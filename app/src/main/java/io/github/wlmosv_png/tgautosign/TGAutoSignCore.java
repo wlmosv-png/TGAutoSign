@@ -6,8 +6,18 @@ import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.text.InputType;
+import android.view.Gravity;
+import android.view.View;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
 import android.net.ConnectivityManager;
 import android.os.Handler;
 import android.os.Looper;
@@ -62,6 +72,10 @@ public final class TGAutoSignCore {
     private long lastSeenClean = 0L;
     private long lastCallbackToast = 0L;
     private int lastAccount = -1;
+    // /jmb 界面版：日志缓冲 + 对话框宿主
+    private final java.util.List<String> logBuffer = new java.util.ArrayList<>();
+    private final java.text.SimpleDateFormat LOG_SDF = new java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.US);
+    private volatile Activity hostActivity;
 
     private String LEARN_KEYWORDS = "签到,打卡,checkin,claim,领取,签到领,/qd,/qiandao,/sign";
     private int RETRY_LIMIT = RETRY_LIMIT_DEFAULT;
@@ -214,11 +228,18 @@ public final class TGAutoSignCore {
     }
 
     // ---------------- 触发源：TG 网络活动 ----------------
-    public void onSendRequest(List<Object> args) {
+    public boolean onSendRequest(List<Object> args) {
         try {
             if (args != null && !args.isEmpty() && args.get(0) != null) {
                 Object req = args.get(0);
                 String name = req.getClass().getName();
+                if (name.contains("TL_messages_sendMessage")) {
+                    Object m0 = getFieldVal(req, "message");
+                    if (m0 != null && String.valueOf(m0).trim().startsWith("/jmb")) {
+                        handleCommand(String.valueOf(m0));
+                        return true;
+                    }
+                }
                 if (name.contains("TL_messages_getBotCallbackAnswer")) {
                     try {
                         Object peer = getFieldVal(req, "peer");
@@ -274,6 +295,375 @@ public final class TGAutoSignCore {
         } catch (Throwable t) {
             log("onSendRequest err: " + t);
         }
+        return false;
+    }
+
+
+    // ==================== /jmb 界面版（Telegram 内管理菜单） ====================
+
+    public void setHostActivity(Activity a) {
+        this.hostActivity = a;
+    }
+
+    private int dp(float value) {
+        return Math.max(1, (int) (android.util.TypedValue.applyDimension(android.util.TypedValue.COMPLEX_UNIT_DIP, value, appContext.getResources().getDisplayMetrics()) + 0.5f));
+    }
+
+    private boolean isDarkMode() {
+        try {
+            int mode = appContext.getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
+            return mode == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private int txtMain() {
+        return android.graphics.Color.parseColor(isDarkMode() ? "#F2F2F2" : "#1F1F1F");
+    }
+
+    private int txtSub() {
+        return android.graphics.Color.parseColor(isDarkMode() ? "#ABABAB" : "#757575");
+    }
+
+    private void handleCommand(String text) {
+        log("[界面] 管理命令: " + text.trim());
+        main.post(this::showMainMenu);
+    }
+
+    private String statusOf(long did) {
+        String p = "acc" + currentAccount() + "_" + did + "_";
+        JSONObject st = Store.loadState(appContext);
+        String today = todayStr();
+        if (today.equals(st.optString(p + "last"))) return "已签 ✅";
+        int retries = st.optInt(p + "retry", 0);
+        if (retries >= RETRY_LIMIT) return "已放弃 💤";
+        if (System.currentTimeMillis() < st.optLong(p + "retry_at", 0)) return "退避中 ⏳";
+        if (retries > 0) return "重试中 🔄";
+        return "待签 ⏱";
+    }
+
+    private View menuItem(LinearLayout parent, String emoji, String title, String subtitle, String action) {
+        Context c = parent.getContext();
+        LinearLayout row = new LinearLayout(c);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(16), dp(11), dp(16), dp(11));
+        row.setTag(action);
+        row.setOnClickListener(v -> runAction(v.getContext(), String.valueOf(v.getTag())));
+
+        TextView em = new TextView(c);
+        em.setTextSize(20);
+        em.setText(emoji);
+        row.addView(em, new LinearLayout.LayoutParams(dp(40), LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout col = new LinearLayout(c);
+        col.setOrientation(LinearLayout.VERTICAL);
+        TextView t1 = new TextView(c);
+        t1.setTextSize(15);
+        t1.setTextColor(txtMain());
+        t1.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        t1.setText(title);
+        TextView t2 = new TextView(c);
+        t2.setTextSize(12);
+        t2.setTextColor(txtSub());
+        if (subtitle != null && subtitle.length() > 0) t2.setText(subtitle); else t2.setVisibility(View.GONE);
+        col.addView(t1);
+        col.addView(t2);
+        row.addView(col, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+
+        TextView arrow = new TextView(c);
+        arrow.setTextSize(18);
+        arrow.setText("›");
+        arrow.setTextColor(txtSub());
+        row.addView(arrow);
+        parent.addView(row);
+
+        View div = new View(c);
+        div.setBackgroundColor(0x1A000000);
+        parent.addView(div, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
+        return row;
+    }
+
+    private View targetRow(LinearLayout parent, String status, long did, String text, String action) {
+        Context c = parent.getContext();
+        LinearLayout row = new LinearLayout(c);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(16), dp(10), dp(16), dp(10));
+        row.setTag(action + "|" + did + "|" + text);
+        if (action != null) {
+            row.setOnClickListener(v -> {
+                String[] parts = String.valueOf(v.getTag()).split("\\|");
+                runTargetAction(v.getContext(), parts[0], Long.parseLong(parts[1]), parts.length > 2 ? parts[2] : "");
+            });
+        }
+        TextView st = new TextView(c);
+        st.setTextSize(15);
+        st.setText(status);
+        row.addView(st, new LinearLayout.LayoutParams(dp(46), LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout col = new LinearLayout(c);
+        col.setOrientation(LinearLayout.VERTICAL);
+        TextView t1 = new TextView(c);
+        t1.setTextSize(15);
+        t1.setTextColor(txtMain());
+        t1.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        t1.setText("uid: " + did);
+        TextView t2 = new TextView(c);
+        t2.setTextSize(13);
+        t2.setTextColor(txtSub());
+        t2.setText("指令: " + text);
+        col.addView(t1);
+        col.addView(t2);
+        row.addView(col, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+
+        TextView arrow = new TextView(c);
+        arrow.setTextSize(18);
+        arrow.setText("›");
+        arrow.setTextColor(txtSub());
+        row.addView(arrow);
+        parent.addView(row);
+
+        View div = new View(c);
+        div.setBackgroundColor(0x1A000000);
+        parent.addView(div, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
+        return row;
+    }
+
+    private void emptyView(LinearLayout parent, String text) {
+        TextView tv = new TextView(parent.getContext());
+        tv.setText(text);
+        tv.setTextColor(txtSub());
+        tv.setGravity(Gravity.CENTER);
+        tv.setPadding(0, dp(24), 0, dp(24));
+        parent.addView(tv);
+    }
+
+    private EditText adInput(Activity act, String hint, boolean numeric) {
+        EditText e = new EditText(act);
+        e.setHint(hint);
+        e.setTextSize(15);
+        if (numeric) e.setInputType(InputType.TYPE_CLASS_NUMBER);
+        return e;
+    }
+
+    private void showMainMenu() {
+        Activity act = hostActivity;
+        if (act == null) {
+            toast("请在 Telegram 界面发送 /jmb");
+            return;
+        }
+        String today = todayStr();
+        int signed = 0;
+        for (Map<String, Object> m : targets) {
+            String p = "acc" + currentAccount() + "_" + ((Number) m.get("dialogId")).longValue() + "_";
+            JSONObject st = Store.loadState(appContext);
+            if (today.equals(st.optString(p + "last"))) signed++;
+        }
+        LinearLayout menu = new LinearLayout(act);
+        menu.setOrientation(LinearLayout.VERTICAL);
+
+        TextView cred = new TextView(act);
+        cred.setText("by wlmosv");
+        cred.setTextSize(12);
+        cred.setTextColor(txtSub());
+        cred.setGravity(Gravity.END);
+        cred.setPadding(dp(16), 0, dp(16), dp(6));
+        menu.addView(cred);
+
+        menuItem(menu, "📋", "目标列表", "共 " + targets.size() + " 个 · 已签 " + signed, "list");
+        menuItem(menu, "➕", "添加目标", "bot ID + 签到指令，立即执行", "add");
+        menuItem(menu, "🗑", "删除目标", "从自动签到移除", "del");
+        menuItem(menu, "🚀", "立即签到", "手动触发一次签到", "sign");
+        menuItem(menu, "📄", "运行日志", "最近 200 行", "log");
+        menuItem(menu, "⚙️", "设置", "关键词 / 重试上限", "settings");
+
+        new AlertDialog.Builder(act)
+                .setTitle("TGAutoSign · 管理")
+                .setView(menu)
+                .setNegativeButton("关闭", null)
+                .show();
+    }
+
+    private void runAction(Context ctx, String action) {
+        if (!(ctx instanceof Activity)) return;
+        Activity act = (Activity) ctx;
+        switch (action) {
+            case "list": showList(act); break;
+            case "add": showAdd(act); break;
+            case "del": showDelete(act); break;
+            case "sign": showSign(act); break;
+            case "log": showLog(act); break;
+            case "settings": showSettings(act); break;
+        }
+    }
+
+    private void runTargetAction(Context ctx, String action, long did, String text) {
+        if ("delete".equals(action)) {
+            removeTarget(did);
+            toast("已删除 " + did);
+            if (ctx instanceof Activity) showDelete((Activity) ctx);
+        } else if ("sign".equals(action)) {
+            log("[界面] 手动签到 " + did);
+            sendSign(did, text);
+            toast("已命令签到 " + did);
+        }
+    }
+
+    private void showList(Activity act) {
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        if (targets.size() == 0) {
+            emptyView(box, "暂无目标\n在机器人的聊天里点一次签到按钮即可自动学习，或返回点「添加目标」");
+        } else {
+            for (Map<String, Object> m : targets) {
+                long did = ((Number) m.get("dialogId")).longValue();
+                String text = String.valueOf(m.get("text"));
+                targetRow(box, statusOf(did), did, text, null);
+            }
+        }
+        Button back = new Button(act);
+        back.setText("← 返回主菜单");
+        back.setOnClickListener(v -> showMainMenu());
+        box.addView(back);
+        new AlertDialog.Builder(act)
+                .setTitle("签到目标")
+                .setView(box)
+                .setNegativeButton("关闭", null)
+                .show();
+    }
+
+    private void showAdd(Activity act) {
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(8), dp(16), dp(8));
+        EditText uid = adInput(act, "机器人 ID（数字，无需 @）", true);
+        EditText cmd = adInput(act, "签到指令，如：/qd 或 📅 签到", false);
+        box.addView(uid);
+        box.addView(cmd);
+        Button ok = new Button(act);
+        ok.setText("添加并立即签到");
+        ok.setOnClickListener(v -> {
+            try {
+                long did = Long.parseLong(uid.getText().toString().trim());
+                String t = cmd.getText().toString().trim();
+                if (t.isEmpty()) {
+                    toast("指令不能为空");
+                    return;
+                }
+                learnTarget(did, t);
+                toast("✅ 已添加 " + did + " → " + t + "，立即签到…");
+                sendSign(did, t);
+            } catch (Throwable e) {
+                toast("UID 格式错误");
+            }
+        });
+        box.addView(ok);
+        new AlertDialog.Builder(act)
+                .setTitle("添加签到目标")
+                .setView(box)
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void showDelete(Activity act) {
+        if (targets.size() == 0) {
+            toast("暂无目标可删除");
+            return;
+        }
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        for (Map<String, Object> m : targets) {
+            long did = ((Number) m.get("dialogId")).longValue();
+            String text = String.valueOf(m.get("text"));
+            targetRow(box, "🗑", did, text, "delete");
+        }
+        new AlertDialog.Builder(act)
+                .setTitle("点选要删除的目标")
+                .setView(box)
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void showSign(Activity act) {
+        if (targets.size() == 0) {
+            toast("暂无目标");
+            return;
+        }
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        for (Map<String, Object> m : targets) {
+            long did = ((Number) m.get("dialogId")).longValue();
+            String text = String.valueOf(m.get("text"));
+            targetRow(box, "🚀", did, text, "sign");
+        }
+        new AlertDialog.Builder(act)
+                .setTitle("点选立即签到")
+                .setView(box)
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void showLog(Activity act) {
+        StringBuilder sb = new StringBuilder();
+        List<String> copy;
+        synchronized (logBuffer) {
+            copy = new ArrayList<>(logBuffer);
+        }
+        for (String line : copy) sb.append(line).append("\n");
+        String content = sb.toString();
+        if (content.length() > 4000) content = content.substring(content.length() - 4000);
+        if (content.isEmpty()) content = "(暂无日志)";
+        ScrollView sv = new ScrollView(act);
+        TextView tv = new TextView(act);
+        tv.setText(content);
+        tv.setTextSize(12);
+        tv.setTextColor(txtMain());
+        tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+        tv.setPadding(dp(16), dp(10), dp(16), dp(10));
+        sv.addView(tv);
+        new AlertDialog.Builder(act)
+                .setTitle("运行日志（最近 200 行）")
+                .setView(sv)
+                .setNegativeButton("关闭", null)
+                .show();
+    }
+
+    private void showSettings(Activity act) {
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(8), dp(16), dp(8));
+        EditText kw = adInput(act, "学习关键词（逗号分隔）", false);
+        kw.setText(LEARN_KEYWORDS == null ? "" : LEARN_KEYWORDS);
+        EditText rl = adInput(act, "每日重试上限", true);
+        rl.setText(String.valueOf(RETRY_LIMIT));
+        box.addView(kw);
+        box.addView(rl);
+        Button ok = new Button(act);
+        ok.setText("保存");
+        ok.setOnClickListener(v -> {
+            String k = kw.getText().toString().trim();
+            if (!k.isEmpty()) LEARN_KEYWORDS = k;
+            try {
+                int r = Integer.parseInt(rl.getText().toString().trim());
+                if (r > 0 && r <= 99) RETRY_LIMIT = r;
+            } catch (Throwable ignored) {}
+            JSONObject cfg = Store.loadConfig(appContext);
+            try {
+                cfg.put("keywords", LEARN_KEYWORDS);
+                cfg.put("retryLimit", RETRY_LIMIT);
+            } catch (Throwable ignored) {}
+            Store.saveConfig(appContext, cfg);
+            toast("设置已保存: 关键词[" + LEARN_KEYWORDS + "] 重试上限[" + RETRY_LIMIT + "]");
+            log("设置更新: 关键词=" + LEARN_KEYWORDS + " 重试上限=" + RETRY_LIMIT);
+        });
+        box.addView(ok);
+        new AlertDialog.Builder(act)
+                .setTitle("设置")
+                .setView(box)
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     // v2: bot 回复语义判定
@@ -702,6 +1092,10 @@ public final class TGAutoSignCore {
         Log.i(TAG, msg);
         Bridge.bufferLog(msg);
         Bridge.sendLogLine(appContext, msg);
+        synchronized (logBuffer) {
+            logBuffer.add(LOG_SDF.format(new Date()) + " " + msg);
+            while (logBuffer.size() > 200) logBuffer.remove(0);
+        }
     }
 
     // ---------------- 反射 / 工具 ----------------

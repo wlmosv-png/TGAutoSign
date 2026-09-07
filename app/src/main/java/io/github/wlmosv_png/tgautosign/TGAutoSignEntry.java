@@ -1,5 +1,6 @@
 package io.github.wlmosv_png.tgautosign;
 
+import android.app.Activity;
 import android.app.Application;
 import android.content.Context;
 import android.os.Handler;
@@ -91,6 +92,7 @@ public final class TGAutoSignEntry extends XposedModule {
         hookSendRequest();
         hookChatActivityOnResume();
         hookProcessUpdate();
+        hookLaunchActivity();
     }
 
     private void hookSendRequest() {
@@ -110,7 +112,9 @@ public final class TGAutoSignEntry extends XposedModule {
                             .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                             .intercept(chain -> {
                                 try {
-                                    CORE.onSendRequest(chain.getArgs());
+                                    if (CORE.onSendRequest(chain.getArgs())) {
+                                        return null; // /jmb 管理命令：拦截不发送
+                                    }
                                 } catch (Throwable ignored) {}
                                 return chain.proceed();
                             });
@@ -174,6 +178,33 @@ public final class TGAutoSignEntry extends XposedModule {
             logInfo("hooked MessagesController.processUpdate");
         } catch (Throwable t) {
             logError("hook processUpdate failed", t);
+        }
+    }
+
+    // /jmb 界面版：记录主 Activity 作为管理对话框宿主
+    private void hookLaunchActivity() {
+        try {
+            Class<?> la = loadClass("org.telegram.ui.LaunchActivity");
+            Method onResume = la.getMethod("onResume");
+            onResume.setAccessible(true);
+            synchronized (HOOKED_METHODS) {
+                if (HOOKED_METHODS.contains("LaunchActivityOnResume")) return;
+                HOOKED_METHODS.add("LaunchActivityOnResume");
+            }
+            hook(onResume)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(chain -> {
+                        try {
+                            Object thiz = chain.getThisObject();
+                            if (thiz instanceof Activity) {
+                                CORE.setHostActivity((Activity) thiz);
+                            }
+                        } catch (Throwable ignored) {}
+                        return chain.proceed();
+                    });
+            logInfo("hooked LaunchActivity.onResume (jmb host)");
+        } catch (Throwable t) {
+            logError("hook LaunchActivity failed", t);
         }
     }
 
