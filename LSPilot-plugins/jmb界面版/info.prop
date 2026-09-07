@@ -1,6 +1,0 @@
-#Thu Sep 10 03:20:00 CST 2026
-author=wlmosv
-name=jmb界面版
-type=java
-version=1.0.0
-desc=TGAutoSign 界面版：发 /jmb 在 Telegram 内打开管理界面（目标/添加/删除/签到/日志/设置）+ 自动学习每日一签

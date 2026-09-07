@@ -36,8 +36,3 @@ Telegram 自动签到 Xposed 模块（libxposed API 102）。
 签名：release 走 `app/build.gradle` 的 `signingConfigs.release`，
 默认从环境变量读取 keystore 路径与密码（`TGAS_KEYSTORE` / `TGAS_KEYSTORE_PASS` / `TGAS_KEY_ALIAS` / `TGAS_KEY_PASS`），
 或把 keystore 放到 `app/keystore/wlmosv-release.keystore`。
-
-## 附：LSPilot 插件版（jmb界面版）
-
-`LSPilot-plugins/jmb界面版/` 为早期 LSPilot 插件形态（与模块功能一致），
-复制到手机 `Android/media/org.telegram.messenger/LSPilot/Plugin/` 并重启 Telegram 即可用，此处仅作存档。
