@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">TGAutoSign</string>
+    <string name="module_description">Telegram 每日自动签到（自动学习 + 成功即停 + 已签提示）</string>
+</resources>

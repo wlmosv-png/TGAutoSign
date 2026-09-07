@@ -1,0 +1,26 @@
+pluginManagement {
+    repositories {
+        google()
+        mavenLocal()
+        mavenCentral()
+        gradlePluginPortal()
+        maven { url = uri("https://s01.oss.sonatype.org/content/repositories/snapshots/") }
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        // 阿里云镜像（sandbox 无法直连 dl.google.com）
+        maven { url = uri("https://maven.aliyun.com/repository/google") }
+        maven { url = uri("https://maven.aliyun.com/repository/central") }
+        google()
+        mavenLocal()
+        mavenCentral()
+        maven { url = uri("https://api.xposed.info/") }
+        maven { url = uri("https://s01.oss.sonatype.org/content/repositories/snapshots/") }
+    }
+}
+
+rootProject.name = "vector-toast-template"
+include(":app")
