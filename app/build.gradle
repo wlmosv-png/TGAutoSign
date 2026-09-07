@@ -1,0 +1,41 @@
+plugins {
+    id("com.android.application")
+}
+
+android {
+    namespace "io.github.wlmosv_png.tgautosign"
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "io.github.wlmosv_png.tgautosign"
+        minSdk 26
+        targetSdk 36
+        versionCode 101
+        versionName "1.1.0"
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+        }
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+
+    packaging {
+        resources {
+            excludes += ["/META-INF/{AL2.0,LGPL2.1}"]
+        }
+    }
+}
+
+dependencies {
+    // API 102: legacy de.robv.android.xposed API is prohibited
+    compileOnly("io.github.libxposed:api:102.0.0")
+}

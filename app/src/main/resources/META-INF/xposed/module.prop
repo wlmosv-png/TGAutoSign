@@ -1,0 +1,10 @@
+id=io.github.wlmosv_png.tgautosign
+name=TGAutoSign - Telegram 自动签到
+version=1.1.0
+versionCode=101
+author=wlmosv
+description=Telegram 每日自动签到：自动学习机器人签到按钮，每天只签一次，成功即停/已签提示/断网补签
+minApiVersion=102
+targetApiVersion=102
+staticScope=false
+scope=org.telegram.messenger
