@@ -10,8 +10,19 @@ android {
         applicationId "io.github.wlmosv_png.tgautosign"
         minSdk 26
         targetSdk 36
-        versionCode 202
-        versionName "2.2.0"
+        versionCode 102
+        versionName "1.2.0"
+    }
+
+    signingConfigs {
+        release {
+            // 本地签名配置：请替换为你自己的 keystore，或注释掉整个 signingConfigs/release 以使用 debug 签名
+            def ksPath = System.getenv("TGAS_KEYSTORE") ?: "keystore/wlmosv-release.keystore"
+            storeFile file(ksPath)
+            storePassword System.getenv("TGAS_KEYSTORE_PASS") ?: "wlmosv@2026"
+            keyAlias System.getenv("TGAS_KEY_ALIAS") ?: "wlmosv"
+            keyPassword System.getenv("TGAS_KEY_PASS") ?: "wlmosv@2026"
+        }
     }
 
     buildTypes {
@@ -20,6 +31,7 @@ android {
         }
         release {
             minifyEnabled false
+            signingConfig signingConfigs.release
         }
     }
 

@@ -11,40 +11,7 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
-        android:supportsRtl="false"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
-
-        <activity
-            android:name=".ui.MainActivity"
-            android:exported="true"
-            android:label="TGAutoSign">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-
-        <activity
-            android:name=".ui.LogActivity"
-            android:exported="false"
-            android:label="运行日志" />
-
-        <activity
-            android:name=".ui.SettingsActivity"
-            android:exported="false"
-            android:label="设置" />
-
-        <receiver
-            android:name=".ui.TGAutoSignWidget"
-            android:exported="false"
-            android:label="TGAutoSign 签到进度">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/appwidget_info" />
-        </receiver>
+        android:supportsRtl="false">
 
         <meta-data
             android:name="xposedmodule"

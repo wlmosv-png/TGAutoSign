@@ -18,11 +18,15 @@ import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
 /**
- * TGAutoSign 模块现代入口（API 102）
+ * TGAutoSign 模块现代入口（API 102）—— 与 jmb界面版/main.java 的 Hook 点 1:1 对齐
  *  - Toast 注入证明
  *  - hook Application.attach 后初始化业务（用目标 app 的 ClassLoader）
- *  - 安装业务 hook：ConnectionsManager.sendRequest（网络学习/补签触发）、
+ *  - 安装业务 hook：
+ *    ChatActivityEnterView.didPressedBotButton / ChatMessageCellDelegate.didPressBotButton（按钮学习）
+ *    ConnectionsManager.sendRequest（/jmb 拦截 + 网络学习/补签触发）
+ *    LaunchActivity.onResume（记录宿主 Activity）
  *    ChatActivity.onResume（打开聊天补签）
+ *    MessagesController.processUpdate（回复语义判定）
  */
 public final class TGAutoSignEntry extends XposedModule {
     private static final String TAG = "TGAutoSignModule";
@@ -87,14 +91,83 @@ public final class TGAutoSignEntry extends XposedModule {
         notifyInjected(appContext, packageName);
     }
 
-    // ---------------- 业务 hook ----------------
+    // ---------------- 业务 hook（与 jmb界面版 插件一致） ----------------
     private void installBusinessHooks() {
+        hookBotButtonEnterView();
+        hookBotButtonCell();
         hookSendRequest();
         hookChatActivityOnResume();
         hookProcessUpdate();
         hookLaunchActivity();
     }
 
+    // 触发源 1：ChatActivityEnterView.didPressedBotButton（UI 按钮学习）
+    private void hookBotButtonEnterView() {
+        try {
+            Class<?> cls = loadClass("org.telegram.ui.Components.ChatActivityEnterView");
+            Method[] ms = cls.getDeclaredMethods();
+            for (Method m : ms) {
+                if (!"didPressedBotButton".equals(m.getName())) continue;
+                String key = "enterView#didPressedBotButton#" + m.toGenericString();
+                synchronized (HOOKED_METHODS) {
+                    if (HOOKED_METHODS.contains(key)) continue;
+                    HOOKED_METHODS.add(key);
+                }
+                try {
+                    m.setAccessible(true);
+                    hook(m)
+                            .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                            .intercept(chain -> {
+                                try {
+                                    Object[] args = chain.getArgs().toArray();
+                                    Object proto = args != null && args.length > 0 ? args[0] : null;
+                                    Object mo = args != null && args.length > 2 ? args[2] : null;
+                                    CORE.onBotButtonEnterView(proto, mo);
+                                } catch (Throwable ignored) {}
+                                return chain.proceed();
+                            });
+                } catch (Throwable ignored) {}
+            }
+            logInfo("hooked ChatActivityEnterView.didPressedBotButton");
+        } catch (Throwable t) {
+            logError("hook didPressedBotButton failed", t);
+        }
+    }
+
+    // 触发源 1b：ChatActivity$ChatMessageCellDelegate.didPressBotButton（UI 按钮学习）
+    private void hookBotButtonCell() {
+        try {
+            Class<?> cls = loadClass("org.telegram.ui.ChatActivity$ChatMessageCellDelegate");
+            Method[] ms = cls.getDeclaredMethods();
+            for (Method m : ms) {
+                if (!"didPressBotButton".equals(m.getName())) continue;
+                String key = "cellDelegate#didPressBotButton#" + m.toGenericString();
+                synchronized (HOOKED_METHODS) {
+                    if (HOOKED_METHODS.contains(key)) continue;
+                    HOOKED_METHODS.add(key);
+                }
+                try {
+                    m.setAccessible(true);
+                    hook(m)
+                            .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                            .intercept(chain -> {
+                                try {
+                                    Object[] args = chain.getArgs().toArray();
+                                    Object cell = args != null && args.length > 0 ? args[0] : null;
+                                    Object proto = args != null && args.length > 1 ? args[1] : null;
+                                    CORE.onBotButtonCell(cell, proto);
+                                } catch (Throwable ignored) {}
+                                return chain.proceed();
+                            });
+                } catch (Throwable ignored) {}
+            }
+            logInfo("hooked ChatActivity$ChatMessageCellDelegate.didPressBotButton");
+        } catch (Throwable t) {
+            logError("hook didPressBotButton failed", t);
+        }
+    }
+
+    // 触发源 2：ConnectionsManager.sendRequest（网络学习/补签/命令拦截）
     private void hookSendRequest() {
         try {
             Class<?> cm = loadClass("org.telegram.tgnet.ConnectionsManager");
@@ -112,7 +185,7 @@ public final class TGAutoSignEntry extends XposedModule {
                             .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                             .intercept(chain -> {
                                 try {
-                                    if (CORE.onSendRequest(chain.getArgs())) {
+                                    if (CORE.onSendRequest(chain.getArgs().toArray())) {
                                         return null; // /jmb 管理命令：拦截不发送
                                     }
                                 } catch (Throwable ignored) {}
@@ -126,10 +199,15 @@ public final class TGAutoSignEntry extends XposedModule {
         }
     }
 
+    // 触发源 3.1：打开聊天补签
     private void hookChatActivityOnResume() {
         try {
             Class<?> ca = loadClass("org.telegram.ui.ChatActivity");
-            Method onResume = ca.getDeclaredMethod("onResume");
+            Method onResume = findMethod(ca, "onResume");
+            if (onResume == null) {
+                logError("ChatActivity.onResume not found", null);
+                return;
+            }
             onResume.setAccessible(true);
             String key = "onResume#" + onResume.toGenericString();
             synchronized (HOOKED_METHODS) {
@@ -150,7 +228,7 @@ public final class TGAutoSignEntry extends XposedModule {
         }
     }
 
-    // v1.1: bot 回复语义判定（hook 消息接收，转发给 Core）
+    // 触发源 3.5：bot 回复语义判定
     private void hookProcessUpdate() {
         try {
             Class<?> mc = loadClass("org.telegram.messenger.MessagesController");
@@ -181,11 +259,15 @@ public final class TGAutoSignEntry extends XposedModule {
         }
     }
 
-    // /jmb 界面版：记录主 Activity 作为管理对话框宿主
+    // 触发源 3：LaunchActivity 记录对话框宿主
     private void hookLaunchActivity() {
         try {
             Class<?> la = loadClass("org.telegram.ui.LaunchActivity");
-            Method onResume = la.getMethod("onResume");
+            Method onResume = findMethod(la, "onResume");
+            if (onResume == null) {
+                logError("LaunchActivity.onResume not found", null);
+                return;
+            }
             onResume.setAccessible(true);
             synchronized (HOOKED_METHODS) {
                 if (HOOKED_METHODS.contains("LaunchActivityOnResume")) return;
@@ -208,6 +290,20 @@ public final class TGAutoSignEntry extends XposedModule {
         }
     }
 
+
+    // 沿类/父类链查找方法（处理 protected 方法，如 onResume）
+    private static Method findMethod(Class<?> cls, String name) {
+        Class<?> c = cls;
+        while (c != null && c != Object.class) {
+            try {
+                Method m = c.getDeclaredMethod(name);
+                return m;
+            } catch (NoSuchMethodException ignored) {}
+            c = c.getSuperclass();
+        }
+        return null;
+    }
+
     private Class<?> loadClass(String name) throws ClassNotFoundException {
         return Class.forName(name, false, appLoader);
     }
@@ -227,7 +323,6 @@ public final class TGAutoSignEntry extends XposedModule {
         ATTACH_HOOKED.set(false);
         NOTIFIED.set(false);
         CORE = null;
-        // attach hook 会随旧 handle unhook 失效，这里重新安装
         try {
             Method attach = Application.class.getDeclaredMethod("attach", Context.class);
             attach.setAccessible(true);

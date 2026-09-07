@@ -1,9 +1,9 @@
 id=io.github.wlmosv_png.tgautosign
 name=TGAutoSign - Telegram 自动签到
-version=2.2.0
-versionCode=202
+version=1.2.0
+versionCode=102
 author=wlmosv
-description=Telegram 自动签到：自动学习+可视化配置（目标管理/日志/设置/Widget）
+description=jmb界面版：/jmb 管理菜单（自动学习 / 目标管理 / 手动签到 / 日志 / 设置）
 minApiVersion=102
 targetApiVersion=102
 staticScope=false
