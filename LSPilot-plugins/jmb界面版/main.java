@@ -46,6 +46,9 @@ RETRY_LIMIT = 5;
 LEARN_KEYWORDS = "签到,打卡,checkin,claim,领取,签到领,/qd,/qiandao,/sign";
 
 prefs = hostContext.getSharedPreferences("tg_autosign_gen", 0);
+// sendRequest 双触发去重
+seenSignals = new HashSet();
+lastSeenClean = 0L;
 SDF = new SimpleDateFormat("yyyy-MM-dd");
 targets = new ArrayList();
 lastTryTime = 0L;
@@ -80,6 +83,12 @@ jlog(msg) {
             logBuffer.add("[" + SDF.format(new Date()) + " " + new SimpleDateFormat("HH:mm:ss").format(new Date()) + "] " + msg);
             while (logBuffer.size() > 200) logBuffer.remove(0);
         }
+        // 追加到插件目录 runtime.log，便于外部抓取分析
+        try {
+            java.io.FileWriter fw = new java.io.FileWriter(pluginPath + "/log/runtime.log", true);
+            fw.write(SDF.format(new Date()) + " " + new SimpleDateFormat("HH:mm:ss").format(new Date()) + " " + String.valueOf(msg) + "\n");
+            fw.close();
+        } catch (Throwable e2) {}
     } catch (Throwable t) {}
 }
 
@@ -309,9 +318,12 @@ sendSign(dialogId, text) {
 }
 
 // ---------------- 补签 ----------------
-trySignAll(reason) {
+trySignAll(reason, force = false) {
     long now = System.currentTimeMillis();
-    if (now - lastTryTime < THROTTLE_MS) return;
+    if (!force && now - lastTryTime < THROTTLE_MS) {
+        jlog("[" + reason + "] 节流内跳过");
+        return;
+    }
     lastTryTime = now;
     if (!hasNetwork()) {
         jlog("[" + reason + "] 无网络，跳过，网络恢复后自动补");
@@ -352,6 +364,8 @@ trySignAll(reason) {
             jlog("trySignAll 异常 " + dialogId + " : " + t);
         }
     }
+    jlog("[" + reason + "] 检查完成 目标=" + total + " 已签=" + signed + " 处理=" + (total - signed));
+    jlog("[" + reason + "] 检查完成 目标=" + total + " 已签=" + signed + " 处理=" + (total - signed));
     if (promptToday && total > 0 && signed == total) {
         jlog("[提示] 今天已全部签到完成，无需重复");
         toast("今天已经签到过了 ✅");
@@ -847,6 +861,14 @@ try {
                                 try {
                                     long u = ((Number) fUid).longValue();
                                     String t = String.valueOf(fMsg);
+                                    String key = u + "|" + t;
+                                    long nowMs = System.currentTimeMillis();
+                                    if (nowMs - lastSeenClean > 500L) { seenSignals.clear(); lastSeenClean = nowMs; }
+                                    if (seenSignals.contains(key)) {
+                                        jlog("[去重] 跳过重复信号 " + key);
+                                        return;
+                                    }
+                                    seenSignals.add(key);
                                     if (targetContains(u)) {
                                         markSignedFromRequest(u, t);
                                     } else {
@@ -991,7 +1013,7 @@ toast("TGAutoSign 界面版已运行：发 /jmb 管理");
 mainHandler.postDelayed(() -> {
     try {
         jlog("=== 启动立即补签 ===");
-        trySignAll("启动立即");
+        trySignAll("启动立即", true);
     } catch (Throwable t) {}
 }, 10000L);
 
