@@ -5,3 +5,12 @@ app/build/
 local.properties
 .idea/
 .DS_Store
+
+# 签名材料，绝不入库
+keystore/
+*.jks
+*.keystore
+*.p12
+
+# 本地编译校验产物
+verify/

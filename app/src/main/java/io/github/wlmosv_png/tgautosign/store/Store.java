@@ -9,7 +9,7 @@ import org.json.JSONObject;
 import java.util.Map;
 
 /**
- * TGAutoSign v2.2 存储层 —— 模块(Telegram 进程)侧使用，
+ * TGAutoSign 存储层 —— 模块(Telegram 进程)侧使用，
  * 数据存 Telegram 进程自己的 SharedPreferences（跨进程无顾虑）。
  * UI 侧通过 Bridge 广播获取状态快照，不直接读本类。
  */

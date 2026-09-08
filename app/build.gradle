@@ -10,18 +10,24 @@ android {
         applicationId "io.github.wlmosv_png.tgautosign"
         minSdk 26
         targetSdk 36
-        versionCode 102
-        versionName "1.2.0"
+        versionCode 103
+        versionName "1.2.1"
     }
 
     signingConfigs {
         release {
-            // 本地签名配置：请替换为你自己的 keystore，或注释掉整个 signingConfigs/release 以使用 debug 签名
-            def ksPath = System.getenv("TGAS_KEYSTORE") ?: "keystore/wlmosv-release.keystore"
-            storeFile file(ksPath)
-            storePassword System.getenv("TGAS_KEYSTORE_PASS") ?: "wlmosv@2026"
-            keyAlias System.getenv("TGAS_KEY_ALIAS") ?: "wlmosv"
-            keyPassword System.getenv("TGAS_KEY_PASS") ?: "wlmosv@2026"
+            // 只从环境变量读取签名信息，仓库里不留任何口令。
+            // 必须沿用签发 v1.1.0/v1.2.0 的同一把 key，否则老用户只能卸载重装。
+            def ks = System.getenv("TGAS_KEYSTORE")
+            def ksp = System.getenv("TGAS_KEYSTORE_PASS")
+            if (ks && ksp) {
+                storeFile file(ks)
+                storePassword ksp
+                keyAlias System.getenv("TGAS_KEY_ALIAS") ?: "wlmosv"
+                keyPassword System.getenv("TGAS_KEY_PASS") ?: ksp
+            } else {
+                logger.warn("TGAutoSign: 未设置 TGAS_KEYSTORE / TGAS_KEYSTORE_PASS，assembleRelease 产物未签名，需自行 apksigner")
+            }
         }
     }
 

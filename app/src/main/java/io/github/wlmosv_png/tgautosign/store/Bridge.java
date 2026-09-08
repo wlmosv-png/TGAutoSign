@@ -10,7 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * TGAutoSign v2.2 广播桥：模块(Telegram 进程) ↔ UI(模块 App 进程) 跨 UID 通信。
+ * TGAutoSign 广播桥（版本串自 v1.2.1 起统一由 update.UpdateChecker.VERSION_NAME 提供）：模块(Telegram 进程) ↔ UI(模块 App 进程) 跨 UID 通信。
  * 广播对跨 uid 无权限限制 —— 比 ContentProvider 可靠。
  *
  * 动作：

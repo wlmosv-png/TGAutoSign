@@ -39,6 +39,9 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 
+import io.github.wlmosv_png.tgautosign.update.ConfigStore;
+import io.github.wlmosv_png.tgautosign.update.UpdateChecker;
+
 /**
  * TGAutoSignCore —— 由 jmb界面版/main.java（LSPilot 插件）1:1 翻译而来。
  *  - 存储与旧插件共用 SharedPreferences("tg_autosign_gen")，键 acc{account}_learned_<did> 等
@@ -76,6 +79,8 @@ public final class TGAutoSignCore {
     private final List<String> logBuffer = new ArrayList<>();
 
     private final Random random = new Random();
+    /** 最近一次更新检查结果（/jmb 菜单与下载动作读取） */
+    private volatile UpdateChecker.Result lastUpdate = null;
 
     public TGAutoSignCore(Context appContext, ClassLoader cl) {
         this.appContext = appContext.getApplicationContext() != null ? appContext.getApplicationContext() : appContext;
@@ -94,11 +99,29 @@ public final class TGAutoSignCore {
         registerActivityListener();
         mainHandler.postDelayed(() -> { try { jlog("=== 启动立即补签 ==="); trySignAll("启动立即", true); } catch (Throwable ignored) {} }, 10000L);
         schedulePoll();
-        jlog("=== jmb界面版 v1.0 (模块) 已加载 ===");
+        jlog("=== TGAutoSign 模块 v" + UpdateChecker.VERSION_NAME + " (jmb界面版) 已加载 ===");
         jlog("当前账号: " + currentAccount() + "，目标数: " + targets.size());
         jlog("使用: 在任意聊天输入 /jmb 打开管理界面");
         toast("TGAutoSign 界面版已运行：发 /jmb 管理");
-        jlog("TGAutoSignCore v2.2 started, targets=" + targets.size());
+        jlog("TGAutoSignCore v" + UpdateChecker.VERSION_NAME + " started, targets=" + targets.size());
+        checkUpdateSilently();
+    }
+
+    /** 静默检查更新：12 小时冷却，任何失败都不影响签到主流程 */
+    private void checkUpdateSilently() {
+        try {
+            UpdateChecker.checkAsync(appContext, false, mainHandler, r -> {
+                if (r == null) return;
+                if (r.networkError) { jlog("检查更新未成功(忽略): " + r.message); return; }
+                lastUpdate = r;
+                if (r.newer) {
+                    jlog("发现新版本 v" + r.version + "（当前 v" + UpdateChecker.VERSION_NAME + "）");
+                    toast("TGAutoSign 有新版本 v" + r.version + "：发 /jmb → 🔄 检查更新");
+                } else {
+                    jlog("检查更新：已是最新 v" + UpdateChecker.VERSION_NAME);
+                }
+            });
+        } catch (Throwable t) { jlog("检查更新异常(忽略): " + t); }
     }
 
     // ---------------- 工具 ----------------
@@ -607,6 +630,10 @@ public final class TGAutoSignCore {
         if ("sign".equals(action)) { showSign(act); return; }
         if ("log".equals(action)) { showLog(act); return; }
         if ("settings".equals(action)) { showSettings(act); return; }
+        if ("update".equals(action)) { showUpdate(act); return; }
+        if ("update_download".equals(action)) { downloadUpdate(act); return; }
+        if ("export".equals(action)) { doExport(); return; }
+        if ("import".equals(action)) { doImport(); return; }
     }
 
     private void runTargetAction(Context ctx, String action, long did, String text) {
@@ -658,6 +685,12 @@ public final class TGAutoSignCore {
         menuItem(menu, "🚀", "立即签到", "手动触发一次签到", "sign");
         menuItem(menu, "📄", "运行日志", "最近 200 行", "log");
         menuItem(menu, "⚙️", "设置", "关键词 / 重试上限", "settings");
+        String upSub = (lastUpdate != null && lastUpdate.newer)
+                ? "发现新版本 v" + lastUpdate.version + "，可下载"
+                : "当前 v" + UpdateChecker.VERSION_NAME;
+        menuItem(menu, "🔄", "检查更新", upSub, "update");
+        menuItem(menu, "📤", "导出配置", "目标与设置存成 json，换账号不用重学", "export");
+        menuItem(menu, "📥", "导入配置", "读最新导出文件，只合并不清空", "import");
         showDialog(act, "TGAutoSign · 管理", menu, "关闭");
     }
 
@@ -805,6 +838,67 @@ public final class TGAutoSignCore {
 
     public void setHostActivity(Activity act) {
         lastActivity = act;
+    }
+
+    // ==================== 更新检查 / 配置迁移（v1.2.1 新增） ====================
+
+    private void showUpdate(Activity act) {
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        final TextView info = new TextView(act);
+        info.setTextSize(14f);
+        info.setTextColor(android.graphics.Color.parseColor(txtMain(act)));
+        info.setPadding(dp(4), dp(4), dp(4), dp(10));
+        info.setText("当前 v" + UpdateChecker.VERSION_NAME + "\n正在检查更新…");
+        box.addView(info);
+        showDialog(act, "TGAutoSign · 检查更新", box, "关闭");
+        UpdateChecker.checkAsync(appContext, true, mainHandler, r -> {
+            try {
+                if (r == null) { info.setText("刚刚已经检查过，请稍后再试"); return; }
+                lastUpdate = r;
+                info.setText(r.summary(UpdateChecker.VERSION_NAME));
+                if (r.newer && r.apkUrl != null) {
+                    menuItem(box, "⬇️", "下载 v" + r.version + " 安装包", "保存到系统「下载」目录后确认安装", "update_download");
+                }
+            } catch (Throwable ignored) {}
+        });
+    }
+
+    private void downloadUpdate(Activity act) {
+        final UpdateChecker.Result src = lastUpdate;
+        if (src == null || src.apkUrl == null) { toast("该版本没有可直接下载的安装包"); return; }
+        toast("开始下载 v" + src.version + "…");
+        jlog("下载安装包: " + src.apkUrl);
+        UpdateChecker.downloadAsync(appContext, src.apkUrl, src.apkName, mainHandler, d -> {
+            if (d.networkError) { jlog("下载失败: " + d.message); toast("下载失败：" + d.message); return; }
+            jlog("安装包已保存: " + d.savedPath);
+            boolean opened = UpdateChecker.openSaved(appContext, d.savedUri, d.savedPath);
+            toast("已保存到 " + d.savedPath + (opened ? "，请在安装界面确认" : "，请用文件管理器点开安装"));
+        });
+    }
+
+    private void doExport() {
+        ConfigStore.Report rep = ConfigStore.exportAll(appContext);
+        if (rep.ok) {
+            jlog("配置已导出: " + rep.path + "（" + rep.keys + " 项 / " + rep.prefFiles + " 个存储）");
+            toast("已导出 " + rep.keys + " 项配置\n" + rep.path);
+        } else {
+            jlog("导出配置失败: " + rep.message);
+            toast("导出失败：" + rep.message);
+        }
+    }
+
+    private void doImport() {
+        ConfigStore.Report rep = ConfigStore.importAll(appContext, null);
+        if (rep.ok) {
+            jlog("配置已导入: " + rep.path + "（" + rep.keys + " 项）");
+            loadTargets();
+            jlog("导入后目标数 " + targets.size() + "，当前账号 acc" + currentAccount());
+            toast("已导入 " + rep.keys + " 项，当前目标 " + targets.size() + " 个\n发 /jmb → 📋 目标列表 核对");
+        } else {
+            jlog("导入配置失败: " + rep.message);
+            toast("导入失败：" + rep.message);
+        }
     }
 
     // ---------------- 宿主 Activity 记录（兜底：任何 Activity resume 都记） ----------------
