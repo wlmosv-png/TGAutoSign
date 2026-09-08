@@ -4,9 +4,9 @@
 - 新增：模块内置检查更新。启动后 12 小时冷却静默查 GitHub Releases，发现新版 Toast 提示；`/jmb → 🔄 检查更新` 可强制查看版本、更新说明与大小，并把安装包下载到系统「下载」目录后交由系统安装器确认（不申请安装权限，不自动安装）。
 - 新增：`/jmb → 📤 导出配置 / 📥 导入配置`。导出 `tg_autosign_gen` 与 `tg_autosign_v2` 两份偏好（目标、关键词、重试上限、签到状态），换账号或换手机不用重新学习目标；导入为只合并不清空。
 - 新增：版本号单一来源 `UpdateChecker.VERSION_NAME/VERSION_CODE`，修正日志里残留的 `v2.2` / `jmb界面版 v1.0` 与实际版本不符。
-- 变更：tag 规则统一为 `v1.2.1`（检查更新同时兼容旧的 `103-1.2.0` 写法）。
-- 清理：删除 v2「独立管理 App」时代残留的死代码——`ui/MainActivity`、`ui/LogActivity`、`ui/SettingsActivity`、`ui/TargetAdapter`、`ui/TGAutoSignWidget`、`store/Bridge`、`store/Notifier` 共 7 个类 790 行，以及 5 个 layout、`badge_bg`、`widget_bg`、`appwidget_info` 与 5 个颜色；`AndroidManifest.xml` 从未注册过任何 Activity/Receiver，桌面小组件也因此一直不出现。同时去掉不再需要的 `POST_NOTIFICATIONS` 权限与 `androidx.recyclerview` / `androidx.core` 依赖。
-- 安全：`build.gradle` 移除硬编码签名口令，改为环境变量注入；`keystore/` 加入 .gitignore。
+- 变更：tag 规则明确为 git tag `v1.2.1` + GitHub Release tag `103-1.2.1`（前缀数字即远端 versionCode，内置更新器判定最稳；纯版本号 `v1.2.1` 写法同样兼容）。
+- 清理：删除 v2「独立管理 App」时代残留的死代码——`ui/MainActivity`、`ui/LogActivity`、`ui/SettingsActivity`、`ui/TargetAdapter`、`ui/TGAutoSignWidget`、`store/Bridge`、`store/Notifier` 共 7 个类 744 行，以及 5 个 layout、`badge_bg`、`widget_bg`、`appwidget_info` 与 5 个颜色；`AndroidManifest.xml` 从未注册过任何 Activity/Receiver，桌面小组件也因此一直不出现。同时去掉不再需要的 `POST_NOTIFICATIONS` 权限与 `androidx.recyclerview` / `androidx.core` 依赖。
+- 安全：`build.gradle` 移除硬编码签名口令与 keystore 路径，改为环境变量注入（`TGAS_KEYSTORE` / `TGAS_KEYSTORE_PASS` / `TGAS_KEY_ALIAS` / `TGAS_KEY_PASS`）；`keystore/` 加入 .gitignore。本版 APK 唯一权限为 `INTERNET`。
 
 ## v1.2.0（2026-09-08）—— 修复签到不发送 + 按钮学习关键词过滤
 
