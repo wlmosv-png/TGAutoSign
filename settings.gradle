@@ -11,7 +11,7 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        // 阿里云镜像（sandbox 无法直连 dl.google.com）
+        // 阿里云镜像（国内直连 dl.google.com 慢或不通时优先命中）
         maven { url = uri("https://maven.aliyun.com/repository/google") }
         maven { url = uri("https://maven.aliyun.com/repository/central") }
         google()
@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "vector-toast-template"
+rootProject.name = "TGAutoSign"
 include(":app")
