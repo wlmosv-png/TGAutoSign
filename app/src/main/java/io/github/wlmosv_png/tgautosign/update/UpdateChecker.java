@@ -42,8 +42,8 @@ public final class UpdateChecker {
     public static final String MODULE_ID = "io.github.wlmosv_png.tgautosign";
     /** 必须与 app/build.gradle 的 versionCode / versionName 手工保持一致
      *  （AGP 8 默认不生成 BuildConfig，这里不依赖它）。 */
-    public static final int VERSION_CODE = 103;
-    public static final String VERSION_NAME = "1.2.1";
+    public static final int VERSION_CODE = 104;
+    public static final String VERSION_NAME = "1.2.2";
 
     /** 依次尝试：官方镜像仓库（release 资产带 APK）→ 源码仓库 */
     private static final String[][] REPOS = {

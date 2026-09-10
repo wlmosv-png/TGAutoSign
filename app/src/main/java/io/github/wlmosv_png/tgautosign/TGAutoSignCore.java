@@ -100,7 +100,7 @@ public final class TGAutoSignCore {
         mainHandler.postDelayed(() -> { try { jlog("=== 启动立即补签 ==="); trySignAll("启动立即", true); } catch (Throwable ignored) {} }, 10000L);
         schedulePoll();
         jlog("=== TGAutoSign 模块 v" + UpdateChecker.VERSION_NAME + " (jmb界面版) 已加载 ===");
-        jlog("当前账号: " + currentAccount() + "，目标数: " + targets.size());
+        jlog("宿主客户端: " + safePkg() + "，账号: " + currentAccount() + "，目标数: " + targets.size());
         jlog("使用: 在任意聊天输入 /jmb 打开管理界面");
         toast("TGAutoSign 界面版已运行：发 /jmb 管理");
         jlog("TGAutoSignCore v" + UpdateChecker.VERSION_NAME + " started, targets=" + targets.size());
@@ -126,6 +126,11 @@ public final class TGAutoSignCore {
 
     // ---------------- 工具 ----------------
     private String todayStr() { return SDF.format(new Date()); }
+
+    /** 宿主包名（多客户端排查用；失败返回 unknown，不影响主流程） */
+    private String safePkg() {
+        try { return appContext.getPackageName(); } catch (Throwable t) { return "unknown"; }
+    }
 
     private String accountPrefix() { return "acc" + currentAccount() + "_"; }
 

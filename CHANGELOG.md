@@ -1,5 +1,15 @@
 # 更新日志
 
+## v1.2.2 (versionCode 104) —— 多客户端支持（issue #1 / #2）
+
+- **新增：宿主判定不再写死包名。** 新增 `Hosts`：已知包名白名单 + 标志类能力探测，命中任意一条才注入。
+  - 白名单：`org.telegram.messenger`、`org.telegram.messenger.web`（官网直连版，issue #1）、`fork.risin42.nagramx`（Nagram XF，issue #2）、`nu.gpu.nagram`、`nu.gpu.nagramx`、`nu.gpu.nagram.web`
+  - 能力探测：宿主 ClassLoader 能解析 `org.telegram.tgnet.ConnectionsManager` + `org.telegram.ui.Components.ChatActivityEnterView` + `org.telegram.messenger.UserConfig` 即视为 Telegram-Android 血统，新 fork 不必等模块更新；换内核的客户端（Telegram X）标志类不齐全，不会被误注入
+  - 静态核对：官方 12.10.1(70382) / 官网 web 12.10.1(70389) / NagramXF 12.10.1-dec46b0(1250) 三个真实包里，14 个反射类与 `didPressedBotButton`(2 重载)、`sendRequest`(7 重载)、`MessagesController.getInstance`、`MessagesStorage.getInstance/getUser`、`UserConfig.selectedAccount`、`getInputPeer`、`ChatActivity.onResume`、`LaunchActivity.onResume` 逐项一致；第三方客户端尚未做运行时实测
+- **变更：多客户端可观测。** 注入日志标注命中方式（已知客户端 / 能力探测），`/jmb → 📄 运行日志` 首行记录宿主包名；热重载沿用首次命中的宿主包名。
+- **修复（仅诊断，不改行为）：** 按名字扫描方法的 4 个 hook 现在如实打印"匹配 N 个方法"，N=0 时告警。此前 `MessagesController.processUpdate` 在 TG 12.10.1 已改名 `processUpdateArray`，扫描 0 命中却照样打 `hooked`，把"Bot 回复语义判定"这条失效触发源掩盖了。
+- **兼容：** 签到数据、导出 json 格式、更新通道与签名 key 均不变，可直接覆盖升级；老用户不需要重新学习目标。
+
 ## v1.2.1 (versionCode 103)
 - 新增：模块内置检查更新。启动后 12 小时冷却静默查 GitHub Releases，发现新版 Toast 提示；`/jmb → 🔄 检查更新` 可强制查看版本、更新说明与大小，并把安装包下载到系统「下载」目录后交由系统安装器确认（不申请安装权限，不自动安装）。
 - 新增：`/jmb → 📤 导出配置 / 📥 导入配置`。导出 `tg_autosign_gen` 与 `tg_autosign_v2` 两份偏好（目标、关键词、重试上限、签到状态），换账号或换手机不用重新学习目标；导入为只合并不清空。

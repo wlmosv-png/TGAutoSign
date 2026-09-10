@@ -19,6 +19,7 @@ import io.github.libxposed.api.XposedModuleInterface;
 
 /**
  * TGAutoSign 模块现代入口（API 102）—— 与 jmb界面版/main.java 的 Hook 点 1:1 对齐
+ *  - 宿主判定见 Hosts：已知包名白名单 + 标志类能力探测（支持官网 web 版与第三方 fork）
  *  - Toast 注入证明
  *  - hook Application.attach 后初始化业务（用目标 app 的 ClassLoader）
  *  - 安装业务 hook：
@@ -30,7 +31,8 @@ import io.github.libxposed.api.XposedModuleInterface;
  */
 public final class TGAutoSignEntry extends XposedModule {
     private static final String TAG = "TGAutoSignModule";
-    private static final String TARGET_PKG = "org.telegram.messenger";
+    /** 实际注入的宿主包名；Play 版 / 官网 web 版 / 第三方 fork 共用同一套 hook */
+    private static volatile String HOST_PKG = null;
 
     private static final AtomicBoolean ATTACH_HOOKED = new AtomicBoolean(false);
     private static final AtomicBoolean NOTIFIED = new AtomicBoolean(false);
@@ -48,8 +50,14 @@ public final class TGAutoSignEntry extends XposedModule {
     public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
         if (!param.isFirstPackage()) return;
         String packageName = param.getPackageName();
-        logInfo("package loaded package=" + packageName);
-        if (!TARGET_PKG.equals(packageName)) return;
+        ClassLoader probe = null;
+        try { probe = param.getDefaultClassLoader(); } catch (Throwable ignored) {}
+        if (!Hosts.isSupported(packageName, probe)) {
+            logInfo("package loaded，宿主不是 Telegram 家族，跳过: " + packageName);
+            return;
+        }
+        HOST_PKG = packageName;
+        logInfo("package loaded package=" + packageName + "（" + Hosts.describe(packageName, probe) + "）");
 
         if (!ATTACH_HOOKED.compareAndSet(false, true)) return;
         try {
@@ -106,6 +114,7 @@ public final class TGAutoSignEntry extends XposedModule {
         try {
             Class<?> cls = loadClass("org.telegram.ui.Components.ChatActivityEnterView");
             Method[] ms = cls.getDeclaredMethods();
+            int hooked = 0;
             for (Method m : ms) {
                 if (!"didPressedBotButton".equals(m.getName())) continue;
                 String key = "enterView#didPressedBotButton#" + m.toGenericString();
@@ -126,9 +135,11 @@ public final class TGAutoSignEntry extends XposedModule {
                                 } catch (Throwable ignored) {}
                                 return chain.proceed();
                             });
+                    hooked++;
                 } catch (Throwable ignored) {}
             }
-            logInfo("hooked ChatActivityEnterView.didPressedBotButton");
+            logInfo("hooked ChatActivityEnterView.didPressedBotButton（匹配 " + hooked + " 个方法）");
+            if (hooked == 0) logError("未找到 " + "ChatActivityEnterView.didPressedBotButton" + "，该触发源在此宿主上无效", null);
         } catch (Throwable t) {
             logError("hook didPressedBotButton failed", t);
         }
@@ -139,6 +150,7 @@ public final class TGAutoSignEntry extends XposedModule {
         try {
             Class<?> cls = loadClass("org.telegram.ui.ChatActivity$ChatMessageCellDelegate");
             Method[] ms = cls.getDeclaredMethods();
+            int hooked = 0;
             for (Method m : ms) {
                 if (!"didPressBotButton".equals(m.getName())) continue;
                 String key = "cellDelegate#didPressBotButton#" + m.toGenericString();
@@ -159,9 +171,11 @@ public final class TGAutoSignEntry extends XposedModule {
                                 } catch (Throwable ignored) {}
                                 return chain.proceed();
                             });
+                    hooked++;
                 } catch (Throwable ignored) {}
             }
-            logInfo("hooked ChatActivity$ChatMessageCellDelegate.didPressBotButton");
+            logInfo("hooked ChatActivity$ChatMessageCellDelegate.didPressBotButton（匹配 " + hooked + " 个方法）");
+            if (hooked == 0) logError("未找到 " + "ChatMessageCellDelegate.didPressBotButton" + "，该触发源在此宿主上无效", null);
         } catch (Throwable t) {
             logError("hook didPressBotButton failed", t);
         }
@@ -172,6 +186,7 @@ public final class TGAutoSignEntry extends XposedModule {
         try {
             Class<?> cm = loadClass("org.telegram.tgnet.ConnectionsManager");
             Method[] ms = cm.getDeclaredMethods();
+            int hooked = 0;
             for (Method m : ms) {
                 if (!"sendRequest".equals(m.getName())) continue;
                 String key = "sendRequest#" + m.toGenericString();
@@ -191,9 +206,11 @@ public final class TGAutoSignEntry extends XposedModule {
                                 } catch (Throwable ignored) {}
                                 return chain.proceed();
                             });
+                    hooked++;
                 } catch (Throwable ignored) {}
             }
-            logInfo("hooked ConnectionsManager.sendRequest");
+            logInfo("hooked ConnectionsManager.sendRequest（匹配 " + hooked + " 个方法）");
+            if (hooked == 0) logError("未找到 " + "ConnectionsManager.sendRequest" + "，该触发源在此宿主上无效", null);
         } catch (Throwable t) {
             logError("hook sendRequest failed", t);
         }
@@ -233,6 +250,7 @@ public final class TGAutoSignEntry extends XposedModule {
         try {
             Class<?> mc = loadClass("org.telegram.messenger.MessagesController");
             Method[] ms = mc.getDeclaredMethods();
+            int hooked = 0;
             for (Method m : ms) {
                 if (!"processUpdate".equals(m.getName())) continue;
                 String key = "processUpdate#" + m.toGenericString();
@@ -251,9 +269,11 @@ public final class TGAutoSignEntry extends XposedModule {
                                 } catch (Throwable ignored) {}
                                 return chain.proceed();
                             });
+                    hooked++;
                 } catch (Throwable ignored) {}
             }
-            logInfo("hooked MessagesController.processUpdate");
+            logInfo("hooked MessagesController.processUpdate（匹配 " + hooked + " 个方法）");
+            if (hooked == 0) logError("未找到 " + "MessagesController.processUpdate" + "，该触发源在此宿主上无效", null);
         } catch (Throwable t) {
             logError("hook processUpdate failed", t);
         }
@@ -332,7 +352,7 @@ public final class TGAutoSignEntry extends XposedModule {
                         Object result = chain.proceed();
                         Object arg = chain.getArg(0);
                         if (arg instanceof Context) {
-                            try { initBusiness((Context) arg, TARGET_PKG); } catch (Throwable t) {}
+                            try { if (HOST_PKG != null) initBusiness((Context) arg, HOST_PKG); } catch (Throwable t) {}
                         }
                         return result;
                     });
