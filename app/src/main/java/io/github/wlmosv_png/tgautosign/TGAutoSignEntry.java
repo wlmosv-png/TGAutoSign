@@ -252,7 +252,8 @@ public final class TGAutoSignEntry extends XposedModule {
             Method[] ms = mc.getDeclaredMethods();
             int hooked = 0;
             for (Method m : ms) {
-                if (!"processUpdate".equals(m.getName())) continue;
+                // TG 12.10.1 起改名为 processUpdateArray，按前缀匹配兼容新旧两代
+                if (!m.getName().startsWith("processUpdate")) continue;
                 String key = "processUpdate#" + m.toGenericString();
                 synchronized (HOOKED_METHODS) {
                     if (HOOKED_METHODS.contains(key)) continue;
@@ -272,8 +273,8 @@ public final class TGAutoSignEntry extends XposedModule {
                     hooked++;
                 } catch (Throwable ignored) {}
             }
-            logInfo("hooked MessagesController.processUpdate（匹配 " + hooked + " 个方法）");
-            if (hooked == 0) logError("未找到 " + "MessagesController.processUpdate" + "，该触发源在此宿主上无效", null);
+            logInfo("hooked MessagesController.processUpdate*（匹配 " + hooked + " 个方法）");
+            if (hooked == 0) logError("未找到 " + "MessagesController.processUpdate*" + "，该触发源在此宿主上无效", null);
         } catch (Throwable t) {
             logError("hook processUpdate failed", t);
         }

@@ -1,7 +1,7 @@
 id=io.github.wlmosv_png.tgautosign
 name=TGAutoSign - Telegram 自动签到
-version=1.2.2
-versionCode=104
+version=1.2.3
+versionCode=105
 author=wlmosv
 description=/jmb 管理菜单 + 内置检查更新 + 配置导出/导入；支持官方 Play/官网版与 Telegram-Android 系第三方客户端
 minApiVersion=102

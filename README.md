@@ -4,7 +4,7 @@
 
 学习一次 bot 的签到按钮，之后模块在每天、每个账号上自动替你完成签到——断网补签、限流退避、错误分类全部内置。
 
-[更新日志](CHANGELOG.md) · [模块发布页（Xposed-Modules-Repo）](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases) · 当前版本 **v1.2.2 (104)** · 作者 wlmosv
+[更新日志](CHANGELOG.md) · [模块发布页（Xposed-Modules-Repo）](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases) · 当前版本 **v1.2.3 (105)** · 作者 wlmosv
 
 ---
 
@@ -69,7 +69,6 @@
 
 ## 已知限制
 
-- Telegram 12.10.1 起 `MessagesController.processUpdate` 改名 `processUpdateArray`，"Bot 回复语义判定"这一触发源暂时失效（签到主流程不受影响，v1.2.2 日志已如实打印 0 命中告警）；待下版适配
 - 静默更新检查有 12 小时冷却，手动 `/jmb → 🔄 检查更新` 无视冷却
 - 用户侧网络到 GitHub 不通时，应用内检查更新/下载会失败；可手动到 Release 页下载
 
@@ -93,6 +92,7 @@ export TGAS_KEY_ALIAS='wlmosv'
 
 | 版本 | versionCode | 主题 |
 | --- | --- | --- |
+| v1.2.3 | 105 | 签到可靠性修复（跨天重置 / 失败撤销 / FLOOD_WAIT / processUpdateArray 兼容）+ 日志导出 |
 | v1.2.2 | 104 | 多客户端支持（官网直连版 / Nagram XF / 任意 TG-Android fork） |
 | v1.2.1 | 103 | 内置检查更新 + 配置导出/导入 |
 | v1.2.0 | 102 | 修复签到不发送 + 按钮学习关键词过滤 + 适配 TG 12.10.1 |

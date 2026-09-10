@@ -361,11 +361,29 @@ public final class TGAutoSignCore {
                                     jlog("签到永久失败 " + fDid + " : " + text + "（今日放弃）");
                                     toast("⚠️ 签到失败(" + text + ")，今日不再重试");
                                 } else if (code.equals("420") || upper.startsWith("FLOOD_WAIT")) {
-                                    mainHandler.postDelayed(() -> { try { enqueueTry("限流重试"); } catch (Throwable ignored) {} }, 60000L);
-                                    jlog("签到遇限流 " + fDid + " : " + text + "，60秒后自动重试");
+                                    // FLOOD_WAIT_<sec>：尊重服务器要求的等待秒数，写 retry_at 由轮询补签
+                                    long waitSec = 60L;
+                                    try {
+                                        int i = upper.indexOf("FLOOD_WAIT");
+                                        if (i >= 0) {
+                                            StringBuilder digits = new StringBuilder();
+                                            for (int j = i + "FLOOD_WAIT".length(); j < upper.length(); j++) {
+                                                char c = upper.charAt(j);
+                                                if (c >= '0' && c <= '9') digits.append(c); else if (digits.length() > 0) break;
+                                            }
+                                            if (digits.length() > 0) waitSec = Long.parseLong(digits.toString());
+                                        }
+                                    } catch (Throwable ignored) {}
+                                    if (waitSec < 1L) waitSec = 60L;
+                                    long waitMs = waitSec * 1000L + 1500L;
+                                    prefs.edit().putInt(accountPrefix() + "retry_" + fDid, prefs.getInt(accountPrefix() + "retry_" + fDid, 0) + 1)
+                                         .remove(accountPrefix() + "last_" + fDid)
+                                         .putLong(accountPrefix() + "retry_at_" + fDid, System.currentTimeMillis() + waitMs).commit();
+                                    jlog("签到遇限流 " + fDid + " : " + text + "，等待 " + waitSec + " 秒后自动重试");
                                 } else {
                                     int oldRetry = prefs.getInt(accountPrefix() + "retry_" + fDid, 0);
                                     prefs.edit().putInt(accountPrefix() + "retry_" + fDid, oldRetry + 1)
+                                         .remove(accountPrefix() + "last_" + fDid)
                                          .putLong(accountPrefix() + "retry_at_" + fDid, System.currentTimeMillis() + backoffDelay(oldRetry))
                                          .commit();
                                     jlog("签到失败 " + fDid + " : " + text + "（第" + (oldRetry + 1) + "次，退避重试）");
@@ -415,7 +433,16 @@ public final class TGAutoSignCore {
             try {
                 String lastSign = prefs.getString(prefix + "last_" + dialogId, "");
                 if (today.equals(lastSign)) { signed++; continue; }
+                // 跨天重置：last_ 不是今天说明是新的一天，清掉昨天的重试计数与退避
                 int retries = prefs.getInt(prefix + "retry_" + dialogId, 0);
+                if (retries > 0 || prefs.contains(prefix + "retry_at_" + dialogId)) {
+                    prefs.edit()
+                        .putInt(prefix + "retry_" + dialogId, 0)
+                        .remove(prefix + "retry_at_" + dialogId)
+                        .commit();
+                    retries = 0;
+                    jlog("[" + reason + "] " + dialogId + " 新的一天，重试计数已重置");
+                }
                 if (retries >= RETRY_LIMIT) {
                     jlog("[" + reason + "] " + dialogId + " 今日重试已达上限");
                     signed++;
@@ -460,6 +487,43 @@ public final class TGAutoSignCore {
     }
 
     // ---------------- 状态工具（界面用） ----------------
+    private final Map<Long, String> nameCache = new HashMap<>();
+
+    /** 解析 bot 显示名（username / first_name），失败返回 null */
+    private String botName(long did) {
+        if (nameCache.containsKey(did)) return nameCache.get(did);
+        String name = null;
+        try {
+            Object u = null;
+            Object mc = getMessagesController();
+            if (mc != null) {
+                try { u = invoke(mc, "getUser", new Class<?>[]{Long.class}, new Object[]{did}); } catch (Throwable ignored) {}
+            }
+            if (u == null) {
+                Object ms = getMessagesStorage();
+                if (ms != null) {
+                    try { u = invoke(ms, "getUser", new Class<?>[]{long.class}, new Object[]{did}); } catch (Throwable ignored) {}
+                }
+            }
+            if (u != null) {
+                Object un = null;
+                try { un = getFieldVal(u, "username"); } catch (Throwable ignored) {}
+                if (un == null || String.valueOf(un).length() == 0) {
+                    try { un = getFieldVal(u, "first_name"); } catch (Throwable ignored) {}
+                }
+                if (un != null && String.valueOf(un).length() > 0) name = String.valueOf(un);
+            }
+        } catch (Throwable ignored) {}
+        nameCache.put(did, name);
+        return name;
+    }
+
+    /** 目标显示标题：bot 名(uid) 或裸 uid */
+    private String targetTitle(long did) {
+        String n = botName(did);
+        return n != null ? n + " (" + did + ")" : "uid: " + did;
+    }
+
     private String statusOf(long did, String today) {
         String prefix = accountPrefix();
         String lastSign = prefs.getString(prefix + "last_" + did, "");
@@ -549,11 +613,12 @@ public final class TGAutoSignCore {
         t1.setTextSize(15);
         t1.setTextColor(android.graphics.Color.parseColor(txtMain(c)));
         t1.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        t1.setText("uid: " + did);
+        t1.setText(targetTitle(did));
         TextView t2 = new TextView(c);
         t2.setTextSize(13);
         t2.setTextColor(android.graphics.Color.parseColor(txtSub(c)));
-        t2.setText("指令: " + text);
+        String lastT = prefs.getString(accountPrefix() + "last_" + did, "");
+        t2.setText("指令: " + text + (lastT.length() > 0 ? "  ·  上次: " + lastT : ""));
         col.addView(t1);
         col.addView(t2);
         row.addView(col, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
@@ -638,6 +703,7 @@ public final class TGAutoSignCore {
         if ("update".equals(action)) { showUpdate(act); return; }
         if ("update_download".equals(action)) { downloadUpdate(act); return; }
         if ("export".equals(action)) { doExport(); return; }
+        if ("export_log".equals(action)) { doExportLog(act); return; }
         if ("import".equals(action)) { doImport(); return; }
     }
 
@@ -689,6 +755,7 @@ public final class TGAutoSignCore {
         menuItem(menu, "🗑", "删除目标", "从自动签到移除", "del");
         menuItem(menu, "🚀", "立即签到", "手动触发一次签到", "sign");
         menuItem(menu, "📄", "运行日志", "最近 200 行", "log");
+        menuItem(menu, "🧾", "导出运行日志", "写出到系统「下载」目录，便于反馈问题", "export_log");
         menuItem(menu, "⚙️", "设置", "关键词 / 重试上限", "settings");
         String upSub = (lastUpdate != null && lastUpdate.newer)
                 ? "发现新版本 v" + lastUpdate.version + "，可下载"
@@ -762,10 +829,18 @@ public final class TGAutoSignCore {
         if (targets.size() == 0) { toast("暂无目标"); return; }
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
+        if (targets.size() > 1) {
+            Button all = new Button(act);
+            all.setText("🚀 全部签到（" + targets.size() + " 个目标）");
+            all.setOnClickListener(v -> {
+                trySignAll("手动全部", true);
+                toast("已命令全部签到，结果见运行日志");
+            });
+            box.addView(all);
+        }
         for (Map<String, Object> m : targets) {
             long did = ((Number) m.get("dialogId")).longValue();
             String text = String.valueOf(m.get("text"));
-            String status = statusOf(did, todayStr());
             targetRow(box, "🚀", did, text, "sign");
         }
         showDialog(act, "点选立即签到", box, "取消");
@@ -903,6 +978,37 @@ public final class TGAutoSignCore {
         } else {
             jlog("导入配置失败: " + rep.message);
             toast("导入失败：" + rep.message);
+        }
+    }
+
+    /** 导出运行日志到系统「下载」目录（MediaStore，无需存储权限），便于 issue 反馈 */
+    private void doExportLog(Activity act) {
+        try {
+            List<String> copy;
+            synchronized (logBuffer) { copy = new ArrayList<>(logBuffer); }
+            if (copy.isEmpty()) { toast("暂无日志可导出"); return; }
+            StringBuilder sb = new StringBuilder();
+            sb.append("TGAutoSign v").append(UpdateChecker.VERSION_NAME)
+              .append(" 宿主=").append(safePkg())
+              .append(" 导出时间=").append(SDF.format(new Date())).append('\n');
+            for (String line : copy) sb.append(line).append('\n');
+            String content = sb.toString();
+            android.content.ContentResolver cr = appContext.getContentResolver();
+            android.content.ContentValues v = new android.content.ContentValues();
+            String fname = "TGAutoSign-log-" + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date()) + ".txt";
+            v.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, fname);
+            v.put(android.provider.MediaStore.Downloads.MIME_TYPE, "text/plain");
+            if (android.os.Build.VERSION.SDK_INT >= 29) v.put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS);
+            android.net.Uri uri = cr.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+            if (uri == null) { toast("日志导出失败：无法写入下载目录"); return; }
+            java.io.OutputStream os = cr.openOutputStream(uri);
+            os.write(content.getBytes("UTF-8"));
+            os.close();
+            jlog("日志已导出: " + fname);
+            toast("日志已导出到下载目录，文件名见运行日志\n" + fname);
+        } catch (Throwable t) {
+            jlog("日志导出失败: " + t);
+            toast("日志导出失败：" + t);
         }
     }
 
@@ -1100,7 +1206,7 @@ public final class TGAutoSignCore {
                             prefs.edit()
                                 .remove(accountPrefix() + "last_" + did)
                                 .putInt(accountPrefix() + "retry_" + did, cur + 1)
-                                .putLong(accountPrefix() + "retry_at_" + did, System.currentTimeMillis() + backoffDelay(1))
+                                .putLong(accountPrefix() + "retry_at_" + did, System.currentTimeMillis() + backoffDelay(Math.max(cur, 1)))
                                 .commit();
                             jlog("【回复判定】" + did + " bot 回复: " + replyText + " → 判定未成功，撤销已签并安排重试");
                             toast("⚠️ " + did + " 可能未签到成功: " + replyText);
