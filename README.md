@@ -94,6 +94,7 @@ export TGAS_KEY_ALIAS='wlmosv'
 | 版本 | versionCode | 主题 |
 | --- | --- | --- |
 | v1.3.0 | 106 | 回调按钮签到 + 一 bot 多指令 + 一键签全部账号 |
+| v1.3.0 | 106 | 回调按钮签到 + 一 bot 多指令 + 一键签全部账号 |
 | v1.2.3 | 105 | 签到可靠性修复（跨天重置 / 失败撤销 / FLOOD_WAIT / processUpdateArray 兼容）+ 日志导出 |
 | v1.2.2 | 104 | 多客户端支持（官网直连版 / Nagram XF / 任意 TG-Android fork） |
 | v1.2.1 | 103 | 内置检查更新 + 配置导出/导入 |
