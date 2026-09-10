@@ -30,6 +30,10 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Base64;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -43,10 +47,14 @@ import io.github.wlmosv_png.tgautosign.update.ConfigStore;
 import io.github.wlmosv_png.tgautosign.update.UpdateChecker;
 
 /**
- * TGAutoSignCore —— 由 jmb界面版/main.java（LSPilot 插件）1:1 翻译而来。
- *  - 存储与旧插件共用 SharedPreferences("tg_autosign_gen")，键 acc{account}_learned_<did> 等
- *  - 交互全部在 Telegram 进程内完成（模块 hook Telegram）
- *  - 对话框使用 TG 风格（org.telegram.ui.ActionBar.AlertDialog），反射构造
+ * TGAutoSignCore —— v1.3.0 多目标模型版。
+ *
+ * 目标模型（v1.3.0 起）：
+ *  - 一个 bot 可登记多条签到目标（多指令 / 文本 + 回调按钮并存），条目以 id 区分
+ *  - 条目字段：id（prefs 键后缀，主键）、did（bot 数字 ID）、text（指令或按钮文案）、
+ *    kind（text=文本指令 / cb=回调按钮）、data（回调 payload，cb 专用）、hash（回调 hash）
+ *  - 旧数据兼容：v1.2.x 的 acc{N}_learned_<did> 直接以 id=did 迁移，键名不变，无需改写
+ *  - 新条目 id = <did>_<seq> 或 <did>_cb<seq>，与旧键永不冲突
  */
 public final class TGAutoSignCore {
     private static final String TAG = "TGAutoSignModule";
@@ -69,7 +77,7 @@ public final class TGAutoSignCore {
     private final List<Map<String, Object>> targets = new ArrayList<>();
     private long lastTryTime = 0L;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private final Set<Long> pendingSigns = new HashSet<>();
+    private final Set<String> pendingSigns = new HashSet<>();
     private boolean receiverRegistered = false;
     private int lastAccount = -1;
 
@@ -134,6 +142,20 @@ public final class TGAutoSignCore {
 
     private String accountPrefix() { return "acc" + currentAccount() + "_"; }
 
+    private String accountPrefix(int account) { return "acc" + account + "_"; }
+
+    /** 已激活账号数（全账号签到用）；反射失败回退 1 */
+    private int activatedAccounts() {
+        try {
+            Object n = staticInvoke(classEx("org.telegram.messenger.UserConfig"), "getActivatedAccountsCount", new Class<?>[0], new Object[0]);
+            if (n instanceof Number) {
+                int c = ((Number) n).intValue();
+                return c > 0 ? c : 1;
+            }
+        } catch (Throwable ignored) {}
+        return 1;
+    }
+
     private int currentAccount() {
         try {
             Object v = getFieldVal(null, classEx("org.telegram.messenger.UserConfig"), "selectedAccount");
@@ -159,42 +181,145 @@ public final class TGAutoSignCore {
         } catch (Throwable ignored) {}
     }
 
-    // ---------------- 目标管理（与旧插件同键，数据共享） ----------------
-    private void addTarget(long dialogId, String text) {
+    // ---------------- 目标条目模型（v1.3.0：一 bot 多指令 + 回调按钮） ----------------
+    private static final String KIND_TEXT = "text";
+    private static final String KIND_CB = "cb";
+
+    private String entryId(Map<String, Object> m) { return String.valueOf(m.get("id")); }
+    private long entryDid(Map<String, Object> m) { return ((Number) m.get("did")).longValue(); }
+    private String entryText(Map<String, Object> m) { return String.valueOf(m.get("text")); }
+    private String entryKind(Map<String, Object> m) { return m.get("kind") == null ? KIND_TEXT : String.valueOf(m.get("kind")); }
+    private byte[] entryData(Map<String, Object> m) { return m.get("data") instanceof byte[] ? (byte[]) m.get("data") : null; }
+    private long entryHash(Map<String, Object> m) { return m.get("hash") instanceof Number ? ((Number) m.get("hash")).longValue() : 0L; }
+
+    private Map<String, Object> findEntryById(String id) {
         for (Map<String, Object> m : targets) {
-            if (((Number) m.get("dialogId")).longValue() == dialogId) return;
+            if (entryId(m).equals(id)) return m;
         }
-        Map<String, Object> m = new HashMap<>();
-        m.put("dialogId", dialogId);
-        m.put("text", text);
+        return null;
+    }
+
+    private Map<String, Object> findTextEntry(long did, String text) {
+        for (Map<String, Object> m : targets) {
+            if (entryDid(m) == did && KIND_TEXT.equals(entryKind(m)) && entryText(m).equals(String.valueOf(text))) return m;
+        }
+        return null;
+    }
+
+    private Map<String, Object> findCbEntry(long did, byte[] data) {
+        if (data == null) return null;
+        for (Map<String, Object> m : targets) {
+            if (entryDid(m) == did && KIND_CB.equals(entryKind(m)) && Arrays.equals(entryData(m), data)) return m;
+        }
+        return null;
+    }
+
+    /** 新条目 id：<did>_<seq>（文本）或 <did>_cb<seq>（回调），与旧键 acc{N}_learned_<did> 永不冲突 */
+    private String nextEntryId(long did, String kind) {
+        int maxSeq = 0;
+        String prefix = did + (KIND_CB.equals(kind) ? "_cb" : "_");
+        for (Map<String, Object> m : targets) {
+            String id = entryId(m);
+            if (id.startsWith(prefix)) {
+                try { maxSeq = Math.max(maxSeq, Integer.parseInt(id.substring(prefix.length()))); } catch (Throwable ignored) {}
+            }
+        }
+        return prefix + (maxSeq + 1);
+    }
+
+    private void persistEntry(String prefix, Map<String, Object> m) {
+        String id = entryId(m);
+        SharedPreferences.Editor e = prefs.edit();
+        e.putString(prefix + "learned_" + id, entryText(m));
+        e.putString(prefix + "kind_" + id, entryKind(m));
+        e.putLong(prefix + "did_" + id, entryDid(m));
+        if (KIND_CB.equals(entryKind(m)) && entryData(m) != null) {
+            e.putString(prefix + "data_" + id, Base64.getEncoder().encodeToString(entryData(m)));
+            e.putLong(prefix + "hash_" + id, entryHash(m));
+        }
+        e.commit();
+    }
+
+    private void removeEntryKeys(String prefix, String id) {
+        prefs.edit()
+            .remove(prefix + "learned_" + id)
+            .remove(prefix + "kind_" + id)
+            .remove(prefix + "did_" + id)
+            .remove(prefix + "data_" + id)
+            .remove(prefix + "hash_" + id)
+            .remove(prefix + "last_" + id)
+            .remove(prefix + "retry_" + id)
+            .remove(prefix + "retry_at_" + id)
+            .remove(prefix + "sent_at_" + id)
+            .commit();
+    }
+
+    private void addTargetEntry(Map<String, Object> m) {
         targets.add(m);
-        jlog("已登记签到目标 " + dialogId + " -> " + text);
+        jlog("已登记签到目标 " + entryDid(m) + " -> " + (KIND_CB.equals(entryKind(m)) ? "[回调] " : "") + entryText(m) + " (id=" + entryId(m) + ")");
     }
 
     private boolean targetContains(long did) {
         for (Map<String, Object> m : targets) {
-            if (((Number) m.get("dialogId")).longValue() == did) return true;
+            if (entryDid(m) == did) return true;
         }
         return false;
     }
 
     private void loadTargets() {
         targets.clear();
+        loadTargetsInto(accountPrefix(), targets);
+        Collections.sort(targets, new Comparator<Map<String, Object>>() {
+            @Override public int compare(Map<String, Object> a, Map<String, Object> b) {
+                int c = Long.compare(entryDid(a), entryDid(b));
+                return c != 0 ? c : entryId(a).compareTo(entryId(b));
+            }
+        });
+    }
+
+    /** 从 prefs 读出某账号的全部条目（旧键 learned_<did> 自动迁移为 id=did） */
+    private void loadTargetsInto(String prefix, List<Map<String, Object>> out) {
         try {
-            String prefix = accountPrefix();
             Map<String, ?> all = prefs.getAll();
+            List<String> ids = new ArrayList<>();
             for (String key : all.keySet()) {
-                if (key.startsWith(prefix + "learned_")) {
-                    String didStr = key.substring((prefix + "learned_").length());
-                    long did = Long.parseLong(didStr);
-                    addTarget(did, String.valueOf(all.get(key)));
-                }
+                if (key.startsWith(prefix + "learned_")) ids.add(key.substring((prefix + "learned_").length()));
+            }
+            Collections.sort(ids);
+            for (String id : ids) {
+                try {
+                    long did;
+                    String kind;
+                    if (id.contains("_")) {
+                        did = prefs.getLong(prefix + "did_" + id, 0L);
+                        kind = prefs.getString(prefix + "kind_" + id, KIND_TEXT);
+                    } else {
+                        did = Long.parseLong(id);   // 旧格式：learned_<did>
+                        kind = KIND_TEXT;
+                    }
+                    if (did <= 0) continue;
+                    String text = String.valueOf(all.get(prefix + "learned_" + id));
+                    Map<String, Object> m = new HashMap<>();
+                    m.put("id", id);
+                    m.put("did", did);
+                    m.put("text", text);
+                    m.put("kind", kind);
+                    if (KIND_CB.equals(kind)) {
+                        String b64 = prefs.getString(prefix + "data_" + id, null);
+                        if (b64 != null) {
+                            try { m.put("data", Base64.getDecoder().decode(b64)); } catch (Throwable ignored) {}
+                        }
+                        m.put("hash", prefs.getLong(prefix + "hash_" + id, 0L));
+                    }
+                    out.add(m);
+                } catch (Throwable ignored) {}
             }
         } catch (Throwable t) {
             jlog("读取学习目标失败: " + t);
         }
     }
 
+    /** 学习文本指令目标（按钮 / 手动 / 网络层）。同 bot 不同指令 = 新增条目；相同指令 = 跳过。 */
     private void learnTarget(long dialogId, String text) {
         if (!LEARN_ENABLED) return;
         if (text == null || text.length() == 0) return;
@@ -202,30 +327,44 @@ public final class TGAutoSignCore {
             jlog("忽略群聊学习: dialogId=" + dialogId);
             return;
         }
-        if (targetContains(dialogId)) {
-            for (Map<String, Object> m : targets) {
-                if (((Number) m.get("dialogId")).longValue() == dialogId) {
-                    if (String.valueOf(m.get("text")).equals(String.valueOf(text))) {
-                        jlog("目标 " + dialogId + " 已学习过相同指令，跳过");
-                        return;
-                    }
-                    jlog("检测到指令变化，覆盖 " + dialogId + " : " + m.get("text") + " -> " + text);
-                    break;
-                }
-            }
+        if (findTextEntry(dialogId, String.valueOf(text)) != null) {
+            jlog("目标 " + dialogId + " 已学习过相同指令，跳过");
+            return;
         }
+        Map<String, Object> m = new HashMap<>();
+        m.put("id", nextEntryId(dialogId, KIND_TEXT));
+        m.put("did", dialogId);
+        m.put("text", String.valueOf(text));
+        m.put("kind", KIND_TEXT);
         String prefix = accountPrefix();
-        try {
-            prefs.edit()
-                .putString(prefix + "learned_" + dialogId, text)
-                .putString(prefix + "last_" + dialogId, todayStr())
-                .commit();
-            addTarget(dialogId, text);
-            jlog("【自动学习】新目标 " + dialogId + " -> " + text);
-            toast("✅ 已添加新签到目标: " + text);
-        } catch (Throwable t) {
-            jlog("学习失败: " + t);
+        persistEntry(prefix, m);
+        addTargetEntry(m);
+        jlog("【自动学习】新目标 " + dialogId + " -> " + text);
+        toast("✅ 已添加新签到目标: " + text);
+    }
+
+    /** 学习回调按钮目标（inline button，v1.3.0 新增）。同 bot 相同 data 去重。 */
+    private void learnCallback(long dialogId, String display, byte[] data, long hash) {
+        if (!LEARN_ENABLED) return;
+        if (data == null || data.length == 0) return;
+        if (dialogId <= 0) return;
+        if (findCbEntry(dialogId, data) != null) {
+            jlog("目标 " + dialogId + " 已学习过相同回调按钮，跳过");
+            return;
         }
+        String label = display != null && display.trim().length() > 0 ? String.valueOf(display).trim() : "回调按钮";
+        Map<String, Object> m = new HashMap<>();
+        m.put("id", nextEntryId(dialogId, KIND_CB));
+        m.put("did", dialogId);
+        m.put("text", label);
+        m.put("kind", KIND_CB);
+        m.put("data", data);
+        m.put("hash", hash);
+        String prefix = accountPrefix();
+        persistEntry(prefix, m);
+        addTargetEntry(m);
+        jlog("【自动学习】新回调签到目标 " + dialogId + " -> [" + label + "] data=" + Base64.getEncoder().encodeToString(data));
+        toast("✅ 已添加回调签到目标: " + label);
     }
 
     private void learnFromNetwork(long did, String text) {
@@ -264,24 +403,27 @@ public final class TGAutoSignCore {
             jlog("[候选] uid=" + did + " msg=" + t + "（非bot，不自动添加）");
             return;
         }
-        String prefix = accountPrefix();
-        prefs.edit().putString(prefix + "learned_" + did, t).commit();
-        addTarget(did, t);
+        learnTarget(did, t);
         jlog("【网络层自动学习】新目标 " + did + " -> " + t);
-        toast("✅ 已自动添加新签到目标: " + t);
+    }
+
+    private void markSigned(String prefix, String id) {
+        prefs.edit().putString(prefix + "last_" + id, todayStr()).commit();
+        jlog("检测到签到消息已发出，标记今日已签 " + id);
     }
 
     private void markSignedFromRequest(long did, String text) {
         try {
-            if (text == null || !targetContains(did)) return;
-            for (Map<String, Object> m : targets) {
-                if (((Number) m.get("dialogId")).longValue() == did && text.equals(String.valueOf(m.get("text")))) {
-                    String prefix = accountPrefix();
-                    prefs.edit().putString(prefix + "last_" + did, todayStr()).commit();
-                    jlog("检测到签到消息已发出，标记今日已签 " + did);
-                    return;
-                }
-            }
+            if (text == null) return;
+            Map<String, Object> m = findTextEntry(did, String.valueOf(text));
+            if (m != null) markSigned(accountPrefix(), entryId(m));
+        } catch (Throwable ignored) {}
+    }
+
+    private void markSignedFromCallback(long did, byte[] data) {
+        try {
+            Map<String, Object> m = findCbEntry(did, data);
+            if (m != null) markSigned(accountPrefix(), entryId(m));
         } catch (Throwable ignored) {}
     }
 
@@ -292,13 +434,18 @@ public final class TGAutoSignCore {
         return delays[idx];
     }
 
-    private void sendSign(long dialogId, String text) {
-        if (pendingSigns.contains(dialogId)) {
-            jlog("目标 " + dialogId + " 已有请求在处理中，跳过");
+    /** 发送单条目标。account 指定账号；kind=text 发消息，kind=cb 重放回调按钮。 */
+    private void sendSign(Map<String, Object> entry, int account) {
+        final long dialogId = entryDid(entry);
+        final String id = entryId(entry);
+        final String kind = entryKind(entry);
+        final String fText = entryText(entry);
+        if (pendingSigns.contains(id)) {
+            jlog("目标 " + id + " 已有请求在处理中，跳过");
             return;
         }
-        int account = currentAccount();
-        Object mc = getMessagesController();
+        String prefix = accountPrefix(account);
+        Object mc = getMessagesController(account);
         if (mc == null) {
             jlog("MessagesController 为空(account=" + account + ")");
             return;
@@ -309,7 +456,7 @@ public final class TGAutoSignCore {
         if (user == null) {
             jlog("内存无缓存 " + dialogId + "，尝试从数据库读取");
             try {
-                Object ms = getMessagesStorage();
+                Object ms = getMessagesStorage(account);
                 if (ms != null) user = invoke(ms, "getUser", new Class<?>[]{long.class}, new Object[]{dialogId});
             } catch (Throwable e) {
                 jlog("数据库读取失败 " + dialogId + " : " + e);
@@ -327,39 +474,49 @@ public final class TGAutoSignCore {
             return;
         }
         try {
-            Class<?> sendCls = classEx("org.telegram.tgnet.TLRPC$TL_messages_sendMessage");
-            Object req = sendCls.newInstance();
-            setFieldVal(req, "peer", peer);
-            setFieldVal(req, "message", text);
-            setFieldVal(req, "random_id", random.nextLong());
-            pendingSigns.add(dialogId);
-            try { prefs.edit().putLong(accountPrefix() + "sent_at_" + dialogId, System.currentTimeMillis()).commit(); } catch (Throwable ignored) {}
+            Object req;
+            if (KIND_CB.equals(kind)) {
+                Class<?> cbCls = classEx("org.telegram.tgnet.TLRPC$TL_messages_getBotCallbackAnswer");
+                req = cbCls.newInstance();
+                setFieldVal(req, "peer", peer);
+                setFieldVal(req, "data", entryData(entry));
+                setFieldVal(req, "hash", entryHash(entry));
+            } else {
+                Class<?> sendCls = classEx("org.telegram.tgnet.TLRPC$TL_messages_sendMessage");
+                req = sendCls.newInstance();
+                setFieldVal(req, "peer", peer);
+                setFieldVal(req, "message", fText);
+                setFieldVal(req, "random_id", random.nextLong());
+            }
+            pendingSigns.add(id);
+            try { prefs.edit().putLong(prefix + "sent_at_" + id, System.currentTimeMillis()).commit(); } catch (Throwable ignored) {}
             Object cm = staticInvoke(classEx("org.telegram.tgnet.ConnectionsManager"), "getInstance", new Class<?>[]{int.class}, new Object[]{account});
-            final long fDid = dialogId;
-            final String fText = text;
+            final String fId = id;
+            final String fPrefix = prefix;
+            final String fKind = kind;
             final Object delegate = newRequestDelegate(new InvocationHandler() {
                 @Override public Object invoke(Object proxy, Method method, Object[] margs) {
                     if ("run".equals(method.getName()) && margs != null && margs.length >= 2) {
                         final Object response = margs[0];
                         final Object error = margs[1];
-                        mainHandler.post(() -> { pendingSigns.remove(fDid); });
+                        mainHandler.post(() -> { pendingSigns.remove(fId); });
                         try {
                             if (error != null) {
                                 String code = "";
                                 try { code = String.valueOf(getFieldVal(error, "code")); } catch (Throwable ignored) {}
-                                String text = "";
-                                try { text = String.valueOf(getFieldVal(error, "text")); } catch (Throwable ignored) {}
-                                String upper = text.toUpperCase();
+                                String errText = "";
+                                try { errText = String.valueOf(getFieldVal(error, "text")); } catch (Throwable ignored) {}
+                                String upper = errText.toUpperCase();
                                 final String[] PERMANENT = {"PEER_ID_INVALID","USER_BOT_INVALID","CHAT_WRITE_FORBIDDEN","USER_ID_INVALID","AUTH_KEY_UNREGISTERED","MESSAGE_EMPTY","CHAT_ID_INVALID","PEER_ID_NOT_EXIST","USER_PRIVACY_RESTRICTED"};
                                 boolean permanent = false;
                                 for (String s : PERMANENT) {
                                     if (upper.contains(s)) { permanent = true; break; }
                                 }
                                 if (permanent) {
-                                    prefs.edit().putString(accountPrefix() + "last_" + fDid, todayStr())
-                                         .putInt(accountPrefix() + "retry_" + fDid, RETRY_LIMIT).commit();
-                                    jlog("签到永久失败 " + fDid + " : " + text + "（今日放弃）");
-                                    toast("⚠️ 签到失败(" + text + ")，今日不再重试");
+                                    prefs.edit().putString(fPrefix + "last_" + fId, todayStr())
+                                         .putInt(fPrefix + "retry_" + fId, RETRY_LIMIT).commit();
+                                    jlog("签到永久失败 " + dialogId + " : " + errText + "（今日放弃）");
+                                    toast("⚠️ 签到失败(" + errText + ")，今日不再重试");
                                 } else if (code.equals("420") || upper.startsWith("FLOOD_WAIT")) {
                                     // FLOOD_WAIT_<sec>：尊重服务器要求的等待秒数，写 retry_at 由轮询补签
                                     long waitSec = 60L;
@@ -376,25 +533,25 @@ public final class TGAutoSignCore {
                                     } catch (Throwable ignored) {}
                                     if (waitSec < 1L) waitSec = 60L;
                                     long waitMs = waitSec * 1000L + 1500L;
-                                    prefs.edit().putInt(accountPrefix() + "retry_" + fDid, prefs.getInt(accountPrefix() + "retry_" + fDid, 0) + 1)
-                                         .remove(accountPrefix() + "last_" + fDid)
-                                         .putLong(accountPrefix() + "retry_at_" + fDid, System.currentTimeMillis() + waitMs).commit();
-                                    jlog("签到遇限流 " + fDid + " : " + text + "，等待 " + waitSec + " 秒后自动重试");
+                                    prefs.edit().putInt(fPrefix + "retry_" + fId, prefs.getInt(fPrefix + "retry_" + fId, 0) + 1)
+                                         .remove(fPrefix + "last_" + fId)
+                                         .putLong(fPrefix + "retry_at_" + fId, System.currentTimeMillis() + waitMs).commit();
+                                    jlog("签到遇限流 " + dialogId + " : " + errText + "，等待 " + waitSec + " 秒后自动重试");
                                 } else {
-                                    int oldRetry = prefs.getInt(accountPrefix() + "retry_" + fDid, 0);
-                                    prefs.edit().putInt(accountPrefix() + "retry_" + fDid, oldRetry + 1)
-                                         .remove(accountPrefix() + "last_" + fDid)
-                                         .putLong(accountPrefix() + "retry_at_" + fDid, System.currentTimeMillis() + backoffDelay(oldRetry))
+                                    int oldRetry = prefs.getInt(fPrefix + "retry_" + fId, 0);
+                                    prefs.edit().putInt(fPrefix + "retry_" + fId, oldRetry + 1)
+                                         .remove(fPrefix + "last_" + fId)
+                                         .putLong(fPrefix + "retry_at_" + fId, System.currentTimeMillis() + backoffDelay(oldRetry))
                                          .commit();
-                                    jlog("签到失败 " + fDid + " : " + text + "（第" + (oldRetry + 1) + "次，退避重试）");
-                                    toast("⚠️ 签到失败: " + text + "，稍后自动重试");
+                                    jlog("签到失败 " + dialogId + " : " + errText + "（第" + (oldRetry + 1) + "次，退避重试）");
+                                    toast("⚠️ 签到失败: " + errText + "，稍后自动重试");
                                 }
                             } else {
                                 prefs.edit()
-                                    .putString(accountPrefix() + "last_" + fDid, todayStr())
-                                    .putInt(accountPrefix() + "retry_" + fDid, 0)
+                                    .putString(fPrefix + "last_" + fId, todayStr())
+                                    .putInt(fPrefix + "retry_" + fId, 0)
                                     .commit();
-                                jlog("签到完成 " + fDid + " text=" + fText);
+                                jlog("签到完成 " + dialogId + " " + (KIND_CB.equals(fKind) ? "[回调] " : "text=") + fText);
                                 toast("✅ 签到成功: " + fText);
                             }
                         } catch (Throwable ignored) {}
@@ -403,15 +560,20 @@ public final class TGAutoSignCore {
                 }
             });
             invoke(cm, "sendRequest", new Class<?>[]{classEx("org.telegram.tgnet.TLObject"), classEx("org.telegram.tgnet.RequestDelegate")}, new Object[]{req, delegate});
-            jlog("已发起签到请求 " + dialogId + " text=" + text);
+            jlog("已发起签到请求 " + dialogId + " " + (KIND_CB.equals(kind) ? "[回调] " : "text=") + fText + " (id=" + id + ")");
         } catch (Throwable t) {
-            pendingSigns.remove(dialogId);
+            pendingSigns.remove(id);
             jlog("发送异常 " + dialogId + " : " + t);
         }
     }
 
     // ---------------- 补签 ----------------
     void trySignAll(String reason, boolean force) {
+        trySignAllFor(reason, force, currentAccount());
+    }
+
+    /** 对指定账号执行一轮补签。从 prefs 直接读该账号条目，支持全账号签到。 */
+    void trySignAllFor(String reason, boolean force, int account) {
         long now = System.currentTimeMillis();
         if (!force && now - lastTryTime < THROTTLE_MS) {
             jlog("[" + reason + "] 节流内跳过");
@@ -422,23 +584,25 @@ public final class TGAutoSignCore {
             jlog("[" + reason + "] 无网络，跳过，网络恢复后自动补");
             return;
         }
-        String prefix = accountPrefix();
+        String prefix = accountPrefix(account);
         String today = todayStr();
         boolean promptToday = reason != null && (reason.startsWith("启动") || "打开聊天".equals(reason) || "网络恢复".equals(reason));
         int signed = 0;
-        int total = targets.size();
-        for (Map<String, Object> m : targets) {
-            long dialogId = ((Number) m.get("dialogId")).longValue();
-            String text = String.valueOf(m.get("text"));
+        List<Map<String, Object>> list = new ArrayList<>();
+        loadTargetsInto(prefix, list);
+        int total = list.size();
+        for (Map<String, Object> m : list) {
+            long dialogId = entryDid(m);
+            String id = entryId(m);
             try {
-                String lastSign = prefs.getString(prefix + "last_" + dialogId, "");
+                String lastSign = prefs.getString(prefix + "last_" + id, "");
                 if (today.equals(lastSign)) { signed++; continue; }
                 // 跨天重置：last_ 不是今天说明是新的一天，清掉昨天的重试计数与退避
-                int retries = prefs.getInt(prefix + "retry_" + dialogId, 0);
-                if (retries > 0 || prefs.contains(prefix + "retry_at_" + dialogId)) {
+                int retries = prefs.getInt(prefix + "retry_" + id, 0);
+                if (retries > 0 || prefs.contains(prefix + "retry_at_" + id)) {
                     prefs.edit()
-                        .putInt(prefix + "retry_" + dialogId, 0)
-                        .remove(prefix + "retry_at_" + dialogId)
+                        .putInt(prefix + "retry_" + id, 0)
+                        .remove(prefix + "retry_at_" + id)
                         .commit();
                     retries = 0;
                     jlog("[" + reason + "] " + dialogId + " 新的一天，重试计数已重置");
@@ -448,28 +612,43 @@ public final class TGAutoSignCore {
                     signed++;
                     continue;
                 }
-                long retryAt = prefs.getLong(prefix + "retry_at_" + dialogId, 0);
+                long retryAt = prefs.getLong(prefix + "retry_at_" + id, 0);
                 if (System.currentTimeMillis() < retryAt) {
                     long mins = (retryAt - System.currentTimeMillis()) / 60000L;
                     jlog("[" + reason + "] " + dialogId + " 退避中(剩" + mins + "分钟)，跳过");
                     continue;
                 }
-                if (pendingSigns.contains(dialogId)) {
+                if (pendingSigns.contains(id)) {
                     jlog("[" + reason + "] " + dialogId + " 已在发送中，跳过");
                     signed++;
                     continue;
                 }
-                jlog("[" + reason + "] 尝试签到 " + dialogId + " text=" + text + " (重试" + retries + ")");
-                sendSign(dialogId, text);
+                jlog("[" + reason + "] 尝试签到 " + dialogId + " " + (KIND_CB.equals(entryKind(m)) ? "[回调] " : "text=") + entryText(m) + " (重试" + retries + ")");
+                sendSign(m, account);
             } catch (Throwable t) {
                 jlog("trySignAll 异常 " + dialogId + " : " + t);
             }
         }
-        jlog("[" + reason + "] 检查完成 目标=" + total + " 已签=" + signed + " 处理=" + (total - signed));
+        jlog("[" + reason + "] 检查完成(账号" + account + ") 目标=" + total + " 已签=" + signed + " 处理=" + (total - signed));
         if (promptToday && total > 0 && signed == total) {
             jlog("[提示] 今天已全部签到完成，无需重复");
             toast("今天已经签到过了 ✅");
         }
+    }
+
+    /** v1.3.0：一键签全部账号（每个账号独立目标集，各自发各自的） */
+    public void signAllAccounts() {
+        int count = activatedAccounts();
+        jlog("=== 全账号签到开始，共 " + count + " 个账号 ===");
+        for (int i = 0; i < count; i++) {
+            try {
+                trySignAllFor("全账号(" + (i + 1) + "/" + count + ")", false, i);
+            } catch (Throwable t) {
+                jlog("账号 " + i + " 签到异常: " + t);
+            }
+        }
+        jlog("=== 全账号签到结束 ===");
+        toast("全账号签到已执行，结果见运行日志");
     }
 
     public void enqueueTry(String reason) {
@@ -524,13 +703,12 @@ public final class TGAutoSignCore {
         return n != null ? n + " (" + did + ")" : "uid: " + did;
     }
 
-    private String statusOf(long did, String today) {
-        String prefix = accountPrefix();
-        String lastSign = prefs.getString(prefix + "last_" + did, "");
+    private String statusOf(String prefix, String id, String today) {
+        String lastSign = prefs.getString(prefix + "last_" + id, "");
         if (today.equals(lastSign)) return "已签 ✅";
-        int retries = prefs.getInt(prefix + "retry_" + did, 0);
+        int retries = prefs.getInt(prefix + "retry_" + id, 0);
         if (retries >= RETRY_LIMIT) return "已放弃 💤";
-        long retryAt = prefs.getLong(prefix + "retry_at_" + did, 0);
+        long retryAt = prefs.getLong(prefix + "retry_at_" + id, 0);
         if (System.currentTimeMillis() < retryAt) return "退避中 ⏳";
         if (retries > 0) return "重试中 🔄";
         return "待签 ⏱";
@@ -589,18 +767,22 @@ public final class TGAutoSignCore {
         return row;
     }
 
-    private View targetRow(LinearLayout parent, String status, long did, String text, String action) {
+    private View targetRow(LinearLayout parent, Map<String, Object> entry, String status, String action) {
         Context c = parent.getContext();
+        long did = entryDid(entry);
+        String id = entryId(entry);
+        String kind = entryKind(entry);
+        String text = entryText(entry);
         LinearLayout row = new LinearLayout(c);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(16), dp(10), dp(16), dp(10));
-        row.setTag(action + "|" + did + "|" + text);
+        row.setTag(action + "|" + id);
         if (action != null) {
             row.setOnClickListener(v -> {
                 String tag = String.valueOf(v.getTag());
                 String[] parts = tag.split("\\|");
-                runTargetAction(v.getContext(), parts[0], Long.parseLong(parts[1]), parts.length > 2 ? parts[2] : "");
+                runTargetAction(v.getContext(), parts[0], parts.length > 1 ? parts[1] : "");
             });
         }
         TextView st = new TextView(c);
@@ -613,12 +795,13 @@ public final class TGAutoSignCore {
         t1.setTextSize(15);
         t1.setTextColor(android.graphics.Color.parseColor(txtMain(c)));
         t1.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        t1.setText(targetTitle(did));
+        t1.setText(targetTitle(did) + (KIND_CB.equals(kind) ? "  🔘" : ""));
         TextView t2 = new TextView(c);
         t2.setTextSize(13);
         t2.setTextColor(android.graphics.Color.parseColor(txtSub(c)));
-        String lastT = prefs.getString(accountPrefix() + "last_" + did, "");
-        t2.setText("指令: " + text + (lastT.length() > 0 ? "  ·  上次: " + lastT : ""));
+        String lastT = prefs.getString(accountPrefix() + "last_" + id, "");
+        String prefix = KIND_CB.equals(kind) ? "回调: " : "指令: ";
+        t2.setText(prefix + text + (lastT.length() > 0 ? "  ·  上次: " + lastT : ""));
         col.addView(t1);
         col.addView(t2);
         row.addView(col, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
@@ -698,6 +881,7 @@ public final class TGAutoSignCore {
         if ("add".equals(action)) { showAdd(act); return; }
         if ("del".equals(action)) { showDelete(act); return; }
         if ("sign".equals(action)) { showSign(act); return; }
+        if ("sign_all_accounts".equals(action)) { signAllAccounts(); return; }
         if ("log".equals(action)) { showLog(act); return; }
         if ("settings".equals(action)) { showSettings(act); return; }
         if ("update".equals(action)) { showUpdate(act); return; }
@@ -707,29 +891,28 @@ public final class TGAutoSignCore {
         if ("import".equals(action)) { doImport(); return; }
     }
 
-    private void runTargetAction(Context ctx, String action, long did, String text) {
+    private void runTargetAction(Context ctx, String action, String id) {
         if (ctx == null || !(ctx instanceof Activity)) return;
         if ("delete".equals(action)) {
+            Map<String, Object> m = findEntryById(id);
+            if (m == null) { toast("目标不存在"); return; }
+            long did = entryDid(m);
             String prefix = accountPrefix();
-            prefs.edit()
-                .remove(prefix + "learned_" + did)
-                .remove(prefix + "last_" + did)
-                .remove(prefix + "retry_" + did)
-                .remove(prefix + "retry_at_" + did)
-                .commit();
+            removeEntryKeys(prefix, id);
             for (int j = targets.size() - 1; j >= 0; j--) {
-                Map<String, Object> mm = targets.get(j);
-                if (((Number) mm.get("dialogId")).longValue() == did) targets.remove(j);
+                if (entryId(targets.get(j)).equals(id)) targets.remove(j);
             }
-            jlog("已删除目标 " + did);
-            toast("已删除 " + did);
+            jlog("已删除目标 " + did + " (id=" + id + ")");
+            toast("已删除 " + targetTitle(did));
             showDelete((Activity) ctx);
             return;
         }
         if ("sign".equals(action)) {
-            jlog("[界面] 手动签到 " + did);
-            sendSign(did, text);
-            toast("已命令签到 " + did);
+            Map<String, Object> m = findEntryById(id);
+            if (m == null) { toast("目标不存在"); return; }
+            jlog("[界面] 手动签到 " + entryDid(m) + " (id=" + id + ")");
+            sendSign(m, currentAccount());
+            toast("已命令签到 " + entryText(m));
         }
     }
 
@@ -738,8 +921,7 @@ public final class TGAutoSignCore {
         String today = todayStr();
         int signed = 0;
         for (Map<String, Object> m : targets) {
-            long did = ((Number) m.get("dialogId")).longValue();
-            if (today.equals(prefs.getString(accountPrefix() + "last_" + did, ""))) signed++;
+            if (today.equals(prefs.getString(accountPrefix() + "last_" + entryId(m), ""))) signed++;
         }
         LinearLayout menu = new LinearLayout(act);
         menu.setOrientation(LinearLayout.VERTICAL);
@@ -750,10 +932,11 @@ public final class TGAutoSignCore {
         cred.setGravity(Gravity.END);
         cred.setPadding(dp(16), 0, dp(16), dp(6));
         menu.addView(cred);
-        menuItem(menu, "📋", "目标列表", "共 " + targets.size() + " 个 · 已签 " + signed, "list");
+        menuItem(menu, "📋", "目标列表", "共 " + targets.size() + " 个条目 · 已签 " + signed, "list");
         menuItem(menu, "➕", "添加目标", "bot ID + 签到指令，立即执行", "add");
         menuItem(menu, "🗑", "删除目标", "从自动签到移除", "del");
         menuItem(menu, "🚀", "立即签到", "手动触发一次签到", "sign");
+        menuItem(menu, "🌐", "签全部账号", "当前共 " + activatedAccounts() + " 个账号，各自独立签到", "sign_all_accounts");
         menuItem(menu, "📄", "运行日志", "最近 200 行", "log");
         menuItem(menu, "🧾", "导出运行日志", "写出到系统「下载」目录，便于反馈问题", "export_log");
         menuItem(menu, "⚙️", "设置", "关键词 / 重试上限", "settings");
@@ -769,22 +952,14 @@ public final class TGAutoSignCore {
     private void showList(Activity act) {
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
-        String today = todayStr();
         if (targets.size() == 0) {
-            emptyView(box, "暂无目标\n在机器人的聊天里点一次签到按钮即可自动学习，或返回点“添加目标”");
-        } else {
-            for (Map<String, Object> m : targets) {
-                long did = ((Number) m.get("dialogId")).longValue();
-                String text = String.valueOf(m.get("text"));
-                String status = statusOf(did, today);
-                targetRow(box, status, did, text, null);
-            }
+            emptyView(box, "(暂无目标，点 ➕ 添加，或直接点 bot 的签到按钮自动学习)");
         }
-        Button back = new Button(act);
-        back.setText("← 返回主菜单");
-        back.setOnClickListener(v -> showMainMenu(act));
-        box.addView(back);
-        showDialog(act, "签到目标", box, "关闭");
+        String today = todayStr();
+        for (Map<String, Object> m : targets) {
+            targetRow(box, m, statusOf(accountPrefix(), entryId(m), today), null);
+        }
+        showDialog(act, "目标列表（" + targets.size() + "）", box, "关闭");
     }
 
     private void showAdd(Activity act) {
@@ -802,25 +977,34 @@ public final class TGAutoSignCore {
                 long did = Long.parseLong(uid.getText().toString().trim());
                 String t = cmd.getText().toString().trim();
                 if (t.length() == 0) { toast("指令不能为空"); return; }
+                if (findTextEntry(did, t) != null) { toast("该 bot 已存在相同指令"); return; }
                 learnTarget(did, t);
-                toast("✅ 已添加 " + did + " → " + t + "，立即签到…");
-                sendSign(did, t);
+                Map<String, Object> m = findTextEntry(did, t);
+                if (m != null) {
+                    toast("✅ 已添加 " + did + " → " + t + "，立即签到…");
+                    sendSign(m, currentAccount());
+                }
             } catch (Throwable e) {
                 toast("UID 格式错误");
             }
         });
         box.addView(ok);
+        TextView tip = new TextView(act);
+        tip.setTextSize(12);
+        tip.setTextColor(android.graphics.Color.parseColor(txtSub(act)));
+        tip.setText("提示：同一 bot 可添加多条指令（多指令自动签到）；\n回调按钮型签到无需手动添加——直接点一次 bot 的签到按钮即可自动学习。");
+        tip.setPadding(dp(4), dp(10), dp(4), dp(4));
+        box.addView(tip);
         showDialog(act, "添加签到目标", box, "取消");
     }
 
     private void showDelete(Activity act) {
-        if (targets.size() == 0) { toast("暂无目标可删除"); return; }
+        if (targets.size() == 0) { toast("暂无目标"); return; }
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
+        String today = todayStr();
         for (Map<String, Object> m : targets) {
-            long did = ((Number) m.get("dialogId")).longValue();
-            String text = String.valueOf(m.get("text"));
-            targetRow(box, "🗑", did, text, "delete");
+            targetRow(box, m, statusOf(accountPrefix(), entryId(m), today), "delete");
         }
         showDialog(act, "点选要删除的目标", box, "取消");
     }
@@ -831,17 +1015,16 @@ public final class TGAutoSignCore {
         box.setOrientation(LinearLayout.VERTICAL);
         if (targets.size() > 1) {
             Button all = new Button(act);
-            all.setText("🚀 全部签到（" + targets.size() + " 个目标）");
+            all.setText("🚀 全部签到（" + targets.size() + " 个条目）");
             all.setOnClickListener(v -> {
                 trySignAll("手动全部", true);
                 toast("已命令全部签到，结果见运行日志");
             });
             box.addView(all);
         }
+        String today = todayStr();
         for (Map<String, Object> m : targets) {
-            long did = ((Number) m.get("dialogId")).longValue();
-            String text = String.valueOf(m.get("text"));
-            targetRow(box, "🚀", did, text, "sign");
+            targetRow(box, m, statusOf(accountPrefix(), entryId(m), today), "sign");
         }
         showDialog(act, "点选立即签到", box, "取消");
     }
@@ -1067,6 +1250,28 @@ public final class TGAutoSignCore {
         return null;
     }
 
+    /** 回调按钮 payload：TLRPC.KeyboardButtonCallback 有 data(byte[]) 与 hash(long) 字段 */
+    private byte[] buttonData(Object proto) {
+        if (proto == null) return null;
+        try {
+            Object d = getFieldVal(proto, "data");
+            return d instanceof byte[] ? (byte[]) d : null;
+        } catch (Throwable t) { return null; }
+    }
+
+    private long buttonHash(Object proto) {
+        try {
+            Object h = getFieldVal(proto, "hash");
+            return h instanceof Number ? ((Number) h).longValue() : 0L;
+        } catch (Throwable t) { return 0L; }
+    }
+
+    private boolean isCallbackButton(Object proto) {
+        if (proto == null) return false;
+        String n = proto.getClass().getName();
+        return n.contains("Callback");
+    }
+
     /** 关键词过滤：与网络层学习保持同一规则 */
     private boolean keywordMatched(String text) {
         String t = String.valueOf(text).trim();
@@ -1088,7 +1293,17 @@ public final class TGAutoSignCore {
             if (did != null && text != null) {
                 String t = String.valueOf(text);
                 if (!keywordMatched(t)) { jlog("[按钮] uid=" + did + " text=" + t + "（不含签到关键词，不自动添加）"); return; }
-                learnTarget(((Number) did).longValue(), t);
+                long u = ((Number) did).longValue();
+                if (isCallbackButton(proto)) {
+                    byte[] data = buttonData(proto);
+                    if (data != null && data.length > 0) {
+                        learnCallback(u, t, data, buttonHash(proto));
+                    } else {
+                        jlog("[按钮] uid=" + u + " text=" + t + "（无回调 data，可能是链接/游戏按钮，跳过）");
+                    }
+                } else {
+                    learnTarget(u, t);
+                }
             }
         } catch (Throwable ignored) {}
     }
@@ -1104,7 +1319,17 @@ public final class TGAutoSignCore {
             if (did != null && text != null) {
                 String t = String.valueOf(text);
                 if (!keywordMatched(t)) { jlog("[按钮] uid=" + did + " text=" + t + "（不含签到关键词，不自动添加）"); return; }
-                learnTarget(((Number) did).longValue(), t);
+                long u = ((Number) did).longValue();
+                if (isCallbackButton(proto)) {
+                    byte[] data = buttonData(proto);
+                    if (data != null && data.length > 0) {
+                        learnCallback(u, t, data, buttonHash(proto));
+                    } else {
+                        jlog("[按钮] uid=" + u + " text=" + t + "（无回调 data，可能是链接/游戏按钮，跳过）");
+                    }
+                } else {
+                    learnTarget(u, t);
+                }
             }
         } catch (Throwable ignored) {}
     }
@@ -1122,8 +1347,30 @@ public final class TGAutoSignCore {
                     if (peer != null) { try { uid = getFieldVal(peer, "user_id"); } catch (Throwable ignored) {} }
                     if (uid != null) {
                         Object data = getFieldVal(req, "data");
-                        jlog("[回调按钮] uid=" + uid + " data=" + data + " → 回调型按钮，自动签到暂不支持");
-                        toast("ℹ️ 该机器人使用回调按钮，自动签到暂不支持");
+                        if (data instanceof byte[]) {
+                            long u = ((Number) uid).longValue();
+                            byte[] d = (byte[]) data;
+                            // 自己重放的回调请求 → 标记该条目已签
+                            markSignedFromCallback(u, d);
+                            // 用户手动点过但按钮 hook 未捕获时，网络层兜底学习
+                            if (findCbEntry(u, d) == null && d.length > 0) {
+                                String disp = "回调按钮";
+                                try {
+                                    String s2 = new String(d, "ISO-8859-1");
+                                    if (s2 != null && s2.length() > 0) {
+                                        String clean = s2.trim();
+                                        if (clean.length() > 20) clean = clean.substring(0, 20);
+                                        disp = clean;
+                                    }
+                                } catch (Throwable ignored) {}
+                                if (keywordMatched(disp)) {
+                                    Object h = getFieldVal(req, "hash");
+                                    learnCallback(u, disp, d, h instanceof Number ? ((Number) h).longValue() : 0L);
+                                }
+                            }
+                        } else {
+                            jlog("[回调按钮] uid=" + uid + "（无 data，可能是链接/游戏按钮，不学习）");
+                        }
                     }
                 } catch (Throwable ignored) {}
             } else if (rn.contains("TL_messages_sendMessage")) {
@@ -1196,20 +1443,27 @@ public final class TGAutoSignCore {
             if (replyText.length() == 0) return;
             mainHandler.post(() -> {
                 try {
-                    long sentAt = prefs.getLong(accountPrefix() + "sent_at_" + did, 0);
-                    if (System.currentTimeMillis() - sentAt > 10L * 60 * 1000) return;
+                    String prefix = accountPrefix();
                     String lower = replyText.toLowerCase();
                     String[] failWords = {"失败","未成功","请先","不能","无法","不可","错误","已过期","未关注","没有资格","failed","invalid","rejected","not allowed","try again"};
                     for (String w : failWords) {
                         if (lower.contains(w)) {
-                            int cur = prefs.getInt(accountPrefix() + "retry_" + did, 0);
-                            prefs.edit()
-                                .remove(accountPrefix() + "last_" + did)
-                                .putInt(accountPrefix() + "retry_" + did, cur + 1)
-                                .putLong(accountPrefix() + "retry_at_" + did, System.currentTimeMillis() + backoffDelay(Math.max(cur, 1)))
-                                .commit();
-                            jlog("【回复判定】" + did + " bot 回复: " + replyText + " → 判定未成功，撤销已签并安排重试");
-                            toast("⚠️ " + did + " 可能未签到成功: " + replyText);
+                            // 撤销该 bot 最近 10 分钟内发过签到请求的条目（多指令时只动刚发的那条）
+                            for (Map<String, Object> m : targets) {
+                                if (entryDid(m) != did) continue;
+                                String id = entryId(m);
+                                long sentAt = prefs.getLong(prefix + "sent_at_" + id, 0);
+                                if (System.currentTimeMillis() - sentAt > 10L * 60 * 1000) continue;
+                                int cur = prefs.getInt(prefix + "retry_" + id, 0);
+                                prefs.edit()
+                                    .remove(prefix + "last_" + id)
+                                    .putInt(prefix + "retry_" + id, cur + 1)
+                                    .putLong(prefix + "retry_at_" + id, System.currentTimeMillis() + backoffDelay(Math.max(cur, 1)))
+                                    .commit();
+                                jlog("【回复判定】" + did + " bot 回复: " + replyText + " → 判定未成功，撤销已签并安排重试 (id=" + id + ")");
+                                toast("⚠️ " + did + " 可能未签到成功: " + replyText);
+                                return;
+                            }
                             return;
                         }
                     }
@@ -1253,16 +1507,24 @@ public final class TGAutoSignCore {
     }
 
     private Object getMessagesController() {
+        return getMessagesController(currentAccount());
+    }
+
+    private Object getMessagesController(int account) {
         try {
-            return staticInvoke(classEx("org.telegram.messenger.MessagesController"), "getInstance", new Class<?>[]{int.class}, new Object[]{currentAccount()});
+            return staticInvoke(classEx("org.telegram.messenger.MessagesController"), "getInstance", new Class<?>[]{int.class}, new Object[]{account});
         } catch (Throwable t) {
             return null;
         }
     }
 
     private Object getMessagesStorage() {
+        return getMessagesStorage(currentAccount());
+    }
+
+    private Object getMessagesStorage(int account) {
         try {
-            return staticInvoke(classEx("org.telegram.messenger.MessagesStorage"), "getInstance", new Class<?>[]{int.class}, new Object[]{currentAccount()});
+            return staticInvoke(classEx("org.telegram.messenger.MessagesStorage"), "getInstance", new Class<?>[]{int.class}, new Object[]{account});
         } catch (Throwable t) {
             return null;
         }

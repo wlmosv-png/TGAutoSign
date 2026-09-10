@@ -4,7 +4,7 @@
 
 学习一次 bot 的签到按钮，之后模块在每天、每个账号上自动替你完成签到——断网补签、限流退避、错误分类全部内置。
 
-[更新日志](CHANGELOG.md) · [模块发布页（Xposed-Modules-Repo）](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases) · 当前版本 **v1.2.3 (105)** · 作者 wlmosv
+[更新日志](CHANGELOG.md) · [模块发布页（Xposed-Modules-Repo）](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases) · 当前版本 **v1.3.0 (106)** · 作者 wlmosv
 
 ---
 
@@ -24,6 +24,7 @@
 **多账号**
 - 学习目标、当天已签、重试与退避全部按当前账号隔离存放，互不覆盖
 - 定时轮询检测账号切换，切号后重载目标并补签；只签当前选中账号，不替后台账号发消息
+- **🌐 一键签全部账号**：`/jmb` 菜单直接对所有已激活账号分别签到（v1.3.0 新增）
 - 官方版与第三方客户端偏好文件独立，可分别配置
 
 **管理与维护（全部在 `/jmb` 菜单内完成）**
@@ -92,6 +93,7 @@ export TGAS_KEY_ALIAS='wlmosv'
 
 | 版本 | versionCode | 主题 |
 | --- | --- | --- |
+| v1.3.0 | 106 | 回调按钮签到 + 一 bot 多指令 + 一键签全部账号 |
 | v1.2.3 | 105 | 签到可靠性修复（跨天重置 / 失败撤销 / FLOOD_WAIT / processUpdateArray 兼容）+ 日志导出 |
 | v1.2.2 | 104 | 多客户端支持（官网直连版 / Nagram XF / 任意 TG-Android fork） |
 | v1.2.1 | 103 | 内置检查更新 + 配置导出/导入 |
