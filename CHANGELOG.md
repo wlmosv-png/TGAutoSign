@@ -1,5 +1,17 @@
 # 更新日志
 
+## v1.3.1 (versionCode 107) —— 修复回调按钮签到不可用
+
+- **修复：回调按钮签到在 TG 12.10.1 上不可用。** v1.3.0 新增回调按钮签到，但适配 TG 12.10.1 时读按钮 payload 的字段写错，导致点签到按钮学不进去、重放请求缺 msg_id 发不出去，实际无法签到（只会发一条文本消息，bot 回复不支持）。
+
+- **按钮 data 读取兼容新架构：** 适配 `KeyboardButtonProto.getData()` 方法与 `mType.data` 字段（TG 12.10.1 重构后按钮不再有 data 字段）。
+
+- **回调重放补齐 msg_id：** `TL_messages_getBotCallbackAnswer` 的 msg_id 是必填序列化字段，学习时记录按钮所在消息 id，重放时写入。
+
+- **移除对已不存在 hash 字段的赋值：** 此前 `setFieldVal(req, "hash", ...)` 会抛异常被吞，导致请求未发出，现已移除。
+
+- **兼容：** 签到数据、导出 json 格式、更新通道与签名 key 均不变，老用户覆盖安装即可。
+
 ## v1.3.0 (versionCode 106) —— 大功能版：回调按钮签到 + 一 bot 多指令 + 全账号签到
 
 - **新增：回调按钮（inline button）签到支持。** 签到 bot 用回调按钮（点按钮触发而非发文本指令）现在可以直接支持：在聊天里点一次 bot 的签到按钮即可自动学习，之后每天自动重放该回调。学习时记录按钮文案 + callback data（payload），重放走 `TL_messages_getBotCallbackAnswer`；链接/游戏类按钮（无 data）不会被误学。已学文本指令目标不受影响，两者可并存。
