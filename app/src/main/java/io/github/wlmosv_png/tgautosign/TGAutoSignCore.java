@@ -191,6 +191,7 @@ public final class TGAutoSignCore {
     private String entryKind(Map<String, Object> m) { return m.get("kind") == null ? KIND_TEXT : String.valueOf(m.get("kind")); }
     private byte[] entryData(Map<String, Object> m) { return m.get("data") instanceof byte[] ? (byte[]) m.get("data") : null; }
     private long entryHash(Map<String, Object> m) { return m.get("hash") instanceof Number ? ((Number) m.get("hash")).longValue() : 0L; }
+    private int entryMsgId(Map<String, Object> m) { return m.get("msgId") instanceof Number ? ((Number) m.get("msgId")).intValue() : 0; }
 
     private Map<String, Object> findEntryById(String id) {
         for (Map<String, Object> m : targets) {
@@ -236,6 +237,7 @@ public final class TGAutoSignCore {
         if (KIND_CB.equals(entryKind(m)) && entryData(m) != null) {
             e.putString(prefix + "data_" + id, Base64.getEncoder().encodeToString(entryData(m)));
             e.putLong(prefix + "hash_" + id, entryHash(m));
+            e.putInt(prefix + "msg_id_" + id, entryMsgId(m));
         }
         e.commit();
     }
@@ -247,6 +249,7 @@ public final class TGAutoSignCore {
             .remove(prefix + "did_" + id)
             .remove(prefix + "data_" + id)
             .remove(prefix + "hash_" + id)
+            .remove(prefix + "msg_id_" + id)
             .remove(prefix + "last_" + id)
             .remove(prefix + "retry_" + id)
             .remove(prefix + "retry_at_" + id)
@@ -310,6 +313,7 @@ public final class TGAutoSignCore {
                             try { m.put("data", Base64.getDecoder().decode(b64)); } catch (Throwable ignored) {}
                         }
                         m.put("hash", prefs.getLong(prefix + "hash_" + id, 0L));
+                        m.put("msgId", prefs.getInt(prefix + "msg_id_" + id, 0));
                     }
                     out.add(m);
                 } catch (Throwable ignored) {}
@@ -344,7 +348,7 @@ public final class TGAutoSignCore {
     }
 
     /** 学习回调按钮目标（inline button，v1.3.0 新增）。同 bot 相同 data 去重。 */
-    private void learnCallback(long dialogId, String display, byte[] data, long hash) {
+    private void learnCallback(long dialogId, String display, byte[] data, long hash, int msgId) {
         if (!LEARN_ENABLED) return;
         if (data == null || data.length == 0) return;
         if (dialogId <= 0) return;
@@ -360,10 +364,11 @@ public final class TGAutoSignCore {
         m.put("kind", KIND_CB);
         m.put("data", data);
         m.put("hash", hash);
+        m.put("msgId", msgId);
         String prefix = accountPrefix();
         persistEntry(prefix, m);
         addTargetEntry(m);
-        jlog("【自动学习】新回调签到目标 " + dialogId + " -> [" + label + "] data=" + Base64.getEncoder().encodeToString(data));
+        jlog("【自动学习】新回调签到目标 " + dialogId + " -> [" + label + "] data=" + Base64.getEncoder().encodeToString(data) + " msg_id=" + msgId);
         toast("✅ 已添加回调签到目标: " + label);
     }
 
@@ -480,7 +485,7 @@ public final class TGAutoSignCore {
                 req = cbCls.newInstance();
                 setFieldVal(req, "peer", peer);
                 setFieldVal(req, "data", entryData(entry));
-                setFieldVal(req, "hash", entryHash(entry));
+                setFieldVal(req, "msg_id", entryMsgId(entry));
             } else {
                 Class<?> sendCls = classEx("org.telegram.tgnet.TLRPC$TL_messages_sendMessage");
                 req = sendCls.newInstance();
@@ -1255,15 +1260,35 @@ public final class TGAutoSignCore {
         if (proto == null) return null;
         try {
             Object d = getFieldVal(proto, "data");
-            return d instanceof byte[] ? (byte[]) d : null;
-        } catch (Throwable t) { return null; }
+            if (d instanceof byte[]) return (byte[]) d;
+        } catch (Throwable ignored) {}
+        try {
+            Object mType = getFieldVal(proto, "mType");
+            if (mType != null) {
+                Object d2 = getFieldVal(mType, "data");
+                if (d2 instanceof byte[]) return (byte[]) d2;
+            }
+        } catch (Throwable ignored) {}
+        try {
+            Object d3 = call(proto, "getData", new Class<?>[0], new Object[0]);
+            if (d3 instanceof byte[]) return (byte[]) d3;
+        } catch (Throwable ignored) {}
+        return null;
     }
 
     private long buttonHash(Object proto) {
         try {
             Object h = getFieldVal(proto, "hash");
-            return h instanceof Number ? ((Number) h).longValue() : 0L;
-        } catch (Throwable t) { return 0L; }
+            if (h instanceof Number) return ((Number) h).longValue();
+        } catch (Throwable ignored) {}
+        try {
+            Object mType = getFieldVal(proto, "mType");
+            if (mType != null) {
+                Object h2 = getFieldVal(mType, "hash");
+                if (h2 instanceof Number) return ((Number) h2).longValue();
+            }
+        } catch (Throwable ignored) {}
+        return 0L;
     }
 
     private boolean isCallbackButton(Object proto) {
@@ -1297,7 +1322,9 @@ public final class TGAutoSignCore {
                 if (isCallbackButton(proto)) {
                     byte[] data = buttonData(proto);
                     if (data != null && data.length > 0) {
-                        learnCallback(u, t, data, buttonHash(proto));
+                        int msgId = 0;
+                        if (moOrNull != null) { try { Object mid = call(moOrNull, "getId", new Class<?>[0], new Object[0]); msgId = mid instanceof Number ? ((Number) mid).intValue() : 0; } catch (Throwable ignored) {} }
+                        learnCallback(u, t, data, buttonHash(proto), msgId);
                     } else {
                         jlog("[按钮] uid=" + u + " text=" + t + "（无回调 data，可能是链接/游戏按钮，跳过）");
                     }
@@ -1323,7 +1350,9 @@ public final class TGAutoSignCore {
                 if (isCallbackButton(proto)) {
                     byte[] data = buttonData(proto);
                     if (data != null && data.length > 0) {
-                        learnCallback(u, t, data, buttonHash(proto));
+                        int msgId = 0;
+                        if (mo != null) { try { Object mid = call(mo, "getId", new Class<?>[0], new Object[0]); msgId = mid instanceof Number ? ((Number) mid).intValue() : 0; } catch (Throwable ignored) {} }
+                        learnCallback(u, t, data, buttonHash(proto), msgId);
                     } else {
                         jlog("[按钮] uid=" + u + " text=" + t + "（无回调 data，可能是链接/游戏按钮，跳过）");
                     }
@@ -1365,7 +1394,9 @@ public final class TGAutoSignCore {
                                 } catch (Throwable ignored) {}
                                 if (keywordMatched(disp)) {
                                     Object h = getFieldVal(req, "hash");
-                                    learnCallback(u, disp, d, h instanceof Number ? ((Number) h).longValue() : 0L);
+                                    int mid = 0;
+                                    try { Object m2 = getFieldVal(req, "msg_id"); mid = m2 instanceof Number ? ((Number) m2).intValue() : 0; } catch (Throwable ignored) {}
+                                    learnCallback(u, disp, d, h instanceof Number ? ((Number) h).longValue() : 0L, mid);
                                 }
                             }
                         } else {
