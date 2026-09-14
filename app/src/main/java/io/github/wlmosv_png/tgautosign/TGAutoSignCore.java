@@ -1736,10 +1736,10 @@ public final class TGAutoSignCore {
         head.addView(sv);
         int others = 0; try { others = countOtherAccounts(); } catch (Throwable ignored) {}
         TextView st = new TextView(act); st.setTextSize(12); st.setTextColor(0xF2FFFFFF); st.setPadding(0, Theme.dp(act,10), 0, 0);
-        st.setText("账号 #" + currentAccount() + "    目标 " + targets.size() + "    今日已签 " + signed + "/" + targets.size()
+        st.setText(accountLabel(currentAccount()) + "    目标 " + targets.size() + "    今日已签 " + signed + "/" + targets.size()
             + "\n按钮学习 " + (AUTO_LEARN ? "开" : "关") + "    网络学习 " + (AUTO_LEARN_NET ? "开" : "关") + "    关键词过滤 " + (AUTO_LEARN_FILTER ? "开" : "关")
             + "    唤醒 " + (WAKE_CMD != null && !WAKE_CMD.isEmpty() ? WAKE_CMD : "条目自带")
-            + (others > 0 ? ("    其它账号另有 " + others + " 个") : ""));
+            + "\n" + perAccountLine());
         head.addView(st);
         root.addView(head);
         menuItem(root, "📋", "目标列表", "查看 · 测试 · 编辑 · 删除", "list");
@@ -1747,6 +1747,7 @@ public final class TGAutoSignCore {
         menuItem(root, "🔬", "回调调试台", "列出面板所有按钮 · 实时发射 · 绑定", "debug");
         menuItem(root, "🚀", "立即签到", "手动触发当前账号全部", "sign");
         menuItem(root, "🌐", "签全部账号", "共 " + activatedAccounts() + " 个账号，各自独立", "sign_all_accounts");
+        menuItem(root, "⧉", "复制目标到其它账号", "把本账号的目标一次给别的账号", "copy_targets");
         menuItem(root, "📖", "使用教程", "功能说明与快速上手", "tutorial");
         menuItem(root, "🩺", "自诊断", "检查宿主反射锚点是否正常", "diag");
         menuItem(root, "📄", "运行日志", "最近 800 行 · 可搜索 / 筛选 / 清空", "log");
@@ -2204,6 +2205,7 @@ public final class TGAutoSignCore {
         if ("del".equals(action)) { showDelete(act); return; }
         if ("sign".equals(action)) { showSign(act); return; }
         if ("sign_all_accounts".equals(action)) { signAllAccounts(); return; }
+        if ("copy_targets".equals(action)) { showCopyTargets(act); return; }
         if ("log".equals(action)) { showLog(act); return; }
         if ("settings".equals(action)) { showSettings(act); return; }
         if ("update".equals(action)) { showUpdate(act); return; }
