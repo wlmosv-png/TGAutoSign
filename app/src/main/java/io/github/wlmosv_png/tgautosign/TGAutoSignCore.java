@@ -239,8 +239,9 @@ public final class TGAutoSignCore {
     private static boolean isJmbCommand(String raw) {
         String t = String.valueOf(raw).trim();
         if (t.length() < 4 || !t.startsWith("/jmb")) return false;
+        if (t.length() == 4) return true;
         char c = t.charAt(4);
-        return t.length() == 4 || c == ' ' || c == '\n' || c == '\t';
+        return c == ' ' || c == '\n' || c == '\t';
     }
 
     private static final String KIND_TEXT = "text";
@@ -1934,6 +1935,7 @@ public final class TGAutoSignCore {
 
 
     private void doImport(final Activity act) {
+        if (act == null) { toast("请在 TG 界面内发 /jmb 再导入"); return; }
         java.io.File f = null;
         try { f = ConfigStore.latestExportFile(appContext); } catch (Throwable ignored) {}
         if (f == null) {
