@@ -369,9 +369,10 @@ public final class TGAutoSignEntry extends XposedModule {
         Context appContext = context.getApplicationContext() != null ? context.getApplicationContext() : context;
         String message = "TGAutoSign 注入成功: " + loadedPackageName;
         logInfo(message);
-        showToast(appContext, message);
+        // v1.4.1: 冷启注入不再弹 Toast；证明注入请看 logcat 或 /jmb -> 自诊断
     }
 
+    @SuppressWarnings("unused")
     private void showToast(Context context, String message) {
         String display = message.length() > 200 ? message.substring(0, 200) + "..." : message;
         new Handler(Looper.getMainLooper()).post(() -> {

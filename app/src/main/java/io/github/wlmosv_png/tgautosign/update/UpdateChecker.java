@@ -42,8 +42,8 @@ public final class UpdateChecker {
     public static final String MODULE_ID = "io.github.wlmosv_png.tgautosign";
     /** 必须与 app/build.gradle 的 versionCode / versionName 手工保持一致
      *  （AGP 8 默认不生成 BuildConfig，这里不依赖它）。 */
-    public static final int VERSION_CODE = 108;
-    public static final String VERSION_NAME = "1.4.0";
+    public static final int VERSION_CODE = 109;
+    public static final String VERSION_NAME = "1.4.1";
 
     /** 依次尝试：官方镜像仓库（release 资产带 APK）→ 源码仓库 */
     private static final String[][] REPOS = {
@@ -71,6 +71,8 @@ public final class UpdateChecker {
         public int remoteCode;
         public String apkUrl;
         public String apkName = "";
+        public String apkSha256 = "";
+        public String shaUrl = "";
         public long apkSize;
         public String notes = "";
         public String sourceRepo = "";
@@ -101,26 +103,32 @@ public final class UpdateChecker {
     }
 
     /** @param force true 时忽略 12 小时冷却（用户在 /jmb 里主动点）；false 为开机静默检查 */
-    public static void checkAsync(Context ctx, boolean force, Handler main, Callback cb) {
-        SharedPreferences sp = prefs(ctx);
+public static void checkAsync(final Context ctx, boolean force, Handler main, final Callback cb) {
+        final SharedPreferences sp = prefs(ctx);
         long last = sp == null ? 0L : sp.getLong("last_check", 0L);
         if (!force && System.currentTimeMillis() - last < COOLDOWN_MS) return;
-        if (sp != null) sp.edit().putLong("last_check", System.currentTimeMillis()).apply();
         POOL.execute(() -> {
             Result r = doCheck();
+            if (!r.networkError && sp != null) sp.edit().putLong("last_check", System.currentTimeMillis()).apply();
             if (cb != null) main.post(() -> cb.onResult(r));
         });
     }
 
-    public static void downloadAsync(Context ctx, String url, String name, Handler main, Callback cb) {
+
+public static void downloadAsync(Context ctx, String url, String name, Handler main, Callback cb) {
+        downloadAsync(ctx, url, name, "", main, cb);
+    }
+
+    public static void downloadAsync(final Context ctx, String url, String name, final String expectSha, Handler main, final Callback cb) {
         POOL.execute(() -> {
             Result r = new Result();
             r.apkUrl = url;
+            r.apkSha256 = expectSha;
             try {
                 String dest = download(ctx, url, name, r);
                 if (dest == null) {
                     r.networkError = true;
-                    r.message = "下载或写入失败";
+                    if (r.message == null || r.message.isEmpty()) r.message = "下载或写入失败";
                 } else {
                     r.savedPath = dest;
                 }
@@ -172,6 +180,7 @@ public final class UpdateChecker {
                 r.notes = rel.optString("body", "");
                 pickAsset(rel, r);
                 r.newer = decideNewer(r);
+                if (r.shaUrl != null && !r.shaUrl.isEmpty()) r.apkSha256 = fetchShaFor(r.shaUrl, r.apkName);
                 return r;
             } catch (Throwable t) {
                 r.message = t.getClass().getSimpleName() + ": " + t.getMessage();
@@ -237,11 +246,16 @@ public final class UpdateChecker {
         r.apkUrl = best.optString("browser_download_url", null);
         r.apkName = best.optString("name", "");
         r.apkSize = best.optLong("size", 0L);
+        for (int i = 0; i < assets.length(); i++) {
+            JSONObject a = assets.optJSONObject(i);
+            if (a != null && a.optString("name", "").toLowerCase(Locale.US).contains("sha256")) { r.shaUrl = a.optString("browser_download_url", null); break; }
+        }
     }
 
     // ---------------- 下载 ----------------
 
     private static String download(Context ctx, String url, String name, Result r) throws Exception {
+        final java.security.MessageDigest md = newDigest();
         if (name == null || name.trim().isEmpty()) name = "TGAutoSign.apk";
         if (!name.toLowerCase(Locale.US).endsWith(".apk")) name = name + ".apk";
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
@@ -271,10 +285,11 @@ public final class UpdateChecker {
                     if (dest == null) return null;
                     OutputStream os = cr.openOutputStream(dest);
                     if (os == null) return null;
-                    long written = copy(in, os);
+                    long written = copy(in, os, md);
                     r.savedUri = dest;
                     r.apkSize = written;
                     r.apkName = name;
+                    if (!shaOk(r, md)) { try { ctx.getContentResolver().delete(dest, null, null); } catch (Throwable ignored) {} r.savedUri = null; return null; }
                     return Environment.DIRECTORY_DOWNLOADS + "/" + name;
                 }
                 File dir = ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
@@ -282,9 +297,10 @@ public final class UpdateChecker {
                 if (!dir.exists()) dir.mkdirs();
                 File out = new File(dir, name);
                 OutputStream os = new FileOutputStream(out);
-                long written = copy(in, os);
+                long written = copy(in, os, md);
                 r.apkSize = written;
                 r.apkName = name;
+                if (!shaOk(r, md)) { try { out.delete(); } catch (Throwable ignored) {} return null; }
                 return out.getAbsolutePath();
             } finally {
                 try { in.close(); } catch (Throwable ignored) {}
@@ -294,12 +310,12 @@ public final class UpdateChecker {
         }
     }
 
-    private static long copy(InputStream in, OutputStream out) throws Exception {
+    private static long copy(InputStream in, OutputStream out, java.security.MessageDigest md) throws Exception {
         byte[] buf = new byte[16384];
         long total = 0;
         int n;
         try {
-            while ((n = in.read(buf)) > 0) { out.write(buf, 0, n); total += n; }
+            while ((n = in.read(buf)) > 0) { out.write(buf, 0, n); if (md != null) md.update(buf, 0, n); total += n; }
             out.flush();
         } finally {
             try { out.close(); } catch (Throwable ignored) {}
@@ -308,6 +324,44 @@ public final class UpdateChecker {
     }
 
     // ---------------- 小工具 ----------------
+
+private static java.security.MessageDigest newDigest() {
+        try { return java.security.MessageDigest.getInstance("SHA-256"); } catch (Throwable t) { return null; }
+    }
+
+    private static String hexOf(byte[] b) {
+        StringBuilder s = new StringBuilder();
+        for (byte x : b) s.append(String.format("%02x", x));
+        return s.toString();
+    }
+
+    /** 从 sha256sum.txt 里取该 APK 的校验值（没有匹配名字就退回第一条） */
+    private static String fetchShaFor(String url, String apkName) {
+        try {
+            String text = httpGet(url);
+            if (text == null) return "";
+            String fallback = "";
+            for (String line : text.split("\n")) {
+                String l = line.trim();
+                if (l.length() < 64) continue;
+                String sha = l.substring(0, 64).toLowerCase(Locale.US);
+                if (!sha.matches("[0-9a-f]{64}")) continue;
+                if (apkName != null && l.contains(apkName)) return sha;
+                if (fallback.isEmpty()) fallback = sha;
+            }
+            return fallback;
+        } catch (Throwable t) { return ""; }
+    }
+
+    private static boolean shaOk(Result r, java.security.MessageDigest md) {
+        String want = r.apkSha256 == null ? "" : r.apkSha256.trim().toLowerCase(Locale.US);
+        if (want.length() != 64 || md == null) return true;
+        String got = hexOf(md.digest());
+        if (want.equals(got)) return true;
+        r.message = "安装包 sha256 与仓库里的 sha256sum.txt 不一致，已放弃：\n期望 " + want + "\n实际 " + got;
+        Log.i("TGAutoSignModule", "sha256 mismatch " + want + " != " + got);
+        return false;
+    }
 
     private static String httpGet(String url) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
@@ -318,7 +372,7 @@ public final class UpdateChecker {
             c.setRequestProperty("User-Agent", UA);
             c.setRequestProperty("Accept", "application/vnd.github+json");
             int code = c.getResponseCode();
-            if (code < 200 || code >= 400) return null;
+            if (code < 200 || code >= 400) throw new java.io.IOException("HTTP " + code + "（可能是 API 限流或该发布不存在）");
             InputStream in = c.getInputStream();
             ByteArrayOutputStream bo = new ByteArrayOutputStream();
             byte[] buf = new byte[8192];
