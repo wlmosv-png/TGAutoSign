@@ -93,7 +93,35 @@ public final class TGAutoSignCore {
     // 界面版：最近的前台 Activity（用于弹管理对话框）
     private volatile Activity lastActivity = null;
     // 日志环形缓冲（最近 200 行）
-    private final List<String> logBuffer = new ArrayList<>();
+    private static final int LV_DEBUG = 0, LV_INFO = 1, LV_OK = 2, LV_WARN = 3, LV_ERR = 4;
+    private static final java.util.concurrent.ExecutorService LOG_IO =
+            java.util.concurrent.Executors.newSingleThreadExecutor(new java.util.concurrent.ThreadFactory() {
+                @Override public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "TGAutoSignLog");
+                    t.setDaemon(true);
+                    t.setPriority(Thread.MIN_PRIORITY);
+                    return t;
+                }
+            });
+    private static final class LogLine {
+        final long ts; final int lv; final String msg;
+        LogLine(long t, int l, String m) { ts = t; lv = l; msg = m; }
+        String flat() {
+            String tag = lv == LV_DEBUG ? "[调试]" : lv == LV_OK ? "[成功]"
+                    : lv == LV_WARN ? "[警告]" : lv == LV_ERR ? "[错误]" : "";
+            return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date(ts))
+                    + (tag.length() == 0 ? "" : " " + tag) + "  " + msg;
+        }
+    }
+    private final List<LogLine> logBuffer = new ArrayList<LogLine>();
+    private final List<String> diskQueue = new ArrayList<String>();
+    private long diskFlushAt = 0L;
+    private int logFilter = LV_DEBUG;
+    private boolean logShowDebug = false;
+    private boolean logDesc = true;
+    private String logQuery = "";
+    private LinearLayout logList;
+    private TextView logStat;
 
     private final Random random = new Random();
     private String WAKE_CMD = "";
@@ -102,6 +130,116 @@ public final class TGAutoSignCore {
     private final Set<String> wakeFired = cs(); // 唤醒只触发一次，防循环
     /** 最近一次更新检查结果（/jmb 菜单与下载动作读取） */
     private volatile UpdateChecker.Result lastUpdate = null;
+    private String lastRound = "";
+
+    /** 没有任何目标的已登录账号数（用于启动提示里提醒） */
+        private int accountsWithoutTargets() {
+            int n = 0;
+            try {
+                int total = activatedAccounts();
+                for (int i = 0; i < total; i++) if (acctTargetCount(i) == 0) n++;
+            } catch (Throwable ignored) {}
+            return n;
+        }
+    private int acctTargetCount(int account) {
+        try {
+            List<Map<String, Object>> l = new ArrayList<Map<String, Object>>();
+            loadTargetsInto(accountPrefix(account), l);
+            return l.size();
+        } catch (Throwable t) { return 0; }
+    }
+
+    /** 每个账号一行：目标数 + 今天已签数 */
+    private String perAccountLine() {
+        StringBuilder sb = new StringBuilder();
+        try {
+            int n = activatedAccounts();
+            String today = todayStr();
+            for (int i = 0; i < n; i++) {
+                List<Map<String, Object>> l = new ArrayList<Map<String, Object>>();
+                loadTargetsInto(accountPrefix(i), l);
+                int done = 0;
+                for (Map<String, Object> m : l) {
+                    try { if (today.equals(prefs.getString(accountPrefix(i) + "last_" + entryId(m), ""))) done++; } catch (Throwable ignored) {}
+                }
+                if (i > 0) sb.append('\n');
+                sb.append(accountLabel(i)).append("：目标 ").append(l.size()).append(" · 已签 ").append(done);
+                if (l.isEmpty()) sb.append("（还没有目标，去该账号学一个）");
+            }
+        } catch (Throwable ignored) {}
+        return sb.toString();
+    }
+
+    /** 把当前账号的目标复制给其它账号（只复制目标，不带已签状态） */
+    private void showCopyTargets(final Activity act) {
+        if (act == null) { toast("请在 TG 界面使用 /jmb"); return; }
+        final int cur = currentAccount();
+        final List<Map<String, Object>> mine = targetsSnapshot();
+        if (mine.isEmpty()) { toast("当前账号还没有目标，先学一个再复制"); return; }
+        int n = activatedAccounts();
+        if (n <= 1) { toast("只有一个登录账号，不用复制"); return; }
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(Theme.dp(act, 16), Theme.dp(act, 8), Theme.dp(act, 16), Theme.dp(act, 8));
+        TextView info = new TextView(act);
+        info.setTextSize(13);
+        info.setTextColor(Theme.txtPrimary(act));
+        info.setText("把 " + accountLabel(cur) + " 的 " + mine.size() + " 个目标复制到其它账号。\n只复制目标本身，不带「今天已签」和重试记录。");
+        box.addView(info);
+        for (int i = 0; i < n; i++) {
+            if (i == cur) continue;
+            final int target = i;
+            LinearLayout row = new LinearLayout(act);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setPadding(Theme.dp(act, 4), Theme.dp(act, 12), Theme.dp(act, 4), Theme.dp(act, 12));
+            TextView t = new TextView(act);
+            t.setTextSize(15);
+            t.setTextColor(Theme.txtPrimary(act));
+            t.setText("→ " + accountLabel(i) + "（现有 " + acctTargetCount(i) + " 个）");
+            row.addView(t, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            TextView ar = new TextView(act);
+            ar.setTextSize(18);
+            ar.setText("\u203a");
+            row.addView(ar);
+            row.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { copyTargetsTo(target, cur, mine); }
+            });
+            box.addView(row);
+            View div = new View(act);
+            div.setBackgroundColor(0x1A000000);
+            box.addView(div, new LinearLayout.LayoutParams(-1, 1));
+        }
+        showDialog(act, "复制目标到其它账号", box, "关闭");
+    }
+
+    private void copyTargetsTo(int account, int fromAccount, List<Map<String, Object>> src) {
+        String prefix = accountPrefix(account);
+        List<Map<String, Object>> exist = new ArrayList<Map<String, Object>>();
+        try { loadTargetsInto(prefix, exist); } catch (Throwable ignored) {}
+        int added = 0, skipped = 0;
+        for (Map<String, Object> m : src) {
+            try {
+                String kind = entryKind(m);
+                boolean dup = false;
+                for (Map<String, Object> e : exist) {
+                    if (entryDid(e) != entryDid(m)) continue;
+                    if (!kind.equals(entryKind(e))) continue;
+                    if (KIND_CB.equals(kind)) { if (Arrays.equals(entryData(e), entryData(m))) dup = true; }
+                    else if (entryText(e).equals(entryText(m))) dup = true;
+                    if (dup) break;
+                }
+                if (dup) { skipped++; continue; }
+                Map<String, Object> cp = new HashMap<String, Object>(m);
+                persistEntry(prefix, cp);
+                added++;
+            } catch (Throwable ignored) {}
+        }
+        String msg = accountLabel(account) + "：新增 " + added + " 个目标" + (skipped > 0 ? "（跳过重复 " + skipped + " 个）" : "");
+        if (added == 0) logw("【复制目标】" + msg + "——一个都没加，可能已经复制过了");
+        else logs("【复制目标】" + accountLabel(fromAccount) + " → " + msg);
+        toast(added == 0 ? "没有需要复制的新目标（可能早就复制过了）"
+                : "已复制到 " + accountLabel(account) + "：新增 " + added + " 个");
+    }
 
     public TGAutoSignCore(Context appContext, ClassLoader cl) {
         this.appContext = appContext.getApplicationContext() != null ? appContext.getApplicationContext() : appContext;
@@ -111,6 +249,7 @@ public final class TGAutoSignCore {
 
 
     public void start() {
+        migrateLegacyKeys();
         if (started) { return; }
         synchronized (TLOCK) { loadTargetsLocked(); started = true; }
         try {
@@ -131,6 +270,7 @@ public final class TGAutoSignCore {
             + " 按钮学习: " + (AUTO_LEARN ? "开" : "关") + " 网络学习: " + (AUTO_LEARN_NET ? "开" : "关"));
         jlog("使用: 在任意聊天输入 /jmb 打开管理界面");
         checkUpdateSilently();
+            mainHandler.postDelayed(new Runnable() { @Override public void run() { bootToast(); } }, 15000L);
         mainHandler.postDelayed(new Runnable(){ public void run(){ try{ if(!prefs.getBoolean("jmb_tut_seen",false)){ Activity a=lastActivity; if(a!=null){ prefs.edit().putBoolean("jmb_tut_seen",true).apply(); showTutorial(a);} } }catch(Throwable ignored){} } }, 4000L);
     }
 
@@ -140,13 +280,13 @@ public final class TGAutoSignCore {
         try {
             UpdateChecker.checkAsync(appContext, false, mainHandler, r -> {
                 if (r == null) return;
-                if (r.networkError) { jlog("检查更新未成功(忽略): " + r.message); return; }
+                if (r.networkError) { logw("检查更新未成功: " + r.message); return; }
                 lastUpdate = r;
                 if (r.newer) {
-                    jlog("发现新版本 v" + r.version + "（当前 v" + UpdateChecker.VERSION_NAME + "）");
+                    logs("发现新版本 v" + r.version + "（当前 v" + UpdateChecker.VERSION_NAME + "）");
                     toast("TGAutoSign 有新版本 v" + r.version + "：发 /jmb → 🔄 检查更新");
                 } else {
-                    jlog("检查更新：已是最新 v" + UpdateChecker.VERSION_NAME);
+                    logd("检查更新：已是最新 v" + UpdateChecker.VERSION_NAME);
                 }
             });
         } catch (Throwable t) { jlog("检查更新异常(忽略): " + t); }
@@ -183,6 +323,57 @@ public final class TGAutoSignCore {
         } catch (Throwable t) { return 0; }
     }
 
+    /** Toast 策略：同类提示 5 分钟内只弹一次 / 每天最多一次 / 一轮签到结果合并成一条 */
+        private final Map<String, Long> toastAt = new HashMap<String, Long>();
+        private int roundOkN = 0, roundErrN = 0;
+        private boolean roundScheduled = false;
+
+        void toastOnce(String key, String msg) {
+            try {
+                long now = System.currentTimeMillis();
+                synchronized (toastAt) {
+                    Long prev = toastAt.get(key);
+                    if (prev != null && now - prev < 5L * 60L * 1000L) return;
+                    toastAt.put(key, now);
+                }
+                toast(msg);
+            } catch (Throwable t) { toast(msg); }
+        }
+
+        void toastDaily(String key, String msg) {
+            try {
+                String today = todayStr();
+                String k = "jmb_toast_" + key;
+                if (today.equals(prefs.getString(k, ""))) return;
+                prefs.edit().putString(k, today).apply();
+            } catch (Throwable ignored) {}
+            toast(msg);
+        }
+
+        void noteResult(boolean good) {
+            boolean schedule;
+            synchronized (toastAt) {
+                if (good) roundOkN++; else roundErrN++;
+                schedule = !roundScheduled;
+                if (schedule) roundScheduled = true;
+            }
+            if (schedule) {
+                mainHandler.postDelayed(new Runnable() {
+                    @Override public void run() { flushRoundToast(); }
+                }, 8000L);
+            }
+        }
+
+        private void flushRoundToast() {
+            int ok, er;
+            synchronized (toastAt) {
+                ok = roundOkN; er = roundErrN;
+                roundOkN = 0; roundErrN = 0; roundScheduled = false;
+            }
+            if (ok == 0 && er == 0) return;
+            if (er == 0) toastOnce("round|" + todayStr(), "✅ 签到完成 " + ok + " 个");
+            else toastOnce("round|" + todayStr(), "签到完成 " + ok + " 个，" + er + " 个没成功（/jmb → 📄 运行日志 里有原因）");
+        }
     void toast(String msg) {
         try {
             mainHandler.post(() -> {
@@ -191,15 +382,117 @@ public final class TGAutoSignCore {
         } catch (Throwable ignored) {}
     }
 
-    void jlog(String msg) {
-        try {
-            Log.i(TAG, msg);
-            synchronized (logBuffer) {
-                logBuffer.add(new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date()) + " " + new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date()) + "  " + msg);
-                while (logBuffer.size() > 200) logBuffer.remove(0);
-            }
-        } catch (Throwable ignored) {}
-    }
+    void jlog(String msg) { jlog(guessLevel(msg), msg); }
+        void logd(String msg) { jlog(LV_DEBUG, msg); }
+        void logs(String msg) { jlog(LV_OK, msg); }
+        void logw(String msg) { jlog(LV_WARN, msg); }
+        void loge(String msg) { jlog(LV_ERR, msg); }
+
+        void jlog(int lv, String msg) {
+            try {
+                long now = System.currentTimeMillis();
+                LogLine l = new LogLine(now, lv, String.valueOf(msg));
+                Log.i(TAG, msg);
+                synchronized (logBuffer) {
+                    logBuffer.add(l);
+                    while (logBuffer.size() > 800) logBuffer.remove(0);
+                    diskQueue.add(l.flat());
+                    if (diskQueue.size() >= 20 || now - diskFlushAt > 5000L) {
+                        final List<String> batch = new ArrayList<String>(diskQueue);
+                        diskQueue.clear();
+                        diskFlushAt = now;
+                        final java.io.File dir = logDir();
+                        LOG_IO.execute(new Runnable() { @Override public void run() { appendDisk(dir, batch); } });
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+
+        private java.io.File logDir() {
+            try {
+                java.io.File d = appContext.getExternalFilesDir("tgautosign");
+                if (d == null) d = appContext.getFilesDir();
+                if (d != null && !d.exists()) d.mkdirs();
+                return d;
+            } catch (Throwable t) { return null; }
+        }
+
+        private static void appendDisk(java.io.File dir, List<String> batch) {
+            try {
+                if (dir == null || batch == null || batch.isEmpty()) return;
+                java.io.File cur = new java.io.File(dir, "run.log");
+                if (cur.length() > 256L * 1024L) {
+                    for (int i = 4; i >= 1; i--) {
+                        java.io.File old = new java.io.File(dir, "run." + i + ".log");
+                        if (!old.exists()) continue;
+                        if (i == 4) old.delete();
+                        else old.renameTo(new java.io.File(dir, "run." + (i + 1) + ".log"));
+                    }
+                    cur.renameTo(new java.io.File(dir, "run.1.log"));
+                }
+                StringBuilder sb = new StringBuilder();
+                for (String s : batch) sb.append(s).append('\n');
+                java.io.FileOutputStream os = new java.io.FileOutputStream(cur, true);
+                os.write(sb.toString().getBytes("UTF-8"));
+                os.close();
+            } catch (Throwable ignored) {}
+        }
+
+        /** 内存与落盘历史合并（按整行文本去重），供日志页与导出使用 */
+        private List<LogLine> mergedLog(int max) {
+            List<LogLine> out = new ArrayList<LogLine>();
+            try {
+                synchronized (logBuffer) { out.addAll(logBuffer); }
+                java.io.File dir = logDir();
+                java.io.File f = dir == null ? null : new java.io.File(dir, "run.log");
+                if (f != null && f.exists() && f.length() < 2L * 1024 * 1024) {
+                    java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<String>();
+                    for (LogLine l : out) seen.add(l.flat());
+                    java.util.ArrayList<String> lines = new java.util.ArrayList<String>();
+                    java.io.BufferedReader br = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(new java.io.FileInputStream(f), "UTF-8"));
+                    String ln;
+                    while ((ln = br.readLine()) != null) lines.add(ln);
+                    br.close();
+                    int from = Math.max(0, lines.size() - max);
+                    List<LogLine> older = new ArrayList<LogLine>();
+                    for (int i = from; i < lines.size(); i++) {
+                        String s = lines.get(i);
+                        if (s == null || s.trim().length() == 0 || seen.contains(s)) continue;
+                        older.add(parseLogLine(s));
+                    }
+                    out.addAll(0, older);
+                }
+            } catch (Throwable ignored) {}
+            while (out.size() > max) out.remove(0);
+            return out;
+        }
+
+        private static LogLine parseLogLine(String flat) {
+            try {
+                java.util.Date d = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).parse(flat.substring(0, 19));
+                String rest = flat.substring(19).trim();
+                int lv = LV_INFO;
+                if (rest.startsWith("[调试]")) { lv = LV_DEBUG; rest = rest.substring(5).trim(); }
+                else if (rest.startsWith("[成功]")) { lv = LV_OK; rest = rest.substring(5).trim(); }
+                else if (rest.startsWith("[警告]")) { lv = LV_WARN; rest = rest.substring(5).trim(); }
+                else if (rest.startsWith("[错误]")) { lv = LV_ERR; rest = rest.substring(5).trim(); }
+                return new LogLine(d == null ? 0L : d.getTime(), lv, rest);
+            } catch (Throwable t) { return new LogLine(0L, LV_INFO, flat); }
+        }
+
+
+        /** 旧的 jlog(String) 调用点按关键词推断级别；重要路径已改成显式 logs/logw/loge */
+        private static int guessLevel(String m) {
+            if (m == null) return LV_INFO;
+            if (m.contains("异常") || m.contains("失败") || m.contains("错误") || m.contains("崩溃")) return LV_ERR;
+            if (m.contains("重试") || m.contains("退避") || m.contains("限流") || m.contains("未找到")
+                    || m.contains("跳过") || m.contains("警告") || m.contains("没有")) return LV_WARN;
+            if (m.contains("成功") || m.contains("已添加") || m.contains("已保存") || m.contains("已绑定")
+                    || m.contains("已删除") || m.contains("已导入") || m.contains("已复制") || m.contains("已发送")) return LV_OK;
+            if (m.contains("[按钮]") || m.contains("dump:") || m.contains("[候选]") || m.contains("已登记")) return LV_DEBUG;
+            return LV_INFO;
+        }
 
     // ---------------- 目标条目模型（v1.3.0：一 bot 多指令 + 回调按钮） ----------------
 
@@ -331,31 +624,87 @@ public final class TGAutoSignCore {
     private static final Set<String> GLOBAL_KEYS = new HashSet<String>(Arrays.asList(
         "jmb_keywords","jmb_retry","jmb_wake_cmd","jmb_alfilter","jmb_autolearn","jmb_autolearn_net","jmb_tut_seen","jmb_prompt_day","update_cooldown_at","update_seen_code","update_last_notice","update_last_error"));
 
-    private void removeEntryEverywhere(String id) {
-        SharedPreferences.Editor e = prefs.edit();
-        int removed = 0;
-        for (String k : new ArrayList<String>(prefs.getAll().keySet())) {
-            for (String mk : ENTRY_MARKERS) {
-                if (k.endsWith("_" + mk + id) || k.equals(mk + id)) { e.remove(k); removed++; break; }
-            }
+    private static final String[] ENTRY_HEADS = {"learned_", "kind_", "did_", "data_", "hash_", "msg_id_",
+            "pre_", "loc_", "last_", "retry_", "retry_at_", "retry_day_", "sent_at_"};
+
+    /** 是不是"目标/状态"键（带 acc 前缀或不带的老格式）；不是的就是设置项 */
+    private static boolean isEntryKey(String k) {
+        if (k == null) return false;
+        String body = k;
+        if (k.startsWith("acc")) {
+            int i = k.indexOf('_');
+            if (i > 0) body = k.substring(i + 1);
         }
-        e.commit();
-        jlog("【删除】跨账号清除 id=" + id + " 共 " + removed + " 个键");
+        for (String h : ENTRY_HEADS) if (body.startsWith(h)) return true;
+        return false;
     }
 
-    private int clearAllConfig() {
-        SharedPreferences.Editor e = prefs.edit();
-        int removed = 0;
-        for (String k : new ArrayList<String>(prefs.getAll().keySet())) {
-            if (GLOBAL_KEYS.contains(k)) continue;
-            e.remove(k); removed++;
-        }
-        e.commit();
-        targets.clear();
-        lastAccount = currentAccount();
-        loadTargets();
-        return removed;
+    /** 一次性搬正 v1.2.2 之前的无前缀老键：能并到 acc0_ 就并，撞车就丢弃 */
+    private int migrateLegacyKeys() {
+        int moved = 0, dropped = 0;
+        try {
+            java.util.Map<String, ?> all = prefs.getAll();
+            SharedPreferences.Editor e = prefs.edit();
+            for (String k : new ArrayList<String>(all.keySet())) {
+                if (k.startsWith("acc") || !isEntryKey(k)) continue;
+                String nk = "acc0_" + k;
+                Object v = all.get(k);
+                e.remove(k);
+                if (prefs.contains(nk)) { dropped++; continue; }
+                if (v instanceof String) e.putString(nk, (String) v);
+                else if (v instanceof Integer) e.putInt(nk, (Integer) v);
+                else if (v instanceof Long) e.putLong(nk, (Long) v);
+                else if (v instanceof Boolean) e.putBoolean(nk, (Boolean) v);
+                else if (v instanceof Float) e.putFloat(nk, (Float) v);
+                else { dropped++; continue; }
+                moved++;
+            }
+            if (moved + dropped > 0) e.apply();
+        } catch (Throwable t) { logw("迁移历史键失败: " + t); }
+        if (moved + dropped > 0) jlog("清理历史遗留配置：搬正 " + moved + " 个，丢弃重复 " + dropped + " 个");
+        return moved + dropped;
     }
+
+    /** 每天第一次加载时提示一条汇总（之前是每次重启都弹两条，很吵） */
+    private void bootToast() {
+        try {
+            int t = targetsSnapshot().size();
+            int noTarget = accountsWithoutTargets();
+            String msg = "TGAutoSign 今天已就位：" + accountLabel(currentAccount()) + " " + t + " 个目标";
+            if (noTarget > 0) msg += "；还有 " + noTarget + " 个账号没学习目标";
+            toastDaily("boot", msg);
+        } catch (Throwable ignored) {}
+    }
+
+    private void removeEntryEverywhere(String id) {
+            SharedPreferences.Editor e = prefs.edit();
+            int removed = 0;
+            for (String k : new ArrayList<String>(prefs.getAll().keySet())) {
+                if (!isEntryKey(k)) continue;
+                String body = k;
+                if (k.startsWith("acc")) { int i = k.indexOf('_'); if (i > 0) body = k.substring(i + 1); }
+                for (String mk : ENTRY_HEADS) {
+                    if (body.equals(mk + id) || body.endsWith("_" + mk + id)) { e.remove(k); removed++; break; }
+                }
+            }
+            e.apply();
+            logs("【删除】跨账号清除 id=" + id + " 共 " + removed + " 个键");
+        }
+
+    private int clearAllConfig() {
+            SharedPreferences.Editor e = prefs.edit();
+            int removed = 0;
+            for (String k : new ArrayList<String>(prefs.getAll().keySet())) {
+                if (!isEntryKey(k)) continue;   // 设置项（jmb_* 等）一律保留
+                e.remove(k);
+                removed++;
+            }
+            e.apply();
+            synchronized (TLOCK) { targets.clear(); }
+            lastAccount = currentAccount();
+            loadTargets();
+            return removed;
+        }
 
     private void confirmClearAll(final Activity act) {
         LinearLayout box = new LinearLayout(act);
@@ -371,7 +720,7 @@ public final class TGAutoSignCore {
             @Override public void onClick(View v) {
                 int n = clearAllConfig();
                 toast("已清空 " + n + " 项配置");
-                jlog("【清空配置】删除 " + n + " 个键，当前账号目标数=" + targets.size());
+                logs("【清空配置】删除 " + n + " 个键，当前账号目标数=" + targets.size());
             }
         });
         box.addView(ok);
@@ -509,7 +858,7 @@ public final class TGAutoSignCore {
         m.put("data", data); m.put("hash", hash); m.put("msgId", msgId); m.put("loc", label);
         persistEntry(accountPrefix(), m); addTargetEntry(m);
         toast("✅ 已绑定回调: "+label);
-        jlog("【绑定】uid="+did+" text="+label+" data="+hexOf(data,16)+" msg_id="+msgId);
+        logs("【绑定】uid="+did+" text="+label+" data="+hexOf(data,16)+" msg_id="+msgId);
     }
 
     private void startCapture(Activity act){
@@ -689,7 +1038,7 @@ public final class TGAutoSignCore {
 
     private void addTargetEntry(Map<String, Object> m) {
         targets.add(m);
-        jlog("已登记签到目标 " + entryDid(m) + " -> " + (KIND_CB.equals(entryKind(m)) ? "[回调] " : "") + entryText(m) + " (id=" + entryId(m) + ")");
+        logs("已添加目标 " + entryDid(m) + " -> " + (KIND_CB.equals(entryKind(m)) ? "[回调] " : "") + entryText(m) + " (id=" + entryId(m) + ")");
     }
 
     private boolean targetContains(long did) {
@@ -756,7 +1105,7 @@ public final class TGAutoSignCore {
                 } catch (Throwable ignored) {}
             }
         } catch (Throwable t) {
-            jlog("读取学习目标失败: " + t);
+            loge("读取目标列表失败: " + t);
         }
     }
 
@@ -768,11 +1117,11 @@ public final class TGAutoSignCore {
         if (!LEARN_ENABLED) return;
         if (text == null || text.length() == 0) return;
         if (dialogId <= 0) {
-            jlog("忽略群聊学习: dialogId=" + dialogId);
+            logd("忽略群聊学习: dialogId=" + dialogId);
             return;
         }
         if (findTextEntry(dialogId, String.valueOf(text)) != null) {
-            jlog("目标 " + dialogId + " 已学习过相同指令，跳过");
+            logd("目标 " + dialogId + " 已加过相同指令，跳过");
             return;
         }
         Map<String, Object> m = new HashMap<>();
@@ -783,7 +1132,7 @@ public final class TGAutoSignCore {
         String prefix = accountPrefix();
         persistEntry(prefix, m);
         addTargetEntry(m);
-        jlog("【自动学习】新目标 " + dialogId + " -> " + text);
+        logs("【自动学习】新目标 " + dialogId + " -> " + text);
         toast("✅ 已添加新签到目标: " + text);
     }
 
@@ -796,7 +1145,7 @@ public final class TGAutoSignCore {
         if (data == null || data.length == 0) return;
         if (dialogId <= 0) return;
         if (findCbEntry(dialogId, data) != null) {
-            jlog("目标 " + dialogId + " 已学习过相同回调按钮，跳过");
+            logd("目标 " + dialogId + " 已加过相同回调按钮，跳过");
             return;
         }
         String label = display != null && display.trim().length() > 0 ? String.valueOf(display).trim() : "回调按钮";
@@ -811,7 +1160,7 @@ public final class TGAutoSignCore {
         String prefix = accountPrefix();
         persistEntry(prefix, m);
         addTargetEntry(m);
-        jlog("【自动学习】新回调签到目标 " + dialogId + " -> [" + label + "] data=" + Base64.getEncoder().encodeToString(data) + " msg_id=" + msgId);
+        logs("【自动学习】新回调目标 " + dialogId + " -> [" + label + "] data=" + Base64.getEncoder().encodeToString(data) + " msg_id=" + msgId);
         toast("✅ 已添加回调签到目标: " + label);
     }
 
@@ -832,7 +1181,7 @@ public final class TGAutoSignCore {
                 }
             }
             if (!matched) {
-                jlog("[候选] uid=" + did + " msg=" + t + "（不含签到关键词，不自动添加）");
+                logd("[候选] uid=" + did + " msg=" + t + "（不含签到关键词，不自动添加）");
                 return;
             }
         }
@@ -848,7 +1197,7 @@ public final class TGAutoSignCore {
             }
         } catch (Throwable ignored) {}
         if (!isBot) {
-            jlog("[候选] uid=" + did + " msg=" + t + "（非bot，不自动添加）");
+            logd("[候选] uid=" + did + " msg=" + t + "（非bot，不自动添加）");
             return;
         }
         learnTarget(did, t);
@@ -902,25 +1251,25 @@ public final class TGAutoSignCore {
         try { user = invoke(mc, "getUser", new Class<?>[]{Long.class}, new Object[]{dialogId}); }
         catch (Throwable t) { user = null; }
         if (user == null) {
-            jlog("内存无缓存 " + dialogId + "，尝试从数据库读取");
+            logd("内存里没有该 bot，改查数据库 " + dialogId + "，尝试从数据库读取");
             try {
                 Object ms = getMessagesStorage(account);
                 if (ms != null) user = invoke(ms, "getUser", new Class<?>[]{long.class}, new Object[]{dialogId});
             } catch (Throwable e) {
-                jlog("数据库读取失败 " + dialogId + " : " + e);
+                logd("数据库也没读到 " + dialogId + " : " + e);
             }
         }
-        if (user == null) {
-            jlog("未找到用户数据 " + dialogId + "（可能未缓存，稍后自动重试）");
-            return;
-        }
-        Object peer;
-        try { peer = staticInvoke(classEx("org.telegram.messenger.MessagesController"), "getInputPeer", new Class<?>[]{classEx("org.telegram.tgnet.TLObject")}, new Object[]{user}); }
-        catch (Throwable t) { peer = null; }
-        if (peer == null) {
-            jlog("构造 InputPeer 失败 " + dialogId);
-            return;
-        }
+        Object peer = null;
+                if (user != null) {
+                    try { peer = staticInvoke(classEx("org.telegram.messenger.MessagesController"), "getInputPeer", new Class<?>[]{classEx("org.telegram.tgnet.TLObject")}, new Object[]{user}); }
+                    catch (Throwable t) { peer = null; }
+                }
+                if (peer == null) peer = peerFromDialogs(dialogId, account);
+                if (peer == null) {
+                    if (isChatOrChannel(dialogId, account)) { giveUpTarget(entry, account, "这个目标是群或频道，不是 bot"); return; }
+                    countSoftFail(entry, account, "取不到这个 bot 的会话数据");
+                    return;
+                }
         final List<String> pres = cbPres(entry);
         if (KIND_CB.equals(kind) && !pres.isEmpty() && !wakeFired.contains(id)) {
             wakeFired.add(id);
@@ -973,8 +1322,8 @@ public final class TGAutoSignCore {
                                     prefs.edit().putString(fPrefix + "last_" + fId, todayStr())
                                          .putInt(fPrefix + "retry_" + fId, RETRY_LIMIT)
                                          .putString(fPrefix + "retry_day_" + fId, todayStr()).apply();
-                                    jlog("签到永久失败 " + dialogId + " : " + errText + "（今日放弃）");
-                                    toast("⚠️ 签到失败(" + errText + ")，今日不再重试");
+                                    loge("签到永久失败 " + dialogId + " : " + errText + "（今日放弃）");
+                                    noteResult(false);
                                 } else if (code.equals("420") || upper.startsWith("FLOOD_WAIT")) {
                                     // FLOOD_WAIT_<sec>：尊重服务器要求的等待秒数，写 retry_at 由轮询补签
                                     long waitSec = 60L;
@@ -995,7 +1344,7 @@ public final class TGAutoSignCore {
                                          .remove(fPrefix + "last_" + fId)
                                          .putLong(fPrefix + "retry_at_" + fId, System.currentTimeMillis() + waitMs)
                                          .putString(fPrefix + "retry_day_" + fId, todayStr()).apply();
-                                    jlog("签到遇限流 " + dialogId + " : " + errText + "，等待 " + waitSec + " 秒后自动重试");
+                                    logw("签到遇限流 " + dialogId + " : " + errText + "，等待 " + waitSec + " 秒后自动重试");
                                 } else {
                                     int oldRetry = prefs.getInt(fPrefix + "retry_" + fId, 0);
                                     prefs.edit().putInt(fPrefix + "retry_" + fId, oldRetry + 1)
@@ -1003,8 +1352,8 @@ public final class TGAutoSignCore {
                                          .putLong(fPrefix + "retry_at_" + fId, System.currentTimeMillis() + backoffDelay(oldRetry))
                                          .putString(fPrefix + "retry_day_" + fId, todayStr())
                                          .commit();
-                                    jlog("签到失败 " + dialogId + " : " + errText + "（第" + (oldRetry + 1) + "次，退避重试）");
-                                    toast("⚠️ 签到失败: " + errText + "，稍后自动重试");
+                                    loge("签到失败 " + dialogId + " : " + errText + "（第" + (oldRetry + 1) + "次，退避重试）");
+                                    noteResult(false);
                                 }
                             } else {
                                 prefs.edit()
@@ -1015,8 +1364,8 @@ public final class TGAutoSignCore {
                                     .commit();
                                 String ans = "";
                                 try { Object am = getFieldValSafe(response, "message"); if (am == null) am = getFieldValSafe(response, "alert"); if (am != null) ans = String.valueOf(am); } catch (Throwable ignored) {}
-                                jlog("签到完成 " + dialogId + " " + (KIND_CB.equals(fKind) ? "[回调] " : "text=") + fText + (ans.length() > 0 ? " 机器人返回: " + ans : ""));
-                                toast("✅ 签到成功: " + fText + (ans.length() > 0 ? "\n" + ans : ""));
+                                logs("签到完成 " + dialogId + " " + (KIND_CB.equals(fKind) ? "[回调] " : "text=") + fText + (ans.length() > 0 ? " 机器人返回: " + ans : ""));
+                                noteResult(true);
                             }
                         } catch (Throwable ignored) {}
                     }
@@ -1024,10 +1373,10 @@ public final class TGAutoSignCore {
                 }
             });
             invoke(cm, "sendRequest", new Class<?>[]{classEx("org.telegram.tgnet.TLObject"), classEx("org.telegram.tgnet.RequestDelegate")}, new Object[]{req, delegate});
-            jlog("已发起签到请求 " + dialogId + " " + (KIND_CB.equals(kind) ? "[回调] " : "text=") + fText + " (id=" + id + ")");
+            logd("已发出请求 " + dialogId + " " + (KIND_CB.equals(kind) ? "[回调] " : "text=") + fText + " (id=" + id + ")");
         } catch (Throwable t) {
             pendingSigns.remove(id);
-            jlog("发送异常 " + dialogId + " : " + t);
+            loge("发送异常 " + dialogId + " : " + t);
         }
     }
 
@@ -1039,15 +1388,16 @@ public final class TGAutoSignCore {
     /** 对指定账号执行一轮补签。从 prefs 直接读该账号条目，支持全账号签到。 */
 
     void trySignAllFor(String reason, boolean force, int account) {
+        lastRound = null;
         long now = System.currentTimeMillis();
         if (!force && now - lastTryTime < THROTTLE_MS) {
-            jlog("[" + reason + "] 节流内跳过");
+            logd("[" + reason + "] 节流内跳过");
             return;
         }
         lastTryTime = now;
         if (account == currentAccount()) syncAccount();
         if (!hasNetwork()) {
-            jlog("[" + reason + "] 无网络，跳过，网络恢复后自动补");
+            logw("[" + reason + "] 无网络，跳过，网络恢复后自动补");
             return;
         }
         String prefix = accountPrefix(account);
@@ -1072,28 +1422,31 @@ public final class TGAutoSignCore {
                     jlog("[" + reason + "] " + dialogId + " 进入新的一天，重试计数已重置");
                 }
                 if (retries >= RETRY_LIMIT) {
-                    jlog("[" + reason + "] " + dialogId + " 今日已重试 " + retries + " 次，明天再试");
+                    logw("[" + reason + "] " + dialogId + " 今日已重试 " + retries + " 次，明天再试");
                     busy++;
                     continue;
                 }
                 long retryAt = prefs.getLong(prefix + "retry_at_" + id, 0);
                 if (now < retryAt) {
-                    jlog("[" + reason + "] " + dialogId + " 退避中(剩 " + (retryAt - now) / 60000L + " 分钟)，跳过");
+                    logw("[" + reason + "] " + dialogId + " 退避中(剩 " + (retryAt - now) / 60000L + " 分钟)，跳过");
                     busy++;
                     continue;
                 }
                 if (isPendingFresh(id)) {
-                    jlog("[" + reason + "] " + dialogId + " 已在发送中，跳过");
+                    logd("[" + reason + "] " + dialogId + " 正在发送中，跳过");
                     busy++;
                     continue;
                 }
-                jlog("[" + reason + "] 尝试签到 " + dialogId + " " + (KIND_CB.equals(entryKind(m)) ? "[回调] " : "text=") + entryText(m) + " (重试 " + retries + "/" + RETRY_LIMIT + ")");
+                logd("[" + reason + "] 尝试签到 " + dialogId + " " + (KIND_CB.equals(entryKind(m)) ? "[回调] " : "text=") + entryText(m) + " (重试 " + retries + "/" + RETRY_LIMIT + ")");
                 sendSign(m, account);
             } catch (Throwable t) {
                 jlog("trySignAll 异常 " + dialogId + " : " + t);
             }
         }
-        jlog("[" + reason + "] 检查完成(账号" + account + ") 目标=" + total + " 已签=" + signed + " 等待中=" + busy + " 本轮发起=" + (total - signed - busy));
+        String sm = total == 0 ? accountLabel(account) + "：还没有签到目标（切到该账号，去 bot 会话点一下按钮或发一次指令）"
+                : accountLabel(account) + "：目标 " + total + " · 已签 " + signed + " · 待重试 " + busy + " · 本轮发出 " + (total - signed - busy);
+        lastRound = sm;
+        if (total > 0) jlog("[" + reason + "] " + sm);
         if (promptToday && total > 0 && signed == total) {
             String pd = "";
             try { pd = prefs.getString("jmb_prompt_day", ""); } catch (Throwable ignored) {}
@@ -1108,23 +1461,105 @@ public final class TGAutoSignCore {
 
     /** v1.3.0：一键签全部账号（每个账号独立目标集，各自发各自的） */
     public void signAllAccounts() {
-        int count = activatedAccounts();
-        jlog("=== 全账号签到开始，共 " + count + " 个账号 ===");
-        for (int i = 0; i < count; i++) {
-            try {
-                trySignAllFor("全账号(" + (i + 1) + "/" + count + ")", true, i);
-            } catch (Throwable t) {
-                jlog("账号 " + i + " 签到异常: " + t);
+            int count = activatedAccounts();
+            jlog("=== 全账号签到开始，共 " + count + " 个账号 ===");
+            StringBuilder rep = new StringBuilder();
+            for (int i = 0; i < count; i++) {
+                try {
+                    trySignAllFor("全账号(" + (i + 1) + "/" + count + ")", true, i);
+                    String one = lastRound;
+                    if (one == null) one = accountLabel(i) + "：本轮跳过（60 秒内刚跑过，或没网）";
+                    if (rep.length() > 0) rep.append('\n');
+                    rep.append(one);
+                } catch (Throwable t) {
+                    loge("账号 " + (i + 1) + " 签到异常: " + t);
+                }
             }
+            jlog("=== 全账号签到结束 ===");
+            if (rep.length() > 0) toastOnce("allacc|" + todayStr() + "|" + rep.length(), "全账号签到\n" + rep);
         }
-        jlog("=== 全账号签到结束 ===");
-        toast("全账号签到已执行，结果见运行日志");
-    }
 
     public void enqueueTry(String reason) {
         mainHandler.post(() -> { try { trySignAll(reason, false); } catch (Throwable t) { jlog("[" + reason + "] 异常: " + t); } });
     }
 
+    /** 兜底解析 peer：缓存与数据库都拿不到 user 时，从会话列表里找这个 did 直接用 */
+        private Object peerFromDialogs(long did, int account) {
+            try {
+                Object mc = getMessagesController(account);
+                if (mc == null) return null;
+                Object dialogs = null;
+                try { dialogs = call(mc, "getDialogs", new Class<?>[0], new Object[0]); } catch (Throwable ignored) {}
+                if (dialogs == null) { try { dialogs = getFieldVal(mc, "dialogs"); } catch (Throwable ignored) {} }
+                if (!(dialogs instanceof List)) return null;
+                for (Object d : (List<?>) dialogs) {
+                    if (d == null) continue;
+                    long id = -1L;
+                    try { Object o = call(d, "getDialogId", new Class<?>[0], new Object[0]); if (o instanceof Number) id = ((Number) o).longValue(); } catch (Throwable ignored) {}
+                    if (id != did) {
+                        try { Object o = getFieldVal(d, "dialogId"); if (o instanceof Number) id = ((Number) o).longValue(); } catch (Throwable ignored) {}
+                        if (id != did) continue;
+                    }
+                    Object cand = null;
+                    try { cand = call(d, "getInputPeer", new Class<?>[0], new Object[0]); } catch (Throwable ignored) {}
+                    if (cand == null) { try { cand = call(d, "getPeer", new Class<?>[0], new Object[0]); } catch (Throwable ignored) {} }
+                    if (cand == null) { try { cand = getFieldVal(d, "inputPeer"); } catch (Throwable ignored) {} }
+                    if (cand == null) continue;
+                    String cn = cand.getClass().getName();
+                    if (cn.contains("InputChannel") || cn.contains("InputChat")) return null;
+                    if (cn.contains("InputPeer")) return cand;
+                    try {
+                        Object ip = staticInvoke(classEx("org.telegram.messenger.MessagesController"), "getInputPeer",
+                                new Class<?>[]{classEx("org.telegram.tgnet.TLObject")}, new Object[]{cand});
+                        if (ip != null && ip.getClass().getName().contains("InputPeer")) return ip;
+                    } catch (Throwable ignored) {}
+                }
+            } catch (Throwable ignored) {}
+            return null;
+        }
+
+        private boolean isChatOrChannel(long did, int account) {
+            try {
+                Object mc = getMessagesController(account);
+                if (mc == null) return false;
+                Object chat = null;
+                try { chat = invoke(mc, "getChat", new Class<?>[]{Long.class}, new Object[]{did}); } catch (Throwable ignored) {}
+                if (chat == null) { try { chat = invoke(mc, "getChannel", new Class<?>[]{Long.class}, new Object[]{did}); } catch (Throwable ignored) {} }
+                return chat != null;
+            } catch (Throwable t) { return false; }
+        }
+
+        /** 没真正发出去的失败也要计入退避，否则会每 60 秒空跑一次 */
+        private void countSoftFail(Map<String, Object> entry, int account, String why) {
+            String prefix = accountPrefix(account);
+            String id = entryId(entry);
+            try {
+                int cur = prefs.getInt(prefix + "retry_" + id, 0);
+                if (cur > 0 && !todayStr().equals(prefs.getString(prefix + "retry_day_" + id, ""))) cur = 0;
+                long wait = backoffDelay(cur);
+                prefs.edit().putInt(prefix + "retry_" + id, cur + 1)
+                        .putString(prefix + "retry_day_" + id, todayStr())
+                        .putLong(prefix + "retry_at_" + id, System.currentTimeMillis() + wait)
+                        .apply();
+                logw(why + "：" + targetTitle(entryDid(entry)) + " · " + accountLabel(account)
+                        + " · 第 " + (cur + 1) + "/" + RETRY_LIMIT + " 次，" + (wait / 60000L) + " 分钟后再试");
+            } catch (Throwable t) { logd("记录失败状态异常: " + t); }
+        }
+
+        /** 明显签不成的目标（群/频道、被删的 bot）当天放弃，避免无意义重跑 */
+        private void giveUpTarget(Map<String, Object> entry, int account, String why) {
+            String prefix = accountPrefix(account);
+            String id = entryId(entry);
+            try {
+                prefs.edit().putString(prefix + "last_" + id, todayStr())
+                        .putInt(prefix + "retry_" + id, RETRY_LIMIT)
+                        .putString(prefix + "retry_day_" + id, todayStr())
+                        .apply();
+            } catch (Throwable ignored) {}
+            String who = targetTitle(entryDid(entry));
+            logw(why + "：" + who + " · " + accountLabel(account) + "，今天不再尝试；在 /jmb → 📋 目标列表 里可以删掉它");
+            toastOnce("skip|" + account + "|" + id, "⚠ " + who + " 签不了：" + why);
+        }
     private boolean hasNetwork() {
         try {
             ConnectivityManager cm = (ConnectivityManager) appContext.getSystemService(Context.CONNECTIVITY_SERVICE);
@@ -1314,7 +1749,7 @@ public final class TGAutoSignCore {
         menuItem(root, "🌐", "签全部账号", "共 " + activatedAccounts() + " 个账号，各自独立", "sign_all_accounts");
         menuItem(root, "📖", "使用教程", "功能说明与快速上手", "tutorial");
         menuItem(root, "🩺", "自诊断", "检查宿主反射锚点是否正常", "diag");
-        menuItem(root, "📄", "运行日志", "最近 200 行 · 倒序着色", "log");
+        menuItem(root, "📄", "运行日志", "最近 800 行 · 可搜索 / 筛选 / 清空", "log");
         menuItem(root, "🗑", "删除目标", "从自动签到移除", "del");
         menuItem(root, "🧹", "清空所有配置", "跨全部账号彻底清空(保留设置)", "clear_all");
         menuItem(root, "🧾", "导出运行日志", "写到下载目录，便于反馈", "export_log");
@@ -1322,7 +1757,7 @@ public final class TGAutoSignCore {
         String upSub = (lastUpdate != null && lastUpdate.newer) ? "发现新版本 v" + lastUpdate.version + "，可下载" : "当前 v" + UpdateChecker.VERSION_NAME;
         menuItem(root, "🔄", "检查更新", upSub, "update");
         menuItem(root, "📤", "导出配置", "目标与设置存 json，换号不重学", "export");
-        menuItem(root, "📥", "导入配置", "读最新导出文件，只合并不清空", "import");
+        menuItem(root, "📥", "导入配置", "选一份备份，看内容再导入（可合并或覆盖）", "import");
         showDialog(act, "TGAutoSign · 管理", root, "关闭");
     }
 
@@ -1338,37 +1773,177 @@ public final class TGAutoSignCore {
         return n;
     }
 
-    private void showLog(Activity act) {
-        try {
-            List<String> copy;
-            synchronized (logBuffer) { copy = new ArrayList<>(logBuffer); }
-            boolean dk = Theme.dark(act);
-            int okC = dk ? 0xFF7BD88F : 0xFF1B7E33;
-            int errC = dk ? 0xFFFF8A80 : 0xFFB00020;
-            int wrnC = dk ? 0xFFFFC466 : 0xFFB26A00;
-            int infoC = dk ? 0xFFD6D9DE : 0xFF3C4043;
-            android.text.SpannableStringBuilder ssb = new android.text.SpannableStringBuilder();
-            TextView tv = new TextView(act);
-            tv.setTextSize(12); tv.setTypeface(android.graphics.Typeface.MONOSPACE); tv.setPadding(Theme.dp(act,14), Theme.dp(act,10), Theme.dp(act,14), Theme.dp(act,10));
-            if (copy.isEmpty()) { tv.setText("(暂无日志)"); tv.setTextColor(infoC); }
-            else {
-                tv.setTextColor(infoC);
-                for (int i = copy.size() - 1; i >= 0; i--) {
-                    String line = copy.get(i);
-                    int s = ssb.length();
-                    ssb.append(line).append("\n");
-                    int col = infoC;
-                    if (line.indexOf("失败") >= 0 || line.indexOf("错误") >= 0 || line.indexOf("异常") >= 0) col = errC;
-                    else if (line.indexOf("成功") >= 0 || line.indexOf("完成") >= 0 || line.indexOf("已保存") >= 0) col = okC;
-                    else if (line.indexOf("未找到") >= 0 || line.indexOf("警告") >= 0) col = wrnC;
-                    ssb.setSpan(new android.text.style.ForegroundColorSpan(col), s, ssb.length(), 33);
+    private void showLog(final Activity act) {
+            if (act == null) { toast("请在 TG 界面使用 /jmb"); return; }
+            LinearLayout root = new LinearLayout(act);
+            root.setOrientation(LinearLayout.VERTICAL);
+            root.setPadding(Theme.dp(act, 10), Theme.dp(act, 4), Theme.dp(act, 10), Theme.dp(act, 4));
+
+            android.widget.HorizontalScrollView bar = new android.widget.HorizontalScrollView(act);
+            bar.setHorizontalScrollBarEnabled(false);
+            LinearLayout chips = new LinearLayout(act);
+            chips.setOrientation(LinearLayout.HORIZONTAL);
+            bar.addView(chips);
+            logChip(act, chips, "全部", new Runnable() { @Override public void run() { logFilter = LV_DEBUG; logShowDebug = true; refreshLog(); } });
+            logChip(act, chips, "只看重要", new Runnable() { @Override public void run() { logFilter = LV_WARN; logShowDebug = false; refreshLog(); } });
+            logChip(act, chips, "只看错误", new Runnable() { @Override public void run() { logFilter = LV_ERR; logShowDebug = false; refreshLog(); } });
+            logChip(act, chips, logDesc ? "↓ 最新在上" : "↑ 最新在下", new Runnable() { @Override public void run() { logDesc = !logDesc; refreshLog(); } });
+            logChip(act, chips, "🗑 清空", new Runnable() { @Override public void run() { confirmClearLog(act); } });
+            logChip(act, chips, "📤 导出", new Runnable() { @Override public void run() { doExportLog(act); } });
+            root.addView(bar);
+
+            EditText q = new EditText(act);
+            q.setSingleLine();
+            q.setTextSize(13);
+            q.setHint("搜索日志，边输边过滤");
+            q.setTextColor(Theme.txtPrimary(act));
+            q.setHintTextColor(Theme.txtMuted(act));
+            q.addTextChangedListener(new android.text.TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+                @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+                @Override public void afterTextChanged(android.text.Editable s) {
+                    logQuery = String.valueOf(s).trim();
+                    refreshLog();
                 }
-                tv.setText(ssb);
+            });
+            root.addView(q);
+
+            logStat = new TextView(act);
+            logStat.setTextSize(11);
+            logStat.setTextColor(Theme.txtMuted(act));
+            root.addView(logStat);
+
+            ScrollView sv = new ScrollView(act);
+            logList = new LinearLayout(act);
+            logList.setOrientation(LinearLayout.VERTICAL);
+            sv.addView(logList);
+            root.addView(sv, new LinearLayout.LayoutParams(-1, Theme.dp(act, 340)));
+
+            TextView legend = new TextView(act);
+            legend.setTextSize(11);
+            legend.setTextColor(Theme.txtMuted(act));
+            legend.setText("颜色：红=出错要处理 · 黄=会自动重试 · 绿=成功 · 灰白=普通 · 淡灰=调试细节。长按任意行可复制。");
+            root.addView(legend);
+
+            showDialog(act, "运行日志", root, "关闭");
+            refreshLog();
+        }
+
+        private void logChip(final Context c, LinearLayout parent, String label, final Runnable action) {
+            TextView tv = new TextView(c);
+            tv.setTextSize(13);
+            tv.setText(label);
+            tv.setSingleLine(true);
+            tv.setTextColor(Theme.txtPrimary(c));
+            tv.setBackground(Theme.chipBg(c, Theme.dark(c) ? 0xFF2E333B : 0xFFE6EAEE));
+            tv.setPadding(Theme.dp(c, 10), Theme.dp(c, 6), Theme.dp(c, 10), Theme.dp(c, 6));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            lp.setMargins(Theme.dp(c, 2), 0, Theme.dp(c, 2), 0);
+            tv.setLayoutParams(lp);
+            tv.setOnClickListener(v -> action.run());
+            parent.addView(tv);
+        }
+
+        private void refreshLog() {
+            try {
+                if (logList == null) return;
+                logList.removeAllViews();
+                List<LogLine> all = mergedLog(800);
+                List<LogLine> show = new ArrayList<LogLine>();
+                int errs = 0, warns = 0;
+                String qq = logQuery.toLowerCase(Locale.US);
+                for (LogLine l : all) {
+                    if (l.lv == LV_ERR) errs++;
+                    else if (l.lv == LV_WARN) warns++;
+                    if (!logShowDebug && l.lv == LV_DEBUG) continue;
+                    if (l.lv < logFilter) continue;
+                    if (qq.length() > 0 && String.valueOf(l.msg).toLowerCase(Locale.US).indexOf(qq) < 0) continue;
+                    show.add(l);
+                }
+                if (logDesc) Collections.reverse(show);
+                int n = Math.min(show.size(), 200);
+                for (int i = 0; i < n; i++) logRow(logList, show.get(i));
+                if (n == 0) emptyView(logList, show.size() == 0 ? "没有符合条件的日志" : "没有匹配「" + logQuery + "」的日志");
+                String span = "";
+                if (!all.isEmpty()) {
+                    span = " · 时间 " + new SimpleDateFormat("MM-dd HH:mm", Locale.US).format(new Date(all.get(0).ts))
+                            + " 起 " + all.size() + " 条";
+                }
+                if (logStat != null) logStat.setText("错误 " + errs + " · 警告 " + warns + span
+                        + " · 当前显示 " + n + (show.size() > n ? "（更多请导出查看）" : ""));
+            } catch (Throwable t) {
+                try { loge("日志页刷新失败: " + t); } catch (Throwable ignored) {}
             }
-            ScrollView sv = new ScrollView(act); sv.addView(tv);
-            showDialog(act, "运行日志 · 倒序", sv, "关闭");
-        } catch (Throwable t) { jlog("日志框失败: " + t); toast("日志打开失败"); }
-    }
+        }
+
+        private void logRow(LinearLayout parent, final LogLine l) {
+            final Context c = parent.getContext();
+            final String body = new SimpleDateFormat("MM-dd HH:mm:ss", Locale.US).format(new Date(l.ts)) + "  " + l.msg;
+            TextView tv = new TextView(c);
+            tv.setTextSize(12);
+            tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+            tv.setPadding(Theme.dp(c, 2), Theme.dp(c, 3), Theme.dp(c, 2), Theme.dp(c, 3));
+            int col;
+            switch (l.lv) {
+                case LV_ERR: col = Theme.dark(c) ? 0xFFFF8A80 : 0xFFB00020; break;
+                case LV_WARN: col = Theme.dark(c) ? 0xFFFFC466 : 0xFFB26A00; break;
+                case LV_OK: col = Theme.dark(c) ? 0xFF7BD88F : 0xFF1B7E33; break;
+                case LV_DEBUG: col = Theme.dark(c) ? 0xFF74797F : 0xFF9AA0A6; break;
+                default: col = Theme.txtPrimary(c);
+            }
+            tv.setTextColor(col);
+            tv.setText(body);
+            tv.setOnLongClickListener(new View.OnLongClickListener() {
+                @Override public boolean onLongClick(View v) { copyToClip(body); return true; }
+            });
+            parent.addView(tv);
+        }
+
+        private void copyToClip(String body) {
+            try {
+                android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                        appContext.getSystemService(Context.CLIPBOARD_SERVICE);
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("TGAutoSign", body));
+                toast("已复制这一行");
+            } catch (Throwable t) { logw("复制失败: " + t); }
+        }
+
+        private void confirmClearLog(final Activity act) {
+            LinearLayout box = new LinearLayout(act);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(Theme.dp(act, 16), Theme.dp(act, 8), Theme.dp(act, 16), Theme.dp(act, 8));
+            TextView t = new TextView(act);
+            t.setTextSize(13);
+            t.setTextColor(Theme.txtPrimary(act));
+            t.setText("清空会同时删掉当前列表和落盘的历史日志文件。\n建议先「导出再清空」留一份，方便之后对账。");
+            box.addView(t);
+            Button b1 = new Button(act);
+            b1.setText("先导出一份，再清空");
+            b1.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { doExportLog(act); clearLogNow(); } });
+            box.addView(b1);
+            Button b2 = new Button(act);
+            b2.setText("直接清空");
+            b2.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { clearLogNow(); } });
+            box.addView(b2);
+            showDialog(act, "清空运行日志", box, "取消");
+        }
+
+        private void clearLogNow() {
+            try {
+                synchronized (logBuffer) { logBuffer.clear(); diskQueue.clear(); }
+                java.io.File dir = logDir();
+                if (dir != null) {
+                    java.io.File[] fs = dir.listFiles();
+                    if (fs != null) for (java.io.File f : fs) {
+                        String n = f.getName();
+                        if (n.equals("run.log") || (n.startsWith("run.") && n.endsWith(".log"))) f.delete();
+                    }
+                }
+                jlog(LV_INFO, "运行日志已清空，这条是新起的第一条");
+                toast("日志已清空");
+                refreshLog();
+            } catch (Throwable t) { logw("清空日志失败: " + t); }
+        }
 
     private void tcard(LinearLayout box, Activity act, String h, String b) {
         LinearLayout card = new LinearLayout(act); card.setOrientation(LinearLayout.VERTICAL);
@@ -1413,7 +1988,11 @@ public final class TGAutoSignCore {
         ScrollView sv = new ScrollView(act);
         LinearLayout box = new LinearLayout(act); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(Theme.dp(act,10), Theme.dp(act,4), Theme.dp(act,10), Theme.dp(act,4));
         addDiagRow(box, act, "宿主包 " + safePkg(), true);
-        addDiagRow(box, act, "账号 currentAccount()=" + currentAccount() + "  激活数=" + activatedAccounts(), currentAccount() >= 0);
+        addDiagRow(box, act, "当前账号：" + accountLabel(currentAccount()) + "（共登录 " + activatedAccounts() + " 个）", currentAccount() >= 0);
+        for (int ai = 0; ai < activatedAccounts(); ai++) {
+            int cnt = acctTargetCount(ai);
+            addDiagRow(box, act, accountLabel(ai) + "：" + (cnt == 0 ? "还没有签到目标，切过去学一个" : cnt + " 个目标"), cnt > 0);
+        }
         String[] anchors = {
             "org.telegram.messenger.UserConfig",
             "org.telegram.messenger.MessagesController",
@@ -1432,7 +2011,7 @@ public final class TGAutoSignCore {
             catch (Throwable t) { okA = false; why = "  (" + t.getClass().getSimpleName() + ")"; }
             addDiagRow(box, act, a.substring(a.lastIndexOf('.') + 1) + why, okA);
         }
-        addDiagRow(box, act, "按钮 data/hash 走实例反射读取（不依赖类名）", true);
+        addDiagRow(box, act, "回调按钮读取正常（按实例字段取，不依赖类名）", true);
         addDiagRow(box, act, "已采样过按钮（捕获/调试台可用）", lastCapBtns != null);
         sv.addView(box);
         showDialog(act, "自诊断", sv, "关闭");
@@ -1587,12 +2166,12 @@ public final class TGAutoSignCore {
             try {
                 call(b, "setNegativeButton", new Class<?>[]{CharSequence.class, android.content.DialogInterface.OnClickListener.class}, new Object[]{negLabel, null});
             } catch (Throwable e1) {
-                jlog("[对话框] setNegativeButton 未找到(忽略): " + e1);
+                logd("[对话框] setNegativeButton 未找到(忽略): " + e1);
                 try { call(b, "setCancelable", new Class<?>[]{boolean.class}, new Object[]{true}); } catch (Throwable ignored) {}
             }
             d = call(b, "create", new Class<?>[0], new Object[0]);
             if (d != null) call(d, "show", new Class<?>[0], new Object[0]);
-            jlog("[对话框] TG 风格对话框成功: " + title);
+            logd("[对话框] TG 风格对话框成功: " + title);
             return;
         } catch (Throwable t) {
             jlog("[对话框] TG 对话框失败，回退系统框: " + t);
@@ -1631,7 +2210,7 @@ public final class TGAutoSignCore {
         if ("update_download".equals(action)) { downloadUpdate(act); return; }
         if ("export".equals(action)) { doExport(); return; }
         if ("export_log".equals(action)) { doExportLog(act); return; }
-        if ("import".equals(action)) { doImport(act); return; }
+        if ("import".equals(action)) { showImportPicker(act); return; }
         if ("clear_all".equals(action)) { confirmClearAll(act); return; }
         if ("add_text".equals(action)) { showAdd(act); return; }
         if ("cap_cb".equals(action)) { startCapture(act); return; }
@@ -1668,39 +2247,93 @@ public final class TGAutoSignCore {
         if ("more".equals(action)) { Map<String,Object> mm=findEntryById(id); if (mm!=null) showEntryActions((Activity)ctx, mm); return; }
     }
 
-    private void showMainMenuOld(Activity act) {
-        if (act == null) { toast("请在 Telegram 界面使用 /jmb"); return; }
-        String today = todayStr();
-        int signed = 0;
-        for (Map<String, Object> m : targetsSnapshot()) {
-            if (today.equals(prefs.getString(accountPrefix() + "last_" + entryId(m), ""))) signed++;
+
+    private void showImportPicker(final Activity act) {
+        if (act == null) { toast("请在 TG 界面使用 /jmb"); return; }
+        java.util.List<java.io.File> fs = ConfigStore.listExports(appContext);
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(Theme.dp(act, 16), Theme.dp(act, 8), Theme.dp(act, 16), Theme.dp(act, 8));
+        TextView info = new TextView(act);
+        info.setTextSize(13);
+        info.setTextColor(Theme.txtPrimary(act));
+        if (fs.isEmpty()) {
+            info.setText("没有找到备份文件。\n\n备份放在这里：\nAndroid/data/" + safePkg() + "/files/tgautosign/\n（在 /jmb → 📤 导出配置 里生成，也可以手动把 json 拷进去）");
+            box.addView(info);
+            showDialog(act, "导入配置", box, "关闭");
+            return;
         }
-        LinearLayout menu = new LinearLayout(act);
-        menu.setOrientation(LinearLayout.VERTICAL);
-        TextView cred = new TextView(act);
-        cred.setText("by wlmosv");
-        cred.setTextSize(12);
-        cred.setTextColor(android.graphics.Color.parseColor(txtSub(act)));
-        cred.setGravity(Gravity.END);
-        cred.setPadding(dp(16), 0, dp(16), dp(6));
-        menu.addView(cred);
-        menuItem(menu, "📋", "目标列表", "共 " + targets.size() + " 个条目 · 已签 " + signed, "list");
-        menuItem(menu, "➕", "添加目标", "文本指令 或 捕获回调按钮", "add");
-        menuItem(menu, "🗑", "删除目标", "从自动签到移除", "del");
-        menuItem(menu, "🧹", "清空所有配置", "删除全部账号目标(保留设置)，彻底重置", "clear_all");
-        menuItem(menu, "🔬", "回调调试台", "列出面板所有按钮·实时点按钮看返回·可绑定", "debug");
-        menuItem(menu, "🚀", "立即签到", "手动触发一次签到", "sign");
-        menuItem(menu, "🌐", "签全部账号", "当前共 " + activatedAccounts() + " 个账号，各自独立签到", "sign_all_accounts");
-        menuItem(menu, "📄", "运行日志", "最近 200 行", "log");
-        menuItem(menu, "🧾", "导出运行日志", "写出到系统「下载」目录，便于反馈问题", "export_log");
-        menuItem(menu, "⚙️", "设置", "关键词 / 重试上限", "settings");
-        String upSub = (lastUpdate != null && lastUpdate.newer)
-                ? "发现新版本 v" + lastUpdate.version + "，可下载"
-                : "当前 v" + UpdateChecker.VERSION_NAME;
-        menuItem(menu, "🔄", "检查更新", upSub, "update");
-        menuItem(menu, "📤", "导出配置", "目标与设置存成 json，换账号不用重学", "export");
-        menuItem(menu, "📥", "导入配置", "读最新导出文件，只合并不清空", "import");
-        showDialog(act, "TGAutoSign · 管理", menu, "关闭");
+        info.setText("选一份备份导入。导入前会显示它的内容，导入后会告诉你目标数有没有变化。\n"
+                + "合并 = 只覆盖文件里有的键；覆盖 = 先清掉现有目标和状态再导入。");
+        box.addView(info);
+        int n = 0;
+        for (final java.io.File f : fs) {
+            if (n++ >= 10) break;
+            LinearLayout row = new LinearLayout(act);
+            row.setOrientation(LinearLayout.VERTICAL);
+            row.setPadding(Theme.dp(act, 4), Theme.dp(act, 11), Theme.dp(act, 4), Theme.dp(act, 11));
+            TextView t1 = new TextView(act);
+            t1.setTextSize(14);
+            t1.setTextColor(Theme.txtPrimary(act));
+            t1.setText(f.getName());
+            row.addView(t1);
+            TextView t2 = new TextView(act);
+            t2.setTextSize(12);
+            t2.setTextColor(Theme.txtMuted(act));
+            t2.setText(ConfigStore.describe(f));
+            row.addView(t2);
+            row.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { showImportMode(act, f); }
+            });
+            box.addView(row);
+            View div = new View(act);
+            div.setBackgroundColor(0x1A000000);
+            box.addView(div, new LinearLayout.LayoutParams(-1, 1));
+        }
+        showDialog(act, "导入配置 · 选备份", box, "关闭");
+    }
+
+    private void showImportMode(final Activity act, final java.io.File f) {
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(Theme.dp(act, 16), Theme.dp(act, 8), Theme.dp(act, 16), Theme.dp(act, 8));
+        TextView t = new TextView(act);
+        t.setTextSize(13);
+        t.setTextColor(Theme.txtPrimary(act));
+        t.setText(f.getName() + "\n" + ConfigStore.describe(f)
+                + "\n\n" + accountLabel(currentAccount()) + " 现在有 " + targetsSnapshot().size() + " 个目标。");
+        box.addView(t);
+        Button b1 = new Button(act);
+        b1.setText("合并导入（保留现有的）");
+        b1.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { doImportNow(act, f, false); } });
+        box.addView(b1);
+        Button b2 = new Button(act);
+        b2.setText("覆盖导入（先清空目标和状态）");
+        b2.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { doImportNow(act, f, true); } });
+        box.addView(b2);
+        showDialog(act, "怎么导入", box, "取消");
+    }
+
+    private void doImportNow(Activity act, java.io.File f, boolean replace) {
+        int before = targetsSnapshot().size();
+        try { if (replace) clearAllConfig(); } catch (Throwable ignored) {}
+        ConfigStore.Report rep = ConfigStore.importMerge(appContext, f, replace);
+        if (!rep.ok) {
+            loge("导入失败：" + rep.message);
+            toast("导入失败：" + rep.message);
+            return;
+        }
+        try { lastAccount = -1; syncAccount(); } catch (Throwable ignored) {}
+        int after = targetsSnapshot().size();
+        String line = "【导入】" + f.getName() + " · " + (replace ? "覆盖" : "合并") + " · 写入 " + rep.keys + " 个键"
+                + (rep.skipped > 0 ? "（忽略不认识的老键 " + rep.skipped + " 个）" : "")
+                + " · " + accountLabel(currentAccount()) + " 目标 " + before + " → " + after;
+        if (after == before && before > 0) logw(line + " —— 当前账号的目标数没变");
+        else logs(line);
+        toast(after == before
+                ? "导入完成，但当前账号目标数没变（" + after + " 个）。\n备份可能是同账号的旧内容，或切到别的账号再看"
+                : "导入完成：" + accountLabel(currentAccount()) + " 目标 " + before + " → " + after);
+        if (act != null) showList(act);
     }
 
     private void showList(Activity act) {
@@ -1783,29 +2416,6 @@ public final class TGAutoSignCore {
         showDialog(act, "点选立即签到", box, "取消");
     }
 
-    private void showLogOld(Activity act) {
-        try {
-            StringBuilder sb = new StringBuilder();
-            List<String> copy;
-            synchronized (logBuffer) { copy = new ArrayList<>(logBuffer); }
-            for (String line : copy) sb.append(line).append("\n");
-            String content = sb.toString();
-            if (content.length() > 4000) content = content.substring(content.length() - 4000);
-            if (content.length() == 0) content = "(暂无日志)";
-            ScrollView sv = new ScrollView(act);
-            TextView tv = new TextView(act);
-            tv.setText(content);
-            tv.setTextSize(12);
-            tv.setTextColor(android.graphics.Color.parseColor(txtMain(act)));
-            tv.setTypeface(android.graphics.Typeface.MONOSPACE);
-            tv.setPadding(dp(16), dp(10), dp(16), dp(10));
-            sv.addView(tv);
-            showDialog(act, "运行日志（最近 200 行）", sv, "关闭");
-        } catch (Throwable t) {
-            jlog("日志框失败: " + t);
-            toast("日志打开失败: " + t);
-        }
-    }
 
     private android.widget.Switch swRow(Context c, String label, boolean on) {
         android.widget.Switch s = new android.widget.Switch(c);
@@ -1925,88 +2535,54 @@ public final class TGAutoSignCore {
     private void doExport() {
         ConfigStore.Report rep = ConfigStore.exportAll(appContext);
         if (rep.ok) {
-            jlog("配置已导出: " + rep.path + "（" + rep.keys + " 项 / " + rep.prefFiles + " 个存储）");
+            logs("配置已导出: " + rep.path + "（" + rep.keys + " 项 / " + rep.prefFiles + " 个存储）");
             toast("已导出 " + rep.keys + " 项配置\n" + rep.path);
         } else {
-            jlog("导出配置失败: " + rep.message);
+            loge("导出配置失败: " + rep.message);
             toast("导出失败：" + rep.message);
         }
     }
 
 
-    private void doImport(final Activity act) {
-        if (act == null) { toast("请在 TG 界面内发 /jmb 再导入"); return; }
-        java.io.File f = null;
-        try { f = ConfigStore.latestExportFile(appContext); } catch (Throwable ignored) {}
-        if (f == null) {
-            toast("没找到导出文件（放在 TG 的 files/tgautosign 目录里的 TGAutoSign-config-*.json）");
-            jlog("【导入】没有找到可导入的配置文件");
-            return;
-        }
-        String desc = "";
-        try { desc = ConfigStore.describe(f); } catch (Throwable t) { desc = String.valueOf(t); }
-        LinearLayout box = new LinearLayout(act);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(16), dp(8), dp(16), dp(8));
-        TextView info = new TextView(act);
-        info.setTextSize(13);
-        info.setTextColor(android.graphics.Color.parseColor(txtMain(act)));
-        info.setText("将导入：\n" + f.getName() + "\n" + desc + "\n\n导入是「只合并不清空」：文件里的键覆盖本地，本地多出来的保留。"
-            + "注意旧备份里已被删除的目标会被带回，今日已签与重试状态也会一起导入。");
-        box.addView(info);
-        Button go = new Button(act);
-        go.setText("确认导入");
-        go.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { applyImport(act); }
-        });
-        box.addView(go);
-        showDialog(act, "导入配置", box, "取消");
-    }
 
-    private void applyImport(final Activity act) {
-        ConfigStore.Report rep = ConfigStore.importAll(appContext, null);
-        if (rep.ok) {
-            synchronized (TLOCK) { loadTargetsLocked(); }
-            jlog("配置已导入: " + rep.path + "（" + rep.keys + " 项），当前目标 " + targetsSnapshot().size() + " 个");
-            toast("已导入 " + rep.keys + " 项，目标 " + targetsSnapshot().size() + " 个");
-            if (act != null && !act.isFinishing()) showList(act);
-        } else {
-            jlog("导入配置失败: " + rep.message);
-            toast("导入失败：" + rep.message);
-        }
-    }
 
 
     /** 导出运行日志到系统「下载」目录（MediaStore，无需存储权限），便于 issue 反馈 */
     private void doExportLog(Activity act) {
-        try {
-            List<String> copy;
-            synchronized (logBuffer) { copy = new ArrayList<>(logBuffer); }
-            if (copy.isEmpty()) { toast("暂无日志可导出"); return; }
-            StringBuilder sb = new StringBuilder();
-            sb.append("TGAutoSign v").append(UpdateChecker.VERSION_NAME)
-              .append(" 宿主=").append(safePkg())
-              .append(" 导出时间=").append(SDF.format(new Date())).append('\n');
-            for (String line : copy) sb.append(line).append('\n');
-            String content = sb.toString();
-            android.content.ContentResolver cr = appContext.getContentResolver();
-            android.content.ContentValues v = new android.content.ContentValues();
-            String fname = "TGAutoSign-log-" + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date()) + ".txt";
-            v.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, fname);
-            v.put(android.provider.MediaStore.Downloads.MIME_TYPE, "text/plain");
-            if (android.os.Build.VERSION.SDK_INT >= 29) v.put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS);
-            android.net.Uri uri = cr.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
-            if (uri == null) { toast("日志导出失败：无法写入下载目录"); return; }
-            java.io.OutputStream os = cr.openOutputStream(uri);
-            os.write(content.getBytes("UTF-8"));
-            os.close();
-            jlog("日志已导出: " + fname);
-            toast("日志已导出到下载目录，文件名见运行日志\n" + fname);
-        } catch (Throwable t) {
-            jlog("日志导出失败: " + t);
-            toast("日志导出失败：" + t);
+            try {
+                List<LogLine> all = mergedLog(4000);
+                if (all.isEmpty()) { toast("暂无日志可导出"); return; }
+                StringBuilder sb = new StringBuilder();
+                sb.append("TGAutoSign v").append(UpdateChecker.VERSION_NAME)
+                  .append("  宿主=").append(safePkg())
+                  .append("  当前账号=").append(accountLabel(currentAccount()))
+                  .append("  目标=").append(targetsSnapshot().size())
+                  .append("  导出=").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()))
+                  .append("  行数=").append(all.size()).append('\n');
+                for (LogLine l : all) sb.append(l.flat()).append('\n');
+                String content = sb.toString();
+                android.content.ContentResolver cr = appContext.getContentResolver();
+                android.content.ContentValues v = new android.content.ContentValues();
+                String fname = "TGAutoSign-log-" + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date()) + ".txt";
+                v.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, fname);
+                v.put(android.provider.MediaStore.Downloads.MIME_TYPE, "text/plain");
+                v.put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS);
+                android.net.Uri uri = cr.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+                if (uri == null) { toast("导出失败：写不进「下载」目录"); return; }
+                java.io.OutputStream os = cr.openOutputStream(uri);
+                if (os == null) { toast("导出失败：打不开写入流"); return; }
+                try { os.write(content.getBytes("UTF-8")); } finally { try { os.close(); } catch (Throwable ignored) {} }
+                jlog("日志已导出：" + fname + "（" + all.size() + " 行，含落盘历史）");
+                toast("已导出到「下载」：" + fname);
+            } catch (Throwable t) {
+                logw("日志导出失败: " + t);
+                toast("日志导出失败：" + t);
+            }
         }
-    }
+
+        private static String accountLabel(int acc) {
+            return "账号" + (acc + 1);
+        }
 
     // ---------------- 宿主 Activity 记录（兜底：任何 Activity resume 都记） ----------------
 
@@ -2148,7 +2724,7 @@ public final class TGAutoSignCore {
             Object text = buttonText(proto);
             if (did != null && text != null) {
                 String t = String.valueOf(text);
-                if (!AUTO_LEARN || (AUTO_LEARN_FILTER && !keywordMatched(t))) { jlog("[按钮] uid=" + did + " text=" + t + "（不含关键词，自动学习已过滤；可用 捕获/调试台 手动绑定）"); return; }
+                if (!AUTO_LEARN || (AUTO_LEARN_FILTER && !keywordMatched(t))) { logd("[按钮] uid=" + did + " text=" + t + "（不含关键词，自动学习已过滤；可用 捕获/调试台 手动绑定）"); return; }
                 long u = ((Number) did).longValue();
                 if (isCallbackButton(proto)) {
                     byte[] data = buttonData(proto);
@@ -2157,7 +2733,7 @@ public final class TGAutoSignCore {
                         if (moOrNull != null) { try { Object mid = call(moOrNull, "getId", new Class<?>[0], new Object[0]); msgId = mid instanceof Number ? ((Number) mid).intValue() : 0; } catch (Throwable ignored) {} }
                         learnCallback(u, t, data, buttonHash(proto), msgId);
                     } else {
-                        jlog("[按钮] uid=" + u + " text=" + t + "（无回调 data，可能是链接/游戏按钮，跳过）");
+                        logd("[按钮] uid=" + u + " text=" + t + "（无回调 data，可能是链接/游戏按钮，跳过）");
                     }
                 } else {
                     learnTarget(u, t);
@@ -2177,7 +2753,7 @@ public final class TGAutoSignCore {
             Object text = buttonText(proto);
             if (did != null && text != null) {
                 String t = String.valueOf(text);
-                if (!AUTO_LEARN || (AUTO_LEARN_FILTER && !keywordMatched(t))) { jlog("[按钮] uid=" + did + " text=" + t + "（不含关键词，自动学习已过滤；可用 捕获/调试台 手动绑定）"); return; }
+                if (!AUTO_LEARN || (AUTO_LEARN_FILTER && !keywordMatched(t))) { logd("[按钮] uid=" + did + " text=" + t + "（不含关键词，自动学习已过滤；可用 捕获/调试台 手动绑定）"); return; }
                 long u = ((Number) did).longValue();
                 if (isCallbackButton(proto)) {
                     byte[] data = buttonData(proto);
@@ -2186,7 +2762,7 @@ public final class TGAutoSignCore {
                         if (mo != null) { try { Object mid = call(mo, "getId", new Class<?>[0], new Object[0]); msgId = mid instanceof Number ? ((Number) mid).intValue() : 0; } catch (Throwable ignored) {} }
                         learnCallback(u, t, data, buttonHash(proto), msgId);
                     } else {
-                        jlog("[按钮] uid=" + u + " text=" + t + "（无回调 data，可能是链接/游戏按钮，跳过）");
+                        logd("[按钮] uid=" + u + " text=" + t + "（无回调 data，可能是链接/游戏按钮，跳过）");
                     }
                 } else {
                     learnTarget(u, t);
@@ -2277,7 +2853,7 @@ public final class TGAutoSignCore {
             }
             return false;
         } catch (Throwable t) {
-            jlog("[活动] 异常: " + t);
+            loge("[活动] 异常: " + t);
             return false;
         }
     }
@@ -2329,7 +2905,7 @@ public final class TGAutoSignCore {
                                     .putString(prefix + "retry_day_" + id, todayStr())
                                     .commit();
                                 jlog("【回复判定】" + did + " bot 回复: " + replyText + " → 判定未成功，撤销已签并安排重试 (id=" + id + ")");
-                                toast("⚠️ " + did + " 可能未签到成功: " + replyText);
+                                noteResult(true);
                                 return;
                             }
                             return;

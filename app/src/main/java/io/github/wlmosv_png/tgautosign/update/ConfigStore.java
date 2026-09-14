@@ -48,6 +48,7 @@ public final class ConfigStore {
         public Uri uri;
         public int prefFiles;
         public int keys;
+        public int skipped;
         public String message = "";
     }
 
@@ -166,6 +167,66 @@ public final class ConfigStore {
         }
     }
 
+    private static final String[] ENTRY_HEADS = {"learned_", "kind_", "did_", "data_", "hash_", "msg_id_",
+            "pre_", "loc_", "last_", "retry_", "retry_at_", "retry_day_", "sent_at_"};
+
+    /** 是不是目标/状态键（含不带 acc 前缀的老格式）；不是的就是设置项 */
+    public static boolean isEntryKey(String k) {
+        if (k == null) return false;
+        String body = k;
+        if (k.startsWith("acc")) {
+            int i = k.indexOf('_');
+            if (i > 0) body = k.substring(i + 1);
+        }
+        for (String h : ENTRY_HEADS) if (body.startsWith(h)) return true;
+        return false;
+    }
+
+    /** 可导入的备份：本应用私有目录里的 config json，新的在前 */
+    public static java.util.List<File> listExports(Context ctx) {
+        java.util.List<File> out = new java.util.ArrayList<File>();
+        try {
+            File dir = ctx.getExternalFilesDir(SUB_DIR);
+            if (dir == null) return out;
+            File[] fs = dir.listFiles();
+            if (fs == null) return out;
+            java.util.ArrayList<File> keep = new java.util.ArrayList<File>();
+            for (File f : fs) {
+                String n = f.getName();
+                if (n.startsWith("TGAutoSign-config") && n.endsWith(".json") && f.isFile()) keep.add(f);
+            }
+            java.util.Collections.sort(keep, new java.util.Comparator<File>() {
+                @Override public int compare(File a, File b) { return Long.compare(b.lastModified(), a.lastModified()); }
+            });
+            out.addAll(keep);
+        } catch (Throwable ignored) {}
+        return out;
+    }
+
+    /** 导入：replace=true 时先把目标与状态清空，只保留设置 */
+    public static Report importMerge(Context ctx, File f, boolean replace) {
+        Report rep = new Report();
+        try {
+            if (f == null || !f.exists()) { rep.message = "文件不存在"; return rep; }
+            if (replace) {
+                for (String name : PREFS_LIST) {
+                    SharedPreferences sp = ctx.getSharedPreferences(name, Context.MODE_PRIVATE);
+                    SharedPreferences.Editor ed = sp.edit();
+                    for (String k : new java.util.ArrayList<String>(sp.getAll().keySet())) {
+                        if (isEntryKey(k)) ed.remove(k);
+                    }
+                    ed.apply();
+                }
+            }
+            return applyJson(ctx, read(f), rep);
+        } catch (Throwable t) {
+            rep.ok = false;
+            rep.message = String.valueOf(t);
+            return rep;
+        }
+    }
+
+    /** 导入前先看一眼文件里有什么（用于给用户确认）。 */
     private static Report applyJson(Context ctx, String text, Report rep) throws Exception {
         JSONObject root = new JSONObject(text);
         int fmt = root.optInt(FORMAT_KEY, 0);
@@ -175,7 +236,7 @@ public final class ConfigStore {
         }
         JSONObject prefs = root.optJSONObject("prefs");
         if (prefs == null) { rep.message = "配置文件里没有 prefs 段"; return rep; }
-        int n = 0;
+        int n = 0, bad = 0;
         for (String name : PREFS_LIST) {
             JSONObject file = prefs.optJSONObject(name);
             if (file == null) continue;
@@ -184,11 +245,12 @@ public final class ConfigStore {
             java.util.Iterator<String> it = file.keys();
             while (it.hasNext()) {
                 String k = it.next();
+                if (!isEntryKey(k) && !k.startsWith("jmb_")) { bad++; continue; }   // 不认识的键不写
                 JSONObject cell = file.optJSONObject(k);
-                if (cell == null) continue;
+                if (cell == null) { bad++; continue; }
                 String t = cell.optString("t", "s");
                 Object v = cell.opt("v");
-                if (v == null) continue;
+                if (v == null) { bad++; continue; }
                 if ("s".equals(t)) ed.putString(k, String.valueOf(v));
                 else if ("i".equals(t)) ed.putInt(k, cell.optInt("v"));
                 else if ("l".equals(t)) ed.putLong(k, cell.optLong("v"));
@@ -201,6 +263,7 @@ public final class ConfigStore {
             rep.prefFiles++;
         }
         rep.keys = n;
+        rep.skipped = bad;
         rep.ok = n > 0;
         if (!rep.ok) rep.message = "配置文件里没有可写入的键";
         return rep;
