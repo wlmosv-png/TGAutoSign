@@ -265,7 +265,6 @@ public final class TGAutoSignCore {
         registerActivityListener();
         mainHandler.postDelayed(() -> { try { jlog("=== 启动立即补签 ==="); trySignAll("启动立即", true); } catch (Throwable ignored) {} }, 10000L);
         schedulePoll();
-        try { ScopeSync.init(prefs); mainHandler.postDelayed(() -> { try { ScopeSync.askForKnownHosts(); } catch (Throwable ignored) {} }, 6000L); } catch (Throwable ignored) {}
         jlog("=== TGAutoSign 模块 v" + UpdateChecker.VERSION_NAME + " 已加载 ===");
         jlog("宿主: " + safePkg() + " 账号: " + currentAccount() + " 目标: " + targetsSnapshot().size()
             + " 按钮学习: " + (AUTO_LEARN ? "开" : "关") + " 网络学习: " + (AUTO_LEARN_NET ? "开" : "关"));
@@ -1986,7 +1985,6 @@ public final class TGAutoSignCore {
     }
 
     private void showDiag(Activity act) {
-        try { ScopeSync.askForKnownHosts(); } catch (Throwable ignored) {}
         if (act == null) return;
         ScrollView sv = new ScrollView(act);
         LinearLayout box = new LinearLayout(act); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(Theme.dp(act,10), Theme.dp(act,4), Theme.dp(act,10), Theme.dp(act,4));
@@ -2016,11 +2014,6 @@ public final class TGAutoSignCore {
         }
         String missM = Hosts.missingMarkers(cl);
         addDiagRow(box, act, "Telegram 标志类：" + (missM.isEmpty() ? "三项齐全" : "缺 " + missM + "（该客户端自研了这层，模块不注入也不误伤）"), missM.isEmpty());
-        addDiagRow(box, act, "框架服务（作用域请求）：" + ScopeSync.describe(), ScopeSync.bound);
-        if (!ScopeSync.missing.isEmpty())
-            addDiagRow(box, act, "作用域还缺 " + ScopeSync.missing.size() + " 个已知客户端，去通知里点确认即可", false);
-        if (ScopeSync.lastError.length() > 0)
-            addDiagRow(box, act, "作用域请求：" + ScopeSync.lastError, false);
         addDiagRow(box, act, "回调按钮读取正常（按实例字段取，不依赖类名）", true);
         addDiagRow(box, act, "已采样过按钮（捕获/调试台可用）", lastCapBtns != null);
         sv.addView(box);
