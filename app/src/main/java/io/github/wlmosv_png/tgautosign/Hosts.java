@@ -70,6 +70,18 @@ public final class Hosts {
         return "不支持";
     }
 
+    /** 未命中时到底缺哪个标志类（给日志与自诊断，别再让用户猜） */
+    public static String missingMarkers(ClassLoader loader) {
+        if (loader == null) return "拿不到 ClassLoader";
+        StringBuilder sb = new StringBuilder();
+        for (String marker : MARKERS) {
+            if (canLoad(loader, marker)) continue;
+            if (sb.length() > 0) sb.append("、");
+            sb.append(marker.substring(marker.lastIndexOf('.') + 1));
+        }
+        return sb.toString();
+    }
+
     public static Set<String> knownPackages() {
         return KNOWN;
     }

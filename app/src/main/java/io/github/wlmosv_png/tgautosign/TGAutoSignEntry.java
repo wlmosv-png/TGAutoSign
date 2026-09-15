@@ -53,6 +53,7 @@ public final class TGAutoSignEntry extends XposedModule {
         ClassLoader probe = null;
         try { probe = param.getDefaultClassLoader(); } catch (Throwable ignored) {}
         if (!Hosts.isSupported(packageName, probe)) {
+            try { logInfo("缺标志类: " + Hosts.missingMarkers(probe) + " —— 该客户端自研了这些层，模块不注入以免误发"); } catch (Throwable ignored) {}
             logInfo("package loaded，宿主不是 Telegram 家族，跳过: " + packageName);
             return;
         }
