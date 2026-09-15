@@ -17,7 +17,7 @@
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="@string/module_description" />
+            android:value="TGAutoSign - automatic daily check-in for Telegram bots; manage with /jmb inside any chat; supports official and third-party Telegram clients" />
         <meta-data
             android:name="xposedminversion"
             android:value="102" />
