@@ -16,8 +16,6 @@
 
 ## 📱 界面一览
 
-界面在 Telegram 内渲染：终端风等宽字体、霓虹描边、状态徽章、实时日志卡；深浅色跟随 TG 主题自动切换（v1.5.1 起）。
-
 | 暗色 · 主面板 | 日间 · 主面板 |
 | --- | --- |
 | ![暗色主面板](docs/screenshots/main-dark.jpg) | ![日间主面板](docs/screenshots/main-light.jpg) |
