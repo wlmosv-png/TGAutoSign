@@ -182,7 +182,7 @@ public final class TGAutoSignCore {
             java.util.List<LogLine> recent = new ArrayList<>();
             synchronized (logBuffer) { if (logBuffer.size() > 0) { int f = Math.max(0, logBuffer.size() - 4); for (int i = f; i < logBuffer.size(); i++) recent.add(logBuffer.get(i)); } }
             if (recent.isEmpty()) {
-                TextView e1 = new TextView(act2); e1.setTextSize(11); e1.setTypeface(android.graphics.Typeface.MONOSPACE); e1.setTextColor(0xFF4A5568);
+                TextView e1 = new TextView(act2); e1.setTextSize(11); e1.setTypeface(android.graphics.Typeface.MONOSPACE); e1.setTextColor(Theme.termFaint(act2));
                 e1.setText("$ (暂无日志消息，稍后自动出现)"); body.addView(e1);
                 return;
             }
@@ -191,7 +191,7 @@ public final class TGAutoSignCore {
                 String lineText = new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(new java.util.Date(l.ts)) + "  " + l.msg;
                 if (lineText.length() > 46) lineText = lineText.substring(0, 46) + "...";
                 lv2.setText("$ " + lineText);
-                lv2.setTextColor(l.lv == LV_ERR ? 0xFFFF5A76 : l.lv == LV_OK ? 0xFF00FF9C : l.lv == LV_WARN ? 0xFFFFB84D : 0xFF8B98B8);
+                lv2.setTextColor(l.lv == LV_ERR ? Theme.termPink(act2) : l.lv == LV_OK ? Theme.termGreen(act2) : l.lv == LV_WARN ? Theme.termAmber(act2) : Theme.termMuted(act2));
                 body.addView(lv2);
             }
         } catch (Throwable ignored) {}
@@ -203,25 +203,25 @@ public final class TGAutoSignCore {
         b.setAllCaps(false);
         b.setTextSize(13);
         b.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-        b.setTextColor(0xFF00E5FF);
+        b.setTextColor(Theme.termCyan(c));
         b.setPadding(dp(10), dp(9), dp(10), dp(9));
-        try { b.setBackground(termBorder(c, 0x1400E5FF, 0x5900E5FF)); } catch (Throwable ignored) {}
+        try { b.setBackground(termBorder(c, Theme.withAlpha(Theme.termCyan(c), 0x14), Theme.withAlpha(Theme.termCyan(c), 0x59))); } catch (Throwable ignored) {}
         return b;
     }
 
     /** 终端风按钮（强调：荧光绿，用于主操作/确认） */
     private Button mkBtnPrimary(Context c) {
         Button b = mkBtn(c);
-        b.setTextColor(0xFF00FF9C);
-        try { b.setBackground(termBorder(c, 0x1400FF9C, 0x6600FF9C)); } catch (Throwable ignored) {}
+        b.setTextColor(Theme.termGreen(c));
+        try { b.setBackground(termBorder(c, Theme.withAlpha(Theme.termGreen(c), 0x14), Theme.withAlpha(Theme.termGreen(c), 0x66))); } catch (Throwable ignored) {}
         return b;
     }
 
     /** 终端风按钮（危险：品红，用于删除/清空） */
     private Button mkBtnDanger(Context c) {
         Button b = mkBtn(c);
-        b.setTextColor(0xFFFF5A76);
-        try { b.setBackground(termBorder(c, 0x14FF5A76, 0x66FF5A76)); } catch (Throwable ignored) {}
+        b.setTextColor(Theme.termPink(c));
+        try { b.setBackground(termBorder(c, Theme.withAlpha(Theme.termPink(c), 0x14), Theme.withAlpha(Theme.termPink(c), 0x66))); } catch (Throwable ignored) {}
         return b;
     }
 
@@ -242,14 +242,14 @@ public final class TGAutoSignCore {
         b.setText((on ? "[ON]  " : "[OFF] ") + label);
         b.setTextSize(11);
         b.setTypeface(android.graphics.Typeface.MONOSPACE);
-        b.setTextColor(on ? 0xFF00FF9C : 0xFF6B758F);
+        b.setTextColor(on ? Theme.termGreen(act) : Theme.termMuted(act));
         b.setPadding(dp(10), dp(5), dp(10), dp(5));
         try {
             android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
             g.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
             g.setCornerRadius(dp(12));
-            g.setColor(on ? 0x1400FF9C : 0x0A6B758F);
-            g.setStroke(dp(1), on ? 0x6600FF9C : 0x336B758F);
+            g.setColor(on ? Theme.withAlpha(Theme.termGreen(act), 0x14) : Theme.withAlpha(Theme.termMuted(act), 0x0A));
+            g.setStroke(dp(1), on ? Theme.withAlpha(Theme.termGreen(act), 0x66) : Theme.withAlpha(Theme.termMuted(act), 0x33));
             b.setBackground(g);
         } catch (Throwable ignored) {}
         android.widget.LinearLayout.LayoutParams lp = new android.widget.LinearLayout.LayoutParams(-2, -2);
@@ -291,7 +291,7 @@ public final class TGAutoSignCore {
         box.setPadding(Theme.dp(act, 16), Theme.dp(act, 8), Theme.dp(act, 16), Theme.dp(act, 8));
         TextView info = new TextView(act);
         info.setTextSize(13);
-        info.setTextColor(0xFFE6F1FF);
+        info.setTextColor(Theme.termTxt(act));
         info.setText("把 " + accountLabel(cur) + " 的 " + mine.size() + " 个目标复制到其它账号。\n只复制目标本身，不带「今天已签」和重试记录。");
         box.addView(info);
         for (int i = 0; i < n; i++) {
@@ -302,7 +302,7 @@ public final class TGAutoSignCore {
             row.setPadding(Theme.dp(act, 4), Theme.dp(act, 12), Theme.dp(act, 4), Theme.dp(act, 12));
             TextView t = new TextView(act);
             t.setTextSize(15);
-            t.setTextColor(0xFFE6F1FF);
+            t.setTextColor(Theme.termTxt(act));
             t.setText("→ " + accountLabel(i) + "（现有 " + acctTargetCount(i) + " 个）");
             row.addView(t, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             TextView ar = new TextView(act);
@@ -314,7 +314,7 @@ public final class TGAutoSignCore {
             });
             box.addView(row);
             View div = new View(act);
-            div.setBackgroundColor(0x1A000000);
+            div.setBackgroundColor(Theme.line(act));
             box.addView(div, new LinearLayout.LayoutParams(-1, 1));
         }
         showDialog(act, "复制目标到其它账号", box, "关闭");
@@ -955,7 +955,7 @@ public final class TGAutoSignCore {
                 r2.addView(tt,new LinearLayout.LayoutParams(0,-2,1f));
                 r2.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ toast("这类按钮无法用回调模拟；文本键盘类请用「文本指令」目标（文本=按钮文字）"); } });
                 box.addView(r2);
-                View dv=new View(act); dv.setBackgroundColor(0x1A000000); box.addView(dv,new LinearLayout.LayoutParams(-1,1));
+                View dv=new View(act); dv.setBackgroundColor(Theme.line(act)); box.addView(dv,new LinearLayout.LayoutParams(-1,1));
                 continue;
             }
             final long fdid=did; final int fmid=mid;
@@ -966,7 +966,7 @@ public final class TGAutoSignCore {
             TextView ar=new TextView(act); ar.setTextSize(18); ar.setText("\u203a"); row.addView(ar);
             row.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ bindCallback(fdid,text,data,hash,fmid); } });
             box.addView(row);
-            View div=new View(act); div.setBackgroundColor(0x1A000000); box.addView(div,new LinearLayout.LayoutParams(-1,1));
+            View div=new View(act); div.setBackgroundColor(Theme.line(act)); box.addView(div,new LinearLayout.LayoutParams(-1,1));
         }
         if (cb==0 && proto!=null && isCallbackButton(proto)){
             final byte[] fdd=buttonData(proto); final long fh=buttonHash(proto); final String text=strOr(buttonText(proto),"回调按钮"); final long fdid=did; final int fmid=mid;
@@ -1059,7 +1059,7 @@ public final class TGAutoSignCore {
         final EditText pre=adInput(act,"前置命令序列（逗号或换行分隔，可空；发送后拉面板再点按钮）",0);
         if (cb) pre.setText(preToJsonToText(entryPre(m))); box.addView(pre);
         if (cb){
-            TextView pt = new TextView(act); pt.setTextSize(12); pt.setTextColor(0xFFB0B0B0); pt.setPadding(dp(2), dp(6), 0, 0);
+            TextView pt = new TextView(act); pt.setTextSize(12); pt.setTextColor(Theme.termMuted(act)); pt.setPadding(dp(2), dp(6), 0, 0);
             pt.setText("模板（点一下追加；可自行输入）：");
             box.addView(pt);
             android.widget.HorizontalScrollView hsc = new android.widget.HorizontalScrollView(act);
@@ -1179,7 +1179,7 @@ public final class TGAutoSignCore {
             TextView ar=new TextView(act); ar.setTextSize(18); ar.setText("\u203a"); row.addView(ar);
             row.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ testFire(fdid,fmid,text,data,hash); } });
             box.addView(row);
-            View div=new View(act); div.setBackgroundColor(0x1A000000); box.addView(div,new LinearLayout.LayoutParams(-1,1));
+            View div=new View(act); div.setBackgroundColor(Theme.line(act)); box.addView(div,new LinearLayout.LayoutParams(-1,1));
         }
         if (cb==0) emptyView(box,"(暂无可调试按钮：先在目标 bot 会话里点一次它的签到按钮)");
         showDialog(act,"回调调试台", box, "关闭");
@@ -1971,7 +1971,7 @@ public final class TGAutoSignCore {
         LinearLayout row = new LinearLayout(c);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackground(termBorder(c, 0xFF101726, 0x2200E5FF));
+        row.setBackground(termBorder(c, Theme.termCard(c), Theme.withAlpha(Theme.termCyan(c), 0x22)));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(Theme.dp(c,3), Theme.dp(c,4), Theme.dp(c,3), Theme.dp(c,4));
         row.setLayoutParams(lp);
@@ -1980,16 +1980,16 @@ public final class TGAutoSignCore {
         row.setOnClickListener(v -> runAction(v.getContext(), String.valueOf(v.getTag())));
         TextView em = new TextView(c);
         em.setText(emoji); em.setTextSize(18); em.setGravity(Gravity.CENTER);
-        em.setBackground(termBorder(c, 0x1600E5FF, 0x3300E5FF));
+        em.setBackground(termBorder(c, Theme.withAlpha(Theme.termCyan(c), 0x16), Theme.withAlpha(Theme.termCyan(c), 0x33)));
         row.addView(em, new LinearLayout.LayoutParams(Theme.dp(c,40), Theme.dp(c,40)));
         row.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,12), 1));
         LinearLayout col = new LinearLayout(c); col.setOrientation(LinearLayout.VERTICAL);
-        TextView t1 = new TextView(c); t1.setTextSize(15); t1.setTextColor(0xFFE6F1FF); t1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); t1.setText(title); col.addView(t1);
-        TextView t2 = new TextView(c); t2.setTextSize(11); t2.setTextColor(0xFF8B98B8); t2.setTypeface(android.graphics.Typeface.MONOSPACE);
+        TextView t1 = new TextView(c); t1.setTextSize(15); t1.setTextColor(Theme.termTxt(c)); t1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); t1.setText(title); col.addView(t1);
+        TextView t2 = new TextView(c); t2.setTextSize(11); t2.setTextColor(Theme.termMuted(c)); t2.setTypeface(android.graphics.Typeface.MONOSPACE);
         if (subtitle != null && subtitle.length() > 0) t2.setText(subtitle); else t2.setVisibility(View.GONE);
         col.addView(t2);
         row.addView(col, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        TextView ar = new TextView(c); ar.setTextSize(18); ar.setText("\u203a"); ar.setTextColor(0xFF00E5FF); row.addView(ar);
+        TextView ar = new TextView(c); ar.setTextSize(18); ar.setText("\u203a"); ar.setTextColor(Theme.termCyan(c)); row.addView(ar);
         parent.addView(row);
         return row;
     }
@@ -1999,9 +1999,9 @@ public final class TGAutoSignCore {
         chip.setTextSize(11);
         chip.setText(cb ? "🔸 回调" : "\u2328 指令");
         chip.setPadding(Theme.dp(c,8), Theme.dp(c,2), Theme.dp(c,8), Theme.dp(c,2));
-        chip.setTextColor(cb ? 0xFF00E5FF : 0xFF8B98B8);
+        chip.setTextColor(cb ? Theme.termCyan(c) : Theme.termMuted(c));
         chip.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-        chip.setBackground(termBorder(c, cb ? 0x1200E5FF : 0x0D8B98B8, cb ? 0x5900E5FF : 0x338B98B8));
+        chip.setBackground(termBorder(c, cb ? Theme.withAlpha(Theme.termCyan(c), 0x12) : Theme.withAlpha(Theme.termMuted(c), 0x0D), cb ? Theme.withAlpha(Theme.termCyan(c), 0x59) : Theme.withAlpha(Theme.termMuted(c), 0x33)));
         return chip;
     }
 
@@ -2014,7 +2014,7 @@ public final class TGAutoSignCore {
         LinearLayout row = new LinearLayout(c);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackground(termBorder(c, 0xFF101726, 0x2200E5FF));
+        row.setBackground(termBorder(c, Theme.termCard(c), Theme.withAlpha(Theme.termCyan(c), 0x22)));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(Theme.dp(c,3), Theme.dp(c,4), Theme.dp(c,3), Theme.dp(c,4));
         row.setLayoutParams(lp);
@@ -2029,12 +2029,12 @@ public final class TGAutoSignCore {
         }
         LinearLayout col = new LinearLayout(c); col.setOrientation(LinearLayout.VERTICAL);
         LinearLayout tl = new LinearLayout(c); tl.setOrientation(LinearLayout.HORIZONTAL); tl.setGravity(Gravity.CENTER_VERTICAL);
-        TextView t1 = new TextView(c); t1.setTextSize(15); t1.setTextColor(0xFFE6F1FF); t1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); t1.setText(targetTitle(did));
+        TextView t1 = new TextView(c); t1.setTextSize(15); t1.setTextColor(Theme.termTxt(c)); t1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); t1.setText(targetTitle(did));
         tl.addView(t1, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         tl.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,8), 1));
         tl.addView(typeChip(c, cb));
         col.addView(tl);
-        TextView t2 = new TextView(c); t2.setTextSize(11); t2.setTextColor(0xFF8B98B8); t2.setTypeface(android.graphics.Typeface.MONOSPACE);
+        TextView t2 = new TextView(c); t2.setTextSize(11); t2.setTextColor(Theme.termMuted(c)); t2.setTypeface(android.graphics.Typeface.MONOSPACE);
         String lastT = prefs.getString(accountPrefix() + "last_" + id, "");
         StringBuilder sb = new StringBuilder(status);
         sb.append("   ").append(cb ? "🔸" : "\u2328").append(" ").append(text);
@@ -2042,7 +2042,7 @@ public final class TGAutoSignCore {
         t2.setText(sb.toString());
         col.addView(t2);
         row.addView(col, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        TextView ar = new TextView(c); ar.setTextSize(18); ar.setText("\u203a"); ar.setTextColor(0xFF00E5FF); row.addView(ar);
+        TextView ar = new TextView(c); ar.setTextSize(18); ar.setText("\u203a"); ar.setTextColor(Theme.termCyan(c)); row.addView(ar);
         parent.addView(row);
         return row;
     }
@@ -2066,20 +2066,20 @@ public final class TGAutoSignCore {
         head.setPadding(Theme.dp(act,18), Theme.dp(act,16), Theme.dp(act,18), Theme.dp(act,16));
         LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-1, -2);
         hlp.setMargins(0, 0, 0, Theme.dp(act,8)); head.setLayoutParams(hlp);
-        head.setBackground(termBorder(act, 0xFF0B1220, 0x4D00E5FF));
+        head.setBackground(termBorder(act, Theme.termCardDeep(act), Theme.withAlpha(Theme.termCyan(act), 0x4D)));
         // 标题行：左侧标题 + 右侧 [START]（仅此按钮跳 GitHub，其余区域不触发）
         LinearLayout titleRow = new LinearLayout(act); titleRow.setOrientation(LinearLayout.HORIZONTAL); titleRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        TextView wm = new TextView(act); wm.setTextSize(23); wm.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); wm.setTextColor(0xFF00E5FF);
+        TextView wm = new TextView(act); wm.setTextSize(23); wm.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); wm.setTextColor(Theme.termCyan(act));
         wm.setText(Art.bold("TGAutoSign"));
         titleRow.addView(wm, new LinearLayout.LayoutParams(0, -2, 1f));
         TextView start = new TextView(act); start.setText("[START]"); start.setTextSize(12); start.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-        start.setTextColor(0xFF00FF9C); start.setClickable(true);
+        start.setTextColor(Theme.termGreen(act)); start.setClickable(true);
         start.setPadding(dp(14), dp(6), dp(14), dp(6));
-        start.setBackground(termBorder(act, 0x1400FF9C, 0x6600FF9C));
+        start.setBackground(termBorder(act, Theme.withAlpha(Theme.termGreen(act), 0x14), Theme.withAlpha(Theme.termGreen(act), 0x66)));
         start.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ openGithub(); } });
         titleRow.addView(start, new LinearLayout.LayoutParams(-2, -2));
         head.addView(titleRow);
-        TextView sv = new TextView(act); sv.setTextSize(12); sv.setTextColor(0xFF8B98B8);
+        TextView sv = new TextView(act); sv.setTextSize(12); sv.setTextColor(Theme.termMuted(act));
         sv.setTypeface(android.graphics.Typeface.MONOSPACE);
         String sign = (SIGN == null || SIGN.isEmpty()) ? "wlmosv" : SIGN;
         sv.setText("$ tgas --v " + UpdateChecker.VERSION_NAME + "  ·  (c) " + sign + " 出品");
@@ -2088,11 +2088,11 @@ public final class TGAutoSignCore {
         LinearLayout statCard = new LinearLayout(act);
         statCard.setOrientation(LinearLayout.VERTICAL);
         statCard.setPadding(dp(12), dp(10), dp(12), dp(10));
-        statCard.setBackground(termBorder(act, 0xFF0D1424, 0x3300E5FF));
+        statCard.setBackground(termBorder(act, Theme.termCardInput(act), Theme.withAlpha(Theme.termCyan(act), 0x33)));
         android.widget.LinearLayout.LayoutParams lpCard = new android.widget.LinearLayout.LayoutParams(-1, -2);
         lpCard.topMargin = dp(12);
         statCard.setLayoutParams(lpCard);
-        TextView st1 = new TextView(act); st1.setTextSize(14); st1.setTextColor(0xFF00E5FF);
+        TextView st1 = new TextView(act); st1.setTextSize(14); st1.setTextColor(Theme.termCyan(act));
         st1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
         st1.setText("\u25B8 " + accountLabel(currentAccount()) + "  ·  targets " + targets.size() + "  ·  signed " + signed + "/" + targets.size());
         statCard.addView(st1);
@@ -2106,24 +2106,24 @@ public final class TGAutoSignCore {
         statCard.addView(chips2);
         String plc = perAccountLine();
         if (plc != null && plc.length() > 0) {
-            TextView st3 = new TextView(act); st3.setTextSize(11); st3.setTextColor(0xFF7088B0); st3.setTypeface(android.graphics.Typeface.MONOSPACE); st3.setPadding(0, dp(8), 0, 0); st3.setText(plc); statCard.addView(st3);
+            TextView st3 = new TextView(act); st3.setTextSize(11); st3.setTextColor(Theme.termMuted(act)); st3.setTypeface(android.graphics.Typeface.MONOSPACE); st3.setPadding(0, dp(8), 0, 0); st3.setText(plc); statCard.addView(st3);
         }
         head.addView(statCard);
         // 终端输出卡：最近 4 行运行日志（实时刷新：面板开着每 4 秒自动更新）
         LinearLayout term = new LinearLayout(act);
         term.setOrientation(LinearLayout.VERTICAL);
         term.setPadding(dp(12), dp(10), dp(12), dp(10));
-        term.setBackground(termBorder(act, 0xFF0A0F1A, 0x5900FF9C));
+        term.setBackground(termBorder(act, Theme.termCardDeep(act), Theme.withAlpha(Theme.termGreen(act), 0x59)));
         android.widget.LinearLayout.LayoutParams tl2 = new android.widget.LinearLayout.LayoutParams(-1, -2);
         tl2.topMargin = dp(8); term.setLayoutParams(tl2);
         TextView tt = new TextView(act); tt.setTextSize(11); tt.setTypeface(android.graphics.Typeface.MONOSPACE);
-        tt.setTextColor(0xFF00FF9C);
+        tt.setTextColor(Theme.termGreen(act));
         tt.setText("$ tail -f ~/.logs/tgautosign");
         term.addView(tt);
         final LinearLayout termBody = new LinearLayout(act);
         termBody.setOrientation(LinearLayout.VERTICAL);
         term.addView(termBody);
-        TextView tm = new TextView(act); tm.setTextSize(11); tm.setTypeface(android.graphics.Typeface.MONOSPACE); tm.setTextColor(0xFF00E5FF);
+        TextView tm = new TextView(act); tm.setTextSize(11); tm.setTypeface(android.graphics.Typeface.MONOSPACE); tm.setTextColor(Theme.termCyan(act));
         tm.setText("[更多日志] → 运行日志"); tm.setPadding(0, dp(6), 0, 0); tm.setClickable(true);
         tm.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ runAction(act, "log"); } });
         term.addView(tm);
@@ -2142,9 +2142,9 @@ public final class TGAutoSignCore {
         String[][] QK = {{"sign", "\u25B6 \u7acb\u5373\u7b7e\u5230"}, {"list", "\u2192 \u76ee\u6807"}, {"log", "\u2441 \u65e5\u5fd7"}, {"diag", "\u2694 \u81ea\u68c0"}};
         for (final String[] q : QK) {
             TextView qb = new TextView(act); qb.setText(q[1]); qb.setTextSize(11); qb.setTypeface(android.graphics.Typeface.MONOSPACE);
-            qb.setTextColor(0xFF00E5FF); qb.setClickable(true);
+            qb.setTextColor(Theme.termCyan(act)); qb.setClickable(true);
             qb.setPadding(dp(6), dp(7), dp(6), dp(7));
-            qb.setBackground(termBorder(act, 0x1200E5FF, 0x5900E5FF));
+            qb.setBackground(termBorder(act, Theme.withAlpha(Theme.termCyan(act), 0x12), Theme.withAlpha(Theme.termCyan(act), 0x59)));
             qb.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ runAction(act, q[0]); } });
             quick.addView(qb, new android.widget.LinearLayout.LayoutParams(0, -2, 1f));
         }
@@ -2205,8 +2205,8 @@ public final class TGAutoSignCore {
             q.setSingleLine();
             q.setTextSize(13);
             q.setHint("搜索日志，边输边过滤");
-            q.setTextColor(0xFFE6F1FF);
-            q.setHintTextColor(0xFF5A6A8A);
+            q.setTextColor(Theme.termTxt(act));
+            q.setHintTextColor(Theme.termFaint(act));
             q.addTextChangedListener(new android.text.TextWatcher() {
                 @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
                 @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
@@ -2219,7 +2219,7 @@ public final class TGAutoSignCore {
 
             logStat = new TextView(act);
             logStat.setTextSize(11);
-            logStat.setTextColor(0xFF8B98B8);
+            logStat.setTextColor(Theme.termMuted(act));
             root.addView(logStat);
 
             ScrollView sv = new ScrollView(act);
@@ -2230,7 +2230,7 @@ public final class TGAutoSignCore {
 
             TextView legend = new TextView(act);
             legend.setTextSize(11);
-            legend.setTextColor(0xFF8B98B8);
+            legend.setTextColor(Theme.termMuted(act));
             legend.setText("颜色：红=出错要处理 · 黄=会自动重试 · 绿=成功 · 灰白=普通 · 淡灰=调试细节。长按任意行可复制。");
             root.addView(legend);
 
@@ -2243,8 +2243,8 @@ public final class TGAutoSignCore {
             tv.setTextSize(13);
             tv.setText(label);
             tv.setSingleLine(true);
-            tv.setTextColor(0xFFE6F1FF);
-            tv.setBackground(termBorder(c, 0xFF101726, 0x2200E5FF));
+            tv.setTextColor(Theme.termTxt(c));
+            tv.setBackground(termBorder(c, Theme.termCard(c), Theme.withAlpha(Theme.termCyan(c), 0x22)));
             tv.setPadding(Theme.dp(c, 10), Theme.dp(c, 6), Theme.dp(c, 10), Theme.dp(c, 6));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             lp.setMargins(Theme.dp(c, 2), 0, Theme.dp(c, 2), 0);
@@ -2323,7 +2323,7 @@ public final class TGAutoSignCore {
             box.setPadding(Theme.dp(act, 16), Theme.dp(act, 8), Theme.dp(act, 16), Theme.dp(act, 8));
             TextView t = new TextView(act);
             t.setTextSize(13);
-            t.setTextColor(0xFFE6F1FF);
+            t.setTextColor(Theme.termTxt(act));
             t.setText("清空会同时删掉当前列表和落盘的历史日志文件。\n建议先「导出再清空」留一份，方便之后对账。");
             box.addView(t);
             Button b1 = mkBtn(act);
@@ -2356,11 +2356,11 @@ public final class TGAutoSignCore {
 
     private void tcard(LinearLayout box, Activity act, String h, String b) {
         LinearLayout card = new LinearLayout(act); card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackground(termBorder(act, 0xFF101726, 0x2200E5FF));
+        card.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x22)));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, Theme.dp(act,4), 0, Theme.dp(act,4)); card.setLayoutParams(lp);
         card.setPadding(Theme.dp(act,14), Theme.dp(act,12), Theme.dp(act,14), Theme.dp(act,12));
-        TextView ht = new TextView(act); ht.setTextSize(15); ht.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); ht.setTextColor(0xFF00E5FF); ht.setText(h); card.addView(ht);
-        TextView bt = new TextView(act); bt.setTextSize(12); bt.setTextColor(0xFF8B98B8); bt.setTypeface(android.graphics.Typeface.MONOSPACE); bt.setPadding(0, Theme.dp(act,4), 0, 0); bt.setText(b); card.addView(bt);
+        TextView ht = new TextView(act); ht.setTextSize(15); ht.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); ht.setTextColor(Theme.termCyan(act)); ht.setText(h); card.addView(ht);
+        TextView bt = new TextView(act); bt.setTextSize(12); bt.setTextColor(Theme.termMuted(act)); bt.setTypeface(android.graphics.Typeface.MONOSPACE); bt.setPadding(0, Theme.dp(act,4), 0, 0); bt.setText(b); card.addView(bt);
         box.addView(card);
     }
 
@@ -2384,9 +2384,9 @@ public final class TGAutoSignCore {
 
     private void addDiagRow(LinearLayout box, Activity act, String label, boolean ok) {
         TextView t = new TextView(act);
-        t.setTextSize(12); t.setTextColor(0xFFE6F1FF); t.setTypeface(android.graphics.Typeface.MONOSPACE);
+        t.setTextSize(12); t.setTextColor(Theme.termTxt(act)); t.setTypeface(android.graphics.Typeface.MONOSPACE);
         t.setPadding(Theme.dp(act,12), Theme.dp(act,10), Theme.dp(act,12), Theme.dp(act,10));
-        t.setBackground(termBorder(act, 0xFF101726, 0x2200E5FF));
+        t.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x22)));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, Theme.dp(act,3), 0, Theme.dp(act,3)); t.setLayoutParams(lp);
         t.setText((ok ? "\u2705 " : "\u26a0\ufe0f ") + label);
         box.addView(t);
@@ -2448,11 +2448,32 @@ public final class TGAutoSignCore {
     }
 
 
+    private static boolean themeLogDone;
     private boolean isDarkMode(Context ctx) {
+        boolean tg = false;
+        String how = "no-method";
         try {
-            int mode = ctx.getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
-            return mode == android.content.res.Configuration.UI_MODE_NIGHT_YES;
-        } catch (Throwable t) { return false; }
+            Class<?> th = classEx("org.telegram.ui.ActionBar.Theme");
+            for (java.lang.reflect.Method m : th.getMethods()) {
+                String n = m.getName();
+                if (m.getParameterTypes().length == 0 && java.lang.reflect.Modifier.isStatic(m.getModifiers())
+                        && (n.equals("isCurrentThemeDark") || n.equals("isCurrentThemeNight"))) {
+                    Object r = m.invoke(null);
+                    if (r instanceof Boolean) { tg = ((Boolean) r).booleanValue(); how = n; break; }
+                }
+            }
+        } catch (Throwable t) { how = "exc-" + t.getClass().getSimpleName(); }
+        boolean sys = false;
+        try {
+            sys = (ctx.getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                    == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+        } catch (Throwable ignored) {}
+        if (how.startsWith("no-method") || how.startsWith("exc-")) { tg = sys; how = how + "->sys"; }
+        if (!themeLogDone) {
+            themeLogDone = true;
+            jlog("主题判定: dark=" + tg + " 来源=" + how + " 系统=" + (sys ? "dark" : "light"));
+        }
+        return tg;
     }
 
     private String txtMain(Context ctx) { return isDarkMode(ctx) ? "#F2F2F2" : "#1F1F1F"; }
@@ -2492,7 +2513,7 @@ public final class TGAutoSignCore {
         row.addView(arrow);
         parent.addView(row);
         View div = new View(c);
-        div.setBackgroundColor(0x1A000000);
+        div.setBackgroundColor(Theme.line(c));
         parent.addView(div, new LinearLayout.LayoutParams(-1, 1));
         return row;
     }
@@ -2542,7 +2563,7 @@ public final class TGAutoSignCore {
         row.addView(arrow);
         parent.addView(row);
         View div = new View(c);
-        div.setBackgroundColor(0x1A000000);
+        div.setBackgroundColor(Theme.line(c));
         parent.addView(div, new LinearLayout.LayoutParams(-1, 1));
         return row;
     }
@@ -2561,10 +2582,10 @@ public final class TGAutoSignCore {
         e.setHint(hint);
         e.setTextSize(14);
         e.setTypeface(android.graphics.Typeface.MONOSPACE);
-        e.setTextColor(0xFFE6F1FF);
-        e.setHintTextColor(0xFF5A6A8A);
+        e.setTextColor(Theme.termTxt(act));
+        e.setHintTextColor(Theme.termFaint(act));
         e.setPadding(dp(12), dp(10), dp(12), dp(10));
-        try { e.setBackground(termBorder(act, 0xFF0D1424, 0x3300E5FF)); } catch (Throwable ignored) {}
+        try { e.setBackground(termBorder(act, Theme.termCardInput(act), Theme.withAlpha(Theme.termCyan(act), 0x33))); } catch (Throwable ignored) {}
         if (type == 1) e.setInputType(InputType.TYPE_CLASS_NUMBER);
         return e;
     }
@@ -2811,7 +2832,7 @@ public final class TGAutoSignCore {
         box.setPadding(Theme.dp(act, 16), Theme.dp(act, 8), Theme.dp(act, 16), Theme.dp(act, 8));
         TextView info = new TextView(act);
         info.setTextSize(13);
-        info.setTextColor(0xFFE6F1FF);
+        info.setTextColor(Theme.termTxt(act));
         if (fs.isEmpty()) {
             info.setText("没有找到备份文件。\n\n备份放在这里：\nAndroid/data/" + safePkg() + "/files/tgautosign/\n（在 /jmb → 📤 导出配置 里生成，也可以手动把 json 拷进去）");
             box.addView(info);
@@ -2829,12 +2850,12 @@ public final class TGAutoSignCore {
             row.setPadding(Theme.dp(act, 4), Theme.dp(act, 11), Theme.dp(act, 4), Theme.dp(act, 11));
             TextView t1 = new TextView(act);
             t1.setTextSize(14);
-            t1.setTextColor(0xFFE6F1FF); t1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+            t1.setTextColor(Theme.termTxt(act)); t1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
             t1.setText(f.getName());
             row.addView(t1);
             TextView t2 = new TextView(act);
             t2.setTextSize(11);
-            t2.setTextColor(0xFF8B98B8); t2.setTypeface(android.graphics.Typeface.MONOSPACE);
+            t2.setTextColor(Theme.termMuted(act)); t2.setTypeface(android.graphics.Typeface.MONOSPACE);
             t2.setText(ConfigStore.describe(f));
             row.addView(t2);
             row.setOnClickListener(new View.OnClickListener() {
@@ -2842,7 +2863,7 @@ public final class TGAutoSignCore {
             });
             box.addView(row);
             View div = new View(act);
-            div.setBackgroundColor(0x1A000000);
+            div.setBackgroundColor(Theme.line(act));
             box.addView(div, new LinearLayout.LayoutParams(-1, 1));
         }
         showDialog(act, "导入配置 · 选备份", box, "关闭");
@@ -2854,7 +2875,7 @@ public final class TGAutoSignCore {
         box.setPadding(Theme.dp(act, 16), Theme.dp(act, 8), Theme.dp(act, 16), Theme.dp(act, 8));
         TextView t = new TextView(act);
         t.setTextSize(12);
-        t.setTextColor(0xFFE6F1FF); t.setTypeface(android.graphics.Typeface.MONOSPACE);
+        t.setTextColor(Theme.termTxt(act)); t.setTypeface(android.graphics.Typeface.MONOSPACE);
         t.setText(f.getName() + "\n" + ConfigStore.describe(f)
                 + "\n\n" + accountLabel(currentAccount()) + " 现在有 " + targetsSnapshot().size() + " 个目标。");
         box.addView(t);
@@ -2974,7 +2995,7 @@ public final class TGAutoSignCore {
 
     private android.widget.Switch swRow(Context c, String label, boolean on) {
         android.widget.Switch s = new android.widget.Switch(c);
-        s.setText(label); s.setTextSize(13); s.setTextColor(0xFFE6F1FF); s.setTypeface(android.graphics.Typeface.MONOSPACE); s.setChecked(on);
+        s.setText(label); s.setTextSize(13); s.setTextColor(Theme.termTxt(c)); s.setTypeface(android.graphics.Typeface.MONOSPACE); s.setChecked(on);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, Theme.dp(c,6), 0, Theme.dp(c,6)); s.setLayoutParams(lp);
         s.setPadding(Theme.dp(c,4), Theme.dp(c,10), Theme.dp(c,4), Theme.dp(c,10));
         return s;
@@ -2990,7 +3011,7 @@ public final class TGAutoSignCore {
             kw.setText(LEARN_KEYWORDS == null ? "" : String.valueOf(LEARN_KEYWORDS));
             box.addView(kw);
             LinearLayout rlRow = new LinearLayout(act); rlRow.setOrientation(LinearLayout.HORIZONTAL); rlRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
-            TextView rlLabel = new TextView(act); rlLabel.setText("每日重试上限"); rlLabel.setTextSize(13); rlLabel.setTextColor(0xFFB0B0B0);
+            TextView rlLabel = new TextView(act); rlLabel.setText("每日重试上限"); rlLabel.setTextSize(13); rlLabel.setTextColor(Theme.termMuted(act));
             rlRow.addView(rlLabel, new LinearLayout.LayoutParams(0, -2, 1f));
             Button rlMinus = mkBtn(act); rlMinus.setText("−");
             final EditText rl = new EditText(act); rl.setText(String.valueOf(RETRY_LIMIT)); rl.setInputType(android.text.InputType.TYPE_CLASS_NUMBER); rl.setGravity(android.view.Gravity.CENTER); rl.setTextSize(14);
