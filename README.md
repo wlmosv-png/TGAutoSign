@@ -1,81 +1,116 @@
-# TGAutoSign
+# TGAutoSign · Telegram 自动签到
 
-**Telegram 自动签到** Xposed 模块，基于 LibXposed API 102。管理界面直接做进 Telegram：任意聊天里发 `/jmb` 弹出菜单，没有独立 App，没有桌面组件。
+[![Latest Release](https://img.shields.io/github/v/release/wlmosv-png/TGAutoSign?label=最新版本&color=blue)](https://github.com/wlmosv-png/TGAutoSign/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/wlmosv-png/TGAutoSign/total?label=下载量&color=brightgreen)](https://github.com/wlmosv-png/TGAutoSign/releases)
+[![API](https://img.shields.io/badge/libxposed-API%20102-8A2BE2)](https://github.com/LSPosed/LSPlant)
+[![License](https://img.shields.io/badge/license-GPLv3-green)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/wlmosv-png/TGAutoSign/android.yml?label=CI)](https://github.com/wlmosv-png/TGAutoSign/actions)
 
-学习一次 bot 的签到按钮，之后模块在每天、每个账号上自动替你完成签到——断网补签、限流退避、错误分类、面板实时跟踪全部内置。
+**每天手动给签到 bot 发指令？让模块替你签。**
 
-[更新日志](CHANGELOG.md) · [模块发布页（Xposed-Modules-Repo）](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases) · 当前版本 **v1.5.0 (113)** · 作者 wlmosv
+点一次学会，之后每天全自动：回调按钮签到、断网自动补、多账号隔离、限流退避、面板实时跟踪，全部内置。管理界面直接做进 Telegram——任意聊天发 `/jmb` 弹出菜单，没有独立 App、没有桌面组件。
+
+⬇️ **[下载最新版 APK](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases/latest)** · [全部版本](https://github.com/wlmosv-png/TGAutoSign/releases) · [更新日志](CHANGELOG.md)
 
 ---
 
-## 功能总览
+## 📱 界面一览
+
+界面在 Telegram 内渲染：终端风等宽字体、霓虹描边、状态徽章、实时日志卡；深浅色跟随 TG 主题自动切换（v1.5.1 起）。
+
+| 暗色 · 主面板 | 日间 · 主面板 | 自诊断 |
+| --- | --- | --- |
+| ![暗色主面板](docs/screenshots/main-dark.jpg) | ![日间主面板](docs/screenshots/main-light.jpg) | ![自诊断](docs/screenshots/diagnose-dark.jpg) |
+
+---
+
+## 🚀 快速开始（30 秒）
+
+1. **安装**：[下载最新版 APK](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases/latest)（模块本体），在 **LSPosed** 中启用，作用域勾选你的 Telegram 客户端
+2. **完全停止** Telegram 后重新打开
+3. 任意聊天发送 `/jmb` 打开管理面板
+4. 到签到 bot 的聊天里**点一次签到按钮** → 模块自动记住目标，之后每天自动替你签到
+
+> 回调按钮型 bot（点按钮不发文字）同样支持：点一次即学习，之后每天自动重放回调。
+
+---
+
+## ✨ 功能总览
 
 **签到核心**
-- 自动学习签到目标（可限定仅命中关键词才加，防误加）；回调按钮用「捕获」手动绑定更可控
-- 每天每号只签一次；已签提示；断网后自动补签；打开聊天 / 网络恢复自动触发
-- 发送层自动识别签到指令（仅 bot 会话、含关键词），不碰普通聊天
-- Bot 回复语义判定三态：成功 / 已签过 / 失败（失败自动撤销已签并退避重试：5m→15m→45m→2h→4h）
+- 点一次签到按钮即学会目标；可限定仅命中关键词才自动加，防误加
+- 每天每账号只签一次；断网后自动补签（启动 / 定时 / 打开聊天 / 网络恢复）
+- Bot 回复语义三态判定：成功 / 已签过 / 失败，失败自动撤销已签并按 5m→15m→45m→2h→4h 指数退避重试
 - 限流 420 / FLOOD_WAIT 尊重服务器给出的等待秒数
 
 **回调按钮签到（Live Panel 引擎，v1.5.0 重写）**
-- **点一次即学习，之后完全自动**：采集（bot 面板/你点击时自动记录）→ 自适应匹配（data 精确 > 文本一致 > 最新点击，data 每次变的 bot 也跟随）→ 事件驱动（bot 一发面板就签）
-- **协议级修复**：`getBotCallbackAnswer` flags 位正确写入，重放与官方客户端无差别，不再 DATA_INVALID
-- **一次性按钮自愈**：按钮被点过失效时自动拉新面板重试，成功落地
-- 每条目标可带「前置命令序列」模板（/start、/menu 等一键添加，也可自定义）：签到前先拉面板再重放
-- 🧪 测试 / 🔬 调试台：点任意按钮即时发一次并显示机器人返回，最适合排查
-- 捕获列表分级：文本/链接按钮明确标注，不再静默消失
+- 实时跟踪 bot 最新面板，重放前按「data 精确 > 文本一致 > 最近点击」自适应匹配；data 每次变化的 bot 同样跟随
+- 协议级修复：`getBotCallbackAnswer` 请求与官方客户端一致，不再 DATA_INVALID
+- 一次性按钮自愈：按钮被点废时自动拉新面板重试
+- 每条目标可带前置命令序列（`/start` 等模板一键添加），签到前先拉面板再重放
+- 🧪 测试 / 🔬 调试台：点任意按钮即时发一次并显示机器人返回
 
-**稳定性与防滥用（v1.5.0 新增）**
-- 签到动作 300–1200ms 随机间隔，平滑连发特征
-- 单账号每日动作上限（默认 60，可调），到顶自动停并提示
-- 目标可暂停一周（⏸），需要手动签的日子用得上
-- 回调面板过期/按钮变更时给出明确指引：「去 bot 会话再点一次签到按钮即自动修复」
+**稳定性与防滥用**
+- 签到动作 300–1200ms 随机间隔；单账号每日动作上限（默认 60 可调）
+- 目标可暂停一周（⏸）；面板过期时给出明确修复指引
 
 **多账号**
-- 学习目标、当天已签、重试与退避全部按账号隔离（`acc{N}_` 前缀）
-- 「签全部账号」逐账号汇报；「复制目标到其它账号」一键同步
-- 首页按账号显示「目标 N · 已签 M」及今日成功/失败统计
+- 学习目标、已签状态、重试退避全部按账号隔离
+- 🌐 签全部账号逐账号汇报；📋 复制目标到其它账号一键同步
 
 **多客户端（v1.2.2+）**
-- 官方 Play 版、官网直连版、Nagram XF 等 Telegram-Android 系 fork 均可注入
-- 宿主判定：已知包名白名单 + 标志类能力探测双通道；Telegram X 等换内核客户端明确不注入、不误伤
+- 官方 Play 版、官网直连版、Nagram XF 等 Telegram-Android 系客户端均可注入（见下方支持矩阵）
+- 宿主判定 = 已知包名白名单 + 标志类能力探测；Telegram X 等换内核客户端明确不注入、不误伤
 
 **管理体验（v1.5.0 界面）**
-- 终端/黑客风暗色界面：等宽字体、霓虹描边、状态徽章 `[ON]/[OFF]`
-- 主界面实时日志卡（tail -f：面板开着每 4 秒自动刷新最近日志）
-- 快捷命令：▶ 立即签到 / → 目标 / ⏁ 日志 / ⚔ 自检
-- 标题行 `[START]` 一键打开作者 GitHub；`/jmb log` 一键复制日志给作者
-- 设置内置：关键词 / 重试上限（步进器）/ 唤醒命令 / 三个学习开关
+- 终端风界面：等宽字体、霓虹描边、`[ON]/[OFF]` 状态徽章
+- 主界面实时日志卡（tail -f：面板开着每 4 秒自动刷新）
+- 快捷命令行：▶ 立即签到 / → 目标 / ⏁ 日志 / ⚔ 自检；`/jmb log` 一键复制日志
+- 五级运行日志（搜索 / 筛选 / 复制 / 清空，落盘自动轮转）
 
 **内置更新与迁移**
-- 启动静默检查更新（12 小时冷却）；`/jmb update` 强制检查；下载到系统下载目录后交给系统安装器
-- 配置导出/导入（json，导入只合并）；日志导出到下载目录
-- 旧版本键位自动迁移（含 v1.2.x 老数据），无感升级
+- 启动静默检查更新（12 小时冷却），`/jmb update` 强制检查，一键下载到系统「下载」目录
+- 配置导出 / 导入（json，导入只合并）；日志导出 txt
+- 旧版本数据自动迁移，覆盖安装不丢签到记录
 
 **纯本地**：无服务器、无遥测，数据仅存于本机 SharedPreferences。
 
 ---
 
-## 安装
-
-1. 安装 APK（模块本体），在 LSPosed 中启用，作用域勾选你的 Telegram 客户端；
-2. 重启 Telegram；
-3. 任意聊天发送 `/jmb` 打开管理面板 → 「添加目标」自动识别。
-
-支持 minSdk 26（Android 8.0）及以上。
-
-## 支持矩阵
+## 🖥️ 支持矩阵
 
 | 客户端 | 包名 | 状态 |
 | --- | --- | --- |
-| Telegram（Play / 官方渠道） | `org.telegram.messenger` | ✅ 长期实测 |
-| Telegram 官网 APK | `org.telegram.messenger` | ✅ 实测 |
-| Nagram XF | `xyz.nextalone.nagram` 等 | ✅ 实测 |
+| Telegram（Play / 默认渠道） | `org.telegram.messenger` | ✅ 长期实测 |
+| Telegram（官网直连版） | `org.telegram.messenger.web` | ✅ 静态逐项核对 |
+| Nagram XF | `fork.risin42.nagramx` | ✅ 静态核对 + 真机实测 |
+| Nagram / NagramX / NagramNX | `nu.gpu.nagram` 等 | 白名单覆盖，未实测 |
+| 其它 Telegram-Android 系 fork | 任意包名 | 标志类能力探测，齐全即注入 |
+| Telegram X | — | ❌ 不注入（换内核，标志类不齐全） |
 
-## 构建
+> ⚠️ 作用域：LSPosed 里默认只勾了官方版，用第三方客户端请手动把对应客户端勾进模块作用域。
 
-本仓库使用标准 Gradle + AGP（`./gradlew :app:assembleRelease`），签名为项目内配置的 release keystore；发布产物同时上传至本仓库与 Xposed-Modules-Repo 模块仓库。
+---
 
-## License
+## ❓ FAQ
 
-GPLv3
+**Q：回调按钮型 bot 怎么学？**
+A：发 `/jmb` → ➕ 添加目标 → 🔘 捕获回调按钮 → 去 bot 会话点一次它的签到按钮 → 面板列出按钮后点选绑定（可连点多个）。之后每天自动重放。
+
+**Q：签到没生效怎么办？**
+A：`/jmb` → 🩺 自诊断看反射锚点是否正常；📄 运行日志查注入与签到记录；再不行用 🧾 导出运行日志 + 客户端版本提 Issue。
+
+**Q：换手机 / 换账号怎么迁移？**
+A：旧环境 `/jmb → 📤 导出配置`，新环境把 json 放进 `Android/data/org.telegram.messenger/files/tgautosign/` 后 `/jmb → 📥 导入配置`。
+
+---
+
+## 📜 更新日志
+
+见 [CHANGELOG.md](CHANGELOG.md)（当前 v1.5.1 (114)：界面主题化——日间模式适配 + 更新判定修复）。
+
+## ⚖️ License
+
+**GPLv3**，仅供个人学习与自有账号使用；请遵守 Telegram 服务条款及各群组 / 机器人规则。
+
+构建：标准 Gradle + AGP（`./gradlew :app:assembleRelease`），正式包使用 release keystore 签名，同一份 APK 同时发布到本仓库与 [Xposed-Modules-Repo 模块仓库](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign)。
