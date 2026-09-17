@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: 版本一致性守卫（三处 versionCode 必须一致）
+        run: python3 .github/scripts/check-versions.py
       - uses: actions/setup-java@v4
         with: { java-version: '21', distribution: 'temurin', cache: gradle }
       - run: chmod +x gradlew
