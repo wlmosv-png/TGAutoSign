@@ -197,6 +197,34 @@ public final class TGAutoSignCore {
         } catch (Throwable ignored) {}
     }
 
+    /** 终端风按钮工厂：所有对话框按钮统一走它（等宽 + 暗底 + 霓虹描边） */
+    private Button mkBtn(Context c) {
+        Button b = new Button(c);
+        b.setAllCaps(false);
+        b.setTextSize(13);
+        b.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        b.setTextColor(0xFF00E5FF);
+        b.setPadding(dp(10), dp(9), dp(10), dp(9));
+        try { b.setBackground(termBorder(c, 0x1400E5FF, 0x5900E5FF)); } catch (Throwable ignored) {}
+        return b;
+    }
+
+    /** 终端风按钮（强调：荧光绿，用于主操作/确认） */
+    private Button mkBtnPrimary(Context c) {
+        Button b = mkBtn(c);
+        b.setTextColor(0xFF00FF9C);
+        try { b.setBackground(termBorder(c, 0x1400FF9C, 0x6600FF9C)); } catch (Throwable ignored) {}
+        return b;
+    }
+
+    /** 终端风按钮（危险：品红，用于删除/清空） */
+    private Button mkBtnDanger(Context c) {
+        Button b = mkBtn(c);
+        b.setTextColor(0xFFFF5A76);
+        try { b.setBackground(termBorder(c, 0x14FF5A76, 0x66FF5A76)); } catch (Throwable ignored) {}
+        return b;
+    }
+
     /** 点击主界面标题 → 作者 GitHub */
     private void openGithub() {
         try {
@@ -263,7 +291,7 @@ public final class TGAutoSignCore {
         box.setPadding(Theme.dp(act, 16), Theme.dp(act, 8), Theme.dp(act, 16), Theme.dp(act, 8));
         TextView info = new TextView(act);
         info.setTextSize(13);
-        info.setTextColor(Theme.txtPrimary(act));
+        info.setTextColor(0xFFE6F1FF);
         info.setText("把 " + accountLabel(cur) + " 的 " + mine.size() + " 个目标复制到其它账号。\n只复制目标本身，不带「今天已签」和重试记录。");
         box.addView(info);
         for (int i = 0; i < n; i++) {
@@ -274,7 +302,7 @@ public final class TGAutoSignCore {
             row.setPadding(Theme.dp(act, 4), Theme.dp(act, 12), Theme.dp(act, 4), Theme.dp(act, 12));
             TextView t = new TextView(act);
             t.setTextSize(15);
-            t.setTextColor(Theme.txtPrimary(act));
+            t.setTextColor(0xFFE6F1FF);
             t.setText("→ " + accountLabel(i) + "（现有 " + acctTargetCount(i) + " 个）");
             row.addView(t, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             TextView ar = new TextView(act);
@@ -795,7 +823,7 @@ public final class TGAutoSignCore {
         warn.setTextSize(14);
         warn.setText("将删除【所有账号】的全部签到目标与已签/重试状态，仅保留关键词/重试上限/唤醒命令设置。此操作不可撤销，建议先导出配置备份。");
         box.addView(warn);
-        Button ok = new Button(act);
+        Button ok = mkBtn(act);
         ok.setText("确认清空全部配置");
         ok.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
@@ -942,7 +970,7 @@ public final class TGAutoSignCore {
         }
         if (cb==0 && proto!=null && isCallbackButton(proto)){
             final byte[] fdd=buttonData(proto); final long fh=buttonHash(proto); final String text=strOr(buttonText(proto),"回调按钮"); final long fdid=did; final int fmid=mid;
-            if (fdd!=null){ Button one=new Button(act); one.setText("🔘 绑定刚点按钮: "+text); one.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ bindCallback(fdid,text,fdd,fh,fmid);} }); box.addView(one); }
+            if (fdd!=null){ Button one=mkBtnPrimary(act); one.setText(" 绑定刚点按钮: "+text); one.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ bindCallback(fdid,text,fdd,fh,fmid);} }); box.addView(one); }
         }
         if (cb==0 && proto==null) emptyView(box,"(没读到按钮，请在 bot 里点一下签到按钮再试)");
         showDialog(act,"捕获回调按钮", box, "完成");
@@ -993,23 +1021,23 @@ public final class TGAutoSignCore {
         TextView hd=new TextView(act); hd.setTextSize(15); hd.setTextColor(android.graphics.Color.parseColor(txtMain(act)));
         hd.setText(targetTitle(entryDid(m))+"   "+(cb?"🔘回调":"⌨️指令")+"   "+entryText(m)); b.addView(hd);
         if (cb){
-            Button t=new Button(act); t.setText("🧪 测试签到（先跑前置命令→点按钮→看返回）");
+            Button t=mkBtn(act); t.setText("🧪 测试签到（先跑前置命令→点按钮→看返回）");
             t.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ testEntry(id); } });
             b.addView(t);
         }
-        Button s=new Button(act); s.setText("🚀 立即签到");
+        Button s=mkBtnPrimary(act); s.setText("🚀 立即签到");
         s.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ sendSign(m, currentAccount()); toast("已发起签到，结果见提示/日志"); } });
         b.addView(s);
-        Button e=new Button(act); e.setText("✏️ 编辑（标签/前置命令/定位）");
+        Button e=mkBtn(act); e.setText("✏️ 编辑（标签/前置命令/定位）");
         e.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ showEditEntry(act, m); } });
         b.addView(e);
-        Button rb=new Button(act); rb.setText("🔁 重绑为回调（去点它的按钮）");
+        Button rb=mkBtn(act); rb.setText("🔁 重绑为回调（去点它的按钮）");
         rb.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ toast("去该 bot 会话点一下要绑的签到按钮，会自动作为回调新增"); startCapture(act); } });
         b.addView(rb);
-        Button sn=new Button(act); sn.setText("⏸ 暂停一周 / 恢复");
+        Button sn=mkBtn(act); sn.setText("⏸ 暂停一周 / 恢复");
         sn.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ toggleSnooze(m, currentAccount()); showEntryActions(act, m); } });
         b.addView(sn);
-        Button d=new Button(act); d.setText("🗑 删除");
+        Button d=mkBtnDanger(act); d.setText("🗑 删除");
         d.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ confirmDelete(act, m); } });
         b.addView(d);
         showDialog(act,"条目操作", b, "关闭");
@@ -1038,7 +1066,7 @@ public final class TGAutoSignCore {
             LinearLayout chips = new LinearLayout(act); chips.setOrientation(LinearLayout.HORIZONTAL); chips.setPadding(0, dp(4), 0, 0);
             final String[] TPL = {"/start", "/menu", "/qd", "/checkin", "签到", "开始", "菜单"};
             for (final String tpl : TPL) {
-                Button cbB = new Button(act); cbB.setText(tpl); cbB.setTextSize(12);
+                Button cbB = mkBtn(act); cbB.setText(tpl); cbB.setTextSize(12);
                 cbB.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
                     String cur = pre.getText()==null?"":pre.getText().toString().trim();
                     if (cur.length() > 0) cur += ",";
@@ -1046,7 +1074,7 @@ public final class TGAutoSignCore {
                 } });
                 chips.addView(cbB, new LinearLayout.LayoutParams(-2, -2));
             }
-            Button clb = new Button(act); clb.setText("清空"); clb.setTextSize(12);
+            Button clb = mkBtnDanger(act); clb.setText("清空"); clb.setTextSize(12);
             clb.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ pre.setText(""); } });
             chips.addView(clb, new LinearLayout.LayoutParams(-2, -2));
             hsc.addView(chips);
@@ -1054,7 +1082,7 @@ public final class TGAutoSignCore {
         }
         final EditText loc=adInput(act,"按钮定位文案（重开面板按此找回按钮，默认=标签）",0);
         if (cb){ loc.setText(entryLoc(m)); box.addView(loc); }
-        Button ok=new Button(act); ok.setText("保存");
+        Button ok=mkBtnPrimary(act); ok.setText("保存");
         ok.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
             try {
                 m.put("text", name.getText().toString().trim());
@@ -1134,7 +1162,7 @@ public final class TGAutoSignCore {
         TextView head=new TextView(act); head.setTextSize(13); head.setTextColor(android.graphics.Color.parseColor(txtSub(act)));
         head.setText("回调调试台 · uid="+lastCapDid+" msg="+lastCapMid+" 按钮 "+btns.size()+" 个\n点任意按钮=实时发一次该回调并看返回；不放心先「重新采样」");
         box.addView(head);
-        Button samp=new Button(act); samp.setText("🔘 重新采样（去点一次按钮）");
+        Button samp=mkBtnPrimary(act); samp.setText("🔘 重新采样（去点一次按钮）");
         samp.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ startCapture(act); } });
         box.addView(samp);
         int cb=0;
@@ -1971,9 +1999,9 @@ public final class TGAutoSignCore {
         chip.setTextSize(11);
         chip.setText(cb ? "🔸 回调" : "\u2328 指令");
         chip.setPadding(Theme.dp(c,8), Theme.dp(c,2), Theme.dp(c,8), Theme.dp(c,2));
-        int acc = Theme.accent(c);
-        chip.setTextColor(cb ? (Theme.dark(c) ? 0xFF0A0A0A : 0xFFFFFFFF) : Theme.txtPrimary(c));
-        chip.setBackground(Theme.chipBg(c, cb ? acc : (Theme.dark(c) ? 0xFF3A3F47 : 0xFFECEFF3)));
+        chip.setTextColor(cb ? 0xFF00E5FF : 0xFF8B98B8);
+        chip.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        chip.setBackground(termBorder(c, cb ? 0x1200E5FF : 0x0D8B98B8, cb ? 0x5900E5FF : 0x338B98B8));
         return chip;
     }
 
@@ -1986,7 +2014,7 @@ public final class TGAutoSignCore {
         LinearLayout row = new LinearLayout(c);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackground(Theme.card(c));
+        row.setBackground(termBorder(c, 0xFF101726, 0x2200E5FF));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(Theme.dp(c,3), Theme.dp(c,4), Theme.dp(c,3), Theme.dp(c,4));
         row.setLayoutParams(lp);
@@ -2001,12 +2029,12 @@ public final class TGAutoSignCore {
         }
         LinearLayout col = new LinearLayout(c); col.setOrientation(LinearLayout.VERTICAL);
         LinearLayout tl = new LinearLayout(c); tl.setOrientation(LinearLayout.HORIZONTAL); tl.setGravity(Gravity.CENTER_VERTICAL);
-        TextView t1 = new TextView(c); t1.setTextSize(15); t1.setTextColor(Theme.txtPrimary(c)); t1.setTypeface(android.graphics.Typeface.DEFAULT_BOLD); t1.setText(targetTitle(did));
+        TextView t1 = new TextView(c); t1.setTextSize(15); t1.setTextColor(0xFFE6F1FF); t1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); t1.setText(targetTitle(did));
         tl.addView(t1, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         tl.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,8), 1));
         tl.addView(typeChip(c, cb));
         col.addView(tl);
-        TextView t2 = new TextView(c); t2.setTextSize(12); t2.setTextColor(Theme.txtMuted(c));
+        TextView t2 = new TextView(c); t2.setTextSize(11); t2.setTextColor(0xFF8B98B8); t2.setTypeface(android.graphics.Typeface.MONOSPACE);
         String lastT = prefs.getString(accountPrefix() + "last_" + id, "");
         StringBuilder sb = new StringBuilder(status);
         sb.append("   ").append(cb ? "🔸" : "\u2328").append(" ").append(text);
@@ -2014,7 +2042,7 @@ public final class TGAutoSignCore {
         t2.setText(sb.toString());
         col.addView(t2);
         row.addView(col, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        TextView ar = new TextView(c); ar.setTextSize(18); ar.setText("\u203a"); ar.setTextColor(Theme.txtMuted(c)); row.addView(ar);
+        TextView ar = new TextView(c); ar.setTextSize(18); ar.setText("\u203a"); ar.setTextColor(0xFF00E5FF); row.addView(ar);
         parent.addView(row);
         return row;
     }
@@ -2177,8 +2205,8 @@ public final class TGAutoSignCore {
             q.setSingleLine();
             q.setTextSize(13);
             q.setHint("搜索日志，边输边过滤");
-            q.setTextColor(Theme.txtPrimary(act));
-            q.setHintTextColor(Theme.txtMuted(act));
+            q.setTextColor(0xFFE6F1FF);
+            q.setHintTextColor(0xFF5A6A8A);
             q.addTextChangedListener(new android.text.TextWatcher() {
                 @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
                 @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
@@ -2191,7 +2219,7 @@ public final class TGAutoSignCore {
 
             logStat = new TextView(act);
             logStat.setTextSize(11);
-            logStat.setTextColor(Theme.txtMuted(act));
+            logStat.setTextColor(0xFF8B98B8);
             root.addView(logStat);
 
             ScrollView sv = new ScrollView(act);
@@ -2202,7 +2230,7 @@ public final class TGAutoSignCore {
 
             TextView legend = new TextView(act);
             legend.setTextSize(11);
-            legend.setTextColor(Theme.txtMuted(act));
+            legend.setTextColor(0xFF8B98B8);
             legend.setText("颜色：红=出错要处理 · 黄=会自动重试 · 绿=成功 · 灰白=普通 · 淡灰=调试细节。长按任意行可复制。");
             root.addView(legend);
 
@@ -2215,8 +2243,8 @@ public final class TGAutoSignCore {
             tv.setTextSize(13);
             tv.setText(label);
             tv.setSingleLine(true);
-            tv.setTextColor(Theme.txtPrimary(c));
-            tv.setBackground(Theme.chipBg(c, Theme.dark(c) ? 0xFF2E333B : 0xFFE6EAEE));
+            tv.setTextColor(0xFFE6F1FF);
+            tv.setBackground(termBorder(c, 0xFF101726, 0x2200E5FF));
             tv.setPadding(Theme.dp(c, 10), Theme.dp(c, 6), Theme.dp(c, 10), Theme.dp(c, 6));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             lp.setMargins(Theme.dp(c, 2), 0, Theme.dp(c, 2), 0);
@@ -2270,7 +2298,7 @@ public final class TGAutoSignCore {
                 case LV_WARN: col = Theme.dark(c) ? 0xFFFFC466 : 0xFFB26A00; break;
                 case LV_OK: col = Theme.dark(c) ? 0xFF7BD88F : 0xFF1B7E33; break;
                 case LV_DEBUG: col = Theme.dark(c) ? 0xFF74797F : 0xFF9AA0A6; break;
-                default: col = Theme.txtPrimary(c);
+                default: col = 0xFFB8C4DC;
             }
             tv.setTextColor(col);
             tv.setText(body);
@@ -2295,14 +2323,14 @@ public final class TGAutoSignCore {
             box.setPadding(Theme.dp(act, 16), Theme.dp(act, 8), Theme.dp(act, 16), Theme.dp(act, 8));
             TextView t = new TextView(act);
             t.setTextSize(13);
-            t.setTextColor(Theme.txtPrimary(act));
+            t.setTextColor(0xFFE6F1FF);
             t.setText("清空会同时删掉当前列表和落盘的历史日志文件。\n建议先「导出再清空」留一份，方便之后对账。");
             box.addView(t);
-            Button b1 = new Button(act);
+            Button b1 = mkBtn(act);
             b1.setText("先导出一份，再清空");
             b1.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { doExportLog(act); clearLogNow(); } });
             box.addView(b1);
-            Button b2 = new Button(act);
+            Button b2 = mkBtn(act);
             b2.setText("直接清空");
             b2.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { clearLogNow(); } });
             box.addView(b2);
@@ -2328,11 +2356,11 @@ public final class TGAutoSignCore {
 
     private void tcard(LinearLayout box, Activity act, String h, String b) {
         LinearLayout card = new LinearLayout(act); card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackground(Theme.card(act));
+        card.setBackground(termBorder(act, 0xFF101726, 0x2200E5FF));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, Theme.dp(act,4), 0, Theme.dp(act,4)); card.setLayoutParams(lp);
         card.setPadding(Theme.dp(act,14), Theme.dp(act,12), Theme.dp(act,14), Theme.dp(act,12));
-        TextView ht = new TextView(act); ht.setTextSize(15); ht.setTypeface(android.graphics.Typeface.DEFAULT_BOLD); ht.setTextColor(Theme.accent(act)); ht.setText(h); card.addView(ht);
-        TextView bt = new TextView(act); bt.setTextSize(13); bt.setTextColor(Theme.txtPrimary(act)); bt.setPadding(0, Theme.dp(act,4), 0, 0); bt.setText(b); card.addView(bt);
+        TextView ht = new TextView(act); ht.setTextSize(15); ht.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); ht.setTextColor(0xFF00E5FF); ht.setText(h); card.addView(ht);
+        TextView bt = new TextView(act); bt.setTextSize(12); bt.setTextColor(0xFF8B98B8); bt.setTypeface(android.graphics.Typeface.MONOSPACE); bt.setPadding(0, Theme.dp(act,4), 0, 0); bt.setText(b); card.addView(bt);
         box.addView(card);
     }
 
@@ -2356,9 +2384,9 @@ public final class TGAutoSignCore {
 
     private void addDiagRow(LinearLayout box, Activity act, String label, boolean ok) {
         TextView t = new TextView(act);
-        t.setTextSize(13); t.setTextColor(Theme.txtPrimary(act));
+        t.setTextSize(12); t.setTextColor(0xFFE6F1FF); t.setTypeface(android.graphics.Typeface.MONOSPACE);
         t.setPadding(Theme.dp(act,12), Theme.dp(act,10), Theme.dp(act,12), Theme.dp(act,10));
-        t.setBackground(Theme.card(act));
+        t.setBackground(termBorder(act, 0xFF101726, 0x2200E5FF));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, Theme.dp(act,3), 0, Theme.dp(act,3)); t.setLayoutParams(lp);
         t.setText((ok ? "\u2705 " : "\u26a0\ufe0f ") + label);
         box.addView(t);
@@ -2531,7 +2559,12 @@ public final class TGAutoSignCore {
     private EditText adInput(Activity act, String hint, int type) {
         EditText e = new EditText(act);
         e.setHint(hint);
-        e.setTextSize(15);
+        e.setTextSize(14);
+        e.setTypeface(android.graphics.Typeface.MONOSPACE);
+        e.setTextColor(0xFFE6F1FF);
+        e.setHintTextColor(0xFF5A6A8A);
+        e.setPadding(dp(12), dp(10), dp(12), dp(10));
+        try { e.setBackground(termBorder(act, 0xFF0D1424, 0x3300E5FF)); } catch (Throwable ignored) {}
         if (type == 1) e.setInputType(InputType.TYPE_CLASS_NUMBER);
         return e;
     }
@@ -2778,7 +2811,7 @@ public final class TGAutoSignCore {
         box.setPadding(Theme.dp(act, 16), Theme.dp(act, 8), Theme.dp(act, 16), Theme.dp(act, 8));
         TextView info = new TextView(act);
         info.setTextSize(13);
-        info.setTextColor(Theme.txtPrimary(act));
+        info.setTextColor(0xFFE6F1FF);
         if (fs.isEmpty()) {
             info.setText("没有找到备份文件。\n\n备份放在这里：\nAndroid/data/" + safePkg() + "/files/tgautosign/\n（在 /jmb → 📤 导出配置 里生成，也可以手动把 json 拷进去）");
             box.addView(info);
@@ -2796,12 +2829,12 @@ public final class TGAutoSignCore {
             row.setPadding(Theme.dp(act, 4), Theme.dp(act, 11), Theme.dp(act, 4), Theme.dp(act, 11));
             TextView t1 = new TextView(act);
             t1.setTextSize(14);
-            t1.setTextColor(Theme.txtPrimary(act));
+            t1.setTextColor(0xFFE6F1FF); t1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
             t1.setText(f.getName());
             row.addView(t1);
             TextView t2 = new TextView(act);
-            t2.setTextSize(12);
-            t2.setTextColor(Theme.txtMuted(act));
+            t2.setTextSize(11);
+            t2.setTextColor(0xFF8B98B8); t2.setTypeface(android.graphics.Typeface.MONOSPACE);
             t2.setText(ConfigStore.describe(f));
             row.addView(t2);
             row.setOnClickListener(new View.OnClickListener() {
@@ -2820,16 +2853,16 @@ public final class TGAutoSignCore {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(Theme.dp(act, 16), Theme.dp(act, 8), Theme.dp(act, 16), Theme.dp(act, 8));
         TextView t = new TextView(act);
-        t.setTextSize(13);
-        t.setTextColor(Theme.txtPrimary(act));
+        t.setTextSize(12);
+        t.setTextColor(0xFFE6F1FF); t.setTypeface(android.graphics.Typeface.MONOSPACE);
         t.setText(f.getName() + "\n" + ConfigStore.describe(f)
                 + "\n\n" + accountLabel(currentAccount()) + " 现在有 " + targetsSnapshot().size() + " 个目标。");
         box.addView(t);
-        Button b1 = new Button(act);
+        Button b1 = mkBtn(act);
         b1.setText("合并导入（保留现有的）");
         b1.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { doImportNow(act, f, false); } });
         box.addView(b1);
-        Button b2 = new Button(act);
+        Button b2 = mkBtn(act);
         b2.setText("覆盖导入（先清空目标和状态）");
         b2.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { doImportNow(act, f, true); } });
         box.addView(b2);
@@ -2879,7 +2912,7 @@ public final class TGAutoSignCore {
         EditText cmd = adInput(act, "签到指令，如：/qd 或 📅 签到", 0);
         box.addView(uid);
         box.addView(cmd);
-        Button ok = new Button(act);
+        Button ok = mkBtn(act);
         ok.setText("添加并立即签到");
         ok.setOnClickListener(v -> {
             try {
@@ -2923,7 +2956,7 @@ public final class TGAutoSignCore {
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
         if (targets.size() > 1) {
-            Button all = new Button(act);
+            Button all = mkBtn(act);
             all.setText("🚀 全部签到（" + targets.size() + " 个条目）");
             all.setOnClickListener(v -> {
                 trySignAll("手动全部", true);
@@ -2941,7 +2974,7 @@ public final class TGAutoSignCore {
 
     private android.widget.Switch swRow(Context c, String label, boolean on) {
         android.widget.Switch s = new android.widget.Switch(c);
-        s.setText(label); s.setTextSize(14); s.setTextColor(Theme.txtPrimary(c)); s.setChecked(on);
+        s.setText(label); s.setTextSize(13); s.setTextColor(0xFFE6F1FF); s.setTypeface(android.graphics.Typeface.MONOSPACE); s.setChecked(on);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, Theme.dp(c,6), 0, Theme.dp(c,6)); s.setLayoutParams(lp);
         s.setPadding(Theme.dp(c,4), Theme.dp(c,10), Theme.dp(c,4), Theme.dp(c,10));
         return s;
@@ -2959,9 +2992,9 @@ public final class TGAutoSignCore {
             LinearLayout rlRow = new LinearLayout(act); rlRow.setOrientation(LinearLayout.HORIZONTAL); rlRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
             TextView rlLabel = new TextView(act); rlLabel.setText("每日重试上限"); rlLabel.setTextSize(13); rlLabel.setTextColor(0xFFB0B0B0);
             rlRow.addView(rlLabel, new LinearLayout.LayoutParams(0, -2, 1f));
-            Button rlMinus = new Button(act); rlMinus.setText("−");
+            Button rlMinus = mkBtn(act); rlMinus.setText("−");
             final EditText rl = new EditText(act); rl.setText(String.valueOf(RETRY_LIMIT)); rl.setInputType(android.text.InputType.TYPE_CLASS_NUMBER); rl.setGravity(android.view.Gravity.CENTER); rl.setTextSize(14);
-            Button rlPlus = new Button(act); rlPlus.setText("+");
+            Button rlPlus = mkBtn(act); rlPlus.setText("+");
             rlMinus.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ try { int vv=Integer.parseInt(rl.getText().toString().trim()); vv=Math.max(1,vv-1); rl.setText(String.valueOf(vv)); } catch (Throwable ignored) {} } });
             rlPlus.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ try { int vv=Integer.parseInt(rl.getText().toString().trim()); vv=Math.min(99,vv+1); rl.setText(String.valueOf(vv)); } catch (Throwable ignored) {} } });
             rlRow.addView(rlMinus, new LinearLayout.LayoutParams(0, -2, 1f));
@@ -2977,7 +3010,7 @@ public final class TGAutoSignCore {
             box.addView(anSw);
             final android.widget.Switch afSw = swRow(act, "自动学习仅加命中关键词的按钮（防误加）", AUTO_LEARN_FILTER);
             box.addView(afSw);
-            Button ok = new Button(act);
+            Button ok = mkBtn(act);
             ok.setText("保存");
             ok.setOnClickListener(v -> {
                 String k = kw.getText().toString().trim();
