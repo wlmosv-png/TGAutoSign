@@ -50,6 +50,21 @@ public final class TGAutoSignEntry extends XposedModule {
     public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
         if (!param.isFirstPackage()) return;
         String packageName = param.getPackageName();
+
+        // Nagram XF 30dcd6c 构建存在兼容问题（注入后启动无响应），版本锁定不注入；其他构建正常
+        if ("fork.risin42.nagramx".equals(packageName)) {
+            String vn = null;
+            try {
+                java.lang.reflect.Method gai = param.getClass().getMethod("getApplicationInfo");
+                Object ai = gai.invoke(param);
+                java.lang.reflect.Field vnF = ai != null ? ai.getClass().getField("versionName") : null;
+                if (vnF != null) { Object v = vnF.get(ai); vn = v != null ? String.valueOf(v) : null; }
+            } catch (Throwable ignored) {}
+            if (vn != null && vn.contains("30dcd6c")) {
+                logInfo("Nagram XF 30dcd6c 构建已锁定（注入会导致启动无响应），跳过注入");
+                return;
+            }
+        }
         ClassLoader probe = null;
         try { probe = param.getDefaultClassLoader(); } catch (Throwable ignored) {}
         if (!Hosts.isSupported(packageName, probe)) {
