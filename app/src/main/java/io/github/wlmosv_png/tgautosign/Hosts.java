@@ -34,7 +34,8 @@ public final class Hosts {
             PKG_NAGRAM_XF,
             "nu.gpu.nagram",       // Nagram / NagramX（risin42 dev、main 分支 APP_PACKAGE）
             "nu.gpu.nagramx",      // NagramX base 变体（risin42 base 分支 APP_PACKAGE）
-            "nu.gpu.nagram.web"    // NagramNX（thesv4k 分支 APP_PACKAGE）
+            "nu.gpu.nagram.web",   // NagramNX（thesv4k 分支 APP_PACKAGE）
+            "com.exteraless.app"   // ExteraLess（ExteraGram fork，12.10.1-feae791 实测标志类齐全）
     )));
 
     /** 三者齐全才认定是 Telegram-Android 血统 */

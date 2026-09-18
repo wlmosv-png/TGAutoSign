@@ -43,6 +43,18 @@
 - Bot 回复语义三态判定：成功 / 已签过 / 失败，失败自动撤销已签并按 5m→15m→45m→2h→4h 指数退避重试
 - 限流 420 / FLOOD_WAIT 尊重服务器给出的等待秒数
 
+**签到窗口（v1.5.2）**
+- 设置可配每日签到窗口（如 08:00-10:00），窗口外不签、窗口内准点补签；秒级排程 + 随机偏移防风控
+
+**连续签到日历（v1.5.2）**
+- 首页显示连续签到天数 + 最近 14 天打卡格子，断签归零，旧数据自动兼容
+
+**预设模板（v1.5.2）**
+- 主菜单「📚 预设模板」常用签到指令一键添加
+
+**界面体验（v1.5.2）**
+- 面板开启动效（扫光 / 打字机 / 光标 / 呼吸灯 / 内容渐进）与按钮按压反馈；15 秒内重复打开秒开；主菜单双排网格
+
 **回调按钮签到（Live Panel 引擎，v1.5.0 重写）**
 - 实时跟踪 bot 最新面板，重放前按「data 精确 > 文本一致 > 最近点击」自适应匹配；data 每次变化的 bot 同样跟随
 - 协议级修复：`getBotCallbackAnswer` 请求与官方客户端一致，不再 DATA_INVALID
@@ -83,7 +95,8 @@
 | --- | --- | --- |
 | Telegram（Play / 默认渠道） | `org.telegram.messenger` | ✅ 长期实测 |
 | Telegram（官网直连版） | `org.telegram.messenger.web` | ✅ 静态逐项核对 |
-| Nagram XF | `fork.risin42.nagramx` | ✅ 静态核对 + 真机实测 |
+| Nagram XF | `fork.risin42.nagramx` | ✅ dec46b0 实测 · 30dcd6c 构建暂不兼容 |
+| ExteraLess（ExteraGram fork） | `com.exteraless.app` | ✅ 12.10.1-feae791 实测 |
 | Nagram / NagramX / NagramNX | `nu.gpu.nagram` 等 | 白名单覆盖，未实测 |
 | 其它 Telegram-Android 系 fork | 任意包名 | 标志类能力探测，齐全即注入 |
 | Telegram X | — | ❌ 不注入（换内核，标志类不齐全） |

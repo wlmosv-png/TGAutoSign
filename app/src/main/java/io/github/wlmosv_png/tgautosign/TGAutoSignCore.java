@@ -66,7 +66,8 @@ public final class TGAutoSignCore {
     private long THROTTLE_MS = 60L * 1000L;
     private long POLL_INTERVAL_MS = 30L * 60L * 1000L;
     private int RETRY_LIMIT = 5;
-    private String LEARN_KEYWORDS = "签到,打卡,checkin,claim,领取,签到领,/qd,/qiandao,/sign";
+    private static final String DEF_KEYWORDS = "签到,打卡,checkin,/checkin,claim,领取,签到领,/qd,/qiandao,/sign,/daily,daily,/clock,/kaoqin";
+    private String LEARN_KEYWORDS = DEF_KEYWORDS;
 
     private final Context appContext;
     private final ClassLoader cl;
@@ -127,6 +128,8 @@ public final class TGAutoSignCore {
     private int DAILY_CAP = 60;                  // 每账号每日动作上限（防风控），/jmb 设置里可改
     private volatile long lastPaceAt = 0L;        // 连发节奏锁（jitter 用）
     private String WAKE_CMD = "";
+    private String WINDOW = "";
+    private boolean lastPollInWindow = true;
     private String SIGN = "wlmosv";
     private boolean AUTO_LEARN = false;                       // 非空=回调签到前先发的唤醒命令（拉面板）
     private final Set<String> wakeFired = cs(); // 唤醒只触发一次，防循环
@@ -255,6 +258,17 @@ public final class TGAutoSignCore {
         android.widget.LinearLayout.LayoutParams lp = new android.widget.LinearLayout.LayoutParams(-2, -2);
         lp.rightMargin = dp(6);
         b.setLayoutParams(lp);
+        if (on) {
+            final android.animation.ValueAnimator ba = android.animation.ValueAnimator.ofFloat(0.6f, 1f);
+            ba.setDuration(2400); ba.setRepeatCount(android.animation.ValueAnimator.INFINITE); ba.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+            ba.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                @Override public void onAnimationUpdate(android.animation.ValueAnimator a) { b.setAlpha(((Float) a.getAnimatedValue()).floatValue()); }
+            });
+            b.addOnAttachStateChangeListener(new android.view.View.OnAttachStateChangeListener() {
+                @Override public void onViewAttachedToWindow(android.view.View vv) { ba.start(); }
+                @Override public void onViewDetachedFromWindow(android.view.View vv) { ba.cancel(); b.setAlpha(1f); }
+            });
+        }
         return b;
     }
 
@@ -361,9 +375,11 @@ public final class TGAutoSignCore {
         if (started) { return; }
         synchronized (TLOCK) { loadTargetsLocked(); started = true; }
         try {
-            if (prefs.contains("jmb_keywords")) LEARN_KEYWORDS = prefs.getString("jmb_keywords", LEARN_KEYWORDS);
+            if (prefs.contains("jmb_keywords")) LEARN_KEYWORDS = prefs.getString("jmb_keywords", DEF_KEYWORDS);
             if (prefs.contains("jmb_retry")) RETRY_LIMIT = prefs.getInt("jmb_retry", RETRY_LIMIT);
             WAKE_CMD = prefs.getString("jmb_wake_cmd", "");
+            if (prefs.contains("jmb_window")) WINDOW = prefs.getString("jmb_window", "");
+            if (bootReadyAt == 0L) bootReadyAt = System.currentTimeMillis() + 30000L;
             AUTO_LEARN = prefs.getBoolean("jmb_autolearn", AUTO_LEARN);
             AUTO_LEARN_FILTER = prefs.getBoolean("jmb_alfilter", AUTO_LEARN_FILTER);
             AUTO_LEARN_NET = prefs.getBoolean("jmb_autolearn_net", AUTO_LEARN_NET);
@@ -609,7 +625,11 @@ public final class TGAutoSignCore {
         return java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<String, Boolean>());
     }
 
+    private long lastSyncMs = 0L;
     private void syncAccount() {
+        long n0 = System.currentTimeMillis();
+        if (n0 - lastSyncMs < 2000L) return;
+        lastSyncMs = n0;
         try {
             int cur = currentAccount();
             synchronized (TLOCK) {
@@ -1371,6 +1391,8 @@ public final class TGAutoSignCore {
 
     private void markSigned(String prefix, String id) {
         prefs.edit().putString(prefix + "last_" + id, todayStr()).commit();
+        updateStreak(prefix);
+        noteSignedDay(prefix);
         jlog("检测到签到消息已发出，标记今日已签 " + id);
     }
 
@@ -1725,16 +1747,20 @@ public final class TGAutoSignCore {
     void trySignAllFor(String reason, boolean force, int account) {
         lastRound = null;
         long now = System.currentTimeMillis();
-        if (!force && now - lastTryTime < THROTTLE_MS) {
+        if (!force && !"进入窗口".equals(reason) && now - lastTryTime < THROTTLE_MS) {
             logd("[" + reason + "] 节流内跳过");
             return;
         }
-        lastTryTime = now;
         if (account == currentAccount()) syncAccount();
+        if (!force && !inWindow()) {
+            logd("[" + reason + "] 签到窗口外（当前 " + nowHM() + "，窗口 " + WINDOW + "），跳过");
+            return;
+        }
         if (!hasNetwork()) {
             logw("[" + reason + "] 无网络，跳过，网络恢复后自动补");
             return;
         }
+        lastTryTime = now;
         String prefix = accountPrefix(account);
         String today = todayStr();
         boolean promptToday = reason != null && (reason.startsWith("启动") || "网络恢复".equals(reason));
@@ -1823,7 +1849,12 @@ public final class TGAutoSignCore {
         }
 
     public void enqueueTry(String reason) {
-        mainHandler.post(() -> { try { trySignAll(reason, false); } catch (Throwable t) { jlog("[" + reason + "] 异常: " + t); } });
+        long delay = 0L;
+        if (inWindow() && windowRange() != null) {
+            delay = (long) (Math.random() * 3L * 60L * 1000L);
+        }
+        final String r = reason;
+        mainHandler.postDelayed(() -> { try { trySignAll(r, false); } catch (Throwable t) { jlog("[" + r + "] 异常: " + t); } }, delay);
     }
 
     /** 兜底解析 peer：缓存与数据库都拿不到 user 时，从会话列表里找这个 did 直接用 */
@@ -1966,6 +1997,59 @@ public final class TGAutoSignCore {
         return Math.max(1, (int) (android.util.TypedValue.applyDimension(android.util.TypedValue.COMPLEX_UNIT_DIP, value, appContext.getResources().getDisplayMetrics()) + 0.5f));
     }
 
+    private View menuTile(Activity act, String emoji, String title, String sub, String action) {
+        LinearLayout v = new LinearLayout(act);
+        v.setOrientation(LinearLayout.VERTICAL);
+        v.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+        v.setPadding(dp(8), dp(10), dp(8), dp(10));
+        v.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x22)));
+        v.setTag(action);
+        v.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View vv){ runAction(vv.getContext(), String.valueOf(vv.getTag())); } });
+        v.setOnTouchListener(new android.view.View.OnTouchListener() {
+            @Override public boolean onTouch(View vv, android.view.MotionEvent ev) {
+                int a = ev.getActionMasked();
+                if (a == android.view.MotionEvent.ACTION_DOWN) { vv.animate().scaleX(0.95f).scaleY(0.95f).setDuration(80).start(); }
+                else if (a == android.view.MotionEvent.ACTION_UP || a == android.view.MotionEvent.ACTION_CANCEL) { vv.animate().scaleX(1f).scaleY(1f).setDuration(120).start(); }
+                return false;
+            }
+        });
+        TextView em = new TextView(act); em.setText(emoji); em.setTextSize(20); em.setGravity(android.view.Gravity.CENTER);
+        v.addView(em);
+        TextView t = new TextView(act); t.setText(title); t.setTextSize(12);
+        t.setTextColor(Theme.termTxt(act)); t.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        t.setGravity(android.view.Gravity.CENTER); t.setPadding(0, dp(3), 0, 0);
+        v.addView(t);
+        if (sub != null && sub.length() > 0) {
+            TextView s = new TextView(act); s.setText(sub); s.setTextSize(9);
+            s.setTextColor(Theme.termMuted(act)); s.setTypeface(android.graphics.Typeface.MONOSPACE);
+            s.setGravity(android.view.Gravity.CENTER); s.setPadding(0, dp(2), 0, 0);
+            v.addView(s);
+        }
+        return v;
+    }
+
+    private void addTile(android.widget.GridLayout grid, Activity act, String emoji, String title, String sub, String action) {
+        View v = menuTile(act, emoji, title, sub, action);
+        android.widget.GridLayout.LayoutParams lp = new android.widget.GridLayout.LayoutParams();
+        lp.width = 0;
+        lp.height = android.widget.GridLayout.LayoutParams.WRAP_CONTENT;
+        lp.columnSpec = android.widget.GridLayout.spec(android.widget.GridLayout.UNDEFINED, 1f);
+        lp.setMargins(dp(3), dp(3), dp(3), dp(3));
+        v.setLayoutParams(lp);
+        if (!fastMainOpen) {
+            final int delay = grid.getChildCount() * 40;
+            v.setAlpha(0f);
+            v.setTranslationY(Theme.dp(act, 8));
+            v.addOnAttachStateChangeListener(new android.view.View.OnAttachStateChangeListener() {
+                @Override public void onViewAttachedToWindow(android.view.View vv) {
+                    vv.postDelayed(new Runnable() { @Override public void run() { vv.animate().alpha(1f).translationY(0f).setDuration(300).start(); } }, delay);
+                }
+                @Override public void onViewDetachedFromWindow(android.view.View vv) { vv.animate().cancel(); vv.setAlpha(0f); vv.setTranslationY(Theme.dp(act, 8)); }
+            });
+        }
+        grid.addView(v);
+    }
+
     private View menuItem(LinearLayout parent, String emoji, String title, String subtitle, String action) {
         Context c = parent.getContext();
         LinearLayout row = new LinearLayout(c);
@@ -2047,7 +2131,20 @@ public final class TGAutoSignCore {
         return row;
     }
 
+    private static long lastMainOpen = 0L;
+    private boolean fastMainOpen = false;
+    private volatile boolean inSendReq = false;
+    private volatile long bootReadyAt = 0L;
+
+    private boolean notReadyYet() {
+        return System.currentTimeMillis() < bootReadyAt;
+    }
+
     private void showMainMenu(Activity act) {
+
+        long now0 = System.currentTimeMillis();
+        fastMainOpen = now0 - lastMainOpen < 15000L;
+        lastMainOpen = now0;
 
         syncAccount();
 
@@ -2069,21 +2166,114 @@ public final class TGAutoSignCore {
         head.setBackground(termBorder(act, Theme.termCardDeep(act), Theme.withAlpha(Theme.termCyan(act), 0x4D)));
         // 标题行：左侧标题 + 右侧 [START]（仅此按钮跳 GitHub，其余区域不触发）
         LinearLayout titleRow = new LinearLayout(act); titleRow.setOrientation(LinearLayout.HORIZONTAL); titleRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        TextView wm = new TextView(act); wm.setTextSize(23); wm.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); wm.setTextColor(Theme.termCyan(act));
-        wm.setText(Art.bold("TGAutoSign"));
-        titleRow.addView(wm, new LinearLayout.LayoutParams(0, -2, 1f));
+        LinearLayout floatRow = new LinearLayout(act); floatRow.setOrientation(LinearLayout.HORIZONTAL);
+        String wtitle = Art.bold("TGAutoSign");
+        final java.util.Random rnd = new java.util.Random();
+        final float dens = act.getResources().getDisplayMetrics().density;
+        final android.os.Handler th = new android.os.Handler(act.getMainLooper());
+        for (int wi = 0; wi < wtitle.length(); ) {
+            int cp = wtitle.codePointAt(wi);
+            final String chs = new String(Character.toChars(cp));
+            final int idx = wi;
+            wi += Character.charCount(cp);
+            final TextView chv = new TextView(act);
+            chv.setTextSize(23); chv.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+            final int baseCol = Theme.termCyan(act);
+            final int flashCol = Theme.dark(act) ? 0xFFFFFFFF : 0xFF001820;
+            chv.setTextColor(baseCol); chv.setText(chs);
+            floatRow.addView(chv);
+            final Runnable tw = new Runnable() {
+                @Override public void run() {
+                    try {
+                        if (!chv.isShown()) { th.removeCallbacks(this); return; }
+                        float dx = (float) (rnd.nextInt(7) - 3) * dens;
+                        float dy = (float) (rnd.nextInt(7) - 3) * dens;
+                        chv.setTranslationX(dx);
+                        chv.setTranslationY(dy);
+                        chv.setTextColor(flashCol);
+                        chv.postDelayed(new Runnable() {
+                            @Override public void run() {
+                                chv.setTranslationX(0f);
+                                chv.setTranslationY(0f);
+                                chv.setTextColor(baseCol);
+                            }
+                        }, 90L);
+                    } catch (Throwable ignored) {}
+                    th.postDelayed(this, 500L + rnd.nextInt(2000));
+                }
+            };
+            chv.addOnAttachStateChangeListener(new android.view.View.OnAttachStateChangeListener() {
+                @Override public void onViewAttachedToWindow(android.view.View vv) { th.postDelayed(tw, (long) (idx * 80L)); }
+                @Override public void onViewDetachedFromWindow(android.view.View vv) { th.removeCallbacks(tw); }
+            });
+        }
+        titleRow.addView(floatRow, new LinearLayout.LayoutParams(0, -2, 1f));
         TextView start = new TextView(act); start.setText("[START]"); start.setTextSize(12); start.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
         start.setTextColor(Theme.termGreen(act)); start.setClickable(true);
         start.setPadding(dp(14), dp(6), dp(14), dp(6));
         start.setBackground(termBorder(act, Theme.withAlpha(Theme.termGreen(act), 0x14), Theme.withAlpha(Theme.termGreen(act), 0x66)));
         start.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ openGithub(); } });
         titleRow.addView(start, new LinearLayout.LayoutParams(-2, -2));
+        final View sweep = new View(act);
+        sweep.setBackground(termBorder(act, Theme.withAlpha(Theme.termCyan(act), 0x40), 0));
+        android.widget.LinearLayout.LayoutParams swp = new android.widget.LinearLayout.LayoutParams(Theme.dp(act, 160), Theme.dp(act, 2));
+        swp.topMargin = Theme.dp(act, 6);
+        sweep.setLayoutParams(swp);
+        head.addView(sweep, 0);
+        sweep.addOnAttachStateChangeListener(new android.view.View.OnAttachStateChangeListener() {
+            @Override public void onViewAttachedToWindow(android.view.View vv) {
+                if (fastMainOpen) { sweep.setVisibility(View.GONE); return; }
+                vv.post(new Runnable() { @Override public void run() {
+                    int w = head.getWidth();
+                    sweep.setVisibility(View.VISIBLE);
+                    sweep.setTranslationX(-(float) w);
+                    sweep.animate().translationX((float) w).setDuration(600).setStartDelay(80).withEndAction(new Runnable() {
+                        @Override public void run() { sweep.setVisibility(View.GONE); }
+                    }).start();
+                } });
+            }
+            @Override public void onViewDetachedFromWindow(android.view.View vv) { sweep.animate().cancel(); sweep.setVisibility(View.VISIBLE); }
+        });
         head.addView(titleRow);
-        TextView sv = new TextView(act); sv.setTextSize(12); sv.setTextColor(Theme.termMuted(act));
+        final TextView sv = new TextView(act); sv.setTextSize(12); sv.setTextColor(Theme.termMuted(act));
         sv.setTypeface(android.graphics.Typeface.MONOSPACE);
         String sign = (SIGN == null || SIGN.isEmpty()) ? "wlmosv" : SIGN;
-        sv.setText("$ tgas --v " + UpdateChecker.VERSION_NAME + "  ·  (c) " + sign + " 出品");
-        head.addView(sv);
+        final String fullCmd = "$ tgas --v " + UpdateChecker.VERSION_NAME + "  ·  (c) " + sign + " 出品";
+        final TextView cur = new TextView(act); cur.setTextSize(12); cur.setTextColor(Theme.termCyan(act));
+        cur.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); cur.setText("▊");
+        LinearLayout svRow = new LinearLayout(act); svRow.setOrientation(LinearLayout.HORIZONTAL); svRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        svRow.addView(sv);
+        svRow.addView(cur);
+        head.addView(svRow);
+        final Runnable blink = new Runnable() {
+            @Override public void run() {
+                if (!cur.isShown()) { th.removeCallbacks(this); return; }
+                cur.setVisibility(cur.getVisibility() == View.VISIBLE ? View.INVISIBLE : View.VISIBLE);
+                th.postDelayed(this, 500L);
+            }
+        };
+        final Runnable[] typer = new Runnable[1];
+        typer[0] = new Runnable() {
+            int ti = 0;
+            @Override public void run() {
+                if (!sv.isShown()) { th.removeCallbacks(this); return; }
+                if (ti <= fullCmd.length()) {
+                    sv.setText(fullCmd.substring(0, ti));
+                    ti++;
+                    th.postDelayed(this, 80L);
+                } else {
+                    th.removeCallbacks(this);
+                    th.postDelayed(blink, 300L);
+                }
+            }
+        };
+        svRow.addOnAttachStateChangeListener(new android.view.View.OnAttachStateChangeListener() {
+            @Override public void onViewAttachedToWindow(android.view.View vv) {
+                if (fastMainOpen) { sv.setText(fullCmd); cur.setVisibility(View.VISIBLE); }
+                else { th.postDelayed(typer[0], 200L); }
+            }
+            @Override public void onViewDetachedFromWindow(android.view.View vv) { th.removeCallbacks(typer[0]); th.removeCallbacks(blink); }
+        });
         int others = 0; try { others = countOtherAccounts(); } catch (Throwable ignored) {}
         LinearLayout statCard = new LinearLayout(act);
         statCard.setOrientation(LinearLayout.VERTICAL);
@@ -2096,6 +2286,15 @@ public final class TGAutoSignCore {
         st1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
         st1.setText("\u25B8 " + accountLabel(currentAccount()) + "  ·  targets " + targets.size() + "  ·  signed " + signed + "/" + targets.size());
         statCard.addView(st1);
+        int streakN = streakOf(accountPrefix());
+        TextView stS = new TextView(act); stS.setTextSize(12);
+        stS.setTextColor(streakN > 0 ? Theme.termGreen(act) : Theme.termMuted(act));
+        stS.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        stS.setPadding(0, dp(6), 0, 0);
+        stS.setText(streakN > 0 ? "连续签到 " + streakN + " 天 · 最近 14 天" : "还没连续签到，今天去签一个");
+        statCard.addView(stS);
+        LinearLayout cal = streakCalendar(act);
+        if (cal != null) statCard.addView(cal);
         LinearLayout chips1 = new LinearLayout(act); chips1.setOrientation(LinearLayout.HORIZONTAL); chips1.setPadding(0, dp(8), 0, 0);
         chips1.addView(badge(act, "按钮学习", AUTO_LEARN));
         chips1.addView(badge(act, "网络学习", AUTO_LEARN_NET));
@@ -2107,6 +2306,13 @@ public final class TGAutoSignCore {
         String plc = perAccountLine();
         if (plc != null && plc.length() > 0) {
             TextView st3 = new TextView(act); st3.setTextSize(11); st3.setTextColor(Theme.termMuted(act)); st3.setTypeface(android.graphics.Typeface.MONOSPACE); st3.setPadding(0, dp(8), 0, 0); st3.setText(plc); statCard.addView(st3);
+        }
+        if (!fastMainOpen) {
+            statCard.setAlpha(0f); statCard.setTranslationY(Theme.dp(act, 8));
+            statCard.addOnAttachStateChangeListener(new android.view.View.OnAttachStateChangeListener() {
+                @Override public void onViewAttachedToWindow(android.view.View vv) { vv.postDelayed(new Runnable() { @Override public void run() { vv.animate().alpha(1f).translationY(0f).setDuration(350).start(); } }, 420L); }
+                @Override public void onViewDetachedFromWindow(android.view.View vv) { vv.animate().cancel(); vv.setAlpha(0f); vv.setTranslationY(Theme.dp(act, 8)); }
+            });
         }
         head.addView(statCard);
         // 终端输出卡：最近 4 行运行日志（实时刷新：面板开着每 4 秒自动更新）
@@ -2127,6 +2333,13 @@ public final class TGAutoSignCore {
         tm.setText("[更多日志] → 运行日志"); tm.setPadding(0, dp(6), 0, 0); tm.setClickable(true);
         tm.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ runAction(act, "log"); } });
         term.addView(tm);
+        if (!fastMainOpen) {
+            term.setAlpha(0f); term.setTranslationY(Theme.dp(act, 8));
+            term.addOnAttachStateChangeListener(new android.view.View.OnAttachStateChangeListener() {
+                @Override public void onViewAttachedToWindow(android.view.View vv) { vv.postDelayed(new Runnable() { @Override public void run() { vv.animate().alpha(1f).translationY(0f).setDuration(350).start(); } }, 620L); }
+                @Override public void onViewDetachedFromWindow(android.view.View vv) { vv.animate().cancel(); vv.setAlpha(0f); vv.setTranslationY(Theme.dp(act, 8)); }
+            });
+        }
         head.addView(term);
         renderTermBody(termBody, act);
         // 实时刷新：面板还开着就每 4 秒重建一次日志内容（isShown 自停，避免多开叠加）
@@ -2150,24 +2363,30 @@ public final class TGAutoSignCore {
         }
         head.addView(quick);
         root.addView(head);
-        menuItem(root, "📋", "目标列表", "查看 · 测试 · 编辑 · 删除", "list");
-        menuItem(root, "\u2795", "添加目标", "文本指令 或 捕获回调按钮", "add");
-        menuItem(root, "🔬", "回调调试台", "列出面板所有按钮 · 实时发射 · 绑定", "debug");
-        menuItem(root, "🚀", "立即签到", "手动触发当前账号全部", "sign");
-        menuItem(root, "🌐", "签全部账号", "共 " + activatedAccounts() + " 个账号，各自独立", "sign_all_accounts");
-        menuItem(root, "⧉", "复制目标到其它账号", "把本账号的目标一次给别的账号", "copy_targets");
-        menuItem(root, "📖", "使用教程", "功能说明与快速上手", "tutorial");
-        menuItem(root, "🩺", "自诊断", "检查宿主反射锚点是否正常", "diag");
-        menuItem(root, "📄", "运行日志", "最近 800 行 · 可搜索 / 筛选 / 清空", "log");
-        menuItem(root, "🗑", "删除目标", "从自动签到移除", "del");
-        menuItem(root, "🧹", "清空所有配置", "跨全部账号彻底清空(保留设置)", "clear_all");
-        menuItem(root, "🧾", "导出运行日志", "写到下载目录，便于反馈", "export_log");
-        menuItem(root, "\u2699", "设置", "关键词 / 重试上限 / 唤醒 / 学习开关", "settings");
+        android.widget.GridLayout grid = new android.widget.GridLayout(act);
+        grid.setColumnCount(2);
+        root.addView(grid);
+        addTile(grid, act, "📋", "目标列表", "查看·测试·编辑·删除", "list");
+        addTile(grid, act, "➕", "添加目标", "指令 或 捕获按钮", "add");
+        addTile(grid, act, "🚀", "立即签到", "当前账号全部", "sign");
+        addTile(grid, act, "🌐", "签全部账号", activatedAccounts() + " 个账号", "sign_all_accounts");
+        addTile(grid, act, "🔬", "回调调试台", "按钮·发射·绑定", "debug");
+        addTile(grid, act, "⧉", "复制目标", "给其它账号", "copy_targets");
+        addTile(grid, act, "📖", "使用教程", "快速上手", "tutorial");
+        addTile(grid, act, "🩺", "自诊断", "反射锚点检查", "diag");
+        addTile(grid, act, "📄", "运行日志", "搜索·筛选·清空", "log");
+        addTile(grid, act, "🗑", "删除目标", "移除条目", "del");
+        addTile(grid, act, "🧹", "清空配置", "跨账号彻底清", "clear_all");
+        addTile(grid, act, "🧾", "导出日志", "到下载目录", "export_log");
+        addTile(grid, act, "⚙", "设置", "关键词·窗口·上限", "settings");
+        addTile(grid, act, "📚", "预设模板", "一键添加", "presets");
         String upSub = (lastUpdate != null && lastUpdate.newer) ? "发现新版本 v" + lastUpdate.version + "，可下载" : "当前 v" + UpdateChecker.VERSION_NAME;
-        menuItem(root, "🔄", "检查更新", upSub, "update");
-        menuItem(root, "📤", "导出配置", "目标与设置存 json，换号不重学", "export");
-        menuItem(root, "📥", "导入配置", "选一份备份，看内容再导入（可合并或覆盖）", "import");
-        showDialog(act, "TGAutoSign · 管理", root, "关闭");
+        addTile(grid, act, "🔄", "检查更新", upSub, "update");
+        addTile(grid, act, "📤", "导出配置", "json 备份", "export");
+        addTile(grid, act, "📥", "导入配置", "合并或覆盖", "import");
+        ScrollView scv = new ScrollView(act);
+        scv.addView(root, new android.widget.ScrollView.LayoutParams(-1, -2));
+        showDialog(act, "TGAutoSign · 管理", scv, "关闭");
     }
 
     private int countOtherAccounts() {
@@ -2611,7 +2830,7 @@ public final class TGAutoSignCore {
             logd("[对话框] TG 风格对话框成功: " + title);
             return;
         } catch (Throwable t) {
-            jlog("[对话框] TG 对话框失败，回退系统框: " + t);
+            logd("[对话框] TG 对话框不可用(TG 12.10.3+ 重构 Builder)，降级系统框: " + t);
         }
         // 兜底：尽量接近 TG 深色卡片风格
         try {
@@ -2621,10 +2840,10 @@ public final class TGAutoSignCore {
             ab.setNegativeButton(negLabel, null);
             android.app.AlertDialog ad = ab.create();
             if (ad.getWindow() != null) {
-                ad.getWindow().setBackgroundDrawable(new android.graphics.drawable.GradientDrawable() {{
-                    setColor(0xFF202124);
-                    setCornerRadius(dp(12));
-                }});
+                android.graphics.drawable.GradientDrawable bgd = new android.graphics.drawable.GradientDrawable();
+                bgd.setColor(Theme.dark(act) ? 0xFF202124 : 0xFFF7F8FA);
+                bgd.setCornerRadius(dp(12));
+                ad.getWindow().setBackgroundDrawable(bgd);
             }
             ad.show();
             jlog("[对话框] 已用兜底系统框: " + title);
@@ -2644,6 +2863,7 @@ public final class TGAutoSignCore {
         if ("copy_targets".equals(action)) { showCopyTargets(act); return; }
         if ("log".equals(action)) { showLog(act); return; }
         if ("settings".equals(action)) { showSettings(act); return; }
+        if ("presets".equals(action)) { showPresets(act); return; }
         if ("update".equals(action)) { showUpdate(act); return; }
         if ("update_download".equals(action)) { downloadUpdate(act); return; }
         if ("export".equals(action)) { doExport(); return; }
@@ -2925,6 +3145,258 @@ public final class TGAutoSignCore {
         showDialog(act, "目标列表（" + targets.size() + "）", box, "关闭");
     }
 
+
+    // ---------------- v1.5.2：签到窗口 / 连续签到 / 预设模板 ----------------
+
+    private int parseHM(String s) {
+        try {
+            String[] p = s.split(":");
+            if (p.length != 2) return -1;
+            int h = Integer.parseInt(p[0].trim());
+            int m = Integer.parseInt(p[1].trim());
+            if (h < 0 || h > 23 || m < 0 || m > 59) return -1;
+            return h * 60 + m;
+        } catch (Throwable t) { return -1; }
+    }
+
+    private int[] windowRange() {
+        return windowRangeOf(WINDOW);
+    }
+
+    private boolean inWindow() {
+        int[] r = windowRange();
+        if (r == null) return true;
+        java.util.Calendar c = java.util.Calendar.getInstance();
+        int n = c.get(java.util.Calendar.HOUR_OF_DAY) * 60 + c.get(java.util.Calendar.MINUTE);
+        return n >= r[0] && n <= r[1];
+    }
+
+    private String nowHM() {
+        java.util.Calendar c = java.util.Calendar.getInstance();
+        return String.format("%02d:%02d", c.get(java.util.Calendar.HOUR_OF_DAY), c.get(java.util.Calendar.MINUTE));
+    }
+
+    private boolean isYesterday(String d) {
+        try {
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
+            java.util.Date dt = f.parse(d);
+            java.util.Calendar y = java.util.Calendar.getInstance();
+            y.add(java.util.Calendar.DATE, -1);
+            return f.format(dt).equals(f.format(y.getTime()));
+        } catch (Throwable t) { return false; }
+    }
+
+    private void updateStreak(String prefix) {
+        try {
+            String today = todayStr();
+            String lastDate = prefs.getString(prefix + "last_sign_date", "");
+            if (today.equals(lastDate)) return;
+            int n = prefs.getInt(prefix + "streak", 0);
+            if (lastDate.length() > 0 && isYesterday(lastDate)) n = n + 1; else n = 1;
+            prefs.edit().putInt(prefix + "streak", n).putString(prefix + "last_sign_date", today).apply();
+        } catch (Throwable ignored) {}
+    }
+
+    private int streakOf(String prefix) {
+        try {
+            String lastDate = prefs.getString(prefix + "last_sign_date", "");
+            String today = todayStr();
+            if (lastDate.length() > 0 && (today.equals(lastDate) || isYesterday(lastDate))) {
+                return prefs.getInt(prefix + "streak", 0);
+            }
+            if (lastDate.length() == 0 && hasSignedToday(prefix)) return 1;
+            return 0;
+        } catch (Throwable t) { return 0; }
+    }
+
+    private boolean hasSignedToday(String prefix) {
+        try {
+            String today = todayStr();
+            List<Map<String, Object>> l = new ArrayList<Map<String, Object>>();
+            loadTargetsInto(prefix, l);
+            for (Map<String, Object> m : l) {
+                if (today.equals(prefs.getString(prefix + "last_" + entryId(m), ""))) return true;
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    private java.util.Set<String> signDays(String prefix) {
+        java.util.Set<String> s = new java.util.HashSet<String>();
+        String v = prefs.getString(prefix + "sign_days", "");
+        if (v != null) {
+            for (String x : v.split(",")) {
+                String t = x.trim();
+                if (t.length() > 0) s.add(t);
+            }
+        }
+        return s;
+    }
+
+    private void noteSignedDay(String prefix) {
+        try {
+            String today = todayStr();
+            java.util.Set<String> s = signDays(prefix);
+            if (s.add(today)) {
+                StringBuilder sb = new StringBuilder();
+                int cap = 0;
+                for (String x : s) {
+                    if (cap++ > 90) break;
+                    if (sb.length() > 0) sb.append(',');
+                    sb.append(x);
+                }
+                prefs.edit().putString(prefix + "sign_days", sb.toString()).apply();
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private int[] windowRangeOf(String w) {
+        try {
+            if (w == null) return null;
+            String t = w.trim();
+            if (t.isEmpty()) return null;
+            String[] p = t.split("-");
+            if (p.length != 2) return null;
+            int a = parseHM(p[0].trim());
+            int b = parseHM(p[1].trim());
+            if (a < 0 || b < 0 || b < a) return null;
+            return new int[]{a, b};
+        } catch (Throwable t) { return null; }
+    }
+
+    private final Runnable windowWakeRunnable = new Runnable() {
+        @Override public void run() {
+            try { trySignAll("进入窗口", false); } catch (Throwable ignored) {}
+            scheduleWindowWake();
+        }
+    };
+
+    private void scheduleWindowWake() {
+        try {
+            int[] r = windowRange();
+            if (r == null) { mainHandler.removeCallbacks(windowWakeRunnable); return; }
+            java.util.Calendar c = java.util.Calendar.getInstance();
+            int nowSec = c.get(java.util.Calendar.HOUR_OF_DAY) * 3600 + c.get(java.util.Calendar.MINUTE) * 60 + c.get(java.util.Calendar.SECOND);
+            int startSec = r[0] * 60;
+            int endSec = r[1] * 60;
+            if (nowSec >= startSec && nowSec <= endSec) { mainHandler.removeCallbacks(windowWakeRunnable); enqueueTry("进入窗口"); return; }
+            long delay = nowSec < startSec ? (long) (startSec - nowSec) * 1000L : (long) (24 * 3600 - nowSec + startSec) * 1000L;
+            delay += (long) (Math.random() * 2L * 60L * 1000L);
+            mainHandler.removeCallbacks(windowWakeRunnable);
+            mainHandler.postDelayed(windowWakeRunnable, delay);
+        } catch (Throwable ignored) {}
+    }
+
+    private LinearLayout streakCalendar(Activity act) {
+        try {
+            java.util.Set<String> days = signDays(accountPrefix());
+            if (days.isEmpty() && hasSignedToday(accountPrefix())) days.add(todayStr());
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
+            LinearLayout row1 = new LinearLayout(act); row1.setOrientation(LinearLayout.HORIZONTAL);
+            LinearLayout row2 = new LinearLayout(act); row2.setOrientation(LinearLayout.HORIZONTAL);
+            for (int i = 0; i < 14; i++) {
+                java.util.Calendar cc = java.util.Calendar.getInstance();
+                cc.set(java.util.Calendar.HOUR_OF_DAY, 12);
+                cc.set(java.util.Calendar.MINUTE, 0);
+                cc.set(java.util.Calendar.SECOND, 0);
+                cc.set(java.util.Calendar.MILLISECOND, 0);
+                cc.add(java.util.Calendar.DATE, i - 13);
+                boolean on = days.contains(f.format(cc.getTime()));
+                TextView cell = new TextView(act);
+                cell.setTextSize(9);
+                cell.setGravity(android.view.Gravity.CENTER);
+                cell.setText(String.valueOf(i + 1));
+                cell.setTextColor(on ? 0xFFE8FFF6 : Theme.termMuted(act));
+                android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+                g.setCornerRadius(dp(4));
+                g.setColor(on ? 0xFF1F7A5A : Theme.termCardInput(act));
+                g.setStroke(dp(1), on ? Theme.termGreen(act) : Theme.withAlpha(Theme.termCyan(act), 0x22));
+                cell.setBackground(g);
+                android.widget.LinearLayout.LayoutParams lp = new android.widget.LinearLayout.LayoutParams(0, dp(26), 1f);
+                lp.setMargins(dp(1), dp(2), dp(1), dp(2));
+                (i < 7 ? row1 : row2).addView(cell, lp);
+            }
+            LinearLayout box = new LinearLayout(act); box.setOrientation(LinearLayout.VERTICAL);
+            box.addView(row1);
+            box.addView(row2);
+            TextView legend = new TextView(act);
+            legend.setTextSize(9);
+            legend.setTextColor(Theme.termFaint(act));
+            legend.setPadding(0, dp(2), 0, 0);
+            legend.setText("1 = 13 天前 · 14 = 今天（绿 = 已签到）");
+            box.addView(legend);
+            return box;
+        } catch (Throwable t) { return null; }
+    }
+
+    private static final String[][] PRESETS = {
+        {"示例 · 每日签到", "777000", "/checkin", "示例模板：改成你的 bot（数字 ID 在 bot 里发 /start 可得）"},
+        {"示例 · 群打卡", "777000", "/qd", "示例模板：群打卡指令，可改"},
+        {"示例 · 领取", "777000", "/sign", "示例模板：通用领取指令，可改或删除"},
+    };
+
+    private void showPresets(Activity act) {
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(8), dp(16), dp(8));
+        TextView tip = new TextView(act);
+        tip.setTextSize(12);
+        tip.setTextColor(Theme.termMuted(act));
+        tip.setTypeface(android.graphics.Typeface.MONOSPACE);
+        tip.setText("内置为通用示例模板，点选后把 bot ID 和指令改成你的签到 bot。");
+        box.addView(tip);
+        for (final String[] p : PRESETS) {
+            LinearLayout row = new LinearLayout(act);
+            row.setOrientation(LinearLayout.VERTICAL);
+            row.setPadding(dp(4), dp(10), dp(4), dp(10));
+            TextView t1 = new TextView(act);
+            t1.setTextSize(14);
+            t1.setTextColor(Theme.termTxt(act));
+            t1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+            t1.setText(p[0] + "  ·  " + p[1] + "  →  " + p[2]);
+            row.addView(t1);
+            TextView t2 = new TextView(act);
+            t2.setTextSize(11);
+            t2.setTextColor(Theme.termMuted(act));
+            t2.setTypeface(android.graphics.Typeface.MONOSPACE);
+            t2.setText(p[3]);
+            row.addView(t2);
+            row.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { showPresetEdit(act, p); } });
+            box.addView(row);
+            View div = new View(act);
+            div.setBackgroundColor(Theme.line(act));
+            box.addView(div, new LinearLayout.LayoutParams(-1, 1));
+        }
+        showDialog(act, "预设模板", box, "关闭");
+    }
+
+    private void showPresetEdit(final Activity act, final String[] p) {
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(8), dp(16), dp(8));
+        final EditText uid = adInput(act, "机器人 ID（数字，无需 @）", 1);
+        uid.setText(p[1]);
+        box.addView(uid);
+        final EditText cmd = adInput(act, "签到指令", 0);
+        cmd.setText(p[2]);
+        box.addView(cmd);
+        Button ok = mkBtn(act);
+        ok.setText("添加");
+        ok.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
+            try {
+                long did = Long.parseLong(uid.getText().toString().trim());
+                String t = cmd.getText().toString().trim();
+                if (t.length() == 0) { toast("指令不能为空"); return; }
+                if (findTextEntry(did, t) != null) { toast("该 bot 已存在相同指令"); return; }
+                learnTarget(did, t);
+                Map<String, Object> m = findTextEntry(did, t);
+                if (m != null) toast("✅ 已添加 " + did + " → " + t);
+            } catch (Throwable e) { toast("UID 格式错误"); }
+        }});
+        box.addView(ok);
+        showDialog(act, "确认模板", box, "取消");
+    }
+
     private void showAdd(Activity act) {
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -3025,6 +3497,9 @@ public final class TGAutoSignCore {
             EditText wc = adInput(act, "全局默认唤醒命令(如 /start；条目自带前置命令优先)", 0);
             wc.setText(WAKE_CMD == null ? "" : WAKE_CMD);
             box.addView(wc);
+            EditText wd = adInput(act, "每日签到窗口（如 08:00-10:00；留空=不限）", 0);
+            wd.setText(WINDOW == null ? "" : WINDOW);
+            box.addView(wd);
             final android.widget.Switch alSw = swRow(act, "按钮学习：点一下按钮就加到列表（关=用 捕获/调试台 手动加）", AUTO_LEARN);
             box.addView(alSw);
             final android.widget.Switch anSw = swRow(act, "网络学习：自动识别你在 bot 里发的签到文本（关=只认按钮/手动）", AUTO_LEARN_NET);
@@ -3035,12 +3510,17 @@ public final class TGAutoSignCore {
             ok.setText("保存");
             ok.setOnClickListener(v -> {
                 String k = kw.getText().toString().trim();
-                if (!k.isEmpty()) LEARN_KEYWORDS = k;
+                LEARN_KEYWORDS = k.isEmpty() ? DEF_KEYWORDS : k;
                 try {
                     int r = Integer.parseInt(rl.getText().toString().trim());
                     if (r > 0 && r <= 99) RETRY_LIMIT = r;
                 } catch (Throwable ignored) {}
                 WAKE_CMD = wc.getText().toString().trim();
+                String wv = wd.getText().toString().trim();
+                if (wv.length() > 0 && windowRangeOf(wv) == null) { toast("窗口格式不对：应为 08:00-10:00（开始-结束）"); return; }
+                WINDOW = wv;
+                scheduleWindowWake();
+                if (inWindow()) enqueueTry("进入窗口");
                 AUTO_LEARN = alSw.isChecked();
                 AUTO_LEARN_NET = anSw.isChecked();
                 AUTO_LEARN_FILTER = afSw.isChecked();
@@ -3049,13 +3529,14 @@ public final class TGAutoSignCore {
                         .putString("jmb_keywords", LEARN_KEYWORDS)
                         .putInt("jmb_retry", RETRY_LIMIT)
                         .putString("jmb_wake_cmd", WAKE_CMD)
+                        .putString("jmb_window", WINDOW)
                         .putBoolean("jmb_alfilter", AUTO_LEARN_FILTER)
                         .putBoolean("jmb_autolearn", AUTO_LEARN)
                         .putBoolean("jmb_autolearn_net", AUTO_LEARN_NET)
                         .apply();
                 } catch (Throwable ignored) {}
                 toast("设置已保存");
-                jlog("设置更新: 关键词=" + LEARN_KEYWORDS + " 重试上限=" + RETRY_LIMIT + " 唤醒命令=" + WAKE_CMD
+                jlog("设置更新: 关键词=" + LEARN_KEYWORDS + " 重试上限=" + RETRY_LIMIT + " 唤醒命令=" + WAKE_CMD + " 窗口=" + WINDOW
                     + " 按钮学习=" + (AUTO_LEARN ? "开" : "关") + " 网络学习=" + (AUTO_LEARN_NET ? "开" : "关"));
             });
             box.addView(ok);
@@ -3213,10 +3694,12 @@ public final class TGAutoSignCore {
                     loadTargets();
                     jlog("检测到账号切换 -> acc" + lastAccount + "，已重载目标");
                 }
+                scheduleWindowWake();
                 enqueueTry("定时");
                 schedulePoll();
             } catch (Throwable ignored) {}
         }, POLL_INTERVAL_MS);
+        scheduleWindowWake();
     }
 
     // ==================== 由 Entry 调用的 Hook 回调 ====================
@@ -3369,10 +3852,18 @@ public final class TGAutoSignCore {
 
     /** 触发源 2：网络活动（学习/已签标记/补签/命令拦截）。返回 true 表示已拦截（不发送）。 */
     public boolean onSendRequest(Object[] args) {
-
-        syncAccount();
-
+        Object req0 = args != null && args.length > 0 ? args[0] : null;
+        if (req0 == null) return false;
+        String rn0 = req0.getClass().getName();
+        if (!rn0.contains("TL_messages_sendMessage") && !rn0.contains("TL_messages_getBotCallbackAnswer")
+                && !rn0.contains("TL_messages_sendWebViewData") && !rn0.contains("TL_messages_sendMedia")
+                && !rn0.contains("TL_messages_sendInlineBotResult") && !rn0.contains("TL_messages_sendPhoto")) {
+            return false;
+        }
+        if (inSendReq || notReadyYet()) return false;
+        inSendReq = true;
         try {
+            syncAccount();
             Object req = args != null && args.length > 0 ? args[0] : null;
             if (req == null) return false;
             String rn = req.getClass().getName();
@@ -3451,11 +3942,14 @@ public final class TGAutoSignCore {
         } catch (Throwable t) {
             loge("[活动] 异常: " + t);
             return false;
+        } finally {
+            inSendReq = false;
         }
     }
 
     /** 触发源 3.5：bot 回复语义判定（失败撤销 + 退避重试） */
     public void onUpdateProcessed(Object update) {
+        if (notReadyYet()) return;
         try {
             if (update == null) return;
             // 1.4.7：processUpdate* 的第一参数是 Updates 容器 / List，先解包再逐条判定（此前整条链路从未触发）

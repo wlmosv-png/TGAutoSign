@@ -5,17 +5,20 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:scaleX="0.55"
-        android:scaleY="0.55"
-        android:translateX="24.3"
-        android:translateY="24.3">
+        android:scaleX="1.5"
+        android:scaleY="1.5"
+        android:translateX="36"
+        android:translateY="30">
         <path
-            android:fillColor="#FFFFFF"
+            android:fillColor="#00E5FF"
             android:pathData="M2,12 L22,4 L17,20 L12,14 L7,20 L6,13 Z"/>
-        <path
-            android:fillColor="#9BE7FF"
-            android:pathData="M17,20 L12,14 L7,20 L6,13 L2,12 L22,4 Z"
-            android:strokeColor="#00000000"
-            android:strokeWidth="1"/>
     </group>
+    <path
+        android:strokeColor="#9BE7FF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M32,88 L54,88"/>
+    <path
+        android:fillColor="#00FF9C"
+        android:pathData="M80,72 m-6,0 a6,6 0 1,1 12,0 a6,6 0 1,1 -12,0"/>
 </vector>
