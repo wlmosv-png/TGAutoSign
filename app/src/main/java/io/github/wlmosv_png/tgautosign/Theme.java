@@ -14,21 +14,54 @@ final class Theme {
     static boolean dark(Context c) {
         boolean tg = false;
         String how = "no-method";
-        try {
-            Class<?> th = Class.forName("org.telegram.ui.ActionBar.Theme", false, c.getClassLoader());
-            for (java.lang.reflect.Method m : th.getMethods()) {
-                String n = m.getName();
-                if (m.getParameterTypes().length == 0 && java.lang.reflect.Modifier.isStatic(m.getModifiers())
-                        && (n.equals("isCurrentThemeDark") || n.equals("isCurrentThemeNight"))) {
-                    Object r = m.invoke(null);
-                    if (r instanceof Boolean) { tg = ((Boolean) r).booleanValue(); how = n; break; }
-                }
-            }
-        } catch (Throwable t) { how = "exc-" + t.getClass().getSimpleName(); }
         boolean sys = false;
         try { int m = c.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK; sys = m == Configuration.UI_MODE_NIGHT_YES; }
         catch (Throwable t) { sys = false; }
-        if (how.startsWith("no-method") || how.startsWith("exc-")) { tg = sys; how = how + "->sys"; }
+        ClassLoader cl = c.getClassLoader();
+        // ① 原版 Theme.isCurrentThemeDark（ExteraLess 等未混淆客户端）
+        try {
+            Class<?> th = Class.forName("org.telegram.ui.ActionBar.Theme", false, cl);
+            for (String want : new String[]{"isCurrentThemeDark", "isCurrentThemeNight"}) {
+                try {
+                    java.lang.reflect.Method m = th.getMethod(want);
+                    if (m == null) continue;
+                    if (!java.lang.reflect.Modifier.isStatic(m.getModifiers())) continue;
+                    if (m.getParameterTypes().length != 0) continue;
+                    if (m.getReturnType() != boolean.class && m.getReturnType() != Boolean.class) continue;
+                    Object r = m.invoke(null);
+                    if (r instanceof Boolean) {
+                        tg = ((Boolean) r).booleanValue();
+                        how = want;
+                        break;
+                    }
+                } catch (Throwable ignored) {}
+            }
+        } catch (Throwable t) { how = "exc-1"; }
+        // ② 官方版 / Nagram 12.10.3+：混淆后 ActionBar.o6.A0() 返回当前主题对象，n6.q() 是暗色判断
+        if (how.startsWith("no-method") || how.startsWith("exc-1")) {
+            try {
+                Class<?> o6 = Class.forName("org.telegram.ui.ActionBar.o6", false, cl);
+                java.lang.reflect.Method a0 = o6.getMethod("A0");
+                if (a0 != null && java.lang.reflect.Modifier.isStatic(a0.getModifiers()) && a0.getParameterTypes().length == 0) {
+                    Object theme = a0.invoke(null);
+                    if (theme != null) {
+                        // 遍历主题对象方法，找无参返回 boolean 的（混淆后通常唯一，如 n6.q）
+                        for (java.lang.reflect.Method m : theme.getClass().getMethods()) {
+                            if (m.getParameterTypes().length != 0) continue;
+                            if (m.getReturnType() != boolean.class && m.getReturnType() != Boolean.class) continue;
+                            Object r = m.invoke(theme);
+                            if (r instanceof Boolean) {
+                                tg = ((Boolean) r).booleanValue();
+                                how = "o6.A0()." + m.getName();
+                                break;
+                            }
+                        }
+                    }
+                }
+            } catch (Throwable t) { how = "exc-2"; }
+        }
+        // ③ 兜底：系统 uiMode
+        if (how.startsWith("no-method") || how.startsWith("exc-")) { tg = sys; how += "->sys"; }
         if (!themeLogDone) {
             themeLogDone = true;
             android.util.Log.i("TGAutoSignModule", "theme dark=" + tg + " 来源=" + how + " 系统=" + (sys ? "dark" : "light"));
