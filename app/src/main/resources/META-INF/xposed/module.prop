@@ -1,7 +1,7 @@
 id=io.github.wlmosv_png.tgautosign
 name=TGAutoSign
-version=1.5.4
-versionCode=117
+version=1.5.5
+versionCode=118
 author=wlmosv
 description=Telegram 每日自动签到模块：任意聊天发 /jmb 管理；回调按钮签到、多账号隔离、断网补签，支持官方版与第三方 Telegram 客户端
 minApiVersion=102
