@@ -17,11 +17,13 @@
 
 ## 📱 界面一览
 
-| 主面板（暗色） | 主菜单（日间） |
+| 暗色 · 主面板 | 日间 · 主面板 |
 | --- | --- |
-| ![主面板](docs/screenshots/main-dark.jpg) | ![主菜单](docs/screenshots/main-light.jpg) |
+| ![主面板·暗色](docs/screenshots/main-dark.jpg) | ![主面板·日间](docs/screenshots/main-light.jpg) |
+| 暗色 · 主菜单 | 日间 · 主菜单 |
+| ![主菜单·暗色](docs/screenshots/menu-dark.jpg) | ![主菜单·日间](docs/screenshots/menu-light.jpg) |
 | 设置 | 目标过滤 |
-| ![设置](docs/screenshots/settings-dark.jpg) | ![目标过滤](docs/screenshots/filter-dark.jpg) |
+| ![设置](docs/screenshots/settings-light.jpg) | ![目标过滤](docs/screenshots/filter-light.jpg) |
 
 ---
 
