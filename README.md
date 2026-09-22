@@ -64,10 +64,18 @@
 - 连续失败 3 天告警一次，签到成功即清零
 - 跨客户端同步：官方版与第三方客户端之间同步目标与状态，任一端签的都算数
 
+**过滤与排除**
+
+- 排除规则：一行一条，命中 bot 回复正文或按钮文案就不自动学习；支持 `/…/` 正则与 `#` 注释
+- 排除的 bot：整只 bot 不学习、不自动签到；在主菜单「排除管理」里随时增删，已排除条目独立分组显示
+- 目标冻结：永久停签某条目，与「暂停一周」区分
+- 网络学习需确认：新目标先进待确认池，手动点「加入」才真正添加，防验证码类 bot 误加
+- 目标备注名：可自己给 bot 起名（如「每日签到」），列表按 `@username` 辅助识别，不裸露数字 ID
+
 **界面与数据**
 
 - 管理界面在 Telegram 内，无独立 App；面板底部「全部功能」分类直达
-- 图标全部代码绘制（`Icons.java`），不依赖系统 emoji，各机型一致
+- 图标全部代码绘制（`Icons.java`），含机器人等矢量图标，不依赖系统 emoji，各机型一致
 - 深浅色跟随 TG 主题，也可强制日间 / 夜间
 - 运行日志：五级配色、最新在上、按目标筛选、一键诊断包；按天切分落盘（512KB × 7 天）
 - 通知：每天一条摘要发到自己的收藏夹，不弹系统通知
@@ -79,7 +87,7 @@
 
 | 客户端 | 包名 | 状态 |
 | --- | --- | --- |
-| Telegram（Play / 默认渠道） | `org.telegram.messenger` | ✅ 长期实测 |
+| Telegram（Play / 默认渠道） | `org.telegram.messenger` | ✅ 12.10.3 回调签到实测 |
 | Telegram（官网直连版） | `org.telegram.messenger.web` | ✅ 静态逐项核对 |
 | Nagram XF | `fork.risin42.nagramx` | ✅ dec46b0 实测 |
 | ExteraLess（ExteraGram fork） | `com.exteraless.app` | ✅ 12.10.1-feae791 实测 |
@@ -106,7 +114,9 @@
 | `update/UpdateChecker.java` | 检查更新：读 GitHub Releases latest，两跳容灾 |
 | `update/ConfigStore.java` | 配置导出 / 导入 |
 
-**宿主适配说明**：模块通过反射调用宿主 API，并 hook 以下锚点 —— `ConnectionsManager.sendRequest`（发送与判定）、`ChatActivityEnterView.didPressedBotButton` 与 `ChatActivity$ChatMessageCellDelegate.didPressBotButton`（按钮学习）、`LaunchActivity.onResume`（启动补签）、`MessagesController.processUpdate*`（面板采集与回复语义）。
+**宿主适配说明**：模块通过反射调用宿主 API，并 hook 以下锚点 —— `ConnectionsManager.sendRequest`（发送与判定）、`ChatActivityEnterView` 的按钮点击方法（按钮学习）、`LaunchActivity.onResume`（启动补签）、`MessagesController.processUpdate*`（面板采集与回复语义）。
+
+按钮点击方法自 TG 12.10.3 起与 `AlertDialog$Builder` 的 setter 一样被方法名混淆（官方版 `didPressedBotButton` → `g`，Nagram → `f` / `h`）。模块改为**按参数类型结构匹配**定位并 hook，不依赖具体方法名，官方版与各 fork 通用。
 
 Telegram 12.10.3 起 `AlertDialog$Builder` 的 setter 被方法名混淆（`setTitle` → `g` 等），模块的对话框已改为自绘实现，不再依赖该 API。
 
@@ -141,6 +151,18 @@ A：旧环境 `/jmb` → 导出配置；新环境把 json 放进 `Android/data/<
 ---
 
 ## 📜 更新日志
+
+### v1.5.6 (119)
+
+**新增**：三层黑名单（排除规则 / 排除的 bot / 目标冻结）· 排除管理独立入口 · 网络学习需确认 · 目标备注名 + @username · bot 矢量图标
+
+**界面**：冻结 / 已排除 徽章标识，已排除条目虚化 · 对话框不再叠层
+
+**修复**：官方版 / Nagram 按钮学习失效（改结构匹配 hook）· 回调签到前置命令后盲等导致面板过期 · 网络层学习 hash 字段崩溃 · 汇总通知提前发送
+
+**兼容**：按钮点击方法按参数类型结构匹配，官方版与各 fork 通用 · 三客户端回调签到实测通过
+
+> 自本版起仅对 `org.telegram.messenger`、`xyz.nextalone.nagram`、`com.exteraless.app` 三个客户端做主要维护。
 
 ### v1.5.5 (118)
 

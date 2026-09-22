@@ -31,7 +31,7 @@ final class Icons {
             "list", "repeat", "rocket", "doc", "sliders", "dots", "plus", "trash", "copy", "globe",
             "layers", "receipt", "upload", "download", "flask", "pulse", "refresh", "book",
             "chevron-d", "chevron-u", "check", "clock", "warn", "target", "down", "bulb", "keyboard",
-            "group", "clean", "megaphone", "chevron-r", "pencil", "pause",
+            "group", "bot", "clean", "megaphone", "chevron-r", "pencil", "pause",
             "hourglass", "gap", "key", "save", "x", "calendar", "bolt"));
 
     static boolean has(String name) {
@@ -229,6 +229,16 @@ final class Icons {
                 arc(s, 9f, 20f, 5.6f, 180f, 180f, true);
                 circle(s, 16.4f, 9.4f, 2.6f);
                 arc(s, 16.4f, 20f, 4.6f, 200f, 140f, true);
+                break;
+            case "bot":
+                // 机器人：方头 + 两根天线 + 两眼 + 天线球，20dp 下清晰可辨
+                poly(s, new float[]{7.5f, 10.5f, 7.5f, 17.5f, 16.5f, 17.5f, 16.5f, 10.5f}, true);
+                poly(s, new float[]{9f, 7f, 9f, 4.5f}, false);
+                poly(s, new float[]{15f, 7f, 15f, 4.5f}, false);
+                dot(f, 9f, 4f, 1.1f);
+                dot(f, 15f, 4f, 1.1f);
+                dot(f, 10.4f, 13.5f, 1.1f);
+                dot(f, 13.6f, 13.5f, 1.1f);
                 break;
             case "clean":
                 // 扫帚：斜柄 + 梯形帚头 + 两道帚丝

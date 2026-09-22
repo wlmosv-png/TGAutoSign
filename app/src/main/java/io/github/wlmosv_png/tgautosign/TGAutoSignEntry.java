@@ -126,39 +126,104 @@ public final class TGAutoSignEntry extends XposedModule {
     }
 
     // 触发源 1：ChatActivityEnterView.didPressedBotButton（UI 按钮学习）
+    // 官方版 TG 用 R8 混淆，方法名变成单字母（如 g）；这里改为「结构匹配」：
+    //   在 ChatActivityEnterView 里找「第1参是 ChatActivityEnterView、第2参类型含 KeyboardButton、返回 void」的方法。
     private void hookBotButtonEnterView() {
+        // 扫描多个候选类：按钮点击可能落在 EnterView、ChatActivity 或它们的内部类里。
+        // 判定只看「参数类型名含 KeyboardButton」（TL 类型名不被混淆），跨客户端通用。
+        String[] classNames = {
+                "org.telegram.ui.Components.ChatActivityEnterView",
+                "org.telegram.ui.ChatActivity$ChatMessageCellDelegate",
+                "org.telegram.ui.ChatActivity",
+        };
+        for (String cn : classNames) {
+            try { hookBotButtonInClass(loadClass(cn)); } catch (Throwable ignored) {}
+        }
+    }
+
+    private void hookBotButtonInClass(Class<?> cls) {
         try {
-            Class<?> cls = loadClass("org.telegram.ui.Components.ChatActivityEnterView");
             Method[] ms = cls.getDeclaredMethods();
             int hooked = 0;
             for (Method m : ms) {
-                if (!"didPressedBotButton".equals(m.getName())) continue;
-                String key = "enterView#didPressedBotButton#" + m.toGenericString();
+                boolean isNamed = "didPressedBotButton".equals(m.getName());
+                boolean isStructural = !isNamed && looksLikeBotButtonMethod(m);
+                if (!isNamed && !isStructural) continue;
+                String key = "enterView#botbtn#" + m.toGenericString();
                 synchronized (HOOKED_METHODS) {
                     if (HOOKED_METHODS.contains(key)) continue;
                     HOOKED_METHODS.add(key);
                 }
                 try {
                     m.setAccessible(true);
+                    final boolean structural = isStructural;
+                    final int argc = m.getParameterTypes().length;
                     hook(m)
                             .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                             .intercept(chain -> {
                                 try {
                                     Object[] args = chain.getArgs().toArray();
-                                    Object proto = args != null && args.length > 0 ? args[0] : null;
-                                    Object mo = args != null && args.length > 2 ? args[2] : null;
-                                    CORE.onBotButtonEnterView(proto, mo);
+                                    Object button = pickButtonArg(args);
+                                    Object mo = pickMessageObjectArg(args);
+                                    if (button == null && isNamed) {
+                                        // 按名匹配的老形态：args[0]=按钮, args[2]=MessageObject
+                                        button = args != null && args.length > 0 ? args[0] : null;
+                                        mo = args != null && args.length > 2 ? args[2] : null;
+                                    }
+                                    if (button != null) {
+                                        CORE.onBotButtonEnterView(button, mo);
+                                        logInfo("[按钮探测] 命中 " + chain.getExecutable().toGenericString());
+                                    }
                                 } catch (Throwable ignored) {}
                                 return chain.proceed();
                             });
                     hooked++;
+                    logInfo("hooked botButton(" + (structural ? "结构匹配:" + m.getName() : "按名") + " argc=" + argc + ") " + m.toGenericString());
                 } catch (Throwable ignored) {}
             }
-            logInfo("hooked ChatActivityEnterView.didPressedBotButton（匹配 " + hooked + " 个方法）");
-            if (hooked == 0) logError("未找到 " + "ChatActivityEnterView.didPressedBotButton" + "，该触发源在此宿主上无效", null);
+            if (hooked > 0) logInfo("hooked botButton in " + cls.getName() + "（匹配 " + hooked + " 个方法）");
         } catch (Throwable t) {
-            logError("hook didPressedBotButton failed", t);
+            logError("hook botButton in " + cls.getName() + " failed", t);
         }
+    }
+
+    /**
+     * 通用判定：只要方法参数里「任意一个」类型名含 KeyboardButton（TL 类型名不被混淆，
+     * 可信赖），就认它是按钮点击候选。不限制静态/实例、不限制参数个数、不看方法名。
+     * 这样能覆盖各客户端 R8 混淆后的任意形态（g / h / f / didPressedBotButton ...）。
+     */
+    private static boolean looksLikeBotButtonMethod(Method m) {
+        try {
+            Class<?>[] ps = m.getParameterTypes();
+            if (ps == null) return false;
+            for (Class<?> p : ps) {
+                String n = p.getName();
+                if (n != null && n.contains("KeyboardButton")) return true;
+            }
+            return false;
+        } catch (Throwable t) { return false; }
+    }
+
+    /** 从一个参数数组里挑出「按钮对象」（类型名含 KeyboardButton 的那个）。 */
+    private static Object pickButtonArg(Object[] args) {
+        if (args == null) return null;
+        for (Object a : args) {
+            if (a == null) continue;
+            String n = a.getClass().getName();
+            if (n != null && n.contains("KeyboardButton")) return a;
+        }
+        return null;
+    }
+
+    /** 从参数数组里挑出 MessageObject（类型名含 MessageObject 的那个，用于取 dialogId）。 */
+    private static Object pickMessageObjectArg(Object[] args) {
+        if (args == null) return null;
+        for (Object a : args) {
+            if (a == null) continue;
+            String n = a.getClass().getName();
+            if (n != null && n.contains("MessageObject")) return a;
+        }
+        return null;
     }
 
     // 触发源 1b：ChatActivity$ChatMessageCellDelegate.didPressBotButton（UI 按钮学习）
