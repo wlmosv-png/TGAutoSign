@@ -1,181 +1,148 @@
+<div align="center">
+
 <img src="https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/banner.png" width="720" alt="TGAutoSign">
 
 # TGAutoSign
 
-[![Latest Release](https://img.shields.io/github/v/release/wlmosv-png/TGAutoSign?label=最新版本&color=blue)](https://github.com/wlmosv-png/TGAutoSign/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/wlmosv-png/TGAutoSign/total?label=下载量&color=brightgreen)](https://github.com/wlmosv-png/TGAutoSign/releases)
-[![API](https://img.shields.io/badge/libxposed-API%20102-8A2BE2)](https://github.com/LSPosed/LSPlant)
-[![License](https://img.shields.io/badge/license-GPLv3-green)](LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/wlmosv-png/TGAutoSign/android.yml?label=CI)](https://github.com/wlmosv-png/TGAutoSign/actions)
+<p align="center"><b>中文</b> · <a href="README.en.md">English</a></p>
 
 **点一次，签一年。**  ·  *Tap once. Signed every day.*
 
-在 Telegram 里点一次签到按钮就学会，之后每天自动：回调按钮重放、断网补签、限流退避、面板实时跟踪。
-管理界面直接做进 Telegram —— 任意聊天发 `/jmb`，没有独立 App。
+在 Telegram 里点一下它的签到按钮 —— 之后再也不用管。
 
-⬇️ **[下载最新版 APK](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases/latest)** · [全部版本](https://github.com/wlmosv-png/TGAutoSign/releases) · [更新日志](CHANGELOG.md)
-<details open>
-<summary><b>🇬🇧 English</b></summary>
+回调按钮、文本指令、群签到都支持；签到窗口、断网补签、多账号隔离、限流退避内置。
+管理面板就在 Telegram 内 —— 任意聊天发 `/jmb`。
 
-**TGAutoSign** — Telegram daily auto check-in for LSPosed.
-Tap the bot's check-in button **once**; it learns and repeats daily, automatically.
-The control panel lives inside Telegram: send `/jmb` in any chat.
+[![Latest Release](https://img.shields.io/github/v/release/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=blue)](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/total?label=%E4%B8%8B%E8%BD%BD%E9%87%8F&color=brightgreen)](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases)
+[![API](https://img.shields.io/badge/libxposed-API%20102-8A2BE2)](https://github.com/LSPosed/LSPlant)
+[![License](https://img.shields.io/badge/license-GPLv3-green)](LICENSE)
 
-**Highlights**
+**⬇️ [下载最新版 APK](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases/latest)** · [源码仓库](https://github.com/wlmosv-png/TGAutoSign)
 
-- **Three ways to sign** — callback buttons · text commands · group/channel check-ins; one bot can hold several commands
-- **Multi-account**, fully isolated (targets, signed state and retry backoff are per account)
-- **Timing** — signing window · per-target schedule · minimum spacing · make-up deadline (23:00 default) · pause a target for a week
-- **Reliability** — three-state reply parsing (success / already signed / failure) · failure rolls back and retries with backoff 5m → 15m → 45m → 2h → 4h · `FLOOD_WAIT` respected · offline make-up · 3-day failure alert · cross-client sync
-- **Blocking** — line-based rules (matched against bot replies and button labels, `/…/` regex supported) · block a whole bot · freeze one target · network-learn hits need your confirmation
-- **UI & data** — panel inside Telegram, all icons drawn in code, dark/light follows your Telegram theme, built-in log view with a one-tap diagnostic bundle, daily summary to your Saved Messages
-- **100% local** — no server, no telemetry
-- **English UI out of the box** — on English devices no setup is needed
+作者 **wlmosv** · 好用的话 [给源码仓库点个 Star ⭐](https://github.com/wlmosv-png/TGAutoSign)
 
-**Supported clients**
-
-| Client | Package | Status |
-| --- | --- | --- |
-| Telegram (Play / default) | `org.telegram.messenger` | ✅ tested on 12.10.3 |
-| Telegram (direct APK) | `org.telegram.messenger.web` | ✅ statically verified |
-| Nagram XF | `fork.risin42.nagramx` | ✅ tested |
-| ExteraLess (ExteraGram fork) | `com.exteraless.app` | ✅ tested on 12.10.1 |
-| Nagram / NagramX / NagramNX | `nu.gpu.nagram` etc. | whitelisted, not tested |
-| Other Telegram-Android forks | any | injects if flag classes are intact |
-| Telegram X | — | ❌ not injected (different core) |
-
-> ⚠️ **Scope**: LSPosed enables only the official client by default. Using a third-party client? Tick **that** client in the module's scope as well.
-
-**Install** — install the APK → enable in LSPosed → tick your Telegram client in scope → fully stop Telegram, reopen → send `/jmb` in any chat.
-Requires **libxposed API 102+** and a rooted device.
-
-**What this is not** — a convenience tool, not a bypass. It respects rate limits, waits out `FLOOD_WAIT`, backs off on failures, and never loops tightly. No exploit, no anti-detection logic.
-
-</details>
+</div>
 
 ---
 
-## 📱 Screenshots / 界面一览
+## 📱 界面一览 · Screenshots
 
-**English UI** — built in, no setup required
-**英文界面** — 内置，无需设置
+**英文界面 · English UI** — 内置，无需设置 · *built in, no setup required*
 
 | Main panel | Main menu |
 | --- | --- |
-| ![Main panel](docs/screenshots/main-en-dark.jpg) | ![Main menu](docs/screenshots/menu-en-dark.jpg) |
+| ![Main panel](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/main-en-dark.jpg) | ![Main menu](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/menu-en-dark.jpg) |
 | Targets | Settings |
-| ![Targets](docs/screenshots/targets-en-dark.jpg) | ![Settings](docs/screenshots/settings-en-dark.jpg) |
+| ![Targets](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/targets-en-dark.jpg) | ![Settings](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/settings-en-dark.jpg) |
 
-<details>
-<summary>中文界面（3 张）</summary>
+
+**中文界面 · Chinese UI**
 
 | 暗色 · 主面板 | 暗色 · 主菜单 |
 | --- | --- |
-| ![主面板·暗色](docs/screenshots/main-dark.jpg) | ![主菜单·暗色](docs/screenshots/menu-dark.jpg) |
+| ![主面板·暗色](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/main-dark.jpg) | ![主菜单·暗色](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/menu-dark.jpg) |
 | 设置 | |
-| ![设置](docs/screenshots/settings-light.jpg) | |
-
-</details>
-
----
+| ![设置](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/settings-light.jpg) | |
 
 
 ---
 
-## ✨ 它能做什么
+## ✨ 它能做什么 · What it does
 
-| | 能力 | 说明 |
+| | 能力 · Capability | 说明 · Description |
 |---|---|---|
-| ⚡ | **点一次就学会** | 在 bot 里点一下签到按钮，之后每天自动重放；按钮 data 变了也跟得上 |
-| 📝 | **文本指令也行** | 填 bot ID + 指令（如 `/checkin`），到点自动发 |
-| 👥 | **群 / 频道签到** | 群 ID 同样支持，回复判定按群内消息走 |
-| 🕐 | **时间你说了算** | 签到窗口 · 每目标随机时刻 · 错开间隔 · 补签截止 · 暂停一周 |
-| 🛡️ | **不硬刚风控** | 失败自动退避 5m→15m→45m→2h→4h · 尊重 FLOOD_WAIT · 断网自动补签 |
-| 🚫 | **不想签的挡得住** | 关键词 / 正则规则 · 整只 bot 排除 · 单个目标冻结 |
-| 👤 | **多账号互不干扰** | 目标与已签状态按账号隔离；可一键把目标复制到其它账号 |
-| 🔔 | **每天一条摘要** | 发到自己的收藏夹，不弹系统通知；连续失败 3 天额外告警 |
-| 🌍 | **中英双语界面** | 英文设备装上即英文；设置里可手动切换 |
-| 🔒 | **数据全在本地** | 无服务器、无遥测、无上报 |
-
-## 🚀 30 秒上手
-
-**1.** 装 APK → LSPosed → **模块** → 启用 **TGAutoSign**
-**2.** **作用域**里勾选你在用的 Telegram 客户端
-**3.** 完全停掉 Telegram，再重新打开
-**4.** 任意聊天发 `/jmb` → 到 bot 会话**点一次它的签到按钮** → 完成
-
-> 之后每天自动签。想看状态、改设置，随时发 `/jmb`。
+| ⚡ | **点一次就学会** · **Tap once, it learns** | 在 bot 里点一下签到按钮，之后每天自动重放；按钮 data 变了也跟得上<br>*Tap the bot's button once and it replays daily — even when the callback data changes.* |
+| 📝 | **文本指令也行** · **Text commands too** | 填 bot ID + 指令（如 `/checkin`），到点自动发<br>*Set bot ID + command (e.g. `/checkin`); sent on schedule.* |
+| 👥 | **群 / 频道签到** · **Group & channel check-ins** | 群 ID 同样支持，回复判定按群内消息走<br>*Group IDs supported; replies are read from group messages.* |
+| 🕐 | **时间你说了算** · **Your schedule** | 签到窗口 · 每目标随机时刻 · 错开间隔 · 补签截止 · 暂停一周<br>*Window · per-target random slots · spacing · make-up deadline · pause a week.* |
+| 🛡️ | **不硬刚风控** · **Rate-limit friendly** | 失败退避 5m→15m→45m→2h→4h · 尊重 `FLOOD_WAIT` · 断网自动补签<br>*Backoff on failure · waits out `FLOOD_WAIT` · catches up when back online.* |
+| 🚫 | **不想签的挡得住** · **Block what you don't want** | 关键词 / 正则规则 · 整只 bot 排除 · 单个目标冻结<br>*Keyword / regex rules · block a whole bot · freeze a single target.* |
+| 👤 | **多账号互不干扰** · **Multi-account, isolated** | 目标与已签状态按账号隔离；可一键把目标复制到其它账号<br>*Targets and signed-state are per account; copy targets across accounts.* |
+| 🔔 | **每天一条摘要** · **Daily summary** | 发到自己的收藏夹，不弹系统通知；连续失败 3 天额外告警<br>*One message to your Saved Messages; alert after 3 failing days.* |
+| 🌍 | **中英双语界面** · **Bilingual UI** | 英文设备装上即英文；设置里可手动切换<br>*English out of the box on English devices; switchable in Settings.* |
+| 🔒 | **数据全在本地** · **100% local** | 无服务器、无遥测、无上报<br>*No server, no telemetry.* |
 
 ---
 
-## 🖥️ 支持矩阵
+## 🖥️ 支持的客户端 · Supported clients
 
-| 客户端 | 包名 | 状态 |
+模块先按宿主包名判定，再按标志类能力兜底，命中才注入。
+*Matched by host package first, then by flag classes as fallback — only injects on a match.*
+
+| 客户端 · Client | 包名 · Package | 状态 · Status |
 | --- | --- | --- |
-| Telegram（Play / 默认渠道） | `org.telegram.messenger` | ✅ 12.10.3 回调签到实测 |
-| Telegram（官网直连版） | `org.telegram.messenger.web` | ✅ 静态逐项核对 |
-| Nagram XF | `fork.risin42.nagramx` | ✅ dec46b0 实测 |
-| ExteraLess（ExteraGram fork） | `com.exteraless.app` | ✅ 12.10.1-feae791 实测 |
-| Nagram / NagramX / NagramNX | `nu.gpu.nagram` 等 | 白名单覆盖，未实测 |
-| 其它 Telegram-Android 系 fork | 任意包名 | 标志类齐全即注入 |
-| Telegram X | — | ❌ 不注入（换内核） |
+| Telegram（Play / 默认渠道）| `org.telegram.messenger` | ✅ 12.10.3 实测 · *tested* |
+| Telegram（官网直连版）| `org.telegram.messenger.web` | ✅ 静态核对 · *statically verified* |
+| Nagram XF | `fork.risin42.nagramx` | ✅ dec46b0 实测 · *tested* |
+| ExteraLess | `com.exteraless.app` | ✅ 12.10.1 实测 · *tested* |
+| Nagram / NagramX / NagramNX | `nu.gpu.nagram` 等 | 白名单覆盖，未实测 · *whitelisted, untested* |
+| 其它 Telegram-Android fork | 任意 | 标志类齐全即注入 · *injects if flags intact* |
+| Telegram X | — | ❌ 不注入（换内核）· *not injected* |
 
-适配 Telegram **12.10.x** 全系。
-
-> ⚠️ 作用域：LSPosed 里默认只勾了官方版，用第三方客户端请手动把对应客户端勾进模块作用域。
+> ⚠️ **作用域 · Scope**：LSPosed 里默认只勾了官方版。用第三方客户端，请把**对应客户端**也勾进模块作用域。
+> *LSPosed enables only the official client by default. Using a third-party client? Tick **that** client in scope too.*
 
 ---
 
-## 🧱 代码结构
 
-| 文件 | 职责 |
+---
+
+## 🚀 30 秒上手 · 30-second setup
+
+| 步骤 · Step | 做什么 · Do this |
 | --- | --- |
-| `TGAutoSignEntry.java` | Xposed 入口：hook 装配、宿主判定、作用域申请 |
-| `TGAutoSignCore.java` | 主逻辑：签到调度、面板采集、回复判定、管理界面、日志、同步 |
-| `Hosts.java` | 宿主白名单与标志类能力探测 |
-| `Theme.java` | 终端风色板与深浅色判定（采样界面真实颜色，宿主无关） |
-| `Icons.java` | 矢量图标集：24×24 网格、`Canvas`+`Path` 代码绘制，不占资源文件 |
-| `Art.java` | 标题字符美化（数学粗体 / 花体） |
-| `update/UpdateChecker.java` | 检查更新：读 GitHub Releases latest，两跳容灾 |
-| `update/ConfigStore.java` | 配置导出 / 导入 |
+| **1** | 装 APK → LSPosed → **模块** 里启用 TGAutoSign<br>*Install the APK → LSPosed → **Modules** → enable TGAutoSign* |
+| **2** | **作用域**里勾选你在用的 Telegram 客户端<br>*Tick your Telegram client in **Scope*** |
+| **3** | 完全停掉 Telegram，再重新打开<br>*Fully stop Telegram, then reopen it* |
+| **4** | 任意聊天发 `/jmb` → 到 bot 会话**点一次它的签到按钮**<br>*Send `/jmb` in any chat → tap the button once in the bot chat* |
 
-**宿主适配说明**：模块通过反射调用宿主 API，并 hook 以下锚点 —— `ConnectionsManager.sendRequest`（发送与判定）、`ChatActivityEnterView` 的按钮点击方法（按钮学习）、`LaunchActivity.onResume`（启动补签）、`MessagesController.processUpdate*`（面板采集与回复语义）。
-
-按钮点击方法自 TG 12.10.3 起与 `AlertDialog$Builder` 的 setter 一样被方法名混淆（官方版 `didPressedBotButton` → `g`，Nagram → `f` / `h`）。模块改为**按参数类型结构匹配**定位并 hook，不依赖具体方法名，官方版与各 fork 通用。
-
-Telegram 12.10.3 起 `AlertDialog$Builder` 的 setter 被方法名混淆（`setTitle` → `g` 等），模块的对话框已改为自绘实现，不再依赖该 API。
+> 完成。之后每天自动签，想看状态随时发 `/jmb`。
+> *Done. It signs daily from then on — send `/jmb` anytime to check.*
 
 ---
 
-## 🛠️ 构建
+## ❓ 常见问题 · FAQ
 
-标准 Gradle + AGP：
+**Q：点了按钮没有添加 / Tapped the button but nothing was added**
 
-```sh
-./gradlew :app:assembleRelease
-```
+检查「设置 → 学习行为」里的自动学习开关；或 `/jmb` → 添加目标手动加。若仍不加，确认作用域已勾选、并完全停止 Telegram 重开。
 
-正式包使用 release keystore 签名；同一份 APK 同时发布到本仓库与 [Xposed-Modules-Repo 模块仓库](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign)。
+*Check the auto-learn switch under Settings → Learning, or add the target manually via `/jmb` → Add target. If it still won't add, make sure the scope is ticked and fully restart Telegram.*
+
+**Q：机器人是点按钮不发文字的那种 / The bot uses buttons, not text**
+
+能。点一次按钮即学会（列表里带类型标记），之后每天自动重放。若按钮是打开网页或游戏类（无回调数据），不会误学。
+
+*Yes. Tapping once teaches it (the list shows a type badge) and it replays daily. Buttons that only open a web page or game (no callback data) are never mis-learned.*
+
+**Q：官方版能用，第三方客户端用不了 / Works on the official client but not a third-party one**
+
+模块已支持这些客户端（见支持矩阵），但作用域默认只勾了官方版 —— 到 LSPosed 里把对应客户端勾进模块作用域，再完全停止 Telegram 重开。
+
+*Those clients are supported (see the matrix), but scope only includes the official client by default — tick your client in LSPosed, then fully restart Telegram.*
+
+**Q：签到没生效怎么办 / Signing isn't working**
+
+`/jmb` → 自诊断看反射锚点是否正常；运行日志查注入与签到记录；仍未解决就导出运行日志，附客户端名称与版本提 Issue。
+
+*Run `/jmb` → Self-check to verify the reflection anchors, then inspect the log view. Still stuck? Export the log with your client name and version and open an issue.*
+
+**Q：怎么迁移到新手机 / 新账号 / Migrating to a new phone or account**
+
+旧环境 `/jmb` → 导出配置；新环境把 json 放进 `Android/data/<客户端包名>/files/tgautosign/` 后导入。导入只合并不清空。
+
+*On the old device: `/jmb` → Export. On the new one: drop the json into `Android/data/<client package>/files/tgautosign/` and import. Import merges, never wipes.*
+
+**Q：升级提示「与已安装应用签名不同」/ "Signature mismatch" when updating**
+
+装到了调试包。先卸载再装本页正式版；正式包之间可直接覆盖升级，签到数据不丢。
+
+*You installed a debug build. Uninstall it, then install the official APK from here. Official builds upgrade over each other in place — your data is kept.*
 
 ---
 
-## ❓ 常见问题
-
-**Q：回调按钮型 bot 怎么学？**
-
-A：`/jmb` → 添加目标 → 捕获回调按钮 → 去 bot 会话点一次签到按钮 → 面板列出按钮后点选绑定。之后每天自动重放。
-
-**Q：签到没生效？**
-
-A：`/jmb` → 自诊断看反射锚点；运行日志查注入与签到记录；仍未解决就导出运行日志，附客户端名称与版本提 [Issue](https://github.com/wlmosv-png/TGAutoSign/issues)。
-
-**Q：换手机 / 换账号怎么迁移？**
-
-A：旧环境 `/jmb` → 导出配置；新环境把 json 放进 `Android/data/<客户端包名>/files/tgautosign/` 后导入。导入只合并不清空。
-
----
-
-## 📜 更新日志
+## 📜 更新日志 · Changelog
 
 ### v1.5.6 (119)
 
@@ -191,23 +158,65 @@ A：旧环境 `/jmb` → 导出配置；新环境把 json 放进 `Android/data/<
 
 ### v1.5.5 (118)
 
-**新增**：群 / 频道签到 · 签到结果通知（收藏夹）· 跨客户端同步 · 补签截止 · 连续失败告警
+**新增**
 
-**界面**：图标全面矢量化为代码绘制 · 主菜单分类直达 · 教程重写 · 日志页固定最新在上 · 诊断包升级 · 自绘对话框三宿主统一
+- 群 / 频道签到
+- 签到结果通知（发到自己的收藏夹，不弹系统通知）
+- 跨客户端同步目标与签到状态
+- 补签截止 —— 补签与签到窗口解耦，当天不再提前作废
+- 连续失败 3 天告警
 
-**修复**：手动发指令被误判为已签 · bot 回「已签过」不落盘 · 群签到收不到判定 · 日志读不到历史 · 日志「回到最新」方向相反 · 定时器重复排队
+**界面**
 
-**兼容**：适配 TG 12.10.3 的 `AlertDialog$Builder` 方法名混淆 · 主题判定修复 Nagram / ExteraLess
+- 图标全部改为代码绘制，替换 26 种 emoji
+- 主菜单加分类直达，取消二级「更多功能」页
+- 教程重写，补齐通知、主题、暂停、重试上限说明
+
+**修复**
+
+- 手动发指令被误判为已签，导致自动签到跳过该目标
+- bot 回「已签过」不落盘，日历不绿且心跳每 90 秒重发
+- 群签到发出后收不到结果判定
+- 日志只读当天文件，历史记录读不到
+- 日志「回到最新」方向相反
+- 定时器重复排队导致多目标叠加签到
+
+**兼容**
+
+- 对话框改为自绘，不再依赖宿主 `AlertDialog` API（12.10.3 已把方法名混淆）
 
 ### v1.5.4 (117)
 
-- 定时签到体系：只在窗口内签，时刻表按目标均分，错开间隔可配
-- 今日计划：每目标显示已签 / 待签时刻
+- 定时签到：只在签到窗口内签；签到时间按钮选择，错开间隔可配
+- 今日计划：每目标显示已签实际时刻 / 待签计划时刻
 - 日志升级：按目标过滤、诊断包、加载更多、配色重做
 - 界面：自绘终端卡片对话框、设置页分组、下次签到倒计时
+- 修复：启动与面板补签遵守窗口；多目标随机间隔发送
 
-完整变更见 [CHANGELOG.md](CHANGELOG.md)。
+---
 
-## ⚖️ License
+## 🔗 下载渠道 · Download
 
-**GPLv3**，仅供个人学习与自有账号使用；请遵守 Telegram 服务条款及各群组 / 机器人规则。
+| 渠道 · Channel | 地址 · Where |
+| --- | --- |
+| **本页 Releases**（推荐）· *recommended* | [releases/latest](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases/latest) |
+| 源码仓库 Releases · *source repo* | [wlmosv-png/TGAutoSign](https://github.com/wlmosv-png/TGAutoSign/releases) |
+| 模块内直达 · *in-app* | Telegram 发 ` /jmb ` → 检查更新 |
+
+> 同一版本两个仓库的 APK 逐字节一致（`sha256sum.txt` 附在 Release 里），
+> 签名始终是同一把 release key，覆盖安装不丢数据。
+> *Both repos ship byte-identical APKs (with `sha256sum.txt`), signed by the same release key — installing over keeps your data.*
+
+---
+
+## ⚖️ 许可 · License
+
+基于 **GPLv3** 开源，仅供个人学习与自有账号使用。
+请遵守 Telegram 服务条款及各群组 / 机器人规则。
+
+*Licensed under **GPLv3**. For personal use with your own accounts.
+Please respect Telegram's Terms of Service and each group's / bot's rules.*
+
+---
+
+<p align="center"><sub>Made by wlmosv · <a href="https://github.com/wlmosv-png/TGAutoSign">点个 Star ⭐ 是持续更新的动力</a></sub></p>
