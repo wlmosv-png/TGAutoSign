@@ -123,6 +123,45 @@ public final class TGAutoSignEntry extends XposedModule {
         hookChatActivityOnResume();
         hookProcessUpdate();
         hookLaunchActivity();
+        hookNagramProxyRotationFix();
+    }
+
+    /**
+     * Nagram 兼容补丁：ProxyRotationController.initInternal() 会遍历
+     * SharedConfig.activeAccounts，但 Nagram 的启动顺序里该字段可能还是 null，
+     * 导致 ApplicationLoader.onCreate 直接 NPE 崩溃（不是本模块引入，是 Nagram 自身缺陷）。
+     * 这里在 initInternal 进入前，若 activeAccounts 为 null 就先填一个空集合，避免崩溃。
+     * 只在 Nagram 上生效；其它宿主类不存在时静默跳过。
+     */
+    private void hookNagramProxyRotationFix() {
+        try {
+            Class<?> prc = loadClass("org.telegram.messenger.ProxyRotationController");
+            Class<?> sc = loadClass("org.telegram.messenger.SharedConfig");
+            final java.lang.reflect.Field fActive;
+            try {
+                fActive = sc.getDeclaredField("activeAccounts");
+                fActive.setAccessible(true);
+            } catch (Throwable t) { return; }   // 字段不存在（官方版等）→ 跳过
+            Method target = null;
+            for (Method m : prc.getDeclaredMethods()) {
+                if ("initInternal".equals(m.getName()) && m.getParameterTypes().length == 0) { target = m; break; }
+            }
+            if (target == null) return;
+            target.setAccessible(true);
+            hook(target)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(chain -> {
+                        try {
+                            Object cur = fActive.get(null);
+                            if (cur == null) {
+                                fActive.set(null, new java.util.concurrent.CopyOnWriteArraySet<Object>());
+                                logInfo("[兼容] Nagram activeAccounts 为空，已补空集合防崩溃");
+                            }
+                        } catch (Throwable ignored) {}
+                        return chain.proceed();
+                    });
+            logInfo("[兼容] 已挂 Nagram ProxyRotationController.initInternal 防崩溃补丁");
+        } catch (Throwable ignored) {}
     }
 
     // 触发源 1：ChatActivityEnterView.didPressedBotButton（UI 按钮学习）

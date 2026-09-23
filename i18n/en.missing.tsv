@@ -1,0 +1,42 @@
+# 待翻译（补上 TAB 后的英文即可）
+\n确定删除？（会跨所有账号清干净）	\nDelete? (clears it across all accounts)
+ 使用教程	 Guide
+Telegram 标志类：{0}	Telegram flag classes: {0}
+{0}  ·  约 {1} 分钟后	{0}  ·  in ~{1} min
+{0} 个目标	{0} targets
+{0} 个账号	{0} accounts
+{0} 出品	Made by {0}
+{0}（失败 {1} 次）	{0} (failed {1}×)
+{0}（待签）	{0} (pending)
+{0}（明日）	{0} (tomorrow)
+{0}：{1}	{0}: {1}
+{0}：目标 {1} · 已签 {2}	{0}: {1} targets · {2} signed
+⚠️ TGAutoSign 今日 {0}/{1} 已签，{2} 个未完成	⚠️ TGAutoSign — {0}/{1} signed today, {2} incomplete
+⚠️ {0} 已连续 {1} 天签到失败\n原因: {2}\n账号: {3}	⚠️ {0} failed {1} days in a row\nReason: {2}\nAccount: {3}
+⚠️ {0} 连续 {1} 天签到失败	⚠️ {0} failed {1} days in a row
+✅ TGAutoSign 今日签到完成 {0}/{1}	✅ TGAutoSign — {0}/{1} signed today
+✅ 签到完成 {0} 个	✅ Signed {0}
+三项齐全	all three present
+下载 v{0} 安装包	Download v{0}
+不含学习关键词	no learning keyword
+全账号签到\n{0}	All-account signing\n{0}
+全部签到（{0} 个条目）	Sign all ({0} items)
+分享 TGAutoSign	Share TGAutoSign
+命中「排除的 bot」({0})	Blocked bot ({0})
+命中排除规则「{0}」	Matched block rule "{0}"
+宿主包 {0}	Host package {0}
+已填入: {0}	Filled in: {0}
+当前账号：{0}（共登录 {1} 个）	Current account: {0} ({1} signed in)
+待确认（{0}）	Pending ({0})
+未知	unknown
+没有匹配「{0}」的日志	No logs matching "{0}"
+目标列表（{0}）	Targets ({0})
+目标：{0}	Target: {0}
+目标：全部	Target: all
+确认框失败: {0}	Confirm dialog failed: {0}
+签到完成 {0} 个，{1} 个没成功（/jmb → 📄 运行日志 里有原因）	Signed {0}, {1} failed (see /jmb → 📄 Logs for reasons)
+缺 {0}（该客户端自研了这层，模块不注入也不误伤）	missing {0} (this client rolled its own layer — module neither injects nor interferes)
+群 {0}	Group {0}
+账号一览（{0}）	Accounts ({0})
+还没有签到目标，切过去学一个	no targets yet — switch over and learn one
+（还没有目标，去该账号学一个）	 (no targets yet — switch over and learn one)

@@ -229,7 +229,7 @@ public final class TGAutoSignCore {
             synchronized (logBuffer) { if (logBuffer.size() > 0) { int f = Math.max(0, logBuffer.size() - 4); for (int i = f; i < logBuffer.size(); i++) recent.add(logBuffer.get(i)); } }
             if (recent.isEmpty()) {
                 TextView e1 = new TextView(act2); e1.setTextSize(Theme.TS_CAPTION); e1.setTypeface(Theme.text()); e1.setTextColor(Theme.termFaint(act2));
-                e1.setText("$ (暂无日志消息，稍后自动出现)"); body.addView(e1);
+                e1.setText(Lang.tr("$ (暂无日志消息，稍后自动出现)")); body.addView(e1);
                 return;
             }
             for (LogLine l : recent) {
@@ -325,7 +325,7 @@ public final class TGAutoSignCore {
     /** 图标 + 纯文字（替代原来 "▼ 加载更多" 这类字符画按钮） */
     private Button withIconText(Context c, Button b, String name, String text) {
         if (b == null) return b;
-        b.setText(text);
+        b.setText(Lang.tr(text));
         return withIcon(c, b, name);
     }
 
@@ -364,7 +364,7 @@ public final class TGAutoSignCore {
             i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
             appContext.startActivity(i);
             jlog("[界面] 打开作者主页 github.com/wlmosv-png");
-        } catch (Throwable t) { toast("打开作者主页失败: " + t); }
+        } catch (Throwable t) { toast(Lang.tf("打开作者主页失败: {0}", t)); }
     }
 
     /** 加入 TG 交流群（私有邀请链接，ACTION_VIEW 让系统路由到 Telegram） */
@@ -393,7 +393,7 @@ public final class TGAutoSignCore {
         tip.setTextSize(Theme.TS_SECOND);
         tip.setTextColor(Theme.termMuted(act));
         tip.setTypeface(Theme.mono());
-        tip.setText("分享给需要的人，文案已写好（含下载链接）");
+        tip.setText(Lang.tr("分享给需要的人，文案已写好（含下载链接）"));
         box.addView(tip);
 
         TextView preview = new TextView(act);
@@ -416,7 +416,7 @@ public final class TGAutoSignCore {
                         appContext.getSystemService(Context.CLIPBOARD_SERVICE);
                 cm.setPrimaryClip(android.content.ClipData.newPlainText("TGAutoSign", SHARE_TEXT));
                 toast("已复制，粘到任意聊天即可");
-            } catch (Throwable t) { toast("复制失败: " + t); }
+            } catch (Throwable t) { toast(Lang.tf("复制失败: {0}", t)); }
         } });
         LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, -2);
         blp.topMargin = dp(8);
@@ -430,8 +430,8 @@ public final class TGAutoSignCore {
                 i.setType("text/plain");
                 i.putExtra(android.content.Intent.EXTRA_TEXT, SHARE_TEXT);
                 i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
-                appContext.startActivity(android.content.Intent.createChooser(i, "分享 TGAutoSign"));
-            } catch (Throwable t) { toast("无法打开分享: " + t); }
+                appContext.startActivity(android.content.Intent.createChooser(i, Lang.tr("分享 TGAutoSign")));
+            } catch (Throwable t) { toast(Lang.tf("无法打开分享: {0}", t)); }
         } });
         box.addView(sysB, blp);
 
@@ -445,17 +445,19 @@ public final class TGAutoSignCore {
             i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
             appContext.startActivity(i);
             jlog("[界面] 打开交流群链接");
-        } catch (Throwable t) { toast("打开群链接失败，请确认已装 Telegram: " + t.getMessage()); }
+        } catch (Throwable t) { toast(Lang.tf("打开群链接失败，请确认已装 Telegram: {0}", t.getMessage())); }
     }
 
     /** 状态徽章：开=绿实心点，关=灰空心点（主界面状态卡片用） */
     private TextView badge(final Activity act, String label, boolean on) {
         TextView b = new TextView(act);
-        b.setText((on ? "[ON]  " : "[OFF] ") + label);
+        b.setText((on ? "[ON]  " : "[OFF] ") + Lang.trShort(label));
+        if (Lang.isEnglish()) { b.setSingleLine(false); b.setMaxLines(2); b.setEllipsize(null); }
         b.setTextSize(Theme.TS_CAPTION);
         b.setTypeface(android.graphics.Typeface.MONOSPACE);
         b.setTextColor(on ? Theme.termGreen(act) : Theme.termMuted(act));
-        b.setPadding(dp(10), dp(5), dp(10), dp(5));
+        if (Lang.isEnglish()) b.setPadding(dp(6), dp(5), dp(6), dp(5));
+        else b.setPadding(dp(10), dp(5), dp(10), dp(5));
         try {
             android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
             g.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
@@ -494,14 +496,139 @@ public final class TGAutoSignCore {
                     try { if (today.equals(prefs.getString(kLast(accountPrefix(i), entryId(m)), ""))) done++; } catch (Throwable ignored) {}
                 }
                 if (i > 0) sb.append('\n');
-                sb.append(accountLabel(i)).append("：目标 ").append(l.size()).append(" · 已签 ").append(done);
-                if (l.isEmpty()) sb.append("（还没有目标，去该账号学一个）");
+                sb.append(Lang.tf("{0}：目标 {1} · 已签 {2}", accountLabel(i), l.size(), done));
+                if (l.isEmpty()) sb.append(Lang.tr("（还没有目标，去该账号学一个）"));
             }
         } catch (Throwable ignored) {}
         return sb.toString();
     }
 
     /** 把当前账号的目标复制给其它账号（只复制目标，不带已签状态） */
+    /** 账号概览数据：目标数 / 今日已签 / 是否有定时计划。 */
+    private int[] accountStats(int acc) {
+        int total = 0, signed = 0, timer = 0;
+        try {
+            String prefix = accountPrefix(acc);
+            List<Map<String, Object>> l = new ArrayList<>();
+            loadTargetsInto(prefix, l);
+            total = l.size();
+            String today = todayStr();
+            for (Map<String, Object> m : l) {
+                try {
+                    if (today.equals(prefs.getString(kLast(prefix, entryId(m)), ""))) signed++;
+                } catch (Throwable ignored) {}
+            }
+            if (prefs.getBoolean(prefix + "cfg_timer", prefs.getBoolean("jmb_timer", false))) timer = 1;
+        } catch (Throwable ignored) {}
+        return new int[]{total, signed, timer};
+    }
+
+    /** 账号是否参与自动签到（默认启用）。 */
+    private boolean isAccountEnabled(int acc) {
+        try { return prefs.getBoolean("acc" + acc + "_enabled", true); } catch (Throwable t) { return true; }
+    }
+
+    private void setAccountEnabled(int acc, boolean on) {
+        try { prefs.edit().putBoolean("acc" + acc + "_enabled", on).apply(); } catch (Throwable ignored) {}
+    }
+
+    /** 账号一览：所有已激活账号的概况，当前账号高亮。 */
+    private void showAccountOverview(final Activity act) {
+        try {
+            final int cur = currentAccount();
+            final int count = Math.max(1, activatedAccounts());
+            LinearLayout box = new LinearLayout(act);
+            box.setOrientation(LinearLayout.VERTICAL);
+
+            TextView head = new TextView(act);
+            head.setTextSize(Theme.TS_CAPTION); head.setTextColor(Theme.termMuted(act));
+            head.setTypeface(android.graphics.Typeface.MONOSPACE);
+            head.setText(count <= 1 ? Lang.tr("当前只有 1 个登录账号") : Lang.tf("共 {0} 个登录账号（切换 Telegram 账号即切换目标集）", count));
+            head.setPadding(dp(4), 0, dp(4), dp(8));
+            box.addView(head);
+
+            for (int i = 0; i < count; i++) {
+                final int acc = i;
+                int[] st = accountStats(i);
+                LinearLayout row = new LinearLayout(act);
+                row.setOrientation(LinearLayout.VERTICAL);
+                boolean isCur = (i == cur);
+                int accent = isCur ? Theme.termGreen(act) : Theme.termCyan(act);
+                row.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(accent, isCur ? 0x4D : 0x26)));
+                row.setPadding(dp(12), dp(10), dp(12), dp(10));
+                LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
+                rlp.setMargins(0, dp(3), 0, dp(3));
+                row.setLayoutParams(rlp);
+
+                LinearLayout line1 = new LinearLayout(act); line1.setOrientation(LinearLayout.HORIZONTAL); line1.setGravity(Gravity.CENTER_VERTICAL);
+                TextView nm = new TextView(act); nm.setTextSize(Theme.TS_SUBTITLE); nm.setTextColor(Theme.termTxt(act));
+                nm.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+                nm.setText((isCur ? "● " : "○ ") + accountLabel(i) + (isCur ? Lang.tr("（当前）") : ""));
+                line1.addView(nm, new LinearLayout.LayoutParams(0, -2, 1f));
+                if (st[2] == 1) {
+                    TextView tchip = badgeChip(act, " 定时", Theme.termCyan(act), false);
+                    line1.addView(tchip);
+                }
+                if (!isAccountEnabled(i)) {
+                    TextView dchip = badgeChip(act, " 已停用", Theme.termMuted(act), false);
+                    line1.addView(dchip);
+                }
+                row.addView(line1);
+
+                TextView line2 = new TextView(act); line2.setTextSize(Theme.TS_CAPTION); line2.setTextColor(Theme.termMuted(act));
+                line2.setTypeface(android.graphics.Typeface.MONOSPACE);
+                if (st[0] == 0) line2.setText(Lang.tr("（还没有目标）"));
+                else line2.setText(Lang.tf("目标 {0} · 今日已签 {1} · 待签 {2}", st[0], st[1], st[0] - st[1]));
+                line2.setPadding(dp(1), dp(2), 0, 0);
+                row.addView(line2);
+
+                if (count > 1) {
+                    final boolean en = isAccountEnabled(i);
+                    Button tg = mkBtn(act);
+                    withIconText(act, tg, en ? "pause" : "check", en ? "停用该账号（不参与自动签到）" : "启用该账号");
+                    tg.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
+                        setAccountEnabled(acc, !en);
+                        toast(en ? Lang.tf("已停用 {0}", accountLabel(acc)) : Lang.tf("已启用 {0}", accountLabel(acc)));
+                        showAccountOverview(act);
+                    } });
+                    LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
+                    clp.topMargin = dp(6);
+                    row.addView(tg, clp);
+                }
+                if (!isCur && st[0] == 0) {
+                    Button cp = mkBtn(act); withIconText(act, cp, "copy", "复制本账号目标到该账号");
+                    cp.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
+                        List<Map<String, Object>> mine = targetsSnapshot();
+                        if (mine.isEmpty()) { toast("当前账号还没有目标"); return; }
+                        copyTargetsTo(acc, currentAccount(), mine);
+                        toast(Lang.tf("已复制到 {0}", accountLabel(acc)));
+                        showAccountOverview(act);
+                    } });
+                    LinearLayout.LayoutParams clp2 = new LinearLayout.LayoutParams(-1, -2);
+                    clp2.topMargin = dp(6);
+                    row.addView(cp, clp2);
+                }
+                box.addView(row);
+            }
+
+            if (count > 1) {
+                TextView tip = new TextView(act);
+                tip.setTextSize(Theme.TS_CAPTION); tip.setTextColor(Theme.termFaint(act)); tip.setTypeface(Theme.text());
+                tip.setText(Lang.tr("「签全部账号」会依次签每个账号；定时签到跟随当前账号。切换 Telegram 账号后，本面板显示的目标集会随之切换。"));
+                tip.setPadding(dp(4), dp(8), dp(4), dp(2));
+                box.addView(tip);
+            }
+
+            Button all = mkBtnPrimary(act); withIconText(act, all, "globe", "签全部账号");
+            all.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ signAllAccounts(); toast("已命令全账号签到，结果见日志"); } });
+            LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(-1, -2);
+            alp.topMargin = dp(8);
+            box.addView(all, alp);
+
+            showDialog(act, Lang.tf("账号一览（{0}）", count), box, "关闭");
+        } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
+    }
+
     private void showCopyTargets(final Activity act) {
         if (act == null) { toast("请在 TG 界面使用 /jmb"); return; }
         final int cur = currentAccount();
@@ -515,7 +642,7 @@ public final class TGAutoSignCore {
         TextView info = new TextView(act);
         info.setTextSize(Theme.TS_BODY);
         info.setTextColor(Theme.termTxt(act));
-        info.setText("把 " + accountLabel(cur) + " 的 " + mine.size() + " 个目标复制到其它账号。\n只复制目标本身，不带「今天已签」和重试记录。");
+        info.setText(Lang.tf("把 {0} 的 {1} 个目标复制到其它账号。\n只复制目标本身，不带「今天已签」和重试记录。", accountLabel(cur), mine.size()));
         box.addView(info);
         for (int i = 0; i < n; i++) {
             if (i == cur) continue;
@@ -526,7 +653,7 @@ public final class TGAutoSignCore {
             TextView t = new TextView(act);
             t.setTextSize(Theme.TS_SUBTITLE);
             t.setTextColor(Theme.termTxt(act));
-            t.setText("→ " + accountLabel(i) + "（现有 " + acctTargetCount(i) + " 个）");
+            t.setText(Lang.tf("→ {0}（现有 {1} 个）", accountLabel(i), acctTargetCount(i)));
             row.addView(t, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             TextView ar = new TextView(act);
             ar.setTextSize(18);
@@ -568,8 +695,8 @@ public final class TGAutoSignCore {
         String msg = accountLabel(account) + "：新增 " + added + " 个目标" + (skipped > 0 ? "（跳过重复 " + skipped + " 个）" : "");
         if (added == 0) logw("【复制目标】" + msg + "——一个都没加，可能已经复制过了");
         else logs("【复制目标】" + accountLabel(fromAccount) + " → " + msg);
-        toast(added == 0 ? "没有需要复制的新目标（可能早就复制过了）"
-                : "已复制到 " + accountLabel(account) + "：新增 " + added + " 个");
+        toast(added == 0 ? Lang.tr("没有需要复制的新目标（可能早就复制过了）")
+                : Lang.tf("已复制到 {0}：新增 {1} 个", accountLabel(account), added));
     }
 
     public TGAutoSignCore(Context appContext, ClassLoader cl) {
@@ -604,6 +731,7 @@ public final class TGAutoSignCore {
             GAP_MIN = cfgInt("gap", 0);
             MISS_BACK = cfgBool("missback", false);
             if (prefs.contains("jmb_theme")) THEME_MODE = prefs.getInt("jmb_theme", 0);
+            if (prefs.contains("jmb_lang")) { try { io.github.wlmosv_png.tgautosign.Lang.MODE = prefs.getInt("jmb_lang", 0); } catch (Throwable ignored) {} }
             if (prefs.contains("jmb_notify")) NOTIFY_ON = prefs.getBoolean("jmb_notify", true);
             if (prefs.contains("jmb_notify_fail_only")) NOTIFY_FAIL_ONLY = prefs.getBoolean("jmb_notify_fail_only", false);
             if (prefs.contains("jmb_notify_all_acc")) NOTIFY_ALL_ACCOUNTS = prefs.getBoolean("jmb_notify_all_acc", false);
@@ -618,6 +746,7 @@ public final class TGAutoSignCore {
             AUTO_LEARN_NET_CONFIRM = prefs.getBoolean("jmb_autolearn_net_confirm", AUTO_LEARN_NET_CONFIRM);
         } catch (Throwable ignored) {}
         try { lastAccount = currentAccount(); } catch (Throwable ignored) {}
+        try { migrateAccountConfigs(); } catch (Throwable ignored) {}   // 全局默认 → 各账号（老用户不丢设置）
         registerNetworkReceiver();
         registerActivityListener();
         mainHandler.postDelayed(() -> { try { jlog("=== 启动补签 ==="); timerHook("启动"); } catch (Throwable ignored) {} }, 10000L);
@@ -628,6 +757,10 @@ public final class TGAutoSignCore {
         jlog("宿主: " + safePkg() + " 账号: " + currentAccount() + " 目标: " + targetsSnapshot().size()
             + " 按钮学习: " + (AUTO_LEARN ? "开" : "关") + " 网络学习: " + (AUTO_LEARN_NET ? "开" : "关"));
         jlog("使用: 在任意聊天输入 /jmb 打开管理界面");
+
+
+
+
         checkUpdateSilently();
             mainHandler.postDelayed(new Runnable() { @Override public void run() { bootToast(); } }, 15000L);
         mainHandler.postDelayed(new Runnable(){ public void run(){ try{ if(!prefs.getBoolean("jmb_tut_seen",false)){ prefs.edit().putBoolean("jmb_tut_seen",true).apply(); toast("输入 /jmb 打开管理面板 · /help 查看教程"); } }catch(Throwable ignored){} } }, 4000L);
@@ -643,7 +776,7 @@ public final class TGAutoSignCore {
                 lastUpdate = r;
                 if (r.newer) {
                     logs("发现新版本 v" + r.version + "（当前 v" + UpdateChecker.VERSION_NAME + "）");
-                    toast("TGAutoSign 有新版本 v" + r.version + "：发 /jmb → 🔄 检查更新");
+                    toast(Lang.tf("TGAutoSign 有新版本 v{0}：发 /jmb → 🔄 检查更新", r.version));
                 } else {
                     logd("检查更新：已是最新 v" + UpdateChecker.VERSION_NAME);
                 }
@@ -765,8 +898,8 @@ public final class TGAutoSignCore {
                 roundOkN = 0; roundErrN = 0; roundScheduled = false;
             }
             if (ok == 0 && er == 0) return;
-            if (er == 0) toastOnce("round|" + todayStr(), "✅ 签到完成 " + ok + " 个");
-            else toastOnce("round|" + todayStr(), "签到完成 " + ok + " 个，" + er + " 个没成功（/jmb → 📄 运行日志 里有原因）");
+            if (er == 0) toastOnce("round|" + todayStr(), Lang.tf("✅ 签到完成 {0} 个", ok));
+            else toastOnce("round|" + todayStr(), Lang.tf("签到完成 {0} 个，{1} 个没成功（/jmb → 📄 运行日志 里有原因）", ok, er));
             // 通知摘要：每账号每天最多一条，且必须等"当天所有目标都有结论"才发。
             // 旧写法只看单轮结果 —— 时刻表间隔 4 分钟，第 1 个刚签完就发"今日 1/9"，
             // 用户以为流程结束了。现在有待签/待重试就继续等，由下一轮回来再判断。
@@ -789,9 +922,10 @@ public final class TGAutoSignCore {
             } catch (Throwable ignored) {}
         }
     void toast(String msg) {
+        final String out = Lang.tr(msg);
         try {
             mainHandler.post(() -> {
-                try { Toast.makeText(appContext, String.valueOf(msg), Toast.LENGTH_LONG).show(); } catch (Throwable ignored) {}
+                try { Toast.makeText(appContext, String.valueOf(out), Toast.LENGTH_LONG).show(); } catch (Throwable ignored) {}
             });
         } catch (Throwable ignored) {}
     }
@@ -872,12 +1006,13 @@ public final class TGAutoSignCore {
             prefs.edit().putString(ak, today).apply();
 
             String nm = targetTitle(did);   // 群/频道会显示群名，bot 显示 bot 名
-            String tip = "⚠️ " + nm + " 已连续 " + streak + " 天签到失败\n原因: "
-                    + (errText == null || errText.isEmpty() ? "未知" : errText)
-                    + "\n账号: " + accountLabel(currentAccount());
+            String tip = Lang.tf("⚠️ {0} 已连续 {1} 天签到失败\n原因: {2}\n账号: {3}",
+                    nm, streak,
+                    (errText == null || errText.isEmpty() ? Lang.tr("未知") : errText),
+                    accountLabel(currentAccount()));
             logw("[告警] " + nm + " 连续失败 " + streak + " 天（" + errText + "）");
             if (NOTIFY_ON) sendSavedMessage(tip, currentAccount());
-            else toastOnce("fail|" + id, "⚠️ " + nm + " 连续 " + streak + " 天签到失败");
+            else toastOnce("fail|" + id, Lang.tf("⚠️ {0} 连续 {1} 天签到失败", nm, streak));
         } catch (Throwable ignored) {}
     }
 
@@ -911,16 +1046,15 @@ public final class TGAutoSignCore {
                 if (today.equals(prefs.getString(kLast(prefix, id), ""))) { done++; continue; }
                 int rt = prefs.getInt(kRetry(prefix, id), 0);
                 String nm = entryDisplayName(m);
-                if (rt > 0) fails.add(nm + "（失败 " + rt + " 次）");
-                else if (!isSnoozed(prefix, id)) fails.add(nm + "（待签）");
+                if (rt > 0) fails.add(Lang.tf("{0}（失败 {1} 次）", nm, rt));
+                else if (!isSnoozed(prefix, id)) fails.add(Lang.tf("{0}（待签）", nm));
             }
             if (NOTIFY_FAIL_ONLY && fails.isEmpty()) return;
             StringBuilder sb = new StringBuilder();
             if (fails.isEmpty()) {
-                sb.append("✅ TGAutoSign 今日签到完成 ").append(done).append("/").append(total);
+                sb.append(Lang.tf("✅ TGAutoSign 今日签到完成 {0}/{1}", done, total));
             } else {
-                sb.append("⚠️ TGAutoSign 今日 ").append(done).append("/").append(total)
-                  .append(" 已签，").append(fails.size()).append(" 个未完成");
+                sb.append(Lang.tf("⚠️ TGAutoSign 今日 {0}/{1} 已签，{2} 个未完成", done, total, fails.size()));
                 sb.append("\n");
                 int n = 0;
                 for (String f : fails) { if (n++ >= 8) { sb.append("\n…"); break; } sb.append("\n· ").append(f); }
@@ -1168,30 +1302,25 @@ public final class TGAutoSignCore {
         synchronized (TLOCK) { return new ArrayList<Map<String, Object>>(targets); }
     }
 
-    private boolean isPendingFresh(String id) {
-        if (!pendingSigns.contains(id)) return false;
-        long sentAt = currentSentAt(id);
+    private boolean isPendingFresh(String prefix, String id) {
+        String key = (prefix == null ? "" : prefix) + id;
+        if (!pendingSigns.contains(key)) return false;
+        long sentAt = prefs.getLong((prefix == null ? "" : prefix) + "sent_at_" + id, 0L);
         // sent_at 取不到（例如刚重启、或该条目是别的账号发的）时，不能当成"过期 90 秒"，
         // 否则会把正在发送中的请求误判作废、甚至导致重复发送。
         if (sentAt <= 0L) return true;
         if (System.currentTimeMillis() - sentAt > 90L * 1000L) {
-            pendingSigns.remove(id);
+            pendingSigns.remove(key);
             jlog("目标 " + id + " 发送状态超过 90 秒未回调，已清理并允许重试");
             return false;
         }
         return true;
     }
 
-    /** 查某条目的发送时间：先看当前账号，再看所有账号（跨账号切换时不误判）。 */
-    private long currentSentAt(String id) {
+    /** 查某条目在某账号下的发送时间（不再跨账号 fallback，避免多账号互相误判）。 */
+    private long currentSentAt(String prefix, String id) {
         try {
-            long v = prefs.getLong(accountPrefix() + "sent_at_" + id, 0L);
-            if (v > 0L) return v;
-            int n = Math.max(1, activatedAccounts());
-            for (int i = 0; i < n; i++) {
-                long x = prefs.getLong(accountPrefix(i) + "sent_at_" + id, 0L);
-                if (x > 0L) return x;
-            }
+            return prefs.getLong((prefix == null ? "" : prefix) + "sent_at_" + id, 0L);
         } catch (Throwable ignored) {}
         return 0L;
     }
@@ -1398,14 +1527,14 @@ public final class TGAutoSignCore {
         box.setPadding(dp(16), dp(8), dp(16), dp(8));
         TextView warn = new TextView(act);
         warn.setTextSize(Theme.TS_BODY);
-        warn.setText("将删除【所有账号】的全部签到目标与已签/重试状态，仅保留关键词/重试上限/唤醒命令设置。此操作不可撤销，建议先导出配置备份。");
+        warn.setText(Lang.tr("将删除【所有账号】的全部签到目标与已签/重试状态，仅保留关键词/重试上限/唤醒命令设置。此操作不可撤销，建议先导出配置备份。"));
         box.addView(warn);
         Button ok = mkBtn(act);
-        ok.setText("确认清空全部配置");
+        ok.setText(Lang.tr("确认清空全部配置"));
         ok.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 int n = clearAllConfig();
-                toast("已清空 " + n + " 项配置");
+                toast(Lang.tf("已清空 {0} 项配置", n));
                 logs("【清空配置】删除 " + n + " 个键，当前账号目标数=" + targets.size());
             }
         });
@@ -1519,18 +1648,18 @@ public final class TGAutoSignCore {
         LinearLayout box=new LinearLayout(act); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(16),dp(8),dp(16),dp(8));
         int cb=0; for (Object[] b:btns) if (b[1]!=null) cb++;
         TextView head=new TextView(act); head.setTextSize(Theme.TS_BODY); head.setTextColor(android.graphics.Color.parseColor(txtSub(act)));
-        head.setText("会话 uid="+did+"  msg="+mid+"  回调按钮 "+cb+"/"+btns.size()+"；点一个即绑定（可连点多个）");
+        head.setText(Lang.tf("会话 uid={0}  msg={1}  回调按钮 {2}/{3}；点一个即绑定（可连点多个）", did, mid, cb, btns.size()));
         box.addView(head);
         for (final Object[] b:btns){
             final byte[] data=(byte[])b[1];
             final long hash=((Number)b[2]).longValue();
-            final String text=strOr(b[0],"回调按钮");
+            final String text=strOr(b[0], Lang.tr("回调按钮"));
             if (data==null){
                 LinearLayout r2=new LinearLayout(act); r2.setOrientation(LinearLayout.HORIZONTAL);
                 TextView tt=new TextView(act); tt.setTextSize(Theme.TS_SUBTITLE); tt.setTextColor(android.graphics.Color.parseColor(txtSub(act)));
-                tt.setText("\u26a0\ufe0f "+text+"（文本/链接按钮，不能绑定回调）");
+                tt.setText("\u26a0\ufe0f "+text+Lang.tr("（文本/链接按钮，不能绑定回调）"));
                 r2.addView(tt,new LinearLayout.LayoutParams(0,-2,1f));
-                r2.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ toast("这类按钮无法用回调模拟；文本键盘类请用「文本指令」目标（文本=按钮文字）"); } });
+                r2.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ toast(Lang.tr("这类按钮无法用回调模拟；文本键盘类请用「文本指令」目标（文本=按钮文字）")); } });
                 box.addView(r2);
                 View dv=new View(act); dv.setBackgroundColor(Theme.line(act)); box.addView(dv,new LinearLayout.LayoutParams(-1,1));
                 continue;
@@ -1546,8 +1675,8 @@ public final class TGAutoSignCore {
             View div=new View(act); div.setBackgroundColor(Theme.line(act)); box.addView(div,new LinearLayout.LayoutParams(-1,1));
         }
         if (cb==0 && proto!=null && isCallbackButton(proto)){
-            final byte[] fdd=buttonData(proto); final long fh=buttonHash(proto); final String text=strOr(buttonText(proto),"回调按钮"); final long fdid=did; final int fmid=mid;
-            if (fdd!=null){ Button one=mkBtnPrimary(act); one.setText(" 绑定刚点按钮: "+text); one.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ bindCallback(fdid,text,fdd,fh,fmid);} }); box.addView(one); }
+            final byte[] fdd=buttonData(proto); final long fh=buttonHash(proto); final String text=strOr(buttonText(proto), Lang.tr("回调按钮")); final long fdid=did; final int fmid=mid;
+            if (fdd!=null){ Button one=mkBtnPrimary(act); one.setText(Lang.tr(" 绑定刚点按钮: ")+text); one.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ bindCallback(fdid,text,fdd,fh,fmid);} }); box.addView(one); }
         }
         if (cb==0 && proto==null) emptyView(box,"(没读到按钮，请在 bot 里点一下签到按钮再试)");
         showDialog(act,"捕获回调按钮", box, "完成");
@@ -1561,17 +1690,17 @@ public final class TGAutoSignCore {
             String lb=(text==null||text.trim().isEmpty())?"回调按钮":text.trim();
             exist.put("msgId", msgId); exist.put("hash", hash); exist.put("text", lb); exist.put("loc", lb);
             persistEntry(accountPrefix(), exist);
-            toast("已存在该回调，已刷新消息/指纹（msg_id="+msgId+"）");
+            toast(Lang.tf("已存在该回调，已刷新消息/指纹（msg_id={0}）", msgId));
             logs("【绑定】已存在回调，刷新 msg_id="+msgId+" text="+lb);
             return;
         }
-        String label=(text==null||text.trim().isEmpty())?"回调按钮":text.trim();
+        String label=(text==null||text.trim().isEmpty())?Lang.tr("回调按钮"):text.trim();
         Map<String,Object> m=new HashMap<>();
         m.put("id", nextEntryId(did, KIND_CB));
         m.put("did", did); m.put("text", label); m.put("kind", KIND_CB);
         m.put("data", data); m.put("hash", hash); m.put("msgId", msgId); m.put("loc", label);
         persistEntry(accountPrefix(), m); addTargetEntry(m);
-        toast("✅ 已绑定回调: "+label+"（当前共 "+targetsSnapshot().size()+" 个目标）");
+        toast(Lang.tf("✅ 已绑定回调: {0}（当前共 {1} 个目标）", label, targetsSnapshot().size()));
         logs("【绑定】uid="+did+" text="+label+" data="+hexOf(data,16)+" msg_id="+msgId);
     }
 
@@ -1698,7 +1827,7 @@ public final class TGAutoSignCore {
             tip.setTextSize(Theme.TS_CAPTION);
             tip.setTextColor(Theme.termMuted(act));
             tip.setTypeface(Theme.text());
-            tip.setText("下面是最近会话里的群 / 频道。点一条即可填入群 ID。");
+            tip.setText(Lang.tr("下面是最近会话里的群 / 频道。点一条即可填入群 ID。"));
             tip.setPadding(dp(4), 0, dp(4), dp(8));
             box.addView(tip);
 
@@ -1729,7 +1858,7 @@ public final class TGAutoSignCore {
                         try {
                             if (targetEd != null) targetEd.setText(String.valueOf(fDid));
                             if (titleEd != null && titleEd.getText().toString().trim().isEmpty()) titleEd.setText(fTitle);
-                            toast("已填入: " + fTitle);
+                            toast(Lang.tf("已填入: {0}", fTitle));
                         } catch (Throwable ignored) {}
                     }
                 });
@@ -1740,12 +1869,12 @@ public final class TGAutoSignCore {
                 none.setTextSize(Theme.TS_BODY);
                 none.setTextColor(Theme.termMuted(act));
                 none.setTypeface(Theme.text());
-                none.setText("没找到群/频道。请先打开该群发一条消息，再回来试。");
+                none.setText(Lang.tr("没找到群/频道。请先打开该群发一条消息，再回来试。"));
                 none.setPadding(dp(8), dp(10), dp(8), dp(10));
                 box.addView(none);
             }
             showDialog(act, "选择群 / 频道", box, "关闭");
-        } catch (Throwable t) { toast("读取会话失败: " + t); }
+        } catch (Throwable t) { toast(Lang.tf("读取会话失败: {0}", t)); }
     }
 
     /** 添加「群聊签到」目标：输入群（点选会话或手填）+ 签到指令。 */
@@ -1775,15 +1904,15 @@ public final class TGAutoSignCore {
             tip.setTextSize(Theme.TS_BODY);
             tip.setTextColor(Theme.termMuted(act));
             tip.setTypeface(Theme.text());
-            tip.setText("用于在「群 / 频道」里发签到指令（不是私聊 bot）。\n\n"
+            tip.setText(Lang.tr("用于在「群 / 频道」里发签到指令（不是私聊 bot）。\n\n"
                     + "群 ID 怎么拿？三种办法：\n"
                     + "① 点下面「从会话列表选群」→ 自动填 ID（推荐）\n"
                     + "② 直接去那个群点一次签到按钮 → 自动识别添加\n"
-                    + "③ 群里长按任意消息转发给 @userinfobot 也可查（备用）");
+                    + "③ 群里长按任意消息转发给 @userinfobot 也可查（备用）"));
             tip.setPadding(dp(4), 0, dp(4), dp(8));
             box.addView(tip);
 
-            final EditText idEd = adInput(act, "群 ID（形如 -1001234567890，含负号）", 2);
+            final EditText idEd = adInput(act, Lang.tr("群 ID（形如 -1001234567890，含负号）"), 2);
             box.addView(idEd);
             final EditText titleEd = adInput(act, "备注名（可留空，如：某签到群）", 0);
             box.addView(titleEd);
@@ -1797,7 +1926,7 @@ public final class TGAutoSignCore {
             box.addView(cmdEd);
 
             Button ok = mkBtnPrimary(act);
-            ok.setText("添加群签到目标");
+            ok.setText(Lang.tr("添加群签到目标"));
             ok.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) {
                     try {
@@ -1824,7 +1953,7 @@ public final class TGAutoSignCore {
                         logs("[群签到] 已添加 " + did + " 指令=" + cmd + (ttl.isEmpty() ? "" : " 备注=" + ttl));
                         toast("已添加群签到目标");
                         try { sendSign(m, currentAccount()); } catch (Throwable ignored) {}
-                    } catch (Throwable t) { toast("添加失败: " + t); }
+                    } catch (Throwable t) { toast(Lang.tf("添加失败: {0}", t)); }
                 }
             });
             box.addView(ok);
@@ -1835,7 +1964,7 @@ public final class TGAutoSignCore {
     private void showAddChooser(final Activity act){
         LinearLayout menu=new LinearLayout(act); menu.setOrientation(LinearLayout.VERTICAL);
         TextView tip=new TextView(act); tip.setTextSize(Theme.TS_BODY); tip.setTextColor(android.graphics.Color.parseColor(txtSub(act)));
-        tip.setText("不用管类型：去 bot 会话点一下它的签到按钮，选「自动识别」即可。\n如果它要的是发指令，用「我有签到指令」。");
+        tip.setText(Lang.tr("不用管类型：去 bot 会话点一下它的签到按钮，选「自动识别」即可。\n如果它要的是发指令，用「我有签到指令」。"));
         tip.setPadding(dp(12),dp(8),dp(12),dp(8)); menu.addView(tip);
         menuItem(menu,"bulb","自动识别（推荐）","去 bot 会话点一下它的签到按钮，会自动记忆并每天跟进","cap_cb");
         menuItem(menu,"keyboard","我有签到指令","知道它要求的文本指令（bot ID + 指令）","add_text");
@@ -1849,7 +1978,7 @@ public final class TGAutoSignCore {
         final String id=entryId(m); final boolean cb=KIND_CB.equals(entryKind(m));
         LinearLayout b=new LinearLayout(act); b.setOrientation(LinearLayout.VERTICAL); b.setPadding(dp(16),dp(8),dp(16),dp(8));
         TextView hd=new TextView(act); hd.setTextSize(Theme.TS_SUBTITLE); hd.setTextColor(android.graphics.Color.parseColor(txtMain(act)));
-        hd.setText(targetTitle(entryDid(m))+"   "+(cb?"[回调]":"[指令]")+"   "+entryText(m)); b.addView(hd);
+        hd.setText(targetTitle(entryDid(m))+"   "+(cb?Lang.tr("[回调]"):Lang.tr("[指令]"))+"   "+entryText(m)); b.addView(hd);
         if (cb){
             Button t=mkBtn(act); withIconText(act, t, "flask", "测试签到（先跑前置命令→点按钮→看返回）");
             t.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ testEntry(id); } });
@@ -1891,10 +2020,10 @@ public final class TGAutoSignCore {
                 prefs.edit().putString(kBlockedDids(), blockedDidsToStr()).apply();
                 jlog("设置更新: 排除的 bot = " + (LEARN_BLOCKED_DIDS.isEmpty() ? "(无)" : blockedDidsToStr()));
                 showEntryActions(act, m);
-            } catch (Throwable t) { toast("操作失败: " + t); }
+            } catch (Throwable t) { toast(Lang.tf("操作失败: {0}", t)); }
         } });
         b.addView(bb);
-        Button d=mkBtnDanger(act); d.setText("删除");
+        Button d=mkBtnDanger(act); d.setText(Lang.tr("删除"));
         withIcon(act, d, "trash", Theme.termPink(act));
         d.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ confirmDelete(act, m); } });
         b.addView(d);
@@ -1922,7 +2051,7 @@ public final class TGAutoSignCore {
         if (cb) pre.setText(preToJsonToText(entryPre(m))); box.addView(pre);
         if (cb){
             TextView pt = new TextView(act); pt.setTextSize(Theme.TS_SECOND); pt.setTextColor(Theme.termMuted(act)); pt.setPadding(dp(2), dp(6), 0, 0);
-            pt.setText("模板（点一下追加；可自行输入）：");
+            pt.setText(Lang.tr("模板（点一下追加；可自行输入）："));
             box.addView(pt);
             android.widget.HorizontalScrollView hsc = new android.widget.HorizontalScrollView(act);
             LinearLayout chips = new LinearLayout(act); chips.setOrientation(LinearLayout.HORIZONTAL); chips.setPadding(0, dp(4), 0, 0);
@@ -1936,7 +2065,7 @@ public final class TGAutoSignCore {
                 } });
                 chips.addView(cbB, new LinearLayout.LayoutParams(-2, -2));
             }
-            Button clb = mkBtnDanger(act); clb.setText("清空"); clb.setTextSize(Theme.TS_SECOND);
+            Button clb = mkBtnDanger(act); clb.setText(Lang.tr("清空")); clb.setTextSize(Theme.TS_SECOND);
             clb.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ pre.setText(""); } });
             chips.addView(clb, new LinearLayout.LayoutParams(-2, -2));
             hsc.addView(chips);
@@ -1944,7 +2073,7 @@ public final class TGAutoSignCore {
         }
         final EditText loc=adInput(act,"按钮定位文案（重开面板按此找回按钮，默认=标签）",0);
         if (cb){ loc.setText(entryLoc(m)); box.addView(loc); }
-        Button ok=mkBtnPrimary(act); ok.setText("保存");
+        Button ok=mkBtnPrimary(act); ok.setText(Lang.tr("保存"));
         ok.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
             try {
                 m.put("text", name.getText().toString().trim());
@@ -1958,7 +2087,7 @@ public final class TGAutoSignCore {
                 }
                 persistEntry(accountPrefix(), m);
                 toast("已保存"); showList(act);
-            } catch (Throwable t){ toast("保存失败: "+t); }
+            } catch (Throwable t){ toast(Lang.tf("保存失败: {0}", t)); }
         }});
         box.addView(ok);
         showDialog(act,"编辑目标", box, "取消");
@@ -2088,16 +2217,16 @@ public final class TGAutoSignCore {
                     if ("run".equals(mm.getName()) && a!=null && a.length>=2){
                         final Object resp=a[0]; final Object err=a[1];
                         mainHandler.post(new Runnable(){ public void run(){
-                            if (err!=null){ String et=""; try{ et=strOr(getFieldValSafe(err,"text"),""); }catch(Throwable ignored){} toast("🧪 "+fl+" 失败: "+et); jlog("【测试】uid="+fdid+" ["+fl+"] 失败 err="+et); }
-                            else { String ans=""; try{ Object am=getFieldValSafe(resp,"message"); if(am==null) am=getFieldValSafe(resp,"alert"); ans=strOr(am,""); }catch(Throwable ignored){} toast("🧪 "+fl+" 成功"+(ans.length()>0?": "+ans:"")); jlog("【测试】uid="+fdid+" ["+fl+"] 成功 answer="+ans); }
+                            if (err!=null){ String et=""; try{ et=strOr(getFieldValSafe(err,"text"),""); }catch(Throwable ignored){} toast(Lang.tf("🧪 {0} 失败: {1}", fl, et)); jlog("【测试】uid="+fdid+" ["+fl+"] 失败 err="+et); }
+                            else { String ans=""; try{ Object am=getFieldValSafe(resp,"message"); if(am==null) am=getFieldValSafe(resp,"alert"); ans=strOr(am,""); }catch(Throwable ignored){} toast(Lang.tf("🧪 {0} 成功", fl)+(ans.length()>0?": "+ans:"")); jlog("【测试】uid="+fdid+" ["+fl+"] 成功 answer="+ans); }
                         }});
                     }
                     return null;
                 }
             });
             invoke(cm,"sendRequest", new Class<?>[]{classEx("org.telegram.tgnet.TLObject"), classEx("org.telegram.tgnet.RequestDelegate")}, new Object[]{req, delegate});
-            toast("🧪 已发送测试: "+label);
-        } catch (Throwable t){ toast("测试异常: "+t); }
+            toast(Lang.tf("🧪 已发送测试: {0}", label));
+        } catch (Throwable t){ toast(Lang.tf("测试异常: {0}", t)); }
     }
 
     private void showDebugConsole(Activity act){
@@ -2106,7 +2235,7 @@ public final class TGAutoSignCore {
         if (btns.isEmpty() && lastCapBtns!=null) btns = lastCapBtns;
         LinearLayout box=new LinearLayout(act); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(16),dp(8),dp(16),dp(8));
         TextView head=new TextView(act); head.setTextSize(Theme.TS_BODY); head.setTextColor(android.graphics.Color.parseColor(txtSub(act)));
-        head.setText("回调调试台 · uid="+lastCapDid+" msg="+lastCapMid+" 按钮 "+btns.size()+" 个\n点任意按钮=实时发一次该回调并看返回；不放心先「重新采样」");
+        head.setText(Lang.tf("回调调试台 · uid={0} msg={1} 按钮 {2} 个\n点任意按钮=实时发一次该回调并看返回；不放心先「重新采样」", lastCapDid, lastCapMid, btns.size()));
         box.addView(head);
         Button samp=mkBtnPrimary(act); withIconText(act, samp, "target", "重新采样（去点一次按钮）");
         samp.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ startCapture(act); } });
@@ -2116,7 +2245,7 @@ public final class TGAutoSignCore {
             final byte[] data=(byte[])b[1];
             if (data==null) continue; cb++;
             final long hash=((Number)b[2]).longValue();
-            final String text=strOr(b[0],"回调按钮");
+            final String text=strOr(b[0], Lang.tr("回调按钮"));
             final long fdid=lastCapDid; final int fmid=lastCapMid;
             LinearLayout row=new LinearLayout(act); row.setOrientation(LinearLayout.HORIZONTAL); row.setPadding(dp(4),dp(11),dp(4),dp(11));
             TextView t=new TextView(act); t.setTextSize(Theme.TS_SUBTITLE); t.setTextColor(android.graphics.Color.parseColor(txtMain(act)));
@@ -2255,7 +2384,7 @@ public final class TGAutoSignCore {
         addTargetEntry(m);
         logs("【自动学习】新目标 " + dialogId + " -> " + text);
         String tShort = text != null && text.length() > 18 ? text.substring(0, 18) + "…" : text;
-        toast("✅ 已添加新签到目标: " + tShort);
+        toast(Lang.tf("✅ 已添加新签到目标: {0}", tShort));
     }
 
     /** 把 callback data 转成尽量可读的标签（网络层学习用，拿不到按钮文案时的兜底）。 */
@@ -2293,7 +2422,7 @@ public final class TGAutoSignCore {
             logd("目标 " + dialogId + " 已加过相同回调按钮，跳过");
             return;
         }
-        String label = display != null && display.trim().length() > 0 ? String.valueOf(display).trim() : "回调按钮";
+        String label = display != null && display.trim().length() > 0 ? String.valueOf(display).trim() : Lang.tr("回调按钮");
         Map<String, Object> m = new HashMap<>();
         m.put("id", nextEntryId(dialogId, KIND_CB));
         m.put("did", dialogId);
@@ -2312,7 +2441,7 @@ public final class TGAutoSignCore {
         addTargetEntry(m);
         try { prefs.edit().remove(kTimerPlan(prefix, todayStr())).apply(); } catch (Throwable ignored) {}
         logs("【自动学习】新回调目标 " + dialogId + " -> [" + label + "] data=" + Base64.getEncoder().encodeToString(data) + " msg_id=" + msgId);
-        toast("✅ 已添加回调签到目标: " + label);
+        toast(Lang.tf("✅ 已添加回调签到目标: {0}", label));
     }
 
     private void learnFromNetwork(long did, String text) {
@@ -2562,11 +2691,13 @@ public final class TGAutoSignCore {
         pace();
         // 每条目标一个链路 id：解析 → 发出 → 响应 → 判定 可串联
         setCtxTrace("t" + Integer.toHexString(random.nextInt(0xFFFF)));
+        // 日志上下文跟随「实际发送的账号」，避免全账号循环里延迟任务沿用上一个账号的标签
+        try { ctxAcc = accountLabel(account); ctxRound++; } catch (Throwable ignored) {}
         final long dialogId = entryDid(entry);
         final String id = entryId(entry);
         final String kind = entryKind(entry);
         final String fText = entryText(entry);
-        if (isPendingFresh(id)) {
+        if (isPendingFresh(accountPrefix(account), id)) {
             jlog("目标 " + id + " 已有请求在处理中，跳过");
             return;
         }
@@ -2655,7 +2786,7 @@ public final class TGAutoSignCore {
                 setFieldVal(req, "message", fText);
                 setFieldVal(req, "random_id", random.nextLong());
             }
-            pendingSigns.add(id);
+            pendingSigns.add(prefix + id);
             try { prefs.edit().putLong(prefix + "sent_at_" + id, System.currentTimeMillis()).commit(); } catch (Throwable ignored) {}
             Object cm = staticInvoke(classEx("org.telegram.tgnet.ConnectionsManager"), "getInstance", new Class<?>[]{int.class}, new Object[]{account});
             final String fId = id;
@@ -2671,7 +2802,7 @@ public final class TGAutoSignCore {
                     if ("run".equals(method.getName()) && margs != null && margs.length >= 2) {
                         final Object response = margs[0];
                         final Object error = margs[1];
-                        mainHandler.post(() -> { pendingSigns.remove(fId); });
+                        mainHandler.post(() -> { pendingSigns.remove(fPrefix + fId); });
                         try {
                             if (error != null) {
                                 String code = "";
@@ -2795,7 +2926,7 @@ public final class TGAutoSignCore {
             invoke(cm, "sendRequest", new Class<?>[]{classEx("org.telegram.tgnet.TLObject"), classEx("org.telegram.tgnet.RequestDelegate")}, new Object[]{req, delegate});
             logd("已发出请求 " + dialogId + " " + (KIND_CB.equals(kind) ? "[回调] " : "text=") + fText + " (id=" + id + ")");
         } catch (Throwable t) {
-            pendingSigns.remove(id);
+            pendingSigns.remove(prefix + id);
             logException("发送签到(did=" + dialogId + ")", t);
         }
     }
@@ -2867,7 +2998,7 @@ public final class TGAutoSignCore {
                     busy++;
                     continue;
                 }
-                if (isPendingFresh(id)) {
+                if (isPendingFresh(prefix, id)) {
                     logd("[" + reason + "] " + dialogId + " 正在发送中，跳过");
                     busy++;
                     continue;
@@ -2930,6 +3061,12 @@ public final class TGAutoSignCore {
             StringBuilder rep = new StringBuilder();
             for (int i = 0; i < count; i++) {
                 try {
+                    if (!isAccountEnabled(i)) {
+                        jlog("账号" + (i + 1) + " 已停用，跳过");
+                        if (rep.length() > 0) rep.append('\n');
+                        rep.append(accountLabel(i) + "：已停用，跳过");
+                        continue;
+                    }
                     trySignAllFor("全账号(" + (i + 1) + "/" + count + ")", true, i);
                     String one = lastRound;
                     if (one == null) one = accountLabel(i) + "：本轮跳过（60 秒内刚跑过，或没网）";
@@ -2940,7 +3077,7 @@ public final class TGAutoSignCore {
                 }
             }
             jlog("=== 全账号签到结束 ===");
-            if (rep.length() > 0) toastOnce("allacc|" + todayStr() + "|" + rep.length(), "全账号签到\n" + rep);
+            if (rep.length() > 0) toastOnce("allacc|" + todayStr() + "|" + rep.length(), Lang.tf("全账号签到\n{0}", rep));
         }
 
     public void enqueueTry(String reason) {
@@ -3075,7 +3212,7 @@ public final class TGAutoSignCore {
                 String cn = nameCache.get(did);
                 if (cn != null && cn.length() > 0) return cn;
             }
-            return "群 " + did;   // 至少标明这是群，不裸露数字
+            return Lang.tf("群 {0}", did);   // 至少标明这是群，不裸露数字
         }
         // ④ bot / 用户
         String bn = botName(did);
@@ -3157,14 +3294,14 @@ public final class TGAutoSignCore {
                 String cn = nameCache.get(did);
                 if (cn != null && cn.length() > 0) return cn;
             }
-            return "群 " + did;
+            return Lang.tf("群 {0}", did);
         }
         // bot / 用户：优先显示名，其次 @username
         String n = botName(did);
         if (n == null || n.length() == 0) {
             String u = botUsername(did);
             if (u != null && u.length() > 0) return "@" + u;
-            return "bot " + did;
+            return Lang.tf("bot {0}", did);
         }
         return n;
     }
@@ -3179,13 +3316,13 @@ public final class TGAutoSignCore {
 
     private String statusOf(String prefix, String id, String today) {
         String lastSign = prefs.getString(kLast(prefix, id), "");
-        if (today.equals(lastSign)) return "已签";
+        if (today.equals(lastSign)) return Lang.tr("已签");
         int retries = prefs.getInt(kRetry(prefix, id), 0);
-        if (retries >= RETRY_LIMIT) return "已放弃";
+        if (retries >= RETRY_LIMIT) return Lang.tr("已放弃");
         long retryAt = prefs.getLong(kRetryAt(prefix, id), 0);
-        if (System.currentTimeMillis() < retryAt) return "退避中";
-        if (retries > 0) return "重试中";
-        return "待签";
+        if (System.currentTimeMillis() < retryAt) return Lang.tr("退避中");
+        if (retries > 0) return Lang.tr("重试中");
+        return Lang.tr("待签");
     }
 
     // 状态优先级：待处理(待签/重试/退避)排前，已签/已放弃沉底。数值越小越靠前。
@@ -3254,12 +3391,12 @@ public final class TGAutoSignCore {
             TextView em = new TextView(act); em.setText(icon); em.setTextSize(20); em.setGravity(android.view.Gravity.CENTER);
             v.addView(em);
         }
-        TextView t = new TextView(act); t.setText(title); t.setTextSize(Theme.TS_SECOND);
+        TextView t = new TextView(act); t.setText(Lang.tr(title)); t.setTextSize(Theme.TS_SECOND);
         t.setTextColor(Theme.termTxt(act)); t.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
         t.setGravity(android.view.Gravity.CENTER); t.setPadding(0, dp(3), 0, 0);
         v.addView(t);
         if (sub != null && sub.length() > 0) {
-            TextView s = new TextView(act); s.setText(sub); s.setTextSize(Theme.TS_CAPTION);
+            TextView s = new TextView(act); s.setText(Lang.tr(sub)); s.setTextSize(Theme.TS_CAPTION);
             s.setTextColor(Theme.termMuted(act)); s.setTypeface(android.graphics.Typeface.MONOSPACE);
             s.setGravity(android.view.Gravity.CENTER); s.setPadding(0, dp(2), 0, 0);
             v.addView(s);
@@ -3307,7 +3444,7 @@ public final class TGAutoSignCore {
             box.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c, 6), 1));
         }
         TextView t = new TextView(c);
-        t.setText(label);
+        t.setText(Lang.tr(label));
         t.setTextSize(Theme.TS_SECOND);
         t.setTextColor(Theme.termTxt(c));
         t.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
@@ -3328,7 +3465,7 @@ public final class TGAutoSignCore {
 
     private void sectionHeader(LinearLayout parent, Activity act, String text) {
         TextView h = new TextView(act);
-        h.setText(text);
+        h.setText(Lang.tr(text));
         h.setTextSize(Theme.TS_CAPTION);
         h.setTextColor(Theme.termCyan(act));
         h.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
@@ -3340,7 +3477,7 @@ public final class TGAutoSignCore {
     private View sortChip(Activity act, String label, String mode) {
         boolean on = mode.equals(SORT_MODE);
         TextView chip = new TextView(act);
-        chip.setText(label);
+        chip.setText(Lang.tr(label));
         chip.setTextSize(Theme.TS_CAPTION);
         chip.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
         chip.setGravity(android.view.Gravity.CENTER);
@@ -3387,9 +3524,9 @@ public final class TGAutoSignCore {
         }
         row.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,12), 1));
         LinearLayout col = new LinearLayout(c); col.setOrientation(LinearLayout.VERTICAL);
-        TextView t1 = new TextView(c); t1.setTextSize(Theme.TS_SUBTITLE); t1.setTextColor(Theme.termTxt(c)); t1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); t1.setText(title); col.addView(t1);
+        TextView t1 = new TextView(c); t1.setTextSize(Theme.TS_SUBTITLE); t1.setTextColor(Theme.termTxt(c)); t1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); t1.setText(Lang.tr(title)); col.addView(t1);
         TextView t2 = new TextView(c); t2.setTextSize(Theme.TS_CAPTION); t2.setTextColor(Theme.termMuted(c)); t2.setTypeface(android.graphics.Typeface.MONOSPACE);
-        if (subtitle != null && subtitle.length() > 0) t2.setText(subtitle); else t2.setVisibility(View.GONE);
+        if (subtitle != null && subtitle.length() > 0) t2.setText(Lang.tr(subtitle)); else t2.setVisibility(View.GONE);
         col.addView(t2);
         row.addView(col, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         android.widget.ImageView arv = iconView(c, "chevron-r", 14f, Theme.termCyan(c));
@@ -3406,7 +3543,7 @@ public final class TGAutoSignCore {
     private TextView badgeChip(Context c, String text, int col, boolean solid) {
         TextView chip = new TextView(c);
         chip.setTextSize(Theme.TS_CAPTION);
-        chip.setText(text);
+        chip.setText(Lang.tr(text));
         chip.setGravity(android.view.Gravity.CENTER);
         chip.setPadding(Theme.dp(c,6), Theme.dp(c,2), Theme.dp(c,6), Theme.dp(c,2));
         chip.setTextColor(solid ? Theme.termCardDeep(c) : col);
@@ -3433,7 +3570,7 @@ public final class TGAutoSignCore {
         boolean isChat = "chat".equals(entryPeerKind(m));
         int col = isChat ? Theme.termPink(c) : Theme.termCyan(c);
         String icon = isChat ? "group" : "bot";
-        String label = isChat ? " 群" : " bot";
+        String label = isChat ? Lang.tr(" 群") : " bot";
         TextView chip = badgeChip(c, label, col, isChat);
         android.graphics.drawable.Drawable ic = Icons.d(c, icon, 11f, isChat ? Theme.termCardDeep(c) : col);
         if (ic != null) {
@@ -3448,7 +3585,7 @@ public final class TGAutoSignCore {
     private TextView typeChip(Context c, boolean cb) {
         TextView chip = new TextView(c);
         chip.setTextSize(Theme.TS_CAPTION);
-        chip.setText(cb ? "[回调]" : "[指令]");
+        chip.setText(cb ? Lang.tr("[回调]") : Lang.tr("[指令]"));
         chip.setGravity(android.view.Gravity.CENTER);
         chip.setPadding(Theme.dp(c,8), Theme.dp(c,2), Theme.dp(c,8), Theme.dp(c,2));
         chip.setTextColor(cb ? Theme.termCyan(c) : Theme.termMuted(c));
@@ -3553,7 +3690,7 @@ public final class TGAutoSignCore {
         else if (status != null && (status.contains("退避") || status.contains("重试"))) stCol = Theme.termAmber(c);
         else if (status != null && status.contains("放弃")) stCol = Theme.termMuted(c);
         st.setTextColor(stCol);
-        st.setText(status);
+        st.setText(Lang.tr(status));
         // 状态前导图标：已签=勾、待签=钟、退避/重试=警告
         String stIcon = null;
         if (status != null) {
@@ -3627,7 +3764,7 @@ public final class TGAutoSignCore {
             addTile(g1, act, "plus", "添加目标", "指令 / 捕获按钮", "add");
             addTile(g1, act, "trash", "删除目标", "移除条目", "del");
             addTile(g1, act, "copy", "复制目标", "给其它账号", "copy_targets");
-            addTile(g1, act, "globe", "签全部账号", activatedAccounts() + " 个账号", "sign_all_accounts");
+            addTile(g1, act, "globe", "签全部账号", Lang.tf("{0} 个账号", activatedAccounts()), "sign_all_accounts");
             addTile(g1, act, "layers", "预设模板", "一键添加", "presets");
             }
 
@@ -3843,7 +3980,7 @@ public final class TGAutoSignCore {
         final TextView sv = new TextView(act); sv.setTextSize(Theme.TS_SECOND); sv.setTextColor(Theme.termMuted(act));
         sv.setTypeface(android.graphics.Typeface.MONOSPACE);
         String sign = (SIGN == null || SIGN.isEmpty()) ? "wlmosv" : SIGN;
-        final String fullCmd = "$ tgas --v " + UpdateChecker.VERSION_NAME + "  ·  (c) " + sign + " 出品";
+        final String fullCmd = "$ tgas --v " + UpdateChecker.VERSION_NAME + "  ·  " + Lang.tf("{0} 出品", sign);
         final TextView cur = new TextView(act); cur.setTextSize(Theme.TS_SECOND); cur.setTextColor(Theme.termCyan(act));
         cur.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); cur.setText("▊");
         LinearLayout svRow = new LinearLayout(act); svRow.setOrientation(LinearLayout.HORIZONTAL); svRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
@@ -3922,7 +4059,7 @@ public final class TGAutoSignCore {
         stS.setTextColor(streakN > 0 ? Theme.termGreen(act) : Theme.termMuted(act));
         stS.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
         stS.setPadding(0, dp(6), 0, 0);
-        stS.setText(streakN > 0 ? "连续签到 " + streakN + " 天 · 最近 14 天" : "还没连续签到，今天去签一个");
+        stS.setText(streakN > 0 ? Lang.tf("连续签到 {0} 天 · 最近 14 天", streakN) : Lang.tr("还没连续签到，今天去签一个"));
         statCard.addView(stS);
         // 定时模式：显示距下次签到倒计时
         if (TIMER_ENABLED) {
@@ -3932,7 +4069,7 @@ public final class TGAutoSignCore {
                 stT.setTextColor(Theme.termAmber(act));
                 stT.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
                 stT.setPadding(0, dp(4), 0, 0);
-                stT.setText("下次签到 " + nx);
+                stT.setText(Lang.tf("下次签到 {0}", nx));
                 android.graphics.drawable.Drawable nd = Icons.d(act, "clock", 13f, Theme.termAmber(act));
                 if (nd != null) {
                     int nsz = Theme.dp(act, 13);
@@ -3980,7 +4117,7 @@ public final class TGAutoSignCore {
         termBody.setOrientation(LinearLayout.VERTICAL);
         term.addView(termBody);
         TextView tm = new TextView(act); tm.setTextSize(Theme.TS_CAPTION); tm.setTypeface(android.graphics.Typeface.MONOSPACE); tm.setTextColor(Theme.termCyan(act));
-        tm.setText("[更多日志] → 运行日志"); tm.setPadding(0, dp(6), 0, 0); tm.setClickable(true);
+        tm.setText(Lang.tr("[更多日志] → 运行日志")); tm.setPadding(0, dp(6), 0, 0); tm.setClickable(true);
         tm.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ runAction(act, "log"); } });
         term.addView(tm);
         if (!fastMainOpen) {
@@ -4006,10 +4143,10 @@ public final class TGAutoSignCore {
         String[][] QK = {{"sign", "\u7acb\u5373\u7b7e\u5230", "bolt"}, {"list", "\u76ee\u6807", "list"},
                          {"log", "\u65e5\u5fd7", "doc"}, {"diag", "\u81ea\u68c0", "pulse"}};
         for (final String[] q : QK) {
-            TextView qb = new TextView(act); qb.setText(q[1]); qb.setTextSize(Theme.TS_CAPTION); qb.setTypeface(android.graphics.Typeface.MONOSPACE);
+            TextView qb = new TextView(act); qb.setText(Lang.trShort(q[1])); qb.setTextSize(Theme.TS_CAPTION); qb.setTypeface(android.graphics.Typeface.MONOSPACE);
             qb.setTextColor(Theme.termCyan(act)); qb.setClickable(true);
             qb.setGravity(android.view.Gravity.CENTER);
-            qb.setSingleLine(true);
+            qb.setSingleLine(false); qb.setMaxLines(2);   // 英文比中文长：允许两行，不挤压布局
             android.graphics.drawable.Drawable qd = Icons.d(act, q[2], 12f, Theme.termCyan(act));
             if (qd != null) {
                 int qsz = Theme.dp(act, 12);
@@ -4033,6 +4170,7 @@ public final class TGAutoSignCore {
         addTile(g1, act, "doc", "运行日志", "搜索·筛选·清空", "log");
         addTile(g1, act, "sliders", "设置", "定时·窗口·间隔", "settings");
         addTile(g1, act, "trash", "排除管理", "规则·排除 bot·待确认", "exclude");
+        addTile(g1, act, "globe", "账号一览", Lang.tf("{0} 个账号", activatedAccounts()), "accounts");
         addTile(g1, act, "book", "使用教程", "上手·排障", "tutorial");
 
         // 分类直达：不用进二级页，横滑一行找到全部功能
@@ -4086,7 +4224,7 @@ public final class TGAutoSignCore {
             logChip(act, chips, "只看错误", new Runnable() { @Override public void run() { logFilter = LV_ERR; logShowDebug = false; refreshLog(); } });
             logChip(act, chips, "回到最新", "chevron-u", Theme.termCyan(act), new Runnable() { @Override public void run() { jumpLogNewest(); } });
             final String[] targetNames = collectTargetNames();
-            logChip(act, chips, logTarget.length() == 0 ? "目标：全部" : "目标：" + logTarget, "target", Theme.termAmber(act), new Runnable() { @Override public void run() {
+            logChip(act, chips, logTarget.length() == 0 ? Lang.tr("目标：全部") : Lang.tf("目标：{0}", logTarget), "target", Theme.termAmber(act), new Runnable() { @Override public void run() {
                 try {
                     if (targetNames.length == 0) { toast("还没有签到目标"); return; }
                     LinearLayout pick = new LinearLayout(act);
@@ -4094,7 +4232,7 @@ public final class TGAutoSignCore {
                     pick.setPadding(dp(8), dp(6), dp(8), dp(6));
                     TextView tip = new TextView(act); tip.setTextSize(Theme.TS_SECOND); tip.setTextColor(Theme.termMuted(act));
                     tip.setTypeface(android.graphics.Typeface.MONOSPACE);
-                    tip.setText("选择要查看日志的目标（点「全部」恢复）");
+                    tip.setText(Lang.tr("选择要查看日志的目标（点「全部」恢复）"));
                     tip.setPadding(dp(4), 0, dp(4), dp(8));
                     pick.addView(tip);
                     final Object[] dlg = new Object[1];
@@ -4102,7 +4240,7 @@ public final class TGAutoSignCore {
                     TextView all = new TextView(act); all.setTextSize(Theme.TS_BODY); all.setTypeface(android.graphics.Typeface.MONOSPACE);
                     all.setPadding(dp(10), dp(8), dp(10), dp(8));
                     boolean allOn = logTarget.length() == 0;
-                    all.setText((allOn ? "● " : "○ ") + "全部目标");
+                    all.setText((allOn ? "● " : "○ ") + Lang.tr("全部目标"));
                     all.setTextColor(allOn ? Theme.termCyan(act) : Theme.termTxt(act));
                     all.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
                         logTarget = ""; refreshLog(); dismissOne(dlg[0]);
@@ -4120,7 +4258,7 @@ public final class TGAutoSignCore {
                         pick.addView(row);
                     }
                     dlg[0] = showDialog(act, "目标过滤", pick, "关闭");
-                } catch (Throwable t) { toast("打开目标选择失败: " + t); }
+                } catch (Throwable t) { toast(Lang.tf("打开目标选择失败: {0}", t)); }
             } });
             logChip(act, chips, "诊断包", "copy", Theme.termCyan(act), new Runnable() { @Override public void run() { doCopyDiagnose(act); } });
             logChip(act, chips, "清空", "trash", Theme.termPink(act), new Runnable() { @Override public void run() { confirmClearLog(act); } });
@@ -4130,7 +4268,7 @@ public final class TGAutoSignCore {
             EditText q = new EditText(act);
             q.setSingleLine();
             q.setTextSize(Theme.TS_BODY);
-            q.setHint("搜索日志，边输边过滤");
+            q.setHint(Lang.tr("搜索日志，边输边过滤"));
             q.setTextColor(Theme.termTxt(act));
             q.setHintTextColor(Theme.termFaint(act));
             q.addTextChangedListener(new android.text.TextWatcher() {
@@ -4177,7 +4315,7 @@ public final class TGAutoSignCore {
             legend.setTypeface(android.graphics.Typeface.MONOSPACE);
             String lvTag = logFilter == LV_ERR ? "只看错误" : (logFilter == LV_WARN ? "只看重要" : "全部级别");
             String tgTag = logTarget.length() == 0 ? "全部目标" : "目标:" + logTarget;
-            legend.setText("最新在最上 ｜ 现在看：" + lvTag + " · " + tgTag + " ｜ 红=错误 黄=警告 绿=成功 灰=普通 暗灰=调试 ｜ 长按行复制");
+            legend.setText(Lang.tf("最新在最上 ｜ 现在看：{0} · {1} ｜ 红=错误 黄=警告 绿=成功 灰=普通 暗灰=调试 ｜ 长按行复制", lvTag, tgTag));
             root.addView(legend);
 
             showDialog(act, "运行日志", root, "关闭");
@@ -4188,14 +4326,14 @@ public final class TGAutoSignCore {
         }
 
         private void logChip(final Context c, LinearLayout parent, String label, final Runnable action) {
-            logChip(c, parent, label, null, Theme.termTxt(c), action);
+            logChip(c, parent, Lang.tr(label), null, Theme.termTxt(c), action);
         }
 
         /** 带前导矢量图标的日志页芯片 */
         private void logChip(final Context c, LinearLayout parent, String label, String icon, int iconColor, final Runnable action) {
             TextView tv = new TextView(c);
             tv.setTextSize(Theme.TS_BODY);
-            tv.setText(label);
+            tv.setText(Lang.tr(label));
             tv.setSingleLine(true);
             tv.setEllipsize(android.text.TextUtils.TruncateAt.END);
             tv.setTextColor(Theme.termTxt(c));
@@ -4234,7 +4372,7 @@ public final class TGAutoSignCore {
         private void updateMoreBtn(int total, int shown) {
             if (logMoreBtn == null) return;
             int left = Math.max(0, total - shown);
-            logMoreBtn.setText(left > 0 ? ("加载更多（还有 " + left + " 条）") : "已全部加载");
+            logMoreBtn.setText(left > 0 ? Lang.tf("加载更多（还有 {0} 条）", left) : Lang.tr("已全部加载"));
             logMoreBtn.setEnabled(left > 0);
             logMoreBtn.setAlpha(left > 0 ? 1f : 0.45f);
         }
@@ -4251,7 +4389,7 @@ public final class TGAutoSignCore {
                 updateMoreBtn(show.size(), logRendered);
                 if (logStat != null) {
                     String cur = String.valueOf(logStat.getText());
-                    logStat.setText(cur.replaceAll("已载入 [0-9]+", "已载入 " + logRendered));
+                    logStat.setText(cur.replaceAll("已载入 [0-9]+", Lang.tf("已载入 {0}", logRendered)));
                 }
             } catch (Throwable t) { try { loge("追加日志失败: " + t); } catch (Throwable ignored) {} }
         }
@@ -4288,15 +4426,15 @@ public final class TGAutoSignCore {
                 // 按钮文案按真实剩余判断（修复「明明还有却说已全部加载」）
                 updateMoreBtn(show.size(), n);
                 for (int i = 0; i < n; i++) logRow(logList, show.get(i));
-                if (n == 0) emptyView(logList, show.size() == 0 ? "没有符合条件的日志" : "没有匹配「" + logQuery + "」的日志");
+                if (n == 0) emptyView(logList, show.size() == 0 ? "没有符合条件的日志" : Lang.tf("没有匹配「{0}」的日志", logQuery));
                 String span = "";
                 if (!all.isEmpty()) {
                     span = " · 时间 " + new SimpleDateFormat("MM-dd HH:mm", Locale.US).format(new Date(all.get(0).ts))
                             + " 起 " + all.size() + " 条";
                 }
-                if (logStat != null) logStat.setText("错误 " + errs + " · 警告 " + warns + span
-                        + " · 已载入 " + n + " / 共 " + show.size() + " 条"
-                        + (show.size() > n ? "（点下方按钮继续）" : ""));
+                if (logStat != null) logStat.setText(Lang.tf("错误 {0} · 警告 {1}{2}", errs, warns, span)
+                        + Lang.tf(" · 已载入 {0} / 共 {1} 条", n, show.size())
+                        + (show.size() > n ? Lang.tr("（点下方按钮继续）") : ""));
             } catch (Throwable t) {
                 try { loge("日志页刷新失败: " + t); } catch (Throwable ignored) {}
             }
@@ -4387,14 +4525,14 @@ public final class TGAutoSignCore {
             TextView t = new TextView(act);
             t.setTextSize(Theme.TS_BODY);
             t.setTextColor(Theme.termTxt(act));
-            t.setText("清空会同时删掉当前列表和落盘的历史日志文件。\n建议先「导出再清空」留一份，方便之后对账。");
+            t.setText(Lang.tr("清空会同时删掉当前列表和落盘的历史日志文件。\n建议先「导出再清空」留一份，方便之后对账。"));
             box.addView(t);
             Button b1 = mkBtn(act);
-            b1.setText("先导出一份，再清空");
+            b1.setText(Lang.tr("先导出一份，再清空"));
             b1.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { doExportLog(act); clearLogNow(); } });
             box.addView(b1);
             Button b2 = mkBtn(act);
-            b2.setText("直接清空");
+            b2.setText(Lang.tr("直接清空"));
             b2.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { clearLogNow(); } });
             box.addView(b2);
             showDialog(act, "清空运行日志", box, "取消");
@@ -4424,8 +4562,8 @@ public final class TGAutoSignCore {
         card.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x22)));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, Theme.dp(act,4), 0, Theme.dp(act,4)); card.setLayoutParams(lp);
         card.setPadding(Theme.dp(act,14), Theme.dp(act,12), Theme.dp(act,14), Theme.dp(act,12));
-        TextView ht = new TextView(act); ht.setTextSize(Theme.TS_SUBTITLE); ht.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); ht.setTextColor(Theme.termCyan(act)); ht.setText(h); card.addView(ht);
-        TextView bt = new TextView(act); bt.setTextSize(Theme.TS_SECOND); bt.setTextColor(Theme.termMuted(act)); bt.setTypeface(android.graphics.Typeface.MONOSPACE); bt.setPadding(0, Theme.dp(act,4), 0, 0); bt.setText(b); card.addView(bt);
+        TextView ht = new TextView(act); ht.setTextSize(Theme.TS_SUBTITLE); ht.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); ht.setTextColor(Theme.termCyan(act)); ht.setText(Lang.tr(h)); card.addView(ht);
+        TextView bt = new TextView(act); bt.setTextSize(Theme.TS_SECOND); bt.setTextColor(Theme.termMuted(act)); bt.setTypeface(android.graphics.Typeface.MONOSPACE); bt.setPadding(0, Theme.dp(act,4), 0, 0); bt.setText(Lang.tr(b)); card.addView(bt);
         box.addView(card);
     }
 
@@ -4450,7 +4588,7 @@ public final class TGAutoSignCore {
         tcard(box, act, "⑬ 日志怎么读", "运行日志固定「最新在最上」，打开即定位到最新那条；往下滑看更早的，「加载更多」每次多取 300 条。\n顶部芯片可按级别（全部 / 只看重要 / 只看错误）和目标过滤；「回到最新」一键回顶。\n颜色：红 = 错误，黄 = 警告，绿 = 成功，灰 = 普通，暗灰 = 调试。长按某行可复制。");
         tcard(box, act, "⑭ 更新与反馈", "「检查更新」走官方 GitHub 发布，检测到新版本可直接下载安装包。遇到问题或想提需求，用「加入群组」反馈。");
         sv.addView(box);
-        showDialog(act, Art.bold("TGAutoSign") + " 使用教程", sv, "关闭");
+        showDialog(act, Art.bold("TGAutoSign") + Lang.tr(" 使用教程"), sv, "关闭");
     }
 
     private void addDiagRow(LinearLayout box, Activity act, String label, boolean ok) {
@@ -4459,7 +4597,7 @@ public final class TGAutoSignCore {
         t.setPadding(Theme.dp(act,12), Theme.dp(act,10), Theme.dp(act,12), Theme.dp(act,10));
         t.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x22)));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, Theme.dp(act,3), 0, Theme.dp(act,3)); t.setLayoutParams(lp);
-        t.setText(label);
+        t.setText(Lang.tr(label));
         android.graphics.drawable.Drawable dd = Icons.d(act, ok ? "check" : "warn", 14f,
                 ok ? Theme.termGreen(act) : Theme.termAmber(act));
         if (dd != null) {
@@ -4468,7 +4606,7 @@ public final class TGAutoSignCore {
             t.setCompoundDrawables(dd, null, null, null);
             t.setCompoundDrawablePadding(Theme.dp(act, 8));
         } else {
-            t.setText((ok ? "\u2705 " : "\u26a0\ufe0f ") + label);
+            t.setText((ok ? "\u2705 " : "\u26a0\ufe0f ") + Lang.tr(label));
         }
         box.addView(t);
     }
@@ -4477,11 +4615,11 @@ public final class TGAutoSignCore {
         if (act == null) return;
         ScrollView sv = new ScrollView(act);
         LinearLayout box = new LinearLayout(act); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(Theme.dp(act,10), Theme.dp(act,4), Theme.dp(act,10), Theme.dp(act,4));
-        addDiagRow(box, act, "宿主包 " + safePkg(), true);
-        addDiagRow(box, act, "当前账号：" + accountLabel(currentAccount()) + "（共登录 " + activatedAccounts() + " 个）", currentAccount() >= 0);
+        addDiagRow(box, act, Lang.tf("宿主包 {0}", safePkg()), true);
+        addDiagRow(box, act, Lang.tf("当前账号：{0}（共登录 {1} 个）", accountLabel(currentAccount()), activatedAccounts()), currentAccount() >= 0);
         for (int ai = 0; ai < activatedAccounts(); ai++) {
             int cnt = acctTargetCount(ai);
-            addDiagRow(box, act, accountLabel(ai) + "：" + (cnt == 0 ? "还没有签到目标，切过去学一个" : cnt + " 个目标"), cnt > 0);
+            addDiagRow(box, act, Lang.tf("{0}：{1}", accountLabel(ai), cnt == 0 ? Lang.tr("还没有签到目标，切过去学一个") : Lang.tf("{0} 个目标", cnt)), cnt > 0);
         }
         String[] anchors = {
             "org.telegram.messenger.UserConfig",
@@ -4502,7 +4640,7 @@ public final class TGAutoSignCore {
             addDiagRow(box, act, a.substring(a.lastIndexOf('.') + 1) + why, okA);
         }
         String missM = Hosts.missingMarkers(cl);
-        addDiagRow(box, act, "Telegram 标志类：" + (missM.isEmpty() ? "三项齐全" : "缺 " + missM + "（该客户端自研了这层，模块不注入也不误伤）"), missM.isEmpty());
+        addDiagRow(box, act, Lang.tf("Telegram 标志类：{0}", missM.isEmpty() ? Lang.tr("三项齐全") : Lang.tf("缺 {0}（该客户端自研了这层，模块不注入也不误伤）", missM)), missM.isEmpty());
         addDiagRow(box, act, "回调按钮读取正常（按实例字段取，不依赖类名）", true);
         addDiagRow(box, act, "已采样过按钮（捕获/调试台可用）", lastCapBtns != null);
         sv.addView(box);
@@ -4512,9 +4650,9 @@ public final class TGAutoSignCore {
     private void confirmDelete(final Activity act, final Map<String, Object> m) {
         try {
             new android.app.AlertDialog.Builder(act)
-                .setTitle("删除目标")
-                .setMessage(targetTitle(entryDid(m)) + "  " + entryText(m) + "\n确定删除？（会跨所有账号清干净）")
-                .setPositiveButton("删除", new android.content.DialogInterface.OnClickListener() {
+                .setTitle(Lang.tr("删除目标"))
+                .setMessage(targetTitle(entryDid(m)) + "  " + entryText(m) + Lang.tr("\n确定删除？（会跨所有账号清干净）"))
+                .setPositiveButton(Lang.tr("删除"), new android.content.DialogInterface.OnClickListener() {
                     public void onClick(android.content.DialogInterface d, int w) {
                         String id = entryId(m);
                         removeEntryEverywhere(id);
@@ -4523,9 +4661,9 @@ public final class TGAutoSignCore {
                         showList(act);
                     }
                 })
-                .setNegativeButton("取消", null)
+                .setNegativeButton(Lang.tr("取消"), null)
                 .show();
-        } catch (Throwable t) { toast("确认框失败: " + t); }
+        } catch (Throwable t) { toast(Lang.tf("确认框失败: {0}", t)); }
     }
 
 
@@ -4545,7 +4683,7 @@ public final class TGAutoSignCore {
 
     private void emptyView(LinearLayout parent, String text) {
         TextView tv = new TextView(parent.getContext());
-        tv.setText(text);
+        tv.setText(Lang.tr(text));
         tv.setTextColor(android.graphics.Color.parseColor(txtSub(parent.getContext())));
         tv.setGravity(Gravity.CENTER);
         tv.setPadding(0, dp(24), 0, dp(24));
@@ -4554,7 +4692,7 @@ public final class TGAutoSignCore {
 
     private EditText adInput(Activity act, String hint, int type) {
         EditText e = new EditText(act);
-        e.setHint(hint);
+        e.setHint(Lang.tr(hint));
         e.setTextSize(Theme.TS_BODY);
         e.setTypeface(android.graphics.Typeface.MONOSPACE);
         e.setTextColor(Theme.termTxt(act));
@@ -4645,8 +4783,10 @@ public final class TGAutoSignCore {
     private static final boolean FORCE_CUSTOM_DIALOG = true;
 
     private Object showDialog(Activity act, String title, View view, String negLabel) {
+        title = Lang.tr(title);
+        negLabel = Lang.tr(negLabel);
 
-        if (act == null || act.isFinishing()) { toast(act == null ? "请在 Telegram 界面内使用 /jmb" : "页面已关闭，请重新打开"); return null; }
+        if (act == null || act.isFinishing()) { toast(act == null ? Lang.tr("请在 Telegram 界面内使用 /jmb") : Lang.tr("页面已关闭，请重新打开")); return null; }
 
         try {
             Object b = tgBuilder(act);
@@ -4754,6 +4894,7 @@ public final class TGAutoSignCore {
         if ("del".equals(action)) { showDelete(act); return; }
         if ("sign".equals(action)) { showSign(act); return; }
         if ("sign_all_accounts".equals(action)) { signAllAccounts(); return; }
+        if ("accounts".equals(action)) { showAccountOverview(act); return; }
         if ("copy_targets".equals(action)) { showCopyTargets(act); return; }
         if ("log".equals(action)) { showLog(act); return; }
         if ("settings".equals(action)) { showSettings(act); return; }
@@ -4837,17 +4978,17 @@ public final class TGAutoSignCore {
             String title = entryDisplayName(m);
             if (isSnoozed(prefix, id)) {
                 prefs.edit().remove(kSnooze(prefix, id)).apply();
-                toast("已恢复：" + title);
+                toast(Lang.tf("已恢复：{0}", title));
                 logs("【暂停】已恢复 " + title + " (acc" + account + ")");
             } else {
                 java.util.Calendar c = java.util.Calendar.getInstance();
                 c.add(java.util.Calendar.DAY_OF_YEAR, 7);
                 String until = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(c.getTime());
                 prefs.edit().putString(kSnooze(prefix, id), until).apply();
-                toast("已暂停一周（至 " + until + "）：" + title);
+                toast(Lang.tf("已暂停一周（至 {0}）：{1}", until, title));
                 logs("【暂停】" + title + " 暂停至 " + until + " (acc" + account + ")");
             }
-        } catch (Throwable t) { toast("暂停操作失败: " + t); }
+        } catch (Throwable t) { toast(Lang.tf("暂停操作失败: {0}", t)); }
     }
 
     /** /jmb 子命令：log=复制最近日志；update=强制检查更新；其他返回 false 走原面板 */
@@ -4898,25 +5039,25 @@ public final class TGAutoSignCore {
             android.content.ClipboardManager cm = (android.content.ClipboardManager)
                     appContext.getSystemService(Context.CLIPBOARD_SERVICE);
             cm.setPrimaryClip(android.content.ClipData.newPlainText("TGAutoSign", sb.toString()));
-            toast("已复制最近 " + n + " 行日志到剪贴板");
+            toast(Lang.tf("已复制最近 {0} 行日志到剪贴板", n));
             jlog("【/jmb log】已复制最近 " + n + " 行日志");
-        } catch (Throwable t) { toast("复制日志失败: " + t); }
+        } catch (Throwable t) { toast(Lang.tf("复制日志失败: {0}", t)); }
     }
 
     private void forceCheckUpdate() {
         try {
             UpdateChecker.checkAsync(appContext, true, mainHandler, r -> {
                 if (r == null) return;
-                if (r.networkError) { toast("检查更新未成功: " + r.message); return; }
+                if (r.networkError) { toast(Lang.tf("检查更新未成功: {0}", r.message)); return; }
                 lastUpdate = r;
                 if (r.newer) {
-                    toast("发现新版本 v" + r.version + "（当前 v" + UpdateChecker.VERSION_NAME + "）：发 /jmb → 🔄 检查更新");
+                    toast(Lang.tf("发现新版本 v{0}（当前 v{1}）：发 /jmb → 🔄 检查更新", r.version, UpdateChecker.VERSION_NAME));
                 } else {
-                    toast("已是最新 v" + UpdateChecker.VERSION_NAME);
+                    toast(Lang.tf("已是最新 v{0}", UpdateChecker.VERSION_NAME));
                 }
                 logs("【/jmb update】" + (r.newer ? "发现新版本 v" + r.version : "已是最新 v" + UpdateChecker.VERSION_NAME));
             });
-        } catch (Throwable t) { toast("检查更新失败: " + t); }
+        } catch (Throwable t) { toast(Lang.tf("检查更新失败: {0}", t)); }
     }
 
     private void runTargetAction(Context ctx, String action, String id) {
@@ -4930,7 +5071,7 @@ public final class TGAutoSignCore {
                 if (entryId(targets.get(j)).equals(id)) targets.remove(j);
             }
             jlog("已删除目标 " + did + " (id=" + id + ")");
-            toast("已删除 " + targetTitle(did));
+            toast(Lang.tf("已删除 {0}", targetTitle(did)));
             showDelete((Activity) ctx);
             return;
         }
@@ -4939,7 +5080,7 @@ public final class TGAutoSignCore {
             if (m == null) { toast("目标不存在"); return; }
             jlog("[界面] 手动签到 " + entryDid(m) + " (id=" + id + ")");
             sendSign(m, currentAccount());
-            toast("已命令签到 " + entryText(m));
+            toast(Lang.tf("已命令签到 {0}", entryText(m)));
             return;
         }
         if ("test".equals(action)) { testEntry(id); return; }
@@ -4959,13 +5100,13 @@ public final class TGAutoSignCore {
         info.setTextSize(Theme.TS_BODY);
         info.setTextColor(Theme.termTxt(act));
         if (fs.isEmpty()) {
-            info.setText("没有找到备份文件。\n\n备份放在这里：\nAndroid/data/" + safePkg() + "/files/tgautosign/\n（在 /jmb → 📤 导出配置 里生成，也可以手动把 json 拷进去）");
+            info.setText(Lang.tf("没有找到备份文件。\n\n备份放在这里：\nAndroid/data/{0}/files/tgautosign/\n（在 /jmb → 📤 导出配置 里生成，也可以手动把 json 拷进去）", safePkg()));
             box.addView(info);
             showDialog(act, "导入配置", box, "关闭");
             return;
         }
-        info.setText("选一份备份导入。导入前会显示它的内容，导入后会告诉你目标数有没有变化。\n"
-                + "合并 = 只覆盖文件里有的键；覆盖 = 先清掉现有目标和状态再导入。");
+        info.setText(Lang.tr("选一份备份导入。导入前会显示它的内容，导入后会告诉你目标数有没有变化。\n"
+                + "合并 = 只覆盖文件里有的键；覆盖 = 先清掉现有目标和状态再导入。"));
         box.addView(info);
         int n = 0;
         for (final java.io.File f : fs) {
@@ -5002,14 +5143,14 @@ public final class TGAutoSignCore {
         t.setTextSize(Theme.TS_SECOND);
         t.setTextColor(Theme.termTxt(act)); t.setTypeface(android.graphics.Typeface.MONOSPACE);
         t.setText(f.getName() + "\n" + ConfigStore.describe(f)
-                + "\n\n" + accountLabel(currentAccount()) + " 现在有 " + targetsSnapshot().size() + " 个目标。");
+                + Lang.tf("\n\n{0} 现在有 {1} 个目标。", accountLabel(currentAccount()), targetsSnapshot().size()));
         box.addView(t);
         Button b1 = mkBtn(act);
-        b1.setText("合并导入（保留现有的）");
+        b1.setText(Lang.tr("合并导入（保留现有的）"));
         b1.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { doImportNow(act, f, false); } });
         box.addView(b1);
         Button b2 = mkBtn(act);
-        b2.setText("覆盖导入（先清空目标和状态）");
+        b2.setText(Lang.tr("覆盖导入（先清空目标和状态）"));
         b2.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { doImportNow(act, f, true); } });
         box.addView(b2);
         showDialog(act, "怎么导入", box, "取消");
@@ -5021,7 +5162,7 @@ public final class TGAutoSignCore {
         ConfigStore.Report rep = ConfigStore.importMerge(appContext, f, replace);
         if (!rep.ok) {
             loge("导入失败：" + rep.message);
-            toast("导入失败：" + rep.message);
+            toast(Lang.tf("导入失败：{0}", rep.message));
             return;
         }
         try { lastAccount = -1; syncAccount(); } catch (Throwable ignored) {}
@@ -5031,9 +5172,7 @@ public final class TGAutoSignCore {
                 + " · " + accountLabel(currentAccount()) + " 目标 " + before + " → " + after;
         if (after == before && before > 0) logw(line + " —— 当前账号的目标数没变");
         else logs(line);
-        toast(after == before
-                ? "导入完成，但当前账号目标数没变（" + after + " 个）。\n备份可能是同账号的旧内容，或切到别的账号再看"
-                : "导入完成：" + accountLabel(currentAccount()) + " 目标 " + before + " → " + after);
+        toast(Lang.tf("导入完成：{0} 目标 {1} → {2}", accountLabel(currentAccount()), before, after));
         if (act != null) showList(act);
     }
 
@@ -5044,7 +5183,7 @@ public final class TGAutoSignCore {
             box.setOrientation(LinearLayout.VERTICAL);
             sectionHeader(box, act, "▍排除规则");
             TextView exLab = new TextView(act);
-            exLab.setText("排除规则（一行一条，命中不学习）");
+            exLab.setText(Lang.tr("排除规则（一行一条，命中不学习）"));
             leadIcon(act, exLab, "trash", Theme.termPink(act));
             exLab.setTextSize(Theme.TS_SECOND); exLab.setTextColor(Theme.termMuted(act));
             exLab.setTypeface(android.graphics.Typeface.MONOSPACE);
@@ -5056,7 +5195,7 @@ public final class TGAutoSignCore {
             box.addView(ex);
             TextView exTip = new TextView(act);
             exTip.setTextSize(Theme.TS_CAPTION); exTip.setTextColor(Theme.termFaint(act)); exTip.setTypeface(Theme.text());
-            exTip.setText("匹配 bot 回复正文 + 按钮文案。用 / 包裹当正则，# 开头为注释。");
+            exTip.setText(Lang.tr("匹配 bot 回复正文 + 按钮文案。用 / 包裹当正则，# 开头为注释。"));
             exTip.setPadding(dp(4), dp(4), dp(4), dp(6));
             box.addView(exTip);
 
@@ -5064,22 +5203,22 @@ public final class TGAutoSignCore {
             final TextView blVal = new TextView(act);
             blVal.setTextSize(Theme.TS_CAPTION); blVal.setTextColor(Theme.termFaint(act)); blVal.setTypeface(Theme.text());
             final Runnable refreshBl = new Runnable() { @Override public void run() {
-                if (LEARN_BLOCKED_DIDS.isEmpty()) blVal.setText("(未排除任何 bot)");
-                else blVal.setText("已排除 " + LEARN_BLOCKED_DIDS.size() + " 个 bot");
+                if (LEARN_BLOCKED_DIDS.isEmpty()) blVal.setText(Lang.tr("(未排除任何 bot)"));
+                else blVal.setText(Lang.tf("已排除 {0} 个 bot", LEARN_BLOCKED_DIDS.size()));
             } };
             refreshBl.run();
             blVal.setPadding(dp(4), dp(2), dp(4), dp(4));
             box.addView(blVal);
             Button blBtn = mkBtn(act); withIconText(act, blBtn, "bot", "选择要排除的 bot");
             blBtn.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
-                try { showBlockedBotPicker(act, refreshBl); } catch (Throwable t) { toast("打开失败: " + t); }
+                try { showBlockedBotPicker(act, refreshBl); } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
             } });
             box.addView(blBtn);
 
             sectionHeader(box, act, "▍待确认");
             final java.util.List<Long> pd = pendingConfirmDids();
             TextView pcLab = new TextView(act); pcLab.setTextSize(Theme.TS_CAPTION); pcLab.setTextColor(Theme.termFaint(act)); pcLab.setTypeface(Theme.text());
-            pcLab.setText(pd.isEmpty() ? "(无待确认目标)" : "待确认 " + pd.size() + " 个");
+            pcLab.setText(pd.isEmpty() ? Lang.tr("(无待确认目标)") : Lang.tf("待确认 {0} 个", pd.size()));
             pcLab.setPadding(dp(4), dp(2), dp(4), dp(4));
             box.addView(pcLab);
             Button pcBtn = mkBtn(act); withIconText(act, pcBtn, "check", "处理待确认");
@@ -5094,7 +5233,7 @@ public final class TGAutoSignCore {
             } });
             box.addView(save);
             showDialog(act, "排除管理", box, "关闭");
-        } catch (Throwable t) { toast("打开失败: " + t); }
+        } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
     }
 
     /** 待确认池界面：网络学习命中的目标，用户手动确认加入或忽略。 */
@@ -5107,12 +5246,12 @@ public final class TGAutoSignCore {
             final java.util.List<String> texts = pendingConfirmTexts();
             if (dids.isEmpty()) {
                 TextView e = new TextView(act); e.setTextSize(Theme.TS_BODY); e.setTextColor(Theme.termMuted(act)); e.setTypeface(Theme.text());
-                e.setText("(待确认列表为空)\n网络学习命中且「需确认」开启时，这里会出现候选目标。");
+                e.setText(Lang.tr("(待确认列表为空)\n网络学习命中且「需确认」开启时，这里会出现候选目标。"));
                 e.setPadding(dp(8), dp(12), dp(8), dp(12));
                 box.addView(e);
             } else {
                 TextView hint = new TextView(act); hint.setTextSize(Theme.TS_CAPTION); hint.setTextColor(Theme.termFaint(act)); hint.setTypeface(Theme.text());
-                hint.setText("以下目标来自「网络学习」，确认后才会加入自动签到。点「加入」确认，点「忽略」丢弃。");
+                hint.setText(Lang.tr("以下目标来自「网络学习」，确认后才会加入自动签到。点「加入」确认，点「忽略」丢弃。"));
                 hint.setPadding(dp(4), dp(4), dp(4), dp(8));
                 box.addView(hint);
                 for (int i = 0; i < dids.size(); i++) {
@@ -5142,8 +5281,8 @@ public final class TGAutoSignCore {
                     box.addView(row);
                 }
             }
-            curDlg[0] = showDialog(act, "待确认（" + dids.size() + "）", box, "关闭");
-        } catch (Throwable t) { toast("打开失败: " + t); }
+            curDlg[0] = showDialog(act, Lang.tf("待确认（{0}）", dids.size()), box, "关闭");
+        } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
     }
 
     private void showList(Activity act) {
@@ -5159,7 +5298,7 @@ public final class TGAutoSignCore {
             pclp.setMargins(0, dp(2), 0, dp(8));
             pc.setLayoutParams(pclp);
             TextView pct = new TextView(act); pct.setTextSize(Theme.TS_BODY); pct.setTextColor(Theme.termAmber(act)); pct.setTypeface(Theme.monoBold());
-            pct.setText("待确认 " + pd.size() + " 个（点此处理）");
+            pct.setText(Lang.tf("待确认 {0} 个（点此处理）", pd.size()));
             pc.addView(pct, new LinearLayout.LayoutParams(0, -2, 1f));
             pc.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ showPendingConfirm(act); } });
             box.addView(pc);
@@ -5170,7 +5309,7 @@ public final class TGAutoSignCore {
         // 排序切换
         if (targets.size() > 0) {
             LinearLayout bar = new LinearLayout(act); bar.setOrientation(LinearLayout.HORIZONTAL); bar.setGravity(Gravity.CENTER_VERTICAL); bar.setPadding(dp(2), dp(2), dp(2), dp(6));
-            TextView lab = new TextView(act); lab.setText("排序"); lab.setTextSize(Theme.TS_CAPTION); lab.setTextColor(Theme.termMuted(act)); lab.setTypeface(android.graphics.Typeface.MONOSPACE); lab.setPadding(0, 0, dp(8), 0);
+            TextView lab = new TextView(act); lab.setText(Lang.tr("排序")); lab.setTextSize(Theme.TS_CAPTION); lab.setTextColor(Theme.termMuted(act)); lab.setTypeface(android.graphics.Typeface.MONOSPACE); lab.setPadding(0, 0, dp(8), 0);
             bar.addView(lab);
             bar.addView(sortChip(act, "未签置顶", "unsigned"));
             bar.addView(sortChip(act, "按名称", "name"));
@@ -5181,7 +5320,7 @@ public final class TGAutoSignCore {
             targetRow(box, m, statusOf(accountPrefix(), entryId(m), today), "more");
         }
         Object oldList = listDialog;
-        listDialog = showDialog(act, "目标列表（" + targets.size() + "）", box, "关闭");
+        listDialog = showDialog(act, Lang.tf("目标列表（{0}）", targets.size()), box, "关闭");
         scheduleDismiss(oldList);
     }
 
@@ -5446,9 +5585,59 @@ public final class TGAutoSignCore {
     private void putCfg(android.content.SharedPreferences.Editor ed, String name, Object val) {
         try {
             String p = accountPrefix() + "cfg_" + name;
-            if (val instanceof Boolean) ed.putBoolean(p, (Boolean) val).putBoolean("jmb_" + name, (Boolean) val);
-            else if (val instanceof Integer) ed.putInt(p, (Integer) val).putInt("jmb_" + name, (Integer) val);
-            else ed.putString(p, String.valueOf(val)).putString("jmb_" + name, String.valueOf(val));
+            if (val instanceof Boolean) ed.putBoolean(p, (Boolean) val);
+            else if (val instanceof Integer) ed.putInt(p, (Integer) val);
+            else ed.putString(p, String.valueOf(val));
+        } catch (Throwable ignored) {}
+    }
+
+    /** 把当前账号的签到配置（窗口/定时/间隔/补签等）应用到所有账号。 */
+    private void applyConfigToAllAccounts() {
+        try {
+            int n = Math.max(1, activatedAccounts());
+            String cur = accountPrefix();
+            android.content.SharedPreferences.Editor ed = prefs.edit();
+            String[] keys = {"window", "timer", "gap", "missback", "missdead"};
+            for (int i = 0; i < n; i++) {
+                String p = accountPrefix(i);
+                for (String k : keys) {
+                    String src = cur + "cfg_" + k;
+                    if (!prefs.contains(src)) continue;
+                    Object v = prefs.getAll().get(src);
+                    String dst = p + "cfg_" + k;
+                    if (v instanceof Boolean) ed.putBoolean(dst, (Boolean) v);
+                    else if (v instanceof Integer) ed.putInt(dst, (Integer) v);
+                    else if (v != null) ed.putString(dst, String.valueOf(v));
+                }
+            }
+            ed.putLong("jmb_config_ts", System.currentTimeMillis());
+            ed.apply();
+            jlog("【配置】已把当前账号的签到配置应用到全部 " + n + " 个账号");
+            toast(Lang.tf("已应用到全部 {0} 个账号", n));
+        } catch (Throwable t) { toast(Lang.tf("应用失败: {0}", t)); }
+    }
+
+    /** 启动迁移：没有 acc{N}_cfg_* 的账号，从全局 jmb_* 初始化，避免老用户设置丢失。 */
+    private void migrateAccountConfigs() {
+        try {
+            int n = Math.max(1, activatedAccounts());
+            String[] keys = {"window", "timer", "gap", "missback", "missdead"};
+            android.content.SharedPreferences.Editor ed = null;
+            for (int i = 0; i < n; i++) {
+                String p = accountPrefix(i);
+                for (String k : keys) {
+                    String accKey = p + "cfg_" + k;
+                    String gKey = "jmb_" + k;
+                    if (prefs.contains(accKey)) continue;      // 已配置过，不动
+                    if (!prefs.contains(gKey)) continue;       // 全局也没有，用代码默认
+                    if (ed == null) ed = prefs.edit();
+                    Object v = prefs.getAll().get(gKey);
+                    if (v instanceof Boolean) ed.putBoolean(accKey, (Boolean) v);
+                    else if (v instanceof Integer) ed.putInt(accKey, (Integer) v);
+                    else if (v != null) ed.putString(accKey, String.valueOf(v));
+                }
+            }
+            if (ed != null) { ed.apply(); jlog("【配置】已把全局默认配置迁移到各账号"); }
         } catch (Throwable ignored) {}
     }
     private static String kKeywords() { return "jmb_keywords"; }
@@ -5571,7 +5760,7 @@ public final class TGAutoSignCore {
             for (Map<String, Object> m : plan) {
                 String id = String.valueOf(m.get("id"));
                 if (todayStr().equals(prefs.getString(kLast(prefix, id), ""))) continue;
-                if (isPendingFresh(id)) continue;
+                if (isPendingFresh(prefix, id)) continue;
                 int fireMin = ((Number) m.get("min")).intValue();
                 if (fireMin <= nowMin) continue;   // 已到点 → 交给 sweepDue 立即处理
                 long delayMs = (fireMin - nowMin) * 60000L - c.get(java.util.Calendar.SECOND) * 1000L;
@@ -5605,7 +5794,7 @@ public final class TGAutoSignCore {
             for (Map<String, Object> m : plan) {
                 String id = String.valueOf(m.get("id"));
                 if (todayStr().equals(prefs.getString(kLast(prefix, id), ""))) continue;
-                if (isPendingFresh(id)) continue;
+                if (isPendingFresh(prefix, id)) continue;
                 int fireMin = ((Number) m.get("min")).intValue();
                 if (fireMin > nowMin) continue;        // 还没到点
                 long delayMs;
@@ -5677,13 +5866,43 @@ public final class TGAutoSignCore {
                 try {
                     if (TIMER_ENABLED) {
                         kickSchedule();
-                    } else if (inWindow() && hasUnsignedTarget()) {
-                        enqueueTry("心跳检测");   // 非定时模式：窗口内检测到未签就签（内部自带节流与随机延迟）
+                    } else if (inWindow()) {
+                        // 非定时模式：遍历所有启用账号，各有未签就签（含非当前账号）
+                        int cur = currentAccount();
+                        if (hasUnsignedTarget()) enqueueTry("心跳检测");
+                        int nAcc = Math.max(1, activatedAccounts());
+                        for (int i = 0; i < nAcc; i++) {
+                            if (i == cur) continue;
+                            if (!isAccountEnabled(i)) continue;
+                            if (accountHasUnsigned(i)) {
+                                final int fAcc = i;
+                                mainHandler.postDelayed(new Runnable(){ @Override public void run(){
+                                    try { trySignAllFor("心跳(账号" + (fAcc + 1) + ")", false, fAcc); } catch (Throwable ignored) {}
+                                } }, 5000L + (long) (random.nextInt(10000)));
+                            }
+                        }
                     }
                 } catch (Throwable ignored) {}
                 mainHandler.postDelayed(this, 45000L + (long) (random.nextInt(15000)));
             }
         }, 4000L);
+    }
+
+    /** 指定账号是否还有今天没签的目标（读 prefs，不依赖内存缓存）。 */
+    private boolean accountHasUnsigned(int account) {
+        try {
+            String prefix = accountPrefix(account);
+            String today = todayStr();
+            List<Map<String, Object>> l = new ArrayList<>();
+            loadTargetsInto(prefix, l);
+            if (l.isEmpty()) return false;
+            for (Map<String, Object> m : l) {
+                String id = entryId(m);
+                if (isFrozen(prefix, id)) continue;
+                if (!today.equals(prefs.getString(kLast(prefix, id), ""))) return true;
+            }
+        } catch (Throwable ignored) {}
+        return false;
     }
 
     /** 当前账号是否还有今天没签的目标 */
@@ -5730,9 +5949,9 @@ public final class TGAutoSignCore {
             box.setPadding(dp(6), dp(6), dp(6), dp(6));
             TextView head = new TextView(act);
             head.setTextSize(Theme.TS_CAPTION); head.setTextColor(Theme.termMuted(act)); head.setTypeface(android.graphics.Typeface.MONOSPACE);
-            StringBuilder hb = new StringBuilder("今日补签 · " + all.size() + " 目标");
-            if (r != null) hb.append(" · 窗口 " + String.format("%02d:%02d", r[0] / 60, r[0] % 60) + "-" + String.format("%02d:%02d", r[1] / 60, r[1] % 60));
-            hb.append(TIMER_ENABLED ? (MISS_BACK ? " · 补签开(至 " + String.format("%02d:%02d", MISS_DEADLINE / 60, MISS_DEADLINE % 60) + ")" : " · 补签关") : " · 定时关");
+            StringBuilder hb = new StringBuilder(Lang.tf("今日补签 · {0} 目标", all.size()));
+            if (r != null) hb.append(Lang.tf(" · 窗口 {0}-{1}", String.format("%02d:%02d", r[0] / 60, r[0] % 60), String.format("%02d:%02d", r[1] / 60, r[1] % 60)));
+            hb.append(TIMER_ENABLED ? (MISS_BACK ? Lang.tf(" · 补签开(至 {0})", String.format("%02d:%02d", MISS_DEADLINE / 60, MISS_DEADLINE % 60)) : Lang.tr(" · 补签关")) : Lang.tr(" · 定时关"));
             head.setText(hb.toString());
             head.setPadding(dp(4), 0, dp(4), dp(8));
             box.addView(head);
@@ -5751,29 +5970,29 @@ public final class TGAutoSignCore {
                 String badge, sub;
                 int col;
                 if (done) {
-                    badge = "已补"; col = Theme.termGreen(act);
-                    sub = fireMin >= 0 ? "原计划 " + String.format("%02d:%02d", fireMin / 60, fireMin % 60) + " · 已完成" : "今日已签";
+                    badge = Lang.tr("已补"); col = Theme.termGreen(act);
+                    sub = fireMin >= 0 ? Lang.tf("原计划 {0} · 已完成", String.format("%02d:%02d", fireMin / 60, fireMin % 60)) : Lang.tr("今日已签");
                     doneN++;
                 } else if (fireMin < 0) {
-                    badge = "无计划"; col = Theme.termMuted(act);
-                    sub = "未排进今日时刻表"; skipN++;
+                    badge = Lang.tr("无计划"); col = Theme.termMuted(act);
+                    sub = Lang.tr("未排进今日时刻表"); skipN++;
                 } else if (fireMin <= nowMin) {
                     if (!TIMER_ENABLED || !MISS_BACK) {
-                        badge = "已跳过"; col = Theme.termMuted(act);
-                        sub = "原计划 " + String.format("%02d:%02d", fireMin / 60, fireMin % 60) + " · " + (!TIMER_ENABLED ? "定时未开" : "补签未开");
+                        badge = Lang.tr("已跳过"); col = Theme.termMuted(act);
+                        sub = Lang.tf("原计划 {0} · {1}", String.format("%02d:%02d", fireMin / 60, fireMin % 60), Lang.tr(!TIMER_ENABLED ? "定时未开" : "补签未开"));
                         skipN++;
                     } else if (nowMin > MISS_DEADLINE) {
-                        badge = "已过期"; col = Theme.termMuted(act);
-                        sub = "原计划 " + String.format("%02d:%02d", fireMin / 60, fireMin % 60) + " · 已过补签截止 " + String.format("%02d:%02d", MISS_DEADLINE / 60, MISS_DEADLINE % 60);
+                        badge = Lang.tr("已过期"); col = Theme.termMuted(act);
+                        sub = Lang.tf("原计划 {0} · 已过补签截止 {1}", String.format("%02d:%02d", fireMin / 60, fireMin % 60), String.format("%02d:%02d", MISS_DEADLINE / 60, MISS_DEADLINE % 60));
                         skipN++;
                     } else {
-                        badge = "待补"; col = Theme.termAmber(act);
-                        sub = "原计划 " + String.format("%02d:%02d", fireMin / 60, fireMin % 60) + " · 后台 1~5 分钟随机补";
+                        badge = Lang.tr("待补"); col = Theme.termAmber(act);
+                        sub = Lang.tf("原计划 {0} · 后台 1~5 分钟随机补", String.format("%02d:%02d", fireMin / 60, fireMin % 60));
                         waitN++; missN++;
                     }
                 } else {
-                    badge = "未到点"; col = Theme.termCyan(act);
-                    sub = "计划 " + String.format("%02d:%02d", fireMin / 60, fireMin % 60) + " · 到时自动签";
+                    badge = Lang.tr("未到点"); col = Theme.termCyan(act);
+                    sub = Lang.tf("计划 {0} · 到时自动签", String.format("%02d:%02d", fireMin / 60, fireMin % 60));
                     waitN++;
                 }
 
@@ -5844,7 +6063,7 @@ public final class TGAutoSignCore {
                         && MISS_BACK && nowMin <= MISS_DEADLINE;
                 if (canFire) {
                     TextView go = new TextView(act);
-                    go.setText("补");
+                    go.setText(Lang.tr("补"));
                     go.setTextSize(Theme.TS_SECOND);
                     go.setTextColor(Theme.termAmber(act));
                     go.setTypeface(Theme.monoBold());
@@ -5856,7 +6075,7 @@ public final class TGAutoSignCore {
                     final Map<String, Object> fm2 = m;
                     go.setOnClickListener(new View.OnClickListener() {
                         @Override public void onClick(View v) {
-                            toast("已发起补签：" + entryText(fm2));
+                            toast(Lang.tf("已发起补签：{0}", entryText(fm2)));
                             sendSign(fm2, currentAccount());
                         }
                     });
@@ -5881,7 +6100,7 @@ public final class TGAutoSignCore {
             foot.setTextColor(Theme.termFaint(act));
             foot.setTypeface(android.graphics.Typeface.MONOSPACE);
             foot.setPadding(dp(4), dp(6), dp(4), 0);
-            foot.setText("已补 " + doneN + " · 待补 " + waitN + " · 已跳过 " + skipN + (missN > 0 ? " · 错过 " + missN : ""));
+            foot.setText(Lang.tf("已补 {0} · 待补 {1} · 已跳过 {2}", doneN, waitN, skipN) + (missN > 0 ? Lang.tf(" · 错过 {0}", missN) : ""));
             box.addView(foot);
             showDialog(act, "补签列表", box, "关闭");
         } catch (Throwable t) {
@@ -5915,12 +6134,12 @@ public final class TGAutoSignCore {
                 String tm = String.format("%02d:%02d", fireMin / 60, fireMin % 60);
                 int left = fireMin - nowMin;
                 if (left <= 1) return tm;
-                return tm + "  ·  约 " + left + " 分钟后";
+                return Lang.tf("{0}  ·  约 {1} 分钟后", tm, left);
             }
             int[] r = windowRange();
             if (r != null) {
                 String tm = String.format("%02d:%02d", r[0] / 60, r[0] % 60);
-                return tm + "（明日）";
+                return Lang.tf("{0}（明日）", tm);
             }
         } catch (Throwable ignored) {}
         return null;
@@ -5969,7 +6188,7 @@ public final class TGAutoSignCore {
             legend.setTextSize(Theme.TS_CAPTION);
             legend.setTextColor(Theme.termFaint(act));
             legend.setPadding(0, dp(2), 0, 0);
-            legend.setText("1 = 13 天前 · 14 = 今天（绿 = 已签到）");
+            legend.setText(Lang.tr("1 = 13 天前 · 14 = 今天（绿 = 已签到）"));
             box.addView(legend);
             return box;
         } catch (Throwable t) { return null; }
@@ -5989,7 +6208,7 @@ public final class TGAutoSignCore {
         tip.setTextSize(Theme.TS_SECOND);
         tip.setTextColor(Theme.termMuted(act));
         tip.setTypeface(android.graphics.Typeface.MONOSPACE);
-        tip.setText("内置为通用示例模板，点选后把 bot ID 和指令改成你的签到 bot。");
+        tip.setText(Lang.tr("内置为通用示例模板，点选后把 bot ID 和指令改成你的签到 bot。"));
         box.addView(tip);
         for (final String[] p : PRESETS) {
             LinearLayout row = new LinearLayout(act);
@@ -5999,13 +6218,13 @@ public final class TGAutoSignCore {
             t1.setTextSize(Theme.TS_BODY);
             t1.setTextColor(Theme.termTxt(act));
             t1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-            t1.setText(p[0] + "  ·  " + p[1] + "  →  " + p[2]);
+            t1.setText(Lang.tr(p[0]) + "  ·  " + p[1] + "  →  " + p[2]);
             row.addView(t1);
             TextView t2 = new TextView(act);
             t2.setTextSize(Theme.TS_CAPTION);
             t2.setTextColor(Theme.termMuted(act));
             t2.setTypeface(android.graphics.Typeface.MONOSPACE);
-            t2.setText(p[3]);
+            t2.setText(Lang.tr(p[3]));
             row.addView(t2);
             row.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { showPresetEdit(act, p); } });
             box.addView(row);
@@ -6027,7 +6246,7 @@ public final class TGAutoSignCore {
         cmd.setText(p[2]);
         box.addView(cmd);
         Button ok = mkBtn(act);
-        ok.setText("添加");
+        ok.setText(Lang.tr("添加"));
         ok.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
             try {
                 long did = Long.parseLong(uid.getText().toString().trim());
@@ -6037,7 +6256,7 @@ public final class TGAutoSignCore {
                 unblockBot(did);
                 learnTarget(did, t);
                 Map<String, Object> m = findTextEntry(did, t);
-                if (m != null) toast("✅ 已添加 " + did + " → " + t);
+                if (m != null) toast(Lang.tf("✅ 已添加 {0} → {1}", did, t));
             } catch (Throwable e) { toast("UID 格式错误"); }
         }});
         box.addView(ok);
@@ -6053,7 +6272,7 @@ public final class TGAutoSignCore {
         box.addView(uid);
         box.addView(cmd);
         Button ok = mkBtn(act);
-        ok.setText("添加并立即签到");
+        ok.setText(Lang.tr("添加并立即签到"));
         ok.setOnClickListener(v -> {
             try {
                 long did = Long.parseLong(uid.getText().toString().trim());
@@ -6064,7 +6283,7 @@ public final class TGAutoSignCore {
                 learnTarget(did, t);
                 Map<String, Object> m = findTextEntry(did, t);
                 if (m != null) {
-                    toast("✅ 已添加 " + did + " → " + t + "，立即签到…");
+                    toast(Lang.tf("✅ 已添加 {0} → {1}，立即签到…", did, t));
                     sendSign(m, currentAccount());
                 }
             } catch (Throwable e) {
@@ -6075,7 +6294,7 @@ public final class TGAutoSignCore {
         TextView tip = new TextView(act);
         tip.setTextSize(Theme.TS_SECOND);
         tip.setTextColor(android.graphics.Color.parseColor(txtSub(act)));
-        tip.setText("提示：同一 bot 可添加多条指令（多指令自动签到）；\n回调按钮型签到无需手动添加——直接点一次 bot 的签到按钮即可自动学习。");
+        tip.setText(Lang.tr("提示：同一 bot 可添加多条指令（多指令自动签到）；\n回调按钮型签到无需手动添加——直接点一次 bot 的签到按钮即可自动学习。"));
         tip.setPadding(dp(4), dp(10), dp(4), dp(4));
         box.addView(tip);
         showDialog(act, "添加签到目标", box, "取消");
@@ -6098,7 +6317,7 @@ public final class TGAutoSignCore {
         box.setOrientation(LinearLayout.VERTICAL);
         if (targets.size() > 1) {
             Button all = mkBtn(act);
-            withIconText(act, all, "bolt", "全部签到（" + targets.size() + " 个条目）");
+            withIconText(act, all, "bolt", Lang.tf("全部签到（{0} 个条目）", targets.size()));
             all.setOnClickListener(v -> {
                 trySignAll("手动全部", true);
                 toast("已命令全部签到，结果见运行日志");
@@ -6119,13 +6338,13 @@ public final class TGAutoSignCore {
         t.setTextColor(Theme.termTxt(c));
         t.setTypeface(android.graphics.Typeface.MONOSPACE);
         t.setPadding(dp(8), dp(6), dp(8), dp(6));
-        t.setText(text);
+        t.setText(Lang.tr(text));
         return t;
     }
 
     private android.widget.Switch swRow(Context c, String label, boolean on) {
         android.widget.Switch s = new android.widget.Switch(c);
-        s.setText(label); s.setTextSize(Theme.TS_BODY); s.setTextColor(Theme.termTxt(c)); s.setTypeface(android.graphics.Typeface.MONOSPACE); s.setChecked(on);
+        s.setText(Lang.tr(label)); s.setTextSize(Theme.TS_BODY); s.setTextColor(Theme.termTxt(c)); s.setTypeface(android.graphics.Typeface.MONOSPACE); s.setChecked(on);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, Theme.dp(c,6), 0, Theme.dp(c,6)); s.setLayoutParams(lp);
         s.setPadding(Theme.dp(c,4), Theme.dp(c,10), Theme.dp(c,4), Theme.dp(c,10));
         return s;
@@ -6149,21 +6368,43 @@ public final class TGAutoSignCore {
             final int[] tMode = { THEME_MODE };
             final Button tbSw = mkBtn(act); tbSw.setTextSize(Theme.TS_BODY);
             final Runnable refreshT = new Runnable() { @Override public void run() {
-                tbSw.setText(tMode[0] == 0 ? "自动（跟宿主主题）" : (tMode[0] == 1 ? "始终日间（浅色）" : "始终夜间（终端风）"));
+                tbSw.setText(Lang.tr(tMode[0] == 0 ? "自动（跟宿主主题）" : (tMode[0] == 1 ? "始终日间（浅色）" : "始终夜间（终端风）")));
             } };
             tbSw.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
                 tMode[0] = (tMode[0] + 1) % 3;
                 refreshT.run();
                 Theme.mode = tMode[0];
-                toast("主题：" + (tMode[0] == 0 ? "自动" : (tMode[0] == 1 ? "日间" : "夜间")) + "（保存后生效）");
+                toast(Lang.tf("主题：{0}（保存后生效）", Lang.tr(tMode[0] == 0 ? "自动" : (tMode[0] == 1 ? "日间" : "夜间"))));
             } });
             refreshT.run();
             card0.addView(tbSw, new LinearLayout.LayoutParams(-1, -2));
             TextView tTip = new TextView(act); tTip.setTextSize(Theme.TS_CAPTION); tTip.setTextColor(Theme.termFaint(act));
             tTip.setTypeface(Theme.text());
-            tTip.setText("自动 = 读宿主当前配色（取不到再看系统深色）；识别不准时可手动锁定，保存后重开界面生效");
+            tTip.setText(Lang.tr("自动 = 读宿主当前配色（取不到再看系统深色）；识别不准时可手动锁定，保存后重开界面生效"));
             tTip.setPadding(dp(4), dp(4), dp(4), 0);
             card0.addView(tTip);
+
+            // 界面语言：跟随系统 / 中文 / English
+            final int[] lMode = { Lang.MODE };
+            final Button lbSw = mkBtn(act); lbSw.setTextSize(Theme.TS_BODY);
+            final TextView lTip = new TextView(act); lTip.setTextSize(Theme.TS_CAPTION); lTip.setTextColor(Theme.termFaint(act)); lTip.setTypeface(Theme.text());
+            final Runnable refreshL = new Runnable() { @Override public void run() {
+                lbSw.setText(Lang.tr(lMode[0] == 0 ? "界面语言：跟随系统" : (lMode[0] == 1 ? "界面语言：中文" : "界面语言：English")));
+            } };
+            lbSw.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
+                lMode[0] = (lMode[0] + 1) % 3;
+                Lang.MODE = lMode[0];
+                refreshL.run();
+                lTip.setText(Lang.tr(lMode[0] == 0 ? "界面语言：跟随系统" : (lMode[0] == 1 ? "界面语言：中文" : "界面语言：English")));
+                toast(Lang.tf("语言：{0}（保存后生效）", Lang.tr(lMode[0] == 0 ? "跟随系统" : (lMode[0] == 1 ? "中文" : "English"))));
+            } });
+            refreshL.run();
+            LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(-1, -2);
+            llp.topMargin = dp(8);
+            card0.addView(lbSw, llp);
+            lTip.setText(Lang.tr(lMode[0] == 0 ? "跟随系统：系统语言非中文时自动切英文。" : "保存后生效，日志不翻译。"));
+            lTip.setPadding(dp(4), dp(4), dp(4), 0);
+            card0.addView(lTip);
             box.addView(card0);
 
             // ── 通知 ──
@@ -6182,7 +6423,7 @@ public final class TGAutoSignCore {
             cardN.addView(nfoSw);
             TextView nTip = new TextView(act); nTip.setTextSize(Theme.TS_CAPTION); nTip.setTextColor(Theme.termFaint(act));
             nTip.setTypeface(Theme.text());
-            nTip.setText("每账号每天一条摘要，发到自己的「收藏夹」（不弹系统通知）。目标连续 3 天失败会额外提醒。");
+            nTip.setText(Lang.tr("每账号每天一条摘要，发到自己的「收藏夹」（不弹系统通知）。目标连续 3 天失败会额外提醒。"));
             nTip.setPadding(dp(4), dp(4), dp(4), 0);
             cardN.addView(nTip);
             box.addView(cardN);
@@ -6199,7 +6440,7 @@ public final class TGAutoSignCore {
             tmSw.setTextSize(Theme.TS_BODY);
             card1.addView(tmSw);
             TextView tmSub = new TextView(act); tmSub.setTextSize(Theme.TS_CAPTION); tmSub.setTextColor(Theme.termFaint(act)); tmSub.setTypeface(Theme.text());
-            tmSub.setText("开 = 窗口内按随机时刻逐个签（防风控，推荐）；关 = 检测到未签就马上签（限窗口内）");
+            tmSub.setText(Lang.tr("开 = 窗口内按随机时刻逐个签（防风控，推荐）；关 = 检测到未签就马上签（限窗口内）"));
             tmSub.setPadding(dp(4), 0, dp(4), dp(6));
             card1.addView(tmSub);
             box.addView(card1);
@@ -6208,7 +6449,7 @@ public final class TGAutoSignCore {
             final int[] wStart = { wRange != null ? wRange[0] : 8 * 60 + 30 };
             final int[] wEnd   = { wRange != null ? wRange[1] : 20 * 60 + 30 };
             LinearLayout wRow = new LinearLayout(act); wRow.setOrientation(LinearLayout.HORIZONTAL); wRow.setGravity(android.view.Gravity.CENTER_VERTICAL); wRow.setPadding(dp(4), dp(4), dp(4), dp(4));
-            TextView wLab = new TextView(act); wLab.setText("签到时间"); leadIcon(act, wLab, "clock", Theme.termCyan(act)); wLab.setTextSize(Theme.TS_BODY); wLab.setTextColor(Theme.termTxt(act));
+            TextView wLab = new TextView(act); wLab.setText(Lang.tr("签到时间")); leadIcon(act, wLab, "clock", Theme.termCyan(act)); wLab.setTextSize(Theme.TS_BODY); wLab.setTextColor(Theme.termTxt(act));
             wLab.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
             wRow.addView(wLab, new LinearLayout.LayoutParams(0, -2, 1f));
             final Button wb1 = mkBtn(act); wb1.setTextSize(Theme.TS_BODY);
@@ -6234,13 +6475,13 @@ public final class TGAutoSignCore {
             wRow.addView(wb2, new LinearLayout.LayoutParams(0, -2, 1.2f));
             card1.addView(wRow);
             TextView wTip = new TextView(act); wTip.setTextSize(Theme.TS_CAPTION); wTip.setTextColor(Theme.termFaint(act)); wTip.setTypeface(Theme.text());
-            wTip.setText("每目标在窗口内各占一段随机时刻，互不重叠");
+            wTip.setText(Lang.tr("每目标在窗口内各占一段随机时刻，互不重叠"));
             wTip.setPadding(dp(4), 0, dp(4), dp(6));
             card1.addView(wTip);
             // 错开间隔：0=自动均分，>0=固定最小间隔分钟
             LinearLayout gapRow = new LinearLayout(act); gapRow.setOrientation(LinearLayout.HORIZONTAL); gapRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
             gapRow.setPadding(dp(4), dp(4), dp(4), dp(6));
-            TextView gapLab = new TextView(act); gapLab.setText("错开间隔"); leadIcon(act, gapLab, "gap", Theme.termMuted(act)); gapLab.setTextSize(Theme.TS_SECOND); gapLab.setTextColor(Theme.termMuted(act));
+            TextView gapLab = new TextView(act); gapLab.setText(Lang.tr("错开间隔")); leadIcon(act, gapLab, "gap", Theme.termMuted(act)); gapLab.setTextSize(Theme.TS_SECOND); gapLab.setTextColor(Theme.termMuted(act));
             gapLab.setTypeface(android.graphics.Typeface.MONOSPACE);
             gapRow.addView(gapLab, new LinearLayout.LayoutParams(0, -2, 1f));
             Button gapMinus = mkBtn(act); gapMinus.setText("−");
@@ -6260,21 +6501,21 @@ public final class TGAutoSignCore {
             gapRow.addView(gapPlus, new LinearLayout.LayoutParams(0, -2, 1f));
             card1.addView(gapRow);
             TextView gapTip = new TextView(act); gapTip.setTextSize(Theme.TS_CAPTION); gapTip.setTextColor(Theme.termFaint(act)); gapTip.setTypeface(Theme.text());
-            gapTip.setText("0=按目标数自动均分；如设 30，则相邻目标至少隔 30 分钟");
+            gapTip.setText(Lang.tr("0=按目标数自动均分；如设 30，则相邻目标至少隔 30 分钟"));
             gapTip.setPadding(dp(4), 0, dp(4), dp(2));
             card1.addView(gapTip);
             final android.widget.Switch mbSw = swRow(act, "错过补签", MISS_BACK);
             mbSw.setTextSize(Theme.TS_BODY);
             card1.addView(mbSw);
             TextView mbTip = new TextView(act); mbTip.setTextSize(Theme.TS_CAPTION); mbTip.setTextColor(Theme.termFaint(act)); mbTip.setTypeface(Theme.text());
-            mbTip.setText("关掉 TG 期间错过的签到点：开=错过后随机延迟 1~5 分钟自动补；关=错过即跳过（默认）");
+            mbTip.setText(Lang.tr("关掉 TG 期间错过的签到点：开=错过后随机延迟 1~5 分钟自动补；关=错过即跳过（默认）"));
             mbTip.setPadding(dp(4), 0, dp(4), dp(2));
             card1.addView(mbTip);
             // 补签截止：窗口结束后仍可补到该时间（与签到窗口解耦，避免当天错过作废）
             final int[] mdMin = { MISS_DEADLINE };
             LinearLayout mdRow = new LinearLayout(act); mdRow.setOrientation(LinearLayout.HORIZONTAL); mdRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
             mdRow.setPadding(dp(4), dp(4), dp(4), dp(6));
-            TextView mdLab = new TextView(act); mdLab.setText("补签截止"); leadIcon(act, mdLab, "hourglass", Theme.termMuted(act)); mdLab.setTextSize(Theme.TS_SECOND); mdLab.setTextColor(Theme.termMuted(act));
+            TextView mdLab = new TextView(act); mdLab.setText(Lang.tr("补签截止")); leadIcon(act, mdLab, "hourglass", Theme.termMuted(act)); mdLab.setTextSize(Theme.TS_SECOND); mdLab.setTextColor(Theme.termMuted(act));
             mdLab.setTypeface(android.graphics.Typeface.MONOSPACE);
             mdRow.addView(mdLab, new LinearLayout.LayoutParams(0, -2, 1f));
             final Button mdb = mkBtn(act); mdb.setTextSize(Theme.TS_BODY);
@@ -6290,7 +6531,7 @@ public final class TGAutoSignCore {
             mdRow.addView(mdb, new LinearLayout.LayoutParams(0, -2, 1.2f));
             card1.addView(mdRow);
             TextView mdTip = new TextView(act); mdTip.setTextSize(Theme.TS_CAPTION); mdTip.setTextColor(Theme.termFaint(act)); mdTip.setTypeface(Theme.text());
-            mdTip.setText("窗口结束后仍会补签到到这个时间（如 23:00），过了才真正放弃；仅「错过补签」开启时生效");
+            mdTip.setText(Lang.tr("窗口结束后仍会补签到到这个时间（如 23:00），过了才真正放弃；仅「错过补签」开启时生效"));
             mdTip.setPadding(dp(4), 0, dp(4), dp(2));
             card1.addView(mdTip);
             Button planBtn = mkBtn(act); withIconText(act, planBtn, "list", "查看今日计划");
@@ -6315,7 +6556,7 @@ public final class TGAutoSignCore {
                     pl.setPadding(dp(6), dp(6), dp(6), dp(6));
                     TextView head = new TextView(act);
                     head.setTextSize(Theme.TS_CAPTION); head.setTextColor(Theme.termMuted(act)); head.setTypeface(android.graphics.Typeface.MONOSPACE);
-                    head.setText("今日计划 · " + all.size() + " 个目标 · 随机错开");
+                    head.setText(Lang.tf("今日计划 · {0} 个目标 · 随机错开", all.size()));
                     head.setPadding(dp(4), 0, dp(4), dp(8));
                     pl.addView(head);
 
@@ -6345,11 +6586,11 @@ public final class TGAutoSignCore {
                         badge.setTextSize(Theme.TS_CAPTION); badge.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
                         badge.setPadding(dp(6), dp(3), dp(6), dp(3));
                         if (done) {
-                            badge.setText("已签");
+                            badge.setText(Lang.tr("已签"));
                             badge.setTextColor(Theme.termGreen(act));
                             badge.setBackground(termBorder(act, Theme.withAlpha(Theme.termGreen(act), 0x12), Theme.withAlpha(Theme.termGreen(act), 0x59)));
                         } else {
-                            badge.setText("待签");
+                            badge.setText(Lang.tr("待签"));
                             badge.setTextColor(Theme.termAmber(act));
                             badge.setBackground(termBorder(act, Theme.withAlpha(Theme.termAmber(act), 0x12), Theme.withAlpha(Theme.termAmber(act), 0x59)));
                         }
@@ -6391,7 +6632,7 @@ public final class TGAutoSignCore {
                             time.setText(tm);
                             time.setTextColor(Theme.termCyan(act));
                         } else {
-                            time.setText("明日排");
+                            time.setText(Lang.tr("明日排"));
                             time.setTextColor(Theme.termFaint(act));
                         }
                         row.addView(time, new LinearLayout.LayoutParams(-2, -2));
@@ -6399,11 +6640,11 @@ public final class TGAutoSignCore {
                     }
                     TextView foot = new TextView(act);
                     foot.setTextSize(Theme.TS_CAPTION); foot.setTextColor(Theme.termFaint(act)); foot.setTypeface(Theme.text());
-                    foot.setText("已签 " + doneN + " / " + all.size() + " · 时间=已签时刻 / 待签计划时刻");
+                    foot.setText(Lang.tf("已签 {0} / {1} · 时间=已签时刻 / 待签计划时刻", doneN, all.size()));
                     foot.setPadding(dp(4), dp(6), dp(4), 0);
                     pl.addView(foot);
                     showDialog(act, "今日计划", pl, "关闭");
-                } catch (Throwable t) { toast("预览失败: " + t); }
+                } catch (Throwable t) { toast(Lang.tf("预览失败: {0}", t)); }
             } });
             card1.addView(planBtn);
 
@@ -6418,25 +6659,25 @@ public final class TGAutoSignCore {
             final android.widget.Switch alSw = swRow(act, "按钮学习", AUTO_LEARN);
             card2.addView(alSw);
             TextView alSub = new TextView(act); alSub.setTextSize(Theme.TS_CAPTION); alSub.setTextColor(Theme.termFaint(act)); alSub.setTypeface(Theme.text());
-            alSub.setText("点一下 bot 按钮就自动加到列表");
+            alSub.setText(Lang.tr("点一下 bot 按钮就自动加到列表"));
             alSub.setPadding(dp(4), 0, dp(4), dp(4));
             card2.addView(alSub);
             final android.widget.Switch anSw = swRow(act, "网络学习", AUTO_LEARN_NET);
             card2.addView(anSw);
             TextView anSub = new TextView(act); anSub.setTextSize(Theme.TS_CAPTION); anSub.setTextColor(Theme.termFaint(act)); anSub.setTypeface(Theme.text());
-            anSub.setText("自动识别你在 bot 里发的签到文本");
+            anSub.setText(Lang.tr("自动识别你在 bot 里发的签到文本"));
             anSub.setPadding(dp(4), 0, dp(4), dp(4));
             card2.addView(anSub);
             final android.widget.Switch anCfgSw = swRow(act, "网络学习需确认", AUTO_LEARN_NET_CONFIRM);
             card2.addView(anCfgSw);
             TextView anCfgSub = new TextView(act); anCfgSub.setTextSize(Theme.TS_CAPTION); anCfgSub.setTextColor(Theme.termFaint(act)); anCfgSub.setTypeface(Theme.text());
-            anCfgSub.setText("命中后先进「待确认」列表，你手动确认才加入（防验证码类 bot 误加）");
+            anCfgSub.setText(Lang.tr("命中后先进「待确认」列表，你手动确认才加入（防验证码类 bot 误加）"));
             anCfgSub.setPadding(dp(4), 0, dp(4), dp(4));
             card2.addView(anCfgSub);
             final android.widget.Switch afSw = swRow(act, "关键词过滤", AUTO_LEARN_FILTER);
             card2.addView(afSw);
             TextView afSub = new TextView(act); afSub.setTextSize(Theme.TS_CAPTION); afSub.setTextColor(Theme.termFaint(act)); afSub.setTypeface(Theme.text());
-            afSub.setText("只收文案命中关键词的按钮，防误加");
+            afSub.setText(Lang.tr("只收文案命中关键词的按钮，防误加"));
             afSub.setPadding(dp(4), 0, dp(4), dp(2));
             card2.addView(afSub);
             box.addView(card2);
@@ -6449,7 +6690,7 @@ public final class TGAutoSignCore {
             LinearLayout.LayoutParams c3lp = new LinearLayout.LayoutParams(-1, -2);
             c3lp.setMargins(0, dp(2), 0, dp(6));
             card3.setLayoutParams(c3lp);
-            TextView kwLab = new TextView(act); kwLab.setText("学习关键词（逗号分隔）"); leadIcon(act, kwLab, "key", Theme.termMuted(act)); kwLab.setTextSize(Theme.TS_SECOND); kwLab.setTextColor(Theme.termMuted(act));
+            TextView kwLab = new TextView(act); kwLab.setText(Lang.tr("学习关键词（逗号分隔）")); leadIcon(act, kwLab, "key", Theme.termMuted(act)); kwLab.setTextSize(Theme.TS_SECOND); kwLab.setTextColor(Theme.termMuted(act));
             kwLab.setTypeface(android.graphics.Typeface.MONOSPACE); kwLab.setPadding(dp(2), dp(2), dp(2), dp(4));
             card3.addView(kwLab);
             EditText kw = adInput(act, "如: 签到,打卡,checkin", 0);
@@ -6458,7 +6699,7 @@ public final class TGAutoSignCore {
 
             // ── 排除规则（黑名单）：一行一条，支持正则 ──
             TextView exLab = new TextView(act);
-            exLab.setText("排除规则（一行一条，命中不学习）");
+            exLab.setText(Lang.tr("排除规则（一行一条，命中不学习）"));
             leadIcon(act, exLab, "trash", Theme.termPink(act));
             exLab.setTextSize(Theme.TS_SECOND); exLab.setTextColor(Theme.termMuted(act));
             exLab.setTypeface(android.graphics.Typeface.MONOSPACE);
@@ -6471,13 +6712,13 @@ public final class TGAutoSignCore {
             TextView exTip = new TextView(act);
             exTip.setTextSize(Theme.TS_CAPTION); exTip.setTextColor(Theme.termFaint(act));
             exTip.setTypeface(Theme.text());
-            exTip.setText("匹配 bot 回复正文 + 按钮文案。普通关键词按子串（不分大小写）；\n用 / 包裹当正则，如 /^每日.*点击/ 。# 开头为注释。");
+            exTip.setText(Lang.tr("匹配 bot 回复正文 + 按钮文案。普通关键词按子串（不分大小写）；\n用 / 包裹当正则，如 /^每日.*点击/ 。# 开头为注释。"));
             exTip.setPadding(dp(4), dp(4), dp(4), dp(2));
             card3.addView(exTip);
 
             // ── 排除的 bot ──
             TextView blLab = new TextView(act);
-            blLab.setText("排除的 bot");
+            blLab.setText(Lang.tr("排除的 bot"));
             leadIcon(act, blLab, "bot", Theme.termPink(act));
             blLab.setTextSize(Theme.TS_SECOND); blLab.setTextColor(Theme.termMuted(act));
             blLab.setTypeface(android.graphics.Typeface.MONOSPACE);
@@ -6487,20 +6728,20 @@ public final class TGAutoSignCore {
             blVal.setTextSize(Theme.TS_CAPTION); blVal.setTextColor(Theme.termFaint(act));
             blVal.setTypeface(Theme.text());
             final Runnable refreshBl = new Runnable() { @Override public void run() {
-                if (LEARN_BLOCKED_DIDS.isEmpty()) blVal.setText("(未排除任何 bot)");
-                else blVal.setText("已排除 " + LEARN_BLOCKED_DIDS.size() + " 个 bot");
+                if (LEARN_BLOCKED_DIDS.isEmpty()) blVal.setText(Lang.tr("(未排除任何 bot)"));
+                else blVal.setText(Lang.tf("已排除 {0} 个 bot", LEARN_BLOCKED_DIDS.size()));
             } };
             refreshBl.run();
             blVal.setPadding(dp(4), dp(2), dp(4), dp(4));
             card3.addView(blVal);
             Button blBtn = mkBtn(act); withIconText(act, blBtn, "bot", "选择要排除的 bot");
             blBtn.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
-                try { showBlockedBotPicker(act, refreshBl); } catch (Throwable t) { toast("打开失败: " + t); }
+                try { showBlockedBotPicker(act, refreshBl); } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
             } });
             card3.addView(blBtn);
             LinearLayout rlRow = new LinearLayout(act); rlRow.setOrientation(LinearLayout.HORIZONTAL); rlRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
             rlRow.setPadding(dp(2), dp(8), dp(2), dp(4));
-            TextView rlLabel = new TextView(act); rlLabel.setText("每日重试上限"); leadIcon(act, rlLabel, "repeat", Theme.termMuted(act)); rlLabel.setTextSize(Theme.TS_SECOND); rlLabel.setTextColor(Theme.termMuted(act));
+            TextView rlLabel = new TextView(act); rlLabel.setText(Lang.tr("每日重试上限")); leadIcon(act, rlLabel, "repeat", Theme.termMuted(act)); rlLabel.setTextSize(Theme.TS_SECOND); rlLabel.setTextColor(Theme.termMuted(act));
             rlLabel.setTypeface(android.graphics.Typeface.MONOSPACE);
             rlRow.addView(rlLabel, new LinearLayout.LayoutParams(0, -2, 1f));
             Button rlMinus = mkBtn(act); rlMinus.setText("−");
@@ -6512,7 +6753,7 @@ public final class TGAutoSignCore {
             rlRow.addView(rl, new LinearLayout.LayoutParams(0, -2, 2.2f));
             rlRow.addView(rlPlus, new LinearLayout.LayoutParams(0, -2, 1f));
             card3.addView(rlRow);
-            TextView wcLab = new TextView(act); wcLab.setText("全局默认唤醒命令"); leadIcon(act, wcLab, "keyboard", Theme.termMuted(act)); wcLab.setTextSize(Theme.TS_SECOND); wcLab.setTextColor(Theme.termMuted(act));
+            TextView wcLab = new TextView(act); wcLab.setText(Lang.tr("全局默认唤醒命令")); leadIcon(act, wcLab, "keyboard", Theme.termMuted(act)); wcLab.setTextSize(Theme.TS_SECOND); wcLab.setTextColor(Theme.termMuted(act));
             wcLab.setTypeface(android.graphics.Typeface.MONOSPACE); wcLab.setPadding(dp(2), dp(6), dp(2), dp(4));
             card3.addView(wcLab);
             EditText wc = adInput(act, "如 /start；条目自带前置命令优先", 0);
@@ -6542,6 +6783,7 @@ public final class TGAutoSignCore {
                 NOTIFY_FAIL_ONLY = nfoSw.isChecked();
                 THEME_MODE = tMode[0];
                 Theme.mode = THEME_MODE;
+                try { android.content.SharedPreferences.Editor le = prefs.edit(); le.putInt("jmb_lang", Lang.MODE); le.apply(); } catch (Throwable ignored) {}
                 MISS_BACK = mbSw.isChecked();
                 try { MISS_DEADLINE = mdMin[0]; if (MISS_DEADLINE < 0) MISS_DEADLINE = 0; if (MISS_DEADLINE > 24 * 60 - 1) MISS_DEADLINE = 24 * 60 - 1; } catch (Throwable ignored) {}
                 scheduleTickLoop();   // 确保心跳在跑（开启补签后立即可用，不等触发源）
@@ -6584,10 +6826,25 @@ public final class TGAutoSignCore {
                     + " 按钮学习=" + (AUTO_LEARN ? "开" : "关") + " 网络学习=" + (AUTO_LEARN_NET ? "开" : "关"));
             });
             box.addView(ok);
+            if (activatedAccounts() > 1) {
+                Button applyAll = mkBtn(act);
+                withIconText(act, applyAll, "globe", "把本账号配置应用到全部账号");
+                applyAll.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
+                    applyConfigToAllAccounts();
+                } });
+                LinearLayout.LayoutParams aplp = new LinearLayout.LayoutParams(-1, -2);
+                aplp.topMargin = dp(6);
+                box.addView(applyAll, aplp);
+                TextView apTip = new TextView(act);
+                apTip.setTextSize(Theme.TS_CAPTION); apTip.setTextColor(Theme.termFaint(act)); apTip.setTypeface(Theme.text());
+                apTip.setText(Lang.tf("当前共 {0} 个账号。默认只改本账号（{1}…），点上面按钮才会同步到其它账号。", activatedAccounts(), accountLabel(0)));
+                apTip.setPadding(dp(4), dp(4), dp(4), dp(2));
+                box.addView(apTip);
+            }
             showDialog(act, "设置", box, "取消");
         } catch (Throwable t) {
             jlog("设置框失败: " + t);
-            toast("设置打开失败: " + t);
+            toast(Lang.tf("设置打开失败: {0}", t));
         }
     }
 
@@ -6615,16 +6872,16 @@ public final class TGAutoSignCore {
         info.setTextSize(14f);
         info.setTextColor(android.graphics.Color.parseColor(txtMain(act)));
         info.setPadding(dp(4), dp(4), dp(4), dp(10));
-        info.setText("当前 v" + UpdateChecker.VERSION_NAME + "\n正在检查更新…");
+        info.setText(Lang.tf("当前 v{0}\n正在检查更新…", UpdateChecker.VERSION_NAME));
         box.addView(info);
         showDialog(act, "TGAutoSign · 检查更新", box, "关闭");
         UpdateChecker.checkAsync(appContext, true, mainHandler, r -> {
             try {
-                if (r == null) { info.setText("刚刚已经检查过，请稍后再试"); return; }
+                if (r == null) { info.setText(Lang.tr("刚刚已经检查过，请稍后再试")); return; }
                 lastUpdate = r;
                 info.setText(r.summary(UpdateChecker.VERSION_NAME));
                 if (r.newer && r.apkUrl != null) {
-                    menuItem(box, "download", "下载 v" + r.version + " 安装包", "下载到系统「下载」目录，校验 sha256 后确认安装", "update_download");
+                    menuItem(box, "download", Lang.tf("下载 v{0} 安装包", r.version), "下载到系统「下载」目录，校验 sha256 后确认安装", "update_download");
                 }
             } catch (Throwable ignored) {}
         });
@@ -6633,13 +6890,13 @@ public final class TGAutoSignCore {
     private void downloadUpdate(Activity act) {
         final UpdateChecker.Result src = lastUpdate;
         if (src == null || src.apkUrl == null) { toast("该版本没有可直接下载的安装包"); return; }
-        toast("开始下载 v" + src.version + "…");
+        toast(Lang.tf("开始下载 v{0}…", src.version));
         jlog("下载安装包: " + src.apkUrl);
         UpdateChecker.downloadAsync(appContext, src.apkUrl, src.apkName, src.apkSha256, mainHandler, d -> {
-            if (d.networkError) { jlog("下载失败: " + d.message); toast("下载失败：" + d.message); return; }
+            if (d.networkError) { jlog("下载失败: " + d.message); toast(Lang.tf("下载失败：{0}", d.message)); return; }
             jlog("安装包已保存: " + d.savedPath);
             boolean opened = UpdateChecker.openSaved(appContext, d.savedUri, d.savedPath);
-            toast("已保存到 " + d.savedPath + (opened ? "，请在安装界面确认" : "，请用文件管理器点开安装"));
+            toast(Lang.tf("已保存到 {0}", d.savedPath) + Lang.tr(opened ? "，请在安装界面确认" : "，请用文件管理器点开安装"));
         });
     }
 
@@ -6647,10 +6904,10 @@ public final class TGAutoSignCore {
         ConfigStore.Report rep = ConfigStore.exportAll(appContext);
         if (rep.ok) {
             logs("配置已导出: " + rep.path + "（" + rep.keys + " 项 / " + rep.prefFiles + " 个存储）");
-            toast("已导出 " + rep.keys + " 项配置\n" + rep.path);
+            toast(Lang.tf("已导出 {0} 项配置\n{1}", rep.keys, rep.path));
         } else {
             loge("导出配置失败: " + rep.message);
-            toast("导出失败：" + rep.message);
+            toast(Lang.tf("导出失败：{0}", rep.message));
         }
     }
 
@@ -6749,7 +7006,7 @@ public final class TGAutoSignCore {
             jlog("诊断包已复制（错误 " + errs + " · 警告 " + warns + " · 共 " + all.size() + " 条日志）");
             toast("✅ 诊断包已复制，直接粘贴发给作者即可");
         } catch (Throwable t) {
-            toast("生成诊断包失败: " + t);
+            toast(Lang.tf("生成诊断包失败: {0}", t));
         }
     }
 
@@ -6778,15 +7035,15 @@ public final class TGAutoSignCore {
                 if (os == null) { toast("导出失败：打不开写入流"); return; }
                 try { os.write(content.getBytes("UTF-8")); } finally { try { os.close(); } catch (Throwable ignored) {} }
                 jlog("日志已导出：" + fname + "（" + all.size() + " 行，含落盘历史）");
-                toast("已导出到「下载」：" + fname);
+                toast(Lang.tf("已导出到「下载」：{0}", fname));
             } catch (Throwable t) {
                 logw("日志导出失败: " + t);
-                toast("日志导出失败：" + t);
+                toast(Lang.tf("日志导出失败：{0}", t));
             }
         }
 
         private static String accountLabel(int acc) {
-            return "账号" + (acc + 1);
+            return Lang.tf("账号{0}", acc + 1);
         }
 
     // ---------------- 宿主 Activity 记录（兜底：任何 Activity resume 都记） ----------------
@@ -6931,9 +7188,9 @@ public final class TGAutoSignCore {
             String id = entryId(m);
             String title = entryDisplayName(m);
             prefs.edit().putBoolean(kFrozen(prefix, id), frozen).apply();
-            if (frozen) { logs("【冻结】" + title + " 已冻结，不再自动签到"); toast("已冻结：" + title); }
-            else { logs("【冻结】" + title + " 已解冻"); toast("已解冻：" + title); }
-        } catch (Throwable t) { toast("冻结操作失败: " + t); }
+            if (frozen) { logs("【冻结】" + title + " 已冻结，不再自动签到"); toast(Lang.tf("已冻结：{0}", title)); }
+            else { logs("【冻结】" + title + " 已解冻"); toast(Lang.tf("已解冻：{0}", title)); }
+        } catch (Throwable t) { toast(Lang.tf("冻结操作失败: {0}", t)); }
     }
 
     /**
@@ -6971,12 +7228,12 @@ public final class TGAutoSignCore {
     private String learnDenyReason(long did, String text, String context) {
         try {
             if (did != 0 && LEARN_BLOCKED_DIDS.contains(did)) {
-                return "命中「排除的 bot」(" + did + ")";
+                return Lang.tf("命中「排除的 bot」({0})", did);
             }
             String hay = (context == null ? "" : context) + " \n " + (text == null ? "" : text);
             String hit = excludeHit(hay);
-            if (hit != null) return "命中排除规则「" + hit + "」";
-            if (AUTO_LEARN_FILTER && !keywordMatched(text)) return "不含学习关键词";
+            if (hit != null) return Lang.tf("命中排除规则「{0}」", hit);
+            if (AUTO_LEARN_FILTER && !keywordMatched(text)) return Lang.tr("不含学习关键词");
         } catch (Throwable ignored) {}
         return null;
     }
@@ -7051,7 +7308,7 @@ public final class TGAutoSignCore {
                 pl.setOrientation(LinearLayout.VERTICAL);
                 pl.setPadding(dp(8), dp(10), dp(8), dp(10));
                 TextView e = new TextView(act); e.setTextSize(Theme.TS_BODY); e.setTextColor(Theme.termMuted(act)); e.setTypeface(Theme.text());
-                e.setText("当前没有可排除的对象。\n先在目标列表长按某个 bot 选「排除整只 bot」，\n或先添加目标，再来这里勾选。");
+                e.setText(Lang.tr("当前没有可排除的对象。\n先在目标列表长按某个 bot 选「排除整只 bot」，\n或先添加目标，再来这里勾选。"));
                 e.setPadding(dp(4), dp(4), dp(4), dp(4));
                 pl.addView(e);
                 showDialog(act, "排除的 bot", pl, "关闭");
@@ -7064,7 +7321,7 @@ public final class TGAutoSignCore {
             TextView head = new TextView(act);
             head.setTextSize(Theme.TS_CAPTION); head.setTextColor(Theme.termMuted(act));
             head.setTypeface(android.graphics.Typeface.MONOSPACE);
-            head.setText("勾选 = 排除该 bot（不自动学习、不自动签到）");
+            head.setText(Lang.tr("勾选 = 排除该 bot（不自动学习、不自动签到）"));
             head.setPadding(dp(4), 0, dp(4), dp(8));
             pl.addView(head);
 
@@ -7073,7 +7330,7 @@ public final class TGAutoSignCore {
             final List<Long> allDids = new ArrayList<>();
             if (!blockedDids.isEmpty()) {
                 TextView bh = new TextView(act); bh.setTextSize(Theme.TS_CAPTION); bh.setTextColor(Theme.termPink(act)); bh.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-                bh.setText("▍已排除的 bot（取消勾选可解除）");
+                bh.setText(Lang.tr("▍已排除的 bot（取消勾选可解除）"));
                 bh.setPadding(dp(4), dp(4), dp(4), dp(4));
                 pl.addView(bh);
                 for (int i = 0; i < blockedDids.size(); i++) {
@@ -7094,7 +7351,7 @@ public final class TGAutoSignCore {
             }
             if (!dids.isEmpty()) {
                 TextView th = new TextView(act); th.setTextSize(Theme.TS_CAPTION); th.setTextColor(Theme.termMuted(act)); th.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-                th.setText("▍目标列表里的 bot（勾选 = 排除）");
+                th.setText(Lang.tr("▍目标列表里的 bot（勾选 = 排除）"));
                 th.setPadding(dp(4), dp(8), dp(4), dp(4));
                 pl.addView(th);
                 for (int i = 0; i < dids.size(); i++) {
@@ -7123,14 +7380,14 @@ public final class TGAutoSignCore {
                     prefs.edit().putString(kBlockedDids(), blockedDidsToStr()).apply();
                     jlog("设置更新: 排除的 bot = " + (LEARN_BLOCKED_DIDS.isEmpty() ? "(无)" : blockedDidsToStr()));
                     if (onDone != null) onDone.run();
-                    toast(LEARN_BLOCKED_DIDS.isEmpty() ? "已清空排除列表" : "已排除 " + LEARN_BLOCKED_DIDS.size() + " 个 bot");
-                } catch (Throwable t) { toast("保存失败: " + t); }
+                    toast(LEARN_BLOCKED_DIDS.isEmpty() ? Lang.tr("已清空排除列表") : Lang.tf("已排除 {0} 个 bot", LEARN_BLOCKED_DIDS.size()));
+                } catch (Throwable t) { toast(Lang.tf("保存失败: {0}", t)); }
             } });
             LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, -2);
             blp.topMargin = dp(8);
             pl.addView(save, blp);
             showDialog(act, "排除的 bot", pl, "关闭");
-        } catch (Throwable t) { toast("打开失败: " + t); }
+        } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
     }
 
     /** 该 bot 是否整体被排除 */
@@ -7431,7 +7688,7 @@ public final class TGAutoSignCore {
                             // 只有"模块自己发起"的回调（该目标正在发送中）才乐观标记；
                             // 用户手动点按钮不该被当成签到成功（发送 ≠ 成功）
                             Map<String, Object> cbEntry = findCbEntry(u, d);
-                            if (cbEntry != null && isPendingFresh(entryId(cbEntry))) {
+                            if (cbEntry != null && isPendingFresh(accountPrefix(), entryId(cbEntry))) {
                                 markSignedFromCallback(u, d);
                             } else {
                                 logd("[活动] 非模块发起的回调，不乐观标记 " + u);
@@ -7497,7 +7754,7 @@ public final class TGAutoSignCore {
                             if (targetContains(u)) {
                                 // 同样：只有模块自己发起的文本才乐观标记，避免用户手动发送被误判为已签
                                 Map<String, Object> tx = findTextEntry(u, t);
-                                if (tx != null && isPendingFresh(entryId(tx))) {
+                                if (tx != null && isPendingFresh(accountPrefix(), entryId(tx))) {
                                     markSignedFromRequest(u, t);
                                 } else {
                                     logd("[活动] 非模块发起的文本，不乐观标记 " + u);

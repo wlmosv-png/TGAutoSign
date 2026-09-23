@@ -1,0 +1,540 @@
+# TGAutoSign 全文翻译真相源（中文<TAB>英文）
+群	Group
+补	M
+ 群	 Group
+ 补	 M
+中文	中文
+保存	Save
+全部	All
+关闭	Close
+冻结	Frozen
+删除	Delete
+加入	Add
+取消	Cancel
+唤醒	Wake
+回调	Callback
+夜间	Dark
+定时	Timer
+导出	Export
+已签	Signed
+已补	Made up
+帮助	Help
+待签	Pending
+待补	To make up
+忽略	Skip
+指令	Command
+排序	Sort
+操作	Actions
+放弃	Gave up
+数据	Data
+日志	Logs
+日间	Light
+暂停	Paused
+未知	unknown
+添加	Add
+清空	Clear
+目标	Targets
+确定	OK
+系统	System
+维护	Maintain
+编辑	Edit
+自动	Auto
+自检	Self-check
+设置	Settings
+账号	Account
+过滤	Filter
+返回	Back
+退避	Backing off
+重试	Retrying
+错过	Missed
+频道	Channel
+ 冻结	 Frozen
+ 出品	
+ 定时	 Timer
+ 已签	 Signed
+ 待签	 Pending
+▍外观	APPEARANCE
+▍帮助	HELP
+▍操作	ACTIONS
+▍数据	DATA
+▍目标	TARGETS
+▍签到	SIGNING
+▍维护	MAINTENANCE
+▍诊断	DIAGNOSTICS
+▍通知	NOTIFICATIONS
+已保存	Saved
+已停用	Disabled
+已删除	Deleted
+已加入	Added
+已忽略	Skipped
+已排除	Blocked
+已放弃	Gave up
+已跳过	Skipped
+已过期	Expired
+已错过	Missed
+按名称	By name
+无计划	No plan
+明日排	Tomorrow
+暂停中	Paused
+未到点	Not due yet
+目标:	Target: 
+自诊断	Self-check
+诊断包	Diagnostics bundle
+账号1	Account 1
+账号2	Account 2
+账号3	Account 3
+账号4	Account 4
+账号5	Account 5
+退避中	Retrying later
+重试中	Retrying
+ 已停用	 Disabled
+ 已排除	 Blocked
+ 已放弃	 Gave up
+ 重试中	 Retrying
+[回调]	[Callback]
+[指令]	[Command]
+▍待确认	PENDING
+一键添加	Quick add
+三项齐全	all three present
+个条目）	 entries)
+今日已签	Signed today
+今日待补	To make up today
+今日计划	Today's plan
+使用教程	Guide
+保存设置	Save settings
+全部功能	All features
+全部目标	All targets
+删除目标	Remove target
+加入失败	Could not add
+加入群组	Join group
+加载更多	Load more
+只看重要	Important only
+只看错误	Errors only
+回到最新	Back to latest
+回调按钮	Callback button
+复制文案	Copy text
+复制目标	Copy targets
+学习行为	Learning
+定时未开	Timer off
+定时签到	Timer
+宿主包 	Host package 
+导入配置	Import config
+导出日志	Export logs
+导出配置	Export config
+当前账号	Current account
+待确认（	Pending (
+快速上手	Quick start
+怎么导入	How to import
+按钮学习	Button learning
+排除管理	Blocklist
+数据备份	Data & backup
+时间倒序	Newest first
+时间正序	Oldest first
+暂无目标	No targets
+未签置顶	Unsigned first
+条目操作	Entry actions
+检查更新	Check updates
+添加目标	Add target
+清空配置	Clear config
+目标列表	Targets
+目标管理	Target manager
+目标过滤	Target filter
+直接清空	Clear now
+确认模板	Confirm preset
+移除条目	Delete entry
+立即签到	Sign now
+签到指令	Sign-in command
+签到时间	Signing window
+编辑目标	Edit target
+网络学习	Network learning
+补签列表	Make-up signs
+补签截止	Make-up deadline
+补签未开	Make-up off
+账号一览	Accounts
+跟随系统	System
+运行日志	Logs
+错开间隔	Spacing interval
+错过补签	Missed make-up
+预设模板	Presets
+（当前）	 (current)
+ 使用教程	 Guide
+⑧ 多账号	8. Multiple accounts
+▍全部功能	ALL FEATURES
+▍学习行为	LEARNING
+▍排除规则	BLOCK RULES
+▍签到核心	CORE
+上手·排障	Getting started · fixes
+全部签到（	Sign all (
+关键词过滤	Keyword filter
+分享本模块	Share module
+到下载目录	To Downloads
+只通知失败	Failures only
+合并或覆盖	Merge or replace
+启用该账号	Enable this account
+回调调试台	Callback console
+处理待确认	Review pending
+已全部加载	All loaded
+当前账号：	Current account: 
+推荐给朋友	Tell a friend
+日志已清空	Logs cleared
+目标不存在	Target not found
+目标列表（	Targets (
+目标：全部	Target: all
+签全部账号	Sign all accounts
+给其它账号	To other accounts
+群 {0}	Group {0}
+设置已保存	Settings saved
+诊断与更新	Diagnostics & updates
+账号{0}	Account {0}
+账号一览（	Accounts (
+ · 定时关	 · timer off
+ · 补签关	 · make-up off
+[更多日志]	[More logs]
+{0} 出品	Made by {0}
+① 打开面板	1. Open the panel
+保存失败: 	Save failed: 
+保存排除规则	Save block rules
+关键词与策略	Keywords & strategy
+反射锚点检查	Reflection anchors
+复制失败: 	Copy failed: 
+实际 {0}	Actual {0}
+已复制这一行	Line copied
+打开失败: 	Could not open: 
+指令不能为空	Command cannot be empty
+捕获回调按钮	Capture callback button
+新手只看这段	Start here
+查看今日计划	Today's plan
+每日重试上限	Daily retry limit
+添加签到目标	Add signing target
+添加群聊签到	Add group sign-in
+清空所有配置	Clear all config
+清空运行日志	Clear logs
+点选立即签到	Tap to sign now
+目标：{0}	Target: {0}
+签到结果通知	Sign-in result notification
+请填签到指令	Enter the sign-in command
+请填群 ID	Enter the group ID
+跨账号彻底清	Wipe all accounts
+English	English
+bot {0}	bot {0}
+json 备份	JSON backup
+{0} 个目标	{0} targets
+{0} 个账号	{0} accounts
+{0}（待签）	{0} (pending)
+{0}（明日）	{0} (tomorrow)
+{0}：{1}	{0}: {1}
+⑤ 临时不想签	5. Pause a target
+⑥ 怎么看结果	6. Where to see results
+⑩ 外观与主题	10. Look & theme
+⑬ 日志怎么读	13. Reading logs
+⑭ 更新与反馈	14. Updates & feedback
+▍关键词与策略	KEYWORDS & STRATEGY
+不含学习关键词	no learning keyword
+原计划 {0}	Planned {0}
+宿主包 {0}	Host package {0}
+已停用 {0}	Disabled {0}
+已冻结：{0}	Frozen: {0}
+已删除 {0}	Deleted {0}
+已启用 {0}	Enabled {0}
+已恢复：{0}	Resumed: {0}
+已清空排除列表	Blocklist cleared
+已解冻：{0}	Unfrozen: {0}
+已载入 {0}	Loaded {0}
+排除的 bot	Blocked bots
+排除规则已保存	Block rules saved
+日志目录不可用	Log directory unavailable
+暂无日志可导出	No logs to export
+标签 / 指令	Label / command
+正在检查更新…	Checking for updates…
+添加并立即签到	Add and sign now
+添加群签到目标	Add group sign-in target
+界面语言：中文	Language: 中文
+确认框失败: 	Confirmation dialog failed: 
+示例 · 领取	Example · claim
+网络学习需确认	Confirm network learning
+还没有日志文件	No log files yet
+还没有签到目标	No targets yet
+（还没有目标）	(no targets yet)
+(无待确认目标)	(nothing pending)
+UID 格式错误	Invalid UID
+⑫ 出问题怎么办	12. Troubleshooting
+▍排除的 bot	BLOCKED BOTS
+下次签到 {0}	Next sign-in {0}
+下载失败：{0}	Download failed: {0}
+今天已经签到过了	Already signed today
+全局默认唤醒命令	Default wake command
+冻结（不再签到）	Freeze (never sign)
+反馈·交流·帮助	Feedback · chat · help
+始终日间（浅色）	Always light
+定时·窗口·间隔	Timer · window · interval
+导入失败：{0}	Import failed: {0}
+导出失败：{0}	Export failed: {0}
+已保存到 {0}	Saved to {0}
+已填入: {0}	Filled in: {0}
+已复制到 {0}	Copied to {0}
+已导出「{0}」	Exported "{0}"
+已添加群签到目标	Group sign-in target added
+已跳过（{0}）	Skipped ({0})
+待确认（{0}）	Pending ({0})
+按钮·发射·绑定	Button · fire · bind
+排除整只 bot	Block this bot
+搜索·筛选·清空	Search · filter · clear
+未排进今日时刻表	Not in today's schedule
+查看·测试·编辑	View · test · edit
+点选要删除的目标	Tap a target to delete
+确认清空全部配置	Clear all config
+示例 · 群打卡	Example · group check-in
+补签截止 {0}	Make-up deadline {0}
+解冻（恢复签到）	Unfreeze (resume)
+该按钮无回调数据	This button has no callback data
+选择群 / 频道	Choose group / channel
+🧪 {0} 成功	🧪 {0} succeeded
+ · 错过 {0}	 · missed {0}
+ 绑定刚点按钮: 	 Bind that button: 
+⑦ 签到通知在哪看	7. Where notifications go
+保存失败: {0}	Save failed: {0}
+先导出一份，再清空	Export a copy first, then clear
+全账号签到\n{0}	All-account signing\n{0}
+取消排除该 bot	Unblock this bot
+复制失败: {0}	Copy failed: {0}
+复制目标到其它账号	Copy targets to another account
+始终夜间（终端风）	Always dark (terminal)
+已发起补签：{0}	Make-up sign started: {0}
+已命令签到 {0}	Sign-in requested for {0}
+已是最新 v{0}	Up to date (v{0})
+应用失败: {0}	Apply failed: {0}
+当前账号还没有目标	This account has no targets yet
+待确认 {0} 个	{0} pending
+打开失败: {0}	Could not open: {0}
+指令 / 捕获按钮	Command / capture button
+操作失败: {0}	Action failed: {0}
+暂停一周 / 恢复	Pause 1 week / Resume
+测试异常: {0}	Test error: {0}
+添加失败: {0}	Add failed: {0}
+界面语言：跟随系统	Language: system
+目标列表（{0}）	Targets ({0})
+示例 · 每日签到	Example · daily sign-in
+系统分享（选应用）	Share via…
+自动（跟宿主主题）	Auto (follow host theme)
+账号一览（{0}）	Accounts ({0})
+预览失败: {0}	Preview failed: {0}
+（点下方按钮继续）	 (tap the button below for more)
+，请在安装界面确认	 — confirm in the installer
+⑨ 换手机 / 备份	9. New phone / backup
+⑪ 关键词与自动学习	11. Keywords & auto-learn
+今日待补·已补·跳过	Pending · done · skipped
+导入配置 · 选备份	Import config · pick backup
+已取消排除该 bot	Bot unblocked
+开始下载 v{0}…	Downloading v{0}…
+搜索日志，边输边过滤	Search logs — filters as you type
+日志导出失败：{0}	Log export failed: {0}
+确认框失败: {0}	Confirm dialog failed: {0}
+选择要排除的 bot	Choose bots to block
+(未排除任何 bot)	(no blocked bots)
+③ 前置命令（拉面板）	3. Pre-commands (pull the panel)
+下载 v{0} 安装包	Download v{0}
+冻结操作失败: {0}	Freeze failed: {0}
+合并导入（保留现有的）	Merge (keep existing)
+命中排除规则「{0}」	Matched block rule "{0}"
+备注名（显示用，可空）	Label (display only, optional)
+复制日志失败: {0}	Copying logs failed: {0}
+复制本账号目标到该账号	Copy my targets here
+学习关键词（逗号分隔）	Learning keywords (comma-separated)
+导出失败：打不开写入流	Export failed: cannot open the output stream
+已清空 {0} 项配置	Cleared {0} config entries
+无法打开分享: {0}	Could not open the share sheet: {0}
+暂停操作失败: {0}	Pause failed: {0}
+检查更新失败: {0}	Update check failed: {0}
+绑定失败：会话ID无效	Bind failed: invalid chat ID
+设置打开失败: {0}	Could not open settings: {0}
+读取会话失败: {0}	Could not read chats: {0}
+页面已关闭，请重新打开	The page was closed — open it again
+② 添加目标（三种方式）	2. Add targets (3 ways)
+④ 用什么节奏签（设置）	4. Signing pace (settings)
+✅ 签到完成 {0} 个	✅ Signed {0}
+保存后生效，日志不翻译。	Takes effect after saving. Logs are not translated.
+已复制，粘到任意聊天即可	Copied — paste it into any chat
+已导出到「下载」：{0}	Exported to Downloads: {0}
+当前只有 1 个登录账号	Only 1 account signed in
+检查更新未成功: {0}	Update check failed: {0}
+没有匹配「{0}」的日志	No logs matching "{0}"
+生成诊断包失败: {0}	Could not build the diagnostics bundle: {0}
+界面语言：English	Language: English
+重新采样（去点一次按钮）	Re-sample (tap the button once)
+，请用文件管理器点开安装	 — open it with a file manager to install
+🧪 已发送测试: {0}	🧪 Test sent: {0}
+ · 窗口 {0}-{1}	 · window {0}-{1}
+ · 补签开(至 {0})	 · make-up on (until {0})
+Telegram 标志类：	Telegram flag classes:
+[更多日志] → 运行日志	[More logs] → Logs
+{0}（失败 {1} 次）	{0} (failed {1}×)
+主题：{0}（保存后生效）	Theme: {0} (takes effect after saving)
+今日补签 · {0} 目标	Make-up today · {0} targets
+全部签到（{0} 个条目）	Sign all ({0} items)
+分享 TGAutoSign	Share TGAutoSign
+刚刚已经检查过，请稍后再试	Already checked just now — try again later
+原计划 {0} · {1}	Planned {0} · {1}
+原计划 {0} · 已完成	Planned {0} · done
+只有一个登录账号，不用复制	Only one account signed in — nothing to copy
+已排除 {0} 个 bot	{0} bots blocked
+打开作者主页失败: {0}	Could not open the author's page: {0}
+打开目标选择失败: {0}	Could not open the target picker: {0}
+把本账号配置应用到全部账号	Apply this account's settings to all
+示例模板：群打卡指令，可改	Example template: group check-in command, editable
+规则·排除 bot·待确认	Rules · blocked bots · pending
+该 bot 已存在相同指令	This command already exists
+语言：{0}（保存后生效）	Language: {0} (takes effect after saving)
+请在 TG 界面内完成捕获	Finish the capture inside Telegram
+还没连续签到，今天去签一个	No streak yet — sign in today to start one
+重绑为回调（去点它的按钮）	Rebind as callback (tap its button)
+🧪 {0} 失败: {1}	🧪 {0} failed: {1}
+停用该账号（不参与自动签到）	Disable this account (skip auto sign)
+加载更多（还有 {0} 条）	Load more ({0} left)
+导出失败：写不进「下载」目录	Export failed: cannot write to Downloads
+已入待确认：确认后才加入目标	Added to pending — confirm it to add as a target
+已发起签到，结果见提示/日志	Sign-in started — see the toast / logs for the result
+已命令全账号签到，结果见日志	Signing on all accounts — check the logs for results
+已应用到全部 {0} 个账号	Applied to all {0} accounts
+时间范围错误：结束需晚于开始	Invalid time range: the end must be later than the start
+编辑（标签/前置命令/定位）	Edit (label / pre-commands / anchor)
+覆盖导入（先清空目标和状态）	Replace (clear targets and state first)
+计划 {0} · 到时自动签	Planned {0} · signs automatically when due
+该版本没有可直接下载的安装包	This release has no downloadable package
+还没有签到目标，切过去学一个	no targets yet — switch over and learn one
+TGAutoSign · 管理	TGAutoSign · Manager
+→ {0}（现有 {1} 个）	→ {0} ({1} now)
+✅ 已添加 {0} → {1}	✅ Added {0} → {1}
+✅ 已添加新签到目标: {0}	✅ Sign-in target added: {0}
+从会话列表选群（自动填 ID）	Pick a group from chats (fills ID)
+备注名（可留空，如：某签到群）	Label (optional, e.g. "daily check-in group")
+如: 点击图中事物（一行一条）	e.g. "tap the item in the picture" (one per line)
+已命令全部签到，结果见运行日志	Signing all targets — see the logs for results
+已导出 {0} 项配置\n{1}	Exported {0} config entries\n{1}
+当前 v{0}\n正在检查更新…	Current v{0}\nChecking for updates…
+待确认 {0} 个（点此处理）	{0} pending (tap to review)
+机器人 ID（数字，无需 @）	Bot ID (numbers only, no @)
+请在 TG 界面使用 /jmb	Use /jmb inside Telegram
+（还没有目标，去该账号学一个）	 (no targets yet — switch over and learn one)
+Telegram 标志类：{0}	Telegram flag classes: {0}
+✅ 已添加回调签到目标: {0}	✅ Callback sign-in target added: {0}
+只收文案命中关键词的按钮，防误加	Only buttons whose text matches your keywords are accepted, to avoid false adds
+命中「排除的 bot」({0})	Blocked bot ({0})
+如: 签到,打卡,checkin	e.g. sign-in, checkin, daily
+已暂停一周（至 {0}）：{1}	Paused for a week (until {0}): {1}
+已采样过按钮（捕获/调试台可用）	Buttons sampled (capture / console available)
+排除规则（一行一条，命中不学习）	Block rules (one per line)
+模板（点一下追加；可自行输入）：	Presets (tap to append; you can also type your own):
+签到指令（如 /checkin）	Sign-in command (e.g. /checkin)
+（文本/链接按钮，不能绑定回调）	 (text/link button — cannot bind a callback)
+\n确定删除？（会跨所有账号清干净）	\nDelete? (clears it across all accounts)
+$ (暂无日志消息，稍后自动出现)	$ (no log messages yet — they will appear shortly)
+TGAutoSign · 检查更新	TGAutoSign · Check for updates
+{0}  ·  约 {1} 分钟后	{0}  ·  in ~{1} min
+已复制到 {0}：新增 {1} 个	Copied to {0}: {1} added
+已复制最近 {0} 行日志到剪贴板	Copied the last {0} log lines to the clipboard
+当前账号还没有目标，先学一个再复制	This account has no targets yet — learn one first
+点一下 bot 按钮就自动加到列表	Tap a bot button and it's added to the list automatically
+示例模板：通用领取指令，可改或删除	Example template: generic claim command, edit or delete
+签到指令，如：/qd 或 📅 签到	Sign-in command, e.g. /qd or 📅 Check in
+\n\n{0} 现在有 {1} 个目标。	\n\n{0} currently has {1} targets.
+▍已排除的 bot（取消勾选可解除）	BLOCKED BOTS (uncheck to unblock)
+自动识别你在 bot 里发的签到文本	Detects the sign-in text you type in bots automatically
+错误 {0} · 警告 {1}{2}	Errors {0} · Warnings {1}{2}
+{0}：目标 {1} · 已签 {2}	{0}: {1} targets · {2} signed
+⚠️ {0} 连续 {1} 天签到失败	⚠️ {0} failed {1} days in a row
+✅ 诊断包已复制，直接粘贴发给作者即可	✅ Diagnostics bundle copied — just paste it to the author
+如 /start；条目自带前置命令优先	e.g. /start; the entry's own pre-commands take priority
+当前账号：{0}（共登录 {1} 个）	Current account: {0} ({1} signed in)
+跟随系统：系统语言非中文时自动切英文。	System: switches to English when your system language isn't Chinese.
+选择要查看日志的目标（点「全部」恢复）	Choose a target to filter logs (tap "All" to reset)
+ · 已载入 {0} / 共 {1} 条	 · loaded {0} of {1}
+▍目标列表里的 bot（勾选 = 排除）	BOTS IN YOUR TARGETS (check to block)
+分享给需要的人，文案已写好（含下载链接）	Share it with someone who needs it — the text is ready, download link included.
+原计划 {0} · 已过补签截止 {1}	Planned {0} · past make-up deadline {1}
+已排除该 bot：不再自动学习、不再签到	Bot blocked: no more auto-learning, no more signing
+每目标在窗口内各占一段随机时刻，互不重叠	Each target gets its own non-overlapping random slot inside the window
+没有需要复制的新目标（可能早就复制过了）	No new targets to copy (they may already have been copied)
+测试签到（先跑前置命令→点按钮→看返回）	Test sign (pre-commands → tap button → see reply)
+连续签到 {0} 天 · 最近 14 天	{0}-day streak · last 14 days
+✅ 已添加 {0} → {1}，立即签到…	✅ Added {0} → {1}, signing now…
+今日计划 · {0} 个目标 · 随机错开	Today's plan · {0} targets · randomly spread
+导入完成：{0} 目标 {1} → {2}	Import done: {0} targets {1} → {2}
+{0} · 原计划 {1} · 实际 {2}	{0} · planned {1} · actual {2}
+原计划 {0} · 后台 1~5 分钟随机补	Planned {0} · retries in the background within 1–5 min
+回调按钮读取正常（按实例字段取，不依赖类名）	Callback buttons readable (read from instance fields, no class names needed)
+请在 Telegram 界面内使用 /jmb	Use /jmb inside Telegram
+备注名（显示用，可空；如「每日签到」「查档」）	Label (display only, optional; e.g. "daily sign-in")
+按钮定位文案（重开面板按此找回按钮，默认=标签）	Button locator text (used to find the button again when the panel reopens; defaults to the label)
+✅ 已绑定回调: {0}（当前共 {1} 个目标）	✅ Callback bound: {0} ({1} targets now)
+勾选 = 排除该 bot（不自动学习、不自动签到）	Checked = block this bot (no auto-learning, no auto-signing)
+已补 {0} · 待补 {1} · 已跳过 {2}	Made up {0} · pending {1} · skipped {2}
+没找到群/频道。请先打开该群发一条消息，再回来试。	No groups/channels found. Open one and send a message, then come back.
+目标 {0} · 今日已签 {1} · 待签 {2}	Targets {0} · signed today {1} · pending {2}
+缺 {0}（该客户端自研了这层，模块不注入也不误伤）	missing {0} (this client rolled its own layer — module neither injects nor interferes)
+群 ID 应为负数，如 -1001234567890	The group ID should be negative, e.g. -1001234567890
+✅ TGAutoSign 今日签到完成 {0}/{1}	✅ TGAutoSign — {0}/{1} signed today
+今日待补 {0} · 已补 {1} · 已跳过 {2}	To make up {0} · done {1} · skipped {2}
+会话列表为空：先打开一次 TG 主界面（会话列表）再试	Chat list is empty — open Telegram's main chat list once, then retry
+已存在该回调，已刷新消息/指纹（msg_id={0}）	Callback already exists — message/fingerprint refreshed (msg_id={0})
+打开群链接失败，请确认已装 Telegram: {0}	Could not open the group link — make sure Telegram is installed: {0}
+群 ID（形如 -1001234567890，含负号）	Group ID (like -1001234567890, minus sign included)
+输入 /jmb 打开管理面板 · /help 查看教程	Send /jmb to open the panel · /help for the guide
+1 = 13 天前 · 14 = 今天（绿 = 已签到）	1 = 13 days ago · 14 = today (green = signed)
+下面是最近会话里的群 / 频道。点一条即可填入群 ID。	Recent groups / channels are listed below. Tap one to fill in the group ID.
+取 InputPeer 失败，先在会话里点一下该 bot	Could not get InputPeer — tap the bot in your chat list first
+前置命令序列（逗号或换行分隔，可空；发送后拉面板再点按钮）	Pre-command sequence (comma- or newline-separated, optional; sent first to pull up the panel before tapping)
+去该 bot 会话点一下要绑的签到按钮，会自动作为回调新增	Open that bot's chat and tap the sign-in button you want to bind — it will be added as a callback automatically.
+0=按目标数自动均分；如设 30，则相邻目标至少隔 30 分钟	0 = spread evenly by target count; set 30 to force at least 30 minutes between targets
+已签 {0} / {1} · 时间=已签时刻 / 待签计划时刻	Signed {0} / {1} · time = when it was signed / when it is planned
+群 ID 必须是数字（负数），例：-1001234567890	The group ID must be a number (negative), e.g. -1001234567890
+(暂无目标，点「添加目标」，或直接点 bot 的签到按钮自动学习)	(no targets — tap "Add target", or just tap the bot's sign-in button to learn it)
+共 {0} 个登录账号（切换 Telegram 账号即切换目标集）	{0} accounts signed in (switching Telegram accounts switches the target set)
+发现新版本 v{0}（当前 v{1}）：发 /jmb → 🔄 检查更新	New version v{0} available (current v{1}): send /jmb → 🔄 Check updates
+命中后先进「待确认」列表，你手动确认才加入（防验证码类 bot 误加）	Hits go to the pending list and are only added after you confirm (prevents adding captcha-style bots by mistake)
+拿不到 MessagesController，请回到 TG 主界面再试	Could not get MessagesController — go back to Telegram's main screen and retry
+(待确认列表为空)\n网络学习命中且「需确认」开启时，这里会出现候选目标。	(nothing pending)\nCandidates appear here when network learning hits and "confirm first" is on.
+TGAutoSign 有新版本 v{0}：发 /jmb → 🔄 检查更新	TGAutoSign v{0} is available: send /jmb → 🔄 Check updates
+⚠️ TGAutoSign 今日 {0}/{1} 已签，{2} 个未完成	⚠️ TGAutoSign — {0}/{1} signed today, {2} incomplete
+⚠️ {0} 已连续 {1} 天签到失败\n原因: {2}\n账号: {3}	⚠️ {0} failed {1} days in a row\nReason: {2}\nAccount: {3}
+内置为通用示例模板，点选后把 bot ID 和指令改成你的签到 bot。	These are generic example presets — after picking one, replace the bot ID and command with your own.
+这类按钮无法用回调模拟；文本键盘类请用「文本指令」目标（文本=按钮文字）	This kind of button cannot be simulated with a callback. For text keyboards use a "Text command" target (text = the button label).
+匹配 bot 回复正文 + 按钮文案。用 / 包裹当正则，# 开头为注释。	Matches the bot's reply text and button labels. Wrap in / to use a regex; lines starting with # are comments.
+示例模板：改成你的 bot（数字 ID 在 bot 里发 /start 可得）	Example template: replace with your own bot (send /start to the bot to get its numeric ID)
+签到完成 {0} 个，{1} 个没成功（/jmb → 📄 运行日志 里有原因）	Signed {0}, {1} failed (see /jmb → 📄 Logs for reasons)
+捕获模式已开启：去 bot 会话里点一次它的按钮，我会列出该消息所有按钮供你绑定	Capture mode is on: open the bot's chat and tap its button once — all buttons in that message will be listed for binding.
+以下目标来自「网络学习」，确认后才会加入自动签到。点「加入」确认，点「忽略」丢弃。	These targets came from "network learning" and are only added after you confirm. Tap Add to accept or Skip to discard.
+当前共 {0} 个账号。默认只改本账号（{1}…），点上面按钮才会同步到其它账号。	{0} accounts in total. By default only this account ({1}…) is changed; use the button above to sync to the others.
+开 = 窗口内按随机时刻逐个签（防风控，推荐）；关 = 检测到未签就马上签（限窗口内）	On = sign each target at a random time inside the window (recommended, avoids rate limits); Off = sign as soon as an unsigned target is detected (still inside the window)
+清空会同时删掉当前列表和落盘的历史日志文件。\n建议先「导出再清空」留一份，方便之后对账。	Clearing removes both the current list and the log files on disk.\nExport a copy first so you still have it for reference.
+自动 = 读宿主当前配色（取不到再看系统深色）；识别不准时可手动锁定，保存后重开界面生效	Auto = read the host's current colours (falls back to the system dark setting). If it's wrong, lock it manually — takes effect after saving and reopening.
+每账号每天一条摘要，发到自己的「收藏夹」（不弹系统通知）。目标连续 3 天失败会额外提醒。	One summary per account per day, sent to your own Saved Messages (no system notification). A target failing 3 days in a row triggers an extra alert.
+窗口结束后仍会补签到到这个时间（如 23:00），过了才真正放弃；仅「错过补签」开启时生效	Missed targets can still be signed up to this time (e.g. 23:00) before being given up; only applies when "Missed make-up" is on
+关掉 TG 期间错过的签到点：开=错过后随机延迟 1~5 分钟自动补；关=错过即跳过（默认）	Sign-ins missed while Telegram was closed: On = retry automatically 1–5 minutes late; Off = simply skip them (default)
+把 {0} 的 {1} 个目标复制到其它账号。\n只复制目标本身，不带「今天已签」和重试记录。	Copy {0}'s {1} targets to another account.\nOnly the targets are copied — not today's sign-ins or retry history.
+会话 uid={0}  msg={1}  回调按钮 {2}/{3}；点一个即绑定（可连点多个）	Chat uid={0}  msg={1}  callback buttons {2}/{3}; tap one to bind (you can bind several in a row)
+当前没有可排除的对象。\n先在目标列表长按某个 bot 选「排除整只 bot」，\n或先添加目标，再来这里勾选。	Nothing to block right now.\nLong-press a bot in the target list and choose "Block this bot",\nor add a target first and come back here.
+「检查更新」走官方 GitHub 发布，检测到新版本可直接下载安装包。遇到问题或想提需求，用「加入群组」反馈。	"Check updates" uses the official GitHub releases; if a newer version exists you can download the package directly. For problems or feature requests, use "Join group".
+不用管类型：去 bot 会话点一下它的签到按钮，选「自动识别」即可。\n如果它要的是发指令，用「我有签到指令」。	Don't worry about the type: open the bot's chat, tap its sign-in button once and choose "auto-detect".\nIf it expects a command instead, use "I have a command".
+最新在最上 ｜ 现在看：{0} · {1} ｜ 红=错误 黄=警告 绿=成功 灰=普通 暗灰=调试 ｜ 长按行复制	Newest first ｜ showing: {0} · {1} ｜ red=error amber=warning green=success grey=normal dark grey=debug ｜ long-press a line to copy
+「签全部账号」会依次签每个账号；定时签到跟随当前账号。切换 Telegram 账号后，本面板显示的目标集会随之切换。	"Sign all accounts" signs each account in turn; the timer follows the current account. After you switch Telegram accounts, the target set shown here switches with it.
+回调调试台 · uid={0} msg={1} 按钮 {2} 个\n点任意按钮=实时发一次该回调并看返回；不放心先「重新采样」	Callback console · uid={0} msg={1} · {2} buttons\nTap any button to fire that callback once and see the reply; if unsure, tap "Re-sample" first.
+将删除【所有账号】的全部签到目标与已签/重试状态，仅保留关键词/重试上限/唤醒命令设置。此操作不可撤销，建议先导出配置备份。	This deletes every signing target and all signed/retry state on ALL accounts, keeping only keyword, retry-limit and wake-command settings. It cannot be undone — export a config backup first.
+提示：同一 bot 可添加多条指令（多指令自动签到）；\n回调按钮型签到无需手动添加——直接点一次 bot 的签到按钮即可自动学习。	Tip: one bot can have several commands (all signed automatically);\ncallback-style sign-ins need no manual setup — just tap the bot's sign-in button once and it is learned.
+匹配 bot 回复正文 + 按钮文案。普通关键词按子串（不分大小写）；\n用 / 包裹当正则，如 /^每日.*点击/ 。# 开头为注释。	Matches the bot's reply text and button labels. Plain keywords match as substrings (case-insensitive);\nwrap in / for a regex, e.g. /^daily.*tap/ . Lines starting with # are comments.
+条目操作里有「暂停一周 / 恢复」：暂停后该目标一周内不动作，到期自动恢复。适合出差、bot 维护、或暂时不想被签的场合，不用删掉再加回来。	Under "Entry actions" there is "Pause 1 week / Resume": a paused target does nothing for a week and resumes automatically. Useful when travelling, when a bot is under maintenance, or when you simply don't want it signed for now — no need to delete and re-add it.
+选一份备份导入。导入前会显示它的内容，导入后会告诉你目标数有没有变化。\n合并 = 只覆盖文件里有的键；覆盖 = 先清掉现有目标和状态再导入。	Pick a backup to import. Its contents are shown first, and afterwards you'll see whether the target count changed.\nMerge = only overwrite keys present in the file; Replace = clear existing targets and state first.
+设置里可选主题：自动（跟随 Telegram 主题，推荐）/ 始终日间 / 始终夜间。界面配色由 TG 当前主题决定，切换 TG 主题面板会跟着变。	In Settings you can choose a theme: Auto (follows Telegram, recommended) / Always light / Always dark. The panel colours follow Telegram's current theme and update when you switch it.
+有的 bot 不主动发签到面板。在该条目的「编辑」里填“前置命令序列”（逗号或换行分隔，可多条，如 /start, 菜单）。签到或测试时会先依次发送把面板拉出来，再点按钮。	Some bots won't show the sign-in panel on their own. In that entry's "Edit", fill in a pre-command sequence (comma- or newline-separated, e.g. /start, menu). When signing or testing, these are sent first to pull up the panel, then the button is tapped.
+每个账号的目标和“今天是否已签”各自独立。Telegram 里切到哪个账号，面板就是那个账号的目标，发送签到也跟随当前账号，不会替后台账号乱发。首页会显示其它账号各有几个目标。	Each account keeps its own targets and its own "signed today" state. Whichever account you switch to in Telegram, the panel shows that account's targets and signing follows the current account — no stray sends on behalf of background accounts. The home screen also shows how many targets the other accounts have.
+没有找到备份文件。\n\n备份放在这里：\nAndroid/data/{0}/files/tgautosign/\n（在 /jmb → 📤 导出配置 里生成，也可以手动把 json 拷进去）	No backup files found.\n\nBackups live here:\nAndroid/data/{0}/files/tgautosign/\n(created via /jmb → 📤 Export config; you can also copy a JSON file in manually)
+任意聊天（含收藏夹）输入框发 /jmb 即可。面板顶部是今日进度与最近日志，中间 6 个高频入口，最下一行「全部功能」是分类直达：目标 / 数据 / 系统 / 帮助 / 维护，横滑点一下直接进对应分组。	Type /jmb in any chat (Saved Messages works too). The top shows today's progress and recent logs, the middle row holds 6 frequently used entries, and the bottom "All features" row jumps straight to each category: Targets / Data / System / Help / Maintenance. Swipe sideways and tap to open a group.
+① 任意聊天输入框发 /jmb 打开面板 → ② 点「添加目标」加一个你要签的 bot → ③ 剩下的它自己办：每天在设定时段内自动签，失败自动重试，结果发到你自己的收藏夹。不需要开着 Telegram。	1. Type /jmb in any chat to open the panel. 2. Tap "Add target" to add a bot you want to sign in for. 3. The module handles the rest: it signs automatically during your chosen window, retries on failure, and sends the result to your own Saved Messages. Telegram does not need to stay open.
+设置 → 学习行为：「按钮学习」开启后，你在 bot 里点过的按钮会自动加进目标；「网络学习」自动识别你发的签到文本。\n「关键词过滤」默认关闭（点过的都能绑）；开启后只有文案命中「学习关键词」的按钮才自动加，防误加。	Settings → Learning: with "Button learning" on, buttons you tap in a bot are added to targets automatically; "Network learning" detects sign-in texts you send.\n"Keyword filter" is off by default (anything you tap gets bound); when on, only buttons whose text matches your learning keywords are added, to avoid false positives.
+设置 →「签到结果通知」开启后，每天的签到摘要会静默发到你自己的 Telegram 收藏夹（不弹系统通知、不需要通知权限）。只想出问题时被打扰，就打开「只通知失败」。\n连续 3 天签到失败会额外告警一次，不会天天刷屏。	With Settings → "Sign-in result notification" on, a daily summary is quietly sent to your own Saved Messages (no system notification, no permission needed). Turn on "Failures only" if you only want to hear about problems.\nA target failing 3 days in a row triggers one extra alert — it won't spam you daily.
+「导出配置」生成 json 到下载目录，新设备用「导入配置」还原（导入是合并，不是覆盖）。配置里不含任何登录凭据。\n「导出日志」把运行日志导出到下载目录，方便留档或发给作者。\n删不干净时用「清空配置」，会跨全部账号彻底清。	"Export config" writes a JSON file to Downloads; on a new device use "Import config" to restore it (import merges, it does not overwrite). The file contains no credentials.\n"Export logs" writes the run log to Downloads for archiving or sending to the author.\nIf removal isn't clean, "Clear config" wipes everything across all accounts.
+用于在「群 / 频道」里发签到指令（不是私聊 bot）。\n\n群 ID 怎么拿？三种办法：\n① 点下面「从会话列表选群」→ 自动填 ID（推荐）\n② 直接去那个群点一次签到按钮 → 自动识别添加\n③ 群里长按任意消息转发给 @userinfobot 也可查（备用）	For sending a sign-in command in a group / channel (not a private bot chat).\n\nHow to get the group ID — three ways:\n1. Tap "Pick a group from chats" below → the ID is filled in for you (recommended)\n2. Just go to that group and tap its sign-in button once → added automatically\n3. Long-press any message there and forward it to @userinfobot (fallback)
+· 首页进度：当前账号今天签了几个。\n· 今日计划：设置 →「查看今日计划」，每个目标一行，已签显示实际时刻（绿），待签显示计划时刻（琥珀）。\n· 补签列表：今日待补 / 已补 / 已跳过 / 错过，以及窗口与补签状态。\n· 运行日志：每次动作的完整记录，可按级别和目标筛选。	· Home progress: how many targets were signed today for the current account.\n· Today's plan: Settings → "Today's plan". One row per target; signed ones show the actual time (green), pending ones show the planned time (amber).\n· Make-up list: pending / done / skipped / missed today, plus window and make-up status.\n· Logs: the full record of every action, filterable by level and target.
+运行日志固定「最新在最上」，打开即定位到最新那条；往下滑看更早的，「加载更多」每次多取 300 条。\n顶部芯片可按级别（全部 / 只看重要 / 只看错误）和目标过滤；「回到最新」一键回顶。\n颜色：红 = 错误，黄 = 警告，绿 = 成功，灰 = 普通，暗灰 = 调试。长按某行可复制。	Logs always show the newest line at the top. Swipe down for older entries; "Load more" fetches 300 more each time.\nChips at the top filter by level (all / important / errors) and by target; "Back to latest" jumps to the top.\nColours: red = error, amber = warning, green = success, grey = normal, dark grey = debug. Long-press a line to copy it.
+· 定时签到：开启后只在「签到时间」窗口内动作，窗口外所有自动触发一律不响应。\n· 签到时间：两端可点，例如 08:30-20:30。\n· 错开间隔：0 = 按目标数自动均分；设 N 分钟则相邻目标至少隔 N 分钟再随机，防风控节奏自己定。\n· 错过补签 + 补签截止：当天错过仍可补到该时刻（默认 23:00），避免白白作废。	· Timer: when on, the module only acts inside your "signing window"; nothing triggers outside it.\n· Signing window: tap either end to set, e.g. 08:30-20:30.\n· Spacing interval: 0 = spread evenly by target count; set N minutes to force at least N minutes between targets, then randomize.\n· Missed make-up + deadline: missed targets can still be signed up to the deadline (default 23:00) instead of being skipped for the day.
+· 文本指令：知道 bot 要求的签到文本（如 /checkin）时用，填机器人数字 ID + 指令，到点自动发。\n· 回调按钮（推荐）：这类要“点按钮”。去那个 bot 会话点一次它的签到按钮，模块会自动认出并记住，以后每天替你点。绑定不受关键词限制。\n· 群 / 频道：签到在群里发指令时用，填群 ID（形如 -1001234567890）。\n不确定 bot ID 时，用「从会话列表选群」直接挑。	· Text command: use this when the bot expects a command such as /checkin. Enter the bot's numeric ID and the command; it is sent automatically at the scheduled time.\n· Callback button (recommended): for bots that need a button tapped. Open that bot's chat and tap its sign-in button once — the module learns it and taps it for you every day. Binding is not limited by keywords.\n· Group / channel: for sign-ins you trigger from a group. Enter the group ID (like -1001234567890).\nIf you don't know the bot ID, use "Pick a group from chats".
+①「自诊断」：列出宿主反射锚点是否正常，第三方客户端（Nagram XF / Nagram / ExteraLess）适配先看这里。\n②「回调调试台」：列出面板全部按钮，点任意一个实时发一次看机器人返回，用来确认哪个按钮才对。\n③「运行日志」：点「诊断包」一键复制（错误 + 警告 + 最近 50 条 + 配置摘要），粘贴给作者最省事。\n④ 签到没反应：先看通知开关、是否在签到窗口内、该目标是否被暂停。	1. "Self-check": lists whether the host reflection anchors are healthy. Check here first for third-party clients (Nagram XF / Nagram / ExteraLess).\n2. "Callback console": lists every button on the panel; tap one to fire it once and see the bot's reply — use it to confirm which button is correct.\n3. "Logs": tap "Diagnostics bundle" to copy errors + warnings + the last 50 lines + a config summary in one go, then paste it to the author.\n4. No response when signing: check the notification toggle, whether you're inside the signing window, and whether the target is paused.

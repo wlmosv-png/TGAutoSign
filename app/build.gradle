@@ -22,9 +22,9 @@ android {
 
         targetSdk 36
 
-        versionCode 119
+        versionCode 120
 
-        versionName "1.5.6"
+        versionName "1.5.7"
 
     }
 

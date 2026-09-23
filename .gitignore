@@ -14,3 +14,7 @@ keystore/
 
 # 本地编译校验产物
 verify/
+
+# Python 缓存
+__pycache__/
+*.pyc

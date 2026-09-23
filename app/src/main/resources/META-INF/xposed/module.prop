@@ -1,10 +1,10 @@
 id=io.github.wlmosv_png.tgautosign
 name=TGAutoSign
-version=1.5.5
-versionCode=118
+version=1.5.7
+versionCode=120
 author=wlmosv
-description=Telegram 每日自动签到模块：任意聊天发 /jmb 管理；回调按钮签到、多账号隔离、断网补签，支持官方版与第三方 Telegram 客户端
+description=Telegram daily auto check-in (LSPosed). Send /jmb in any chat. Callback-button sign-in, multi-account isolation, offline make-up. | Telegram 每日自动签到：任意聊天发 /jmb 管理，回调按钮签到、多账号隔离、断网补签
 minApiVersion=102
 targetApiVersion=102
 staticScope=true
-scope=org.telegram.messenger
+scope=org.telegram.messenger,xyz.nextalone.nagram,com.exteraless.app
