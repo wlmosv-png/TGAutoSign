@@ -53,15 +53,27 @@ Requires **libxposed API 102+** and a rooted device.
 
 ---
 
-## 📱 界面一览
+## 📱 Screenshots / 界面一览
 
-| 暗色 · 主面板 | 日间 · 主面板 |
+**English UI** — built in, no setup required
+**英文界面** — 内置，无需设置
+
+| Main panel | Main menu |
 | --- | --- |
-| ![主面板·暗色](docs/screenshots/main-dark.jpg) | ![主面板·日间](docs/screenshots/main-light.jpg) |
-| 暗色 · 主菜单 | 日间 · 主菜单 |
-| ![主菜单·暗色](docs/screenshots/menu-dark.jpg) | ![主菜单·日间](docs/screenshots/menu-light.jpg) |
-| 设置 | 目标过滤 |
-| ![设置](docs/screenshots/settings-light.jpg) | ![目标过滤](docs/screenshots/filter-light.jpg) |
+| ![Main panel](docs/screenshots/main-en-dark.jpg) | ![Main menu](docs/screenshots/menu-en-dark.jpg) |
+| Targets | Settings |
+| ![Targets](docs/screenshots/targets-en-dark.jpg) | ![Settings](docs/screenshots/settings-en-dark.jpg) |
+
+<details>
+<summary>中文界面（3 张）</summary>
+
+| 暗色 · 主面板 | 暗色 · 主菜单 |
+| --- | --- |
+| ![主面板·暗色](docs/screenshots/main-dark.jpg) | ![主菜单·暗色](docs/screenshots/menu-dark.jpg) |
+| 设置 | |
+| ![设置](docs/screenshots/settings-light.jpg) | |
+
+</details>
 
 ---
 
