@@ -83,8 +83,8 @@ public final class Lang {
         EN_SHORT.put("已签", "Done");
         EN_SHORT.put("待签", "Todo");
         EN_SHORT.put("按钮学习", "Buttons");
-        EN_SHORT.put("日志", "Logs");
-        EN_SHORT.put("目标", "Targets");
+        EN_SHORT.put("日志", "Log");
+        EN_SHORT.put("目标", "List");
         EN_SHORT.put("立即签到", "Sign");
         EN_SHORT.put("网络学习", "Network");
         EN_SHORT.put("自检", "Check");
@@ -144,6 +144,10 @@ public final class Lang {
         EN.put("错过", "Missed");
         EN.put("频道", "Channel");
         EN.put(" 冻结", " Frozen");
+        EN.put("{0}：目标 {1} · 已签 {2}/{3}", "{0}: {1} targets · {2}/{3} signed");
+        EN.put("已冻结", "Frozen");
+        EN.put("目标 {0} · 已签 {1}/{2}", "{0} targets  ·  {1}/{2} signed");
+        EN.put("（{0} 个不参与）", "({0} not counted)");
         EN.put(" 出品", "");
         EN.put(" 定时", " Timer");
         EN.put(" 已签", " Signed");

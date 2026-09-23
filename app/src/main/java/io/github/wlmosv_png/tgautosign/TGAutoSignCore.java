@@ -491,12 +491,12 @@ public final class TGAutoSignCore {
             for (int i = 0; i < n; i++) {
                 List<Map<String, Object>> l = new ArrayList<Map<String, Object>>();
                 loadTargetsInto(accountPrefix(i), l);
-                int done = 0;
-                for (Map<String, Object> m : l) {
-                    try { if (today.equals(prefs.getString(kLast(accountPrefix(i), entryId(m)), ""))) done++; } catch (Throwable ignored) {}
-                }
+                // v1.5.7：分母用活跃目标（排除冻结/排除的 bot）
+                String pfx2 = accountPrefix(i);
+                int done = activeSignedCount(pfx2, l, today);
+                int actv = activeTargetCount(pfx2, l);
                 if (i > 0) sb.append('\n');
-                sb.append(Lang.tf("{0}：目标 {1} · 已签 {2}", accountLabel(i), l.size(), done));
+                sb.append(Lang.tf("{0}：目标 {1} · 已签 {2}/{3}", accountLabel(i), l.size(), done, actv));
                 if (l.isEmpty()) sb.append(Lang.tr("（还没有目标，去该账号学一个）"));
             }
         } catch (Throwable ignored) {}
@@ -3003,6 +3003,8 @@ public final class TGAutoSignCore {
                     busy++;
                     continue;
                 }
+                // v1.5.7：被排除的 bot 不再签到（原来只拦学习阶段，已收录的目标照签）
+                if (!force && isBotBlocked(entryDid(m))) { continue; }
                 if (!force && isSnoozed(prefix, id)) {
                     logd("[" + reason + "] " + dialogId + " 暂停中(至 " + prefs.getString(kSnooze(prefix, id), "") + ")，跳过");
                     continue;
@@ -3333,12 +3335,46 @@ public final class TGAutoSignCore {
     }
 
     // 按当前排序模式返回有序快照
+    // ── v1.5.7 计数口径：冻结/排除的目标不参与签到，也不该拖累进度分母 ──
+    /** 该条目是否「不参与签到」（冻结 或 所在 bot 被排除） */
+    private boolean isInactive(String prefix, Map<String, Object> m) {
+        try {
+            if (isFrozen(prefix, entryId(m))) return true;
+            if (isBotBlocked(entryDid(m))) return true;
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /** 活跃目标数（进度分母）：总数 − 冻结 − 排除的 bot */
+    private int activeTargetCount(String prefix, List<Map<String, Object>> list) {
+        int c = 0;
+        for (Map<String, Object> m : list) {
+            try { if (!isInactive(prefix, m)) c++; } catch (Throwable ignored) {}
+        }
+        return c;
+    }
+
+    /** 活跃目标里今天已签数（进度分子） */
+    private int activeSignedCount(String prefix, List<Map<String, Object>> list, String today) {
+        int c = 0;
+        for (Map<String, Object> m : list) {
+            try {
+                if (isInactive(prefix, m)) continue;
+                if (today.equals(prefs.getString(kLast(prefix, entryId(m)), ""))) c++;
+            } catch (Throwable ignored) {}
+        }
+        return c;
+    }
+
     private List<Map<String, Object>> sortedTargets() {
         List<Map<String, Object>> l = targetsSnapshot();
         String today = todayStr();
         if ("name".equals(SORT_MODE)) {
             java.util.Collections.sort(l, new java.util.Comparator<Map<String, Object>>() {
                 @Override public int compare(Map<String, Object> a, Map<String, Object> b) {
+                    int ia = isInactive(accountPrefix(), a) ? 1 : 0;
+                    int ib = isInactive(accountPrefix(), b) ? 1 : 0;
+                    if (ia != ib) return ia - ib;
                     String na = botName(entryDid(a));
                     String nb = botName(entryDid(b));
                     if (na == null) na = "";
@@ -3349,6 +3385,10 @@ public final class TGAutoSignCore {
         } else {
             java.util.Collections.sort(l, new java.util.Comparator<Map<String, Object>>() {
                 @Override public int compare(Map<String, Object> a, Map<String, Object> b) {
+                    // v1.5.7：冻结/排除的沉底，活跃目标永远排在前面
+                    int ia = isInactive(accountPrefix(), a) ? 1 : 0;
+                    int ib = isInactive(accountPrefix(), b) ? 1 : 0;
+                    if (ia != ib) return ia - ib;
                     int ra = statusRank(statusOf(accountPrefix(), entryId(a), today));
                     int rb = statusRank(statusOf(accountPrefix(), entryId(b), today));
                     if (ra != rb) return ra - rb;
@@ -3722,7 +3762,10 @@ public final class TGAutoSignCore {
         row.addView(col, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         TextView ar = new TextView(c); ar.setTextSize(18); ar.setText("\u203a"); ar.setTextColor(accent); row.addView(ar);
         wrap.addView(row);
-        if (blocked) {
+        // v1.5.7：冻结 或 所在 bot 被排除 → 整行虚化（两者视觉一致）
+        boolean frozenRow = false;
+        try { frozenRow = isFrozen(accountPrefix(), id); } catch (Throwable ignored2) {}
+        if (blocked || frozenRow) {
             wrap.setAlpha(0.45f);
         }
         // 点击挂在最外层，保证色条区域也可点
@@ -4026,7 +4069,15 @@ public final class TGAutoSignCore {
         statCard.setLayoutParams(lpCard);
         TextView st1 = new TextView(act); st1.setTextSize(Theme.TS_BODY); st1.setTextColor(Theme.termCyan(act));
         st1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-        st1.setText("\u25B8 " + accountLabel(currentAccount()) + "  ·  targets " + targets.size() + "  ·  signed " + signed + "/" + targets.size());
+        {
+            int aAll = targets.size();
+            int aAct = activeTargetCount(accountPrefix(), targets);
+            int aSig = activeSignedCount(accountPrefix(), targets, today);
+            int aOut = Math.max(0, aAll - aAct);
+            st1.setText("\u25B8 " + accountLabel(currentAccount()) + "  ·  "
+                    + Lang.tf("目标 {0} · 已签 {1}/{2}", aAll, aSig, aAct)
+                    + (aOut > 0 ? Lang.tf("（{0} 个不参与）", aOut) : ""));
+        }
         statCard.addView(st1);
         // 今日进度条：已签=绿，未签=底色，一眼看出进度
         try {
@@ -4039,18 +4090,26 @@ public final class TGAutoSignCore {
             LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(-1, dp(6));
             plp.topMargin = dp(8);
             pbar.setLayoutParams(plp);
-            int doneN = Math.max(0, Math.min(signed, total));
-            if (total > 0 && doneN > 0) {
+            // v1.5.7：分母只取活跃目标 —— 冻结/排除的完全不进条，
+            // 因此有目标被冻结时，剩下的签完就是满条（绿=已签 / 青=待签）
+            int actN = activeTargetCount(accountPrefix(), targets);
+            int sigN = Math.min(activeSignedCount(accountPrefix(), targets, today), actN);
+            int pendN = Math.max(0, actN - sigN);
+            if (sigN > 0) {
                 View f = new View(act);
                 android.graphics.drawable.GradientDrawable fd = new android.graphics.drawable.GradientDrawable();
-                fd.setColor(doneN == total ? Theme.termGreen(act) : Theme.termCyan(act));
+                fd.setColor(Theme.termGreen(act));
                 fd.setCornerRadius(dp(3));
                 f.setBackground(fd);
-                pbar.addView(f, new LinearLayout.LayoutParams(0, dp(6), doneN));
+                pbar.addView(f, new LinearLayout.LayoutParams(0, dp(6), sigN));
             }
-            if (total > doneN) {
+            if (pendN > 0) {
                 View r = new View(act);
-                pbar.addView(r, new LinearLayout.LayoutParams(0, dp(6), total - doneN));
+                android.graphics.drawable.GradientDrawable rd = new android.graphics.drawable.GradientDrawable();
+                rd.setColor(Theme.withAlpha(Theme.termCyan(act), 0x66));
+                rd.setCornerRadius(dp(3));
+                r.setBackground(rd);
+                pbar.addView(r, new LinearLayout.LayoutParams(0, dp(6), pendN));
             }
             statCard.addView(pbar);
         } catch (Throwable ignored) {}
@@ -4156,6 +4215,8 @@ public final class TGAutoSignCore {
             }
             qb.setPadding(dp(4), dp(7), dp(4), dp(7));
             qb.setBackground(termBorder(act, Theme.withAlpha(Theme.termCyan(act), 0x12), Theme.withAlpha(Theme.termCyan(act), 0x59)));
+            // 英文比中文长：给足两行的最小高度，避免折行后第二行被裁
+            if (Lang.isEnglish()) { qb.setMinHeight(dp(46)); qb.setGravity(android.view.Gravity.CENTER); }
             qb.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ runAction(act, q[0]); } });
             quick.addView(qb, new android.widget.LinearLayout.LayoutParams(0, -2, 1f));
         }
