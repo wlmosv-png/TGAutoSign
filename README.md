@@ -1,4 +1,6 @@
-# TGAutoSign · Telegram 自动签到
+<img src="https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/banner.png" width="720" alt="TGAutoSign">
+
+# TGAutoSign
 
 [![Latest Release](https://img.shields.io/github/v/release/wlmosv-png/TGAutoSign?label=最新版本&color=blue)](https://github.com/wlmosv-png/TGAutoSign/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/wlmosv-png/TGAutoSign/total?label=下载量&color=brightgreen)](https://github.com/wlmosv-png/TGAutoSign/releases)
@@ -6,7 +8,7 @@
 [![License](https://img.shields.io/badge/license-GPLv3-green)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/wlmosv-png/TGAutoSign/android.yml?label=CI)](https://github.com/wlmosv-png/TGAutoSign/actions)
 
-**每天手动给签到 bot 发指令？让模块替你签。**
+**点一次，签一年。**  ·  *Tap once. Signed every day.*
 
 在 Telegram 里点一次签到按钮就学会，之后每天自动：回调按钮重放、断网补签、限流退避、面板实时跟踪。
 管理界面直接做进 Telegram —— 任意聊天发 `/jmb`，没有独立 App。
@@ -77,59 +79,32 @@ Requires **libxposed API 102+** and a rooted device.
 
 ---
 
-## 🚀 快速开始
-
-1. **安装**：[下载最新版 APK](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases/latest)，在 **LSPosed** 中启用，作用域勾选你的 Telegram 客户端
-2. **完全停止** Telegram 后重新打开
-3. 到签到 bot 的会话里**点一次签到按钮** → 模块自动记住目标
-4. 之后每天自动签到；发 `/jmb` 可随时查看与管理
-
-> 回调按钮型 bot（点按钮不发文字）同样支持：点一次即学习，之后每天自动重放。
 
 ---
 
-## ✨ 功能
+## ✨ 它能做什么
 
-**签到方式**
+| | 能力 | 说明 |
+|---|---|---|
+| ⚡ | **点一次就学会** | 在 bot 里点一下签到按钮，之后每天自动重放；按钮 data 变了也跟得上 |
+| 📝 | **文本指令也行** | 填 bot ID + 指令（如 `/checkin`），到点自动发 |
+| 👥 | **群 / 频道签到** | 群 ID 同样支持，回复判定按群内消息走 |
+| 🕐 | **时间你说了算** | 签到窗口 · 每目标随机时刻 · 错开间隔 · 补签截止 · 暂停一周 |
+| 🛡️ | **不硬刚风控** | 失败自动退避 5m→15m→45m→2h→4h · 尊重 FLOOD_WAIT · 断网自动补签 |
+| 🚫 | **不想签的挡得住** | 关键词 / 正则规则 · 整只 bot 排除 · 单个目标冻结 |
+| 👤 | **多账号互不干扰** | 目标与已签状态按账号隔离；可一键把目标复制到其它账号 |
+| 🔔 | **每天一条摘要** | 发到自己的收藏夹，不弹系统通知；连续失败 3 天额外告警 |
+| 🌍 | **中英双语界面** | 英文设备装上即英文；设置里可手动切换 |
+| 🔒 | **数据全在本地** | 无服务器、无遥测、无上报 |
 
-- 回调按钮：点一次即学会，之后每天自动重放。按钮 data 每次变化也跟得上
-- 文本指令：填 bot ID + 指令，到点自动发
-- 群 / 频道：群 ID 支持签到与回复判定，列表显示群名或备注名
-- 一个 bot 多条指令：各自独立签到、独立状态、独立重试
-- 多账号：目标、已签状态、重试退避按账号隔离；可跨账号复制目标
+## 🚀 30 秒上手
 
-**时间控制**
+**1.** 装 APK → LSPosed → **模块** → 启用 **TGAutoSign**
+**2.** **作用域**里勾选你在用的 Telegram 客户端
+**3.** 完全停掉 Telegram，再重新打开
+**4.** 任意聊天发 `/jmb` → 到 bot 会话**点一次它的签到按钮** → 完成
 
-- 签到窗口：只在窗口内动作，窗口外零请求
-- 时刻表：窗口按目标数均分，各目标取随机时刻、互不重叠
-- 错开间隔：设 N 分钟则相邻目标至少隔 N 分钟再随机
-- 补签截止：窗口结束后仍补到该时刻（默认 23:00），当天不作废
-- 暂停：单个目标暂停一周，到期自动恢复
-
-**可靠性**
-
-- 回复三态判定：成功 / 已签过 / 失败。失败撤销已签，按 5m→15m→45m→2h→4h 退避
-- FLOOD_WAIT 尊重服务器给的等待秒数
-- 断网补签：启动 / 定时 / 打开聊天 / 网络恢复
-- 连续失败 3 天告警一次，签到成功即清零
-- 跨客户端同步：官方版与第三方客户端之间同步目标与状态，任一端签的都算数
-
-**过滤与排除**
-
-- 排除规则：一行一条，命中 bot 回复正文或按钮文案就不自动学习；支持 `/…/` 正则与 `#` 注释
-- 排除的 bot：整只 bot 不学习、不自动签到；在主菜单「排除管理」里随时增删，已排除条目独立分组显示
-- 目标冻结：永久停签某条目，与「暂停一周」区分
-- 网络学习需确认：新目标先进待确认池，手动点「加入」才真正添加，防验证码类 bot 误加
-- 目标备注名：可自己给 bot 起名（如「每日签到」），列表按 `@username` 辅助识别，不裸露数字 ID
-
-**界面与数据**
-
-- 管理界面在 Telegram 内，无独立 App；面板底部「全部功能」分类直达
-- 图标全部代码绘制（`Icons.java`），含机器人等矢量图标，不依赖系统 emoji，各机型一致
-- 深浅色跟随 TG 主题，也可强制日间 / 夜间
-- 运行日志：五级配色、最新在上、按目标筛选、一键诊断包；按天切分落盘（512KB × 7 天）
-- 通知：每天一条摘要发到自己的收藏夹，不弹系统通知
-- 全部本地存储，无服务器、无遥测
+> 之后每天自动签。想看状态、改设置，随时发 `/jmb`。
 
 ---
 
