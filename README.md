@@ -12,6 +12,44 @@
 管理界面直接做进 Telegram —— 任意聊天发 `/jmb`，没有独立 App。
 
 ⬇️ **[下载最新版 APK](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases/latest)** · [全部版本](https://github.com/wlmosv-png/TGAutoSign/releases) · [更新日志](CHANGELOG.md)
+<details open>
+<summary><b>🇬🇧 English</b></summary>
+
+**TGAutoSign** — Telegram daily auto check-in for LSPosed.
+Tap the bot's check-in button **once**; it learns and repeats daily, automatically.
+The control panel lives inside Telegram: send `/jmb` in any chat.
+
+**Highlights**
+
+- **Three ways to sign** — callback buttons · text commands · group/channel check-ins; one bot can hold several commands
+- **Multi-account**, fully isolated (targets, signed state and retry backoff are per account)
+- **Timing** — signing window · per-target schedule · minimum spacing · make-up deadline (23:00 default) · pause a target for a week
+- **Reliability** — three-state reply parsing (success / already signed / failure) · failure rolls back and retries with backoff 5m → 15m → 45m → 2h → 4h · `FLOOD_WAIT` respected · offline make-up · 3-day failure alert · cross-client sync
+- **Blocking** — line-based rules (matched against bot replies and button labels, `/…/` regex supported) · block a whole bot · freeze one target · network-learn hits need your confirmation
+- **UI & data** — panel inside Telegram, all icons drawn in code, dark/light follows your Telegram theme, built-in log view with a one-tap diagnostic bundle, daily summary to your Saved Messages
+- **100% local** — no server, no telemetry
+- **English UI out of the box** — on English devices no setup is needed
+
+**Supported clients**
+
+| Client | Package | Status |
+| --- | --- | --- |
+| Telegram (Play / default) | `org.telegram.messenger` | ✅ tested on 12.10.3 |
+| Telegram (direct APK) | `org.telegram.messenger.web` | ✅ statically verified |
+| Nagram XF | `fork.risin42.nagramx` | ✅ tested |
+| ExteraLess (ExteraGram fork) | `com.exteraless.app` | ✅ tested on 12.10.1 |
+| Nagram / NagramX / NagramNX | `nu.gpu.nagram` etc. | whitelisted, not tested |
+| Other Telegram-Android forks | any | injects if flag classes are intact |
+| Telegram X | — | ❌ not injected (different core) |
+
+> ⚠️ **Scope**: LSPosed enables only the official client by default. Using a third-party client? Tick **that** client in the module's scope as well.
+
+**Install** — install the APK → enable in LSPosed → tick your Telegram client in scope → fully stop Telegram, reopen → send `/jmb` in any chat.
+Requires **libxposed API 102+** and a rooted device.
+
+**What this is not** — a convenience tool, not a bypass. It respects rate limits, waits out `FLOOD_WAIT`, backs off on failures, and never loops tightly. No exploit, no anti-detection logic.
+
+</details>
 
 ---
 
