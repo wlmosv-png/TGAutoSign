@@ -3,6 +3,23 @@
 ## 1.6.0 (123) — 2026-09-24
 
 ### 修复 · Fixed
+- **「待确认」是个死状态：看得到、点不动（重要）· "Pending" was a dead state: visible but un-actionable (important)**
+  当签到发出后 bot 始终不回复，模块会把它标成「待确认」（不计成功也不计失败，停止自动重试）——
+  这个判断本身是对的，但**只做了一半**：状态写得进去，却没有任何清除入口。
+  目标列表里能看到「待确认」，点进菜单只有编辑 / 重绑 / 暂停 / 冻结 / 排除 / 删除，
+  没有一个能处理它；而重试计数已被清零，于是**每天照发、照超时、照标待确认**，无限循环。
+  现在状态行下方直接给出三个动作：**确认已签**（用户看过会话，记为今日已签）、
+  **重试**（立刻再发一次）、**忽略今天**（今日不再自动重试）。长按菜单里同样有一份。
+  另外补上跨天自动清理（昨天的「待确认」不再有意义，新的一天会重新发）和条目存在性校验。
+  *When a check-in was sent but the bot never replied, the module marked it "pending" (neither success
+  nor failure, auto-retry stopped). That judgement is correct, but only half of it was implemented:
+  the state could be written and never cleared. The target list showed "pending", yet the entry menu
+  only offered edit / rebind / snooze / freeze / exclude / delete — none of which resolved it, and the
+  retry counter had already been reset, so it resent, timed out and re-marked itself pending every
+  single day, forever. Three actions now sit right under the status line: **confirm signed** (you
+  checked the chat), **retry** (send again now) and **skip today** (no more auto-retry today), with
+  the same three in the long-press menu. Stale markers are also swept on the next day, and the
+  pending check now verifies the entry still exists.*
 - **回复判定用错账号（重要）· Reply verdict could land on the wrong account (important)**
   `processUpdateArray` 是**实例方法**，实例自己就带着账号号（`BaseController.currentAccount`），
   但模块判定 bot 回复时读的是**全局当前账号**。多账号下切换账号的瞬间收到回复，

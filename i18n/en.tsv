@@ -46,7 +46,7 @@
 过滤	Filter
 返回	Back
 退避	Backing off
-重试	Retrying
+重试	Retry
 错过	Missed
 频道	Channel
  冻结	 Frozen
@@ -127,6 +127,7 @@
 当前账号	Current account
 待确认（	Pending (
 快速上手	Quick start
+忽略今天	Skip today
 怎么导入	How to import
 按钮学习	Button learning
 捕获目标	Capture target
@@ -144,6 +145,7 @@
 目标管理	Target manager
 目标过滤	Target filter
 直接清空	Clear now
+确认已签	Confirm signed
 确认模板	Confirm preset
 移除条目	Delete entry
 立即签到	Sign now
@@ -180,6 +182,8 @@
 回调调试台	Callback console
 处理待确认	Review pending
 已全部加载	All loaded
+已忽略今天	Skipped today
+已重新发送	Resent
 当前账号：	Current account: 
 推荐给朋友	Tell a friend
 日志已清空	Logs cleared
@@ -217,6 +221,7 @@
 清空所有配置	Clear all config
 清空运行日志	Clear logs
 点选立即签到	Tap to sign now
+目标已不存在	This target no longer exists
 目标：{0}	Target: {0}
 签到结果通知	Sign-in result notification
 请填签到指令	Enter the sign-in command
@@ -247,6 +252,7 @@ json 备份	JSON backup
 已恢复：{0}	Resumed: {0}
 已清空排除列表	Blocklist cleared
 已解冻：{0}	Unfrozen: {0}
+已记为今日已签	Marked as signed today
 已载入 {0}	Loaded {0}
 排除的 bot	Blocked bots
 排除规则已保存	Block rules saved
@@ -284,6 +290,9 @@ UID 格式错误	Invalid UID
 已添加群签到目标	Group sign-in target added
 已跳过（{0}）	Skipped ({0})
 待确认（{0}）	Pending ({0})
+待确认：忽略今天	Pending: skip today
+待确认：确认已签	Pending: confirm signed
+待确认：重试一次	Pending: retry once
 按钮·发射·绑定	Button · fire · bind
 排除整只 bot	Block this bot
 搜索·筛选·清空	Search · filter · clear
@@ -360,6 +369,7 @@ UID 格式错误	Invalid UID
 无法打开分享: {0}	Could not open the share sheet: {0}
 暂停操作失败: {0}	Pause failed: {0}
 检查更新失败: {0}	Update check failed: {0}
+没等到 bot 回复：	No reply from the bot:
 绑定失败：会话ID无效	Bind failed: invalid chat ID
 自动判定成功 / 失败	Auto-detect success / failure
 设置打开失败: {0}	Could not open settings: {0}

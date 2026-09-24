@@ -141,7 +141,7 @@ public final class Lang {
         EN.put("过滤", "Filter");
         EN.put("返回", "Back");
         EN.put("退避", "Backing off");
-        EN.put("重试", "Retrying");
+        EN.put("重试", "Retry");
         EN.put("错过", "Missed");
         EN.put("频道", "Channel");
         EN.put(" 冻结", " Frozen");
@@ -222,6 +222,7 @@ public final class Lang {
         EN.put("当前账号", "Current account");
         EN.put("待确认（", "Pending (");
         EN.put("快速上手", "Quick start");
+        EN.put("忽略今天", "Skip today");
         EN.put("怎么导入", "How to import");
         EN.put("按钮学习", "Button learning");
         EN.put("捕获目标", "Capture target");
@@ -239,6 +240,7 @@ public final class Lang {
         EN.put("目标管理", "Target manager");
         EN.put("目标过滤", "Target filter");
         EN.put("直接清空", "Clear now");
+        EN.put("确认已签", "Confirm signed");
         EN.put("确认模板", "Confirm preset");
         EN.put("移除条目", "Delete entry");
         EN.put("立即签到", "Sign now");
@@ -275,6 +277,8 @@ public final class Lang {
         EN.put("回调调试台", "Callback console");
         EN.put("处理待确认", "Review pending");
         EN.put("已全部加载", "All loaded");
+        EN.put("已忽略今天", "Skipped today");
+        EN.put("已重新发送", "Resent");
         EN.put("当前账号：", "Current account: ");
         EN.put("推荐给朋友", "Tell a friend");
         EN.put("日志已清空", "Logs cleared");
@@ -312,6 +316,7 @@ public final class Lang {
         EN.put("清空所有配置", "Clear all config");
         EN.put("清空运行日志", "Clear logs");
         EN.put("点选立即签到", "Tap to sign now");
+        EN.put("目标已不存在", "This target no longer exists");
         EN.put("目标：{0}", "Target: {0}");
         EN.put("签到结果通知", "Sign-in result notification");
         EN.put("请填签到指令", "Enter the sign-in command");
@@ -342,6 +347,7 @@ public final class Lang {
         EN.put("已恢复：{0}", "Resumed: {0}");
         EN.put("已清空排除列表", "Blocklist cleared");
         EN.put("已解冻：{0}", "Unfrozen: {0}");
+        EN.put("已记为今日已签", "Marked as signed today");
         EN.put("已载入 {0}", "Loaded {0}");
         EN.put("排除的 bot", "Blocked bots");
         EN.put("排除规则已保存", "Block rules saved");
@@ -379,6 +385,9 @@ public final class Lang {
         EN.put("已添加群签到目标", "Group sign-in target added");
         EN.put("已跳过（{0}）", "Skipped ({0})");
         EN.put("待确认（{0}）", "Pending ({0})");
+        EN.put("待确认：忽略今天", "Pending: skip today");
+        EN.put("待确认：确认已签", "Pending: confirm signed");
+        EN.put("待确认：重试一次", "Pending: retry once");
         EN.put("按钮·发射·绑定", "Button · fire · bind");
         EN.put("排除整只 bot", "Block this bot");
         EN.put("搜索·筛选·清空", "Search · filter · clear");
@@ -455,6 +464,7 @@ public final class Lang {
         EN.put("无法打开分享: {0}", "Could not open the share sheet: {0}");
         EN.put("暂停操作失败: {0}", "Pause failed: {0}");
         EN.put("检查更新失败: {0}", "Update check failed: {0}");
+        EN.put("没等到 bot 回复：", "No reply from the bot:");
         EN.put("绑定失败：会话ID无效", "Bind failed: invalid chat ID");
         EN.put("自动判定成功 / 失败", "Auto-detect success / failure");
         EN.put("设置打开失败: {0}", "Could not open settings: {0}");

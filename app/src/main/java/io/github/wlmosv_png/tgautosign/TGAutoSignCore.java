@@ -780,6 +780,7 @@ public final class TGAutoSignCore {
         try { lastAccount = currentAccount(); } catch (Throwable ignored) {}
         try { migrateAccountConfigs(); } catch (Throwable ignored) {}   // 全局默认 → 各账号（老用户不丢设置）
         try { sweepOrphanEntryKeys(); } catch (Throwable ignored) {}    // 清掉历史遗留的孤儿状态键
+        try { sweepStalePendingConfirm(); } catch (Throwable ignored) {} // 清掉跨天残留的「待确认」
         registerNetworkReceiver();
         registerActivityListener();
         mainHandler.postDelayed(() -> { try { jlog("=== 启动补签 ==="); timerHook("启动"); } catch (Throwable ignored) {} }, 10000L);
@@ -1738,8 +1739,8 @@ public final class TGAutoSignCore {
     }
 
     /** 只有"必须挂在条目上才有意义"的键才参与孤儿清理；cfg_/daycap_ 这类账号级配置不能碰。 */
-    private static final String[] ORPHAN_HEADS = {"frozen_", "snooze_", "pendcfm_", "title_",
-            "fail_streak_", "fail_laststamp_", "fail_alert_", "sent_at_"};
+    private static final String[] ORPHAN_HEADS = {"frozen_", "snooze_", "pendcfm_", "pendcfm_note_",
+            "title_", "fail_streak_", "fail_laststamp_", "fail_alert_", "sent_at_"};
 
     /** 每天第一次加载时提示一条汇总（之前是每次重启都弹两条，很吵） */
     private void bootToast() {
@@ -2269,6 +2270,29 @@ public final class TGAutoSignCore {
         Button rb=mkBtn(act); withIconText(act, rb, "repeat", "重绑为回调（去点它的按钮）");
         rb.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ toast("去该 bot 会话点一下要绑的签到按钮，会自动作为回调新增"); startCapture(act); } });
         b.addView(rb);
+        // 「待确认」处置（v1.6.0）：长按菜单里也放一份，两条路径都能处理
+        try {
+            final String _pp = accountPrefix();
+            if (isPendingConfirm(_pp, entryId(m))) {
+                final long _pd = entryDid(m);
+                final String _pi = entryId(m);
+                Button pk = mkBtn(act); withIconText(act, pk, "warn", "待确认：确认已签");
+                pk.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
+                    pendConfirmAsSigned(_pp, _pi, _pd); dismissOne(entryActionsDlg[0]); showList(act);
+                } });
+                b.addView(pk);
+                Button pr2 = mkBtn(act); withIconText(act, pr2, "refresh", "待确认：重试一次");
+                pr2.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
+                    pendConfirmRetry(_pp, _pi, _pd); dismissOne(entryActionsDlg[0]); showList(act);
+                } });
+                b.addView(pr2);
+                Button pi2 = mkBtn(act); withIconText(act, pi2, "x", "待确认：忽略今天");
+                pi2.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
+                    pendConfirmIgnoreToday(_pp, _pi, _pd); dismissOne(entryActionsDlg[0]); showList(act);
+                } });
+                b.addView(pi2);
+            }
+        } catch (Throwable _eP2) { noteSwallowed("showEntryActions(pendcfm)", _eP2); }
         Button sn=mkBtn(act); withIconText(act, sn, "pause", "暂停一周 / 恢复");
         sn.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ toggleSnooze(m, currentAccount()); showEntryActions(act, m); } });
         b.addView(sn);
@@ -4051,6 +4075,7 @@ public final class TGAutoSignCore {
         TextView st = new TextView(c); st.setTextSize(Theme.TS_CAPTION); st.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
         int stCol = Theme.termTxt(c);
         if (status != null && status.contains("已签")) stCol = Theme.termGreen(c);
+        else if (status != null && status.contains("待确认")) stCol = Theme.termAmber(c);
         else if (status != null && (status.contains("退避") || status.contains("重试"))) stCol = Theme.termAmber(c);
         else if (status != null && status.contains("放弃")) stCol = Theme.termMuted(c);
         st.setTextColor(stCol);
@@ -4059,6 +4084,7 @@ public final class TGAutoSignCore {
         String stIcon = null;
         if (status != null) {
             if (status.contains("已签")) stIcon = "check";
+            else if (status.contains("待确认")) stIcon = "warn";
             else if (status.contains("待签")) stIcon = "clock";
             else if (status.contains("退避") || status.contains("重试")) stIcon = "warn";
         }
@@ -4083,6 +4109,51 @@ public final class TGAutoSignCore {
             t2r.addView(lt, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         }
         col.addView(t2r);
+        // 「待确认」处置条（v1.6.0）：以前这个状态只写不读，用户看到「待确认」却无处可点 ——
+        // 点进菜单也只有编辑/重绑/暂停/冻结/排除/删除，没有一个能处理它。
+        // 现在状态行下方直接给三个动作，看到就能当场决定。
+        try {
+            final String pfx = accountPrefix();
+            if (isPendingConfirm(pfx, id)) {
+                LinearLayout pr = new LinearLayout(c);
+                pr.setOrientation(LinearLayout.HORIZONTAL);
+                pr.setGravity(Gravity.CENTER_VERTICAL);
+                pr.setPadding(0, Theme.dp(c, 5), 0, 0);
+                final long fDid = did;
+                final String fId = id;
+                TextView tip = new TextView(c);
+                tip.setTextSize(Theme.TS_CAPTION);
+                tip.setTextColor(Theme.termAmber(c));
+                tip.setTypeface(Theme.text());
+                tip.setText(Lang.tr("没等到 bot 回复："));
+                pr.addView(tip);
+                pr.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,4), 1));
+                Button bOk = mkBtn(c);
+                bOk.setText(Lang.tr("确认已签"));
+                bOk.setTextSize(Theme.TS_CAPTION);
+                bOk.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                    pendConfirmAsSigned(pfx, fId, fDid); refreshListFrom(v.getContext());
+                } });
+                pr.addView(bOk);
+                pr.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,4), 1));
+                Button bRe = mkBtn(c);
+                bRe.setText(Lang.tr("重试"));
+                bRe.setTextSize(Theme.TS_CAPTION);
+                bRe.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                    pendConfirmRetry(pfx, fId, fDid); refreshListFrom(v.getContext());
+                } });
+                pr.addView(bRe);
+                pr.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,4), 1));
+                Button bIg = mkBtn(c);
+                bIg.setText(Lang.tr("忽略今天"));
+                bIg.setTextSize(Theme.TS_CAPTION);
+                bIg.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                    pendConfirmIgnoreToday(pfx, fId, fDid); refreshListFrom(v.getContext());
+                } });
+                pr.addView(bIg);
+                col.addView(pr);
+            }
+        } catch (Throwable _eP) { noteSwallowed("targetRow(pendcfm)", _eP); }
         row.addView(col, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         TextView ar = new TextView(c); ar.setTextSize(18); ar.setText("\u203a"); ar.setTextColor(accent); row.addView(ar);
         wrap.addView(row);
@@ -5934,11 +6005,117 @@ public final class TGAutoSignCore {
     /** 「待确认」：发出去了但 bot 始终没回复，不算成功也不算失败，且不再自动重试。 */
     private static String kPendingConfirm(String prefix, String id) { return prefix + "pendcfm_" + id; }
     private boolean isPendingConfirm(String prefix, String id) {
-        try { return prefs.getBoolean(kPendingConfirm(prefix, id), false); } catch (Throwable t) { return false; }
+        try {
+            if (!prefs.getBoolean(kPendingConfirm(prefix, id), false)) return false;
+            // 双保险：条目已删（清空配置 / 手动删除）时，残留的 pendcfm_ 不该让
+            // "重新添加的同一 bot" 一上来就显示「待确认」。
+            if (findEntryById(id) == null) return false;
+            return true;
+        } catch (Throwable t) { return false; }
     }
     private void clearPendingConfirm(String prefix, String id) {
         try { if (prefs.getBoolean(kPendingConfirm(prefix, id), false)) prefs.edit().remove(kPendingConfirm(prefix, id)).apply(); }
         catch (Throwable _eC) { noteSwallowed("clearPendingConfirm", _eC); }
+    }
+
+    // ── 「待确认」的用户处置（v1.6.0）──
+    // 背景：以前这个状态只写不读 —— 置位后除了"手动测试"没有任何清除入口，
+    // 用户永远卡在「待确认」，而重试计数已被清零 → 每天照发、照超时、照标待确认（死循环）。
+    // 现在给出三个明确动作，并把用户的选择记下来。
+
+    /** 用户已确认该目标今天签上了（写 last_，与正常签到成功等价）。 */
+    private void pendConfirmAsSigned(String prefix, String id, long did) {
+        try {
+            markSigned(prefix, id);              // 会顺带 remove(pendcfm_)
+            prefs.edit().putString(prefix + "pendcfm_note_" + id,
+                    todayStr() + "|用户确认已签").apply();
+            logs("【待确认】" + did + " 用户确认已签 → 计入今日已签");
+            toast(Lang.tr("已记为今日已签"));
+        } catch (Throwable t) { noteSwallowed("pendConfirmAsSigned", t); }
+    }
+
+    /** 用户选择重试：清掉待确认与重试计数，立刻再发一次。 */
+    private void pendConfirmRetry(String prefix, String id, long did) {
+        try {
+            prefs.edit().remove(kPendingConfirm(prefix, id))
+                 .putInt(kRetry(prefix, id), 0)
+                 .remove(kRetryAt(prefix, id))
+                 .remove(kRetryDay(prefix, id))
+                 .putString(prefix + "pendcfm_note_" + id, todayStr() + "|用户点了重试")
+                 .apply();
+            Map<String, Object> m = findEntryById(id);
+            if (m == null) { toast(Lang.tr("目标已不存在")); return; }
+            logs("【待确认】" + did + " 用户点了重试 → 重新发送");
+            toast(Lang.tr("已重新发送"));
+            sendSign(m, currentAccount(), true);
+        } catch (Throwable t) { noteSwallowed("pendConfirmRetry", t); }
+    }
+
+    /** 用户选择忽略今天：清掉待确认，且今天不再自动重试（不计成功也不计失败）。 */
+    private void pendConfirmIgnoreToday(String prefix, String id, long did) {
+        try {
+            prefs.edit().remove(kPendingConfirm(prefix, id))
+                 .putInt(kRetry(prefix, id), RETRY_LIMIT)      // = 今日放弃，不再自动试
+                 .putString(kRetryDay(prefix, id), todayStr())
+                 .putString(prefix + "pendcfm_note_" + id, todayStr() + "|用户忽略今天")
+                 .apply();
+            logs("【待确认】" + did + " 用户忽略今天（今日不再自动重试）");
+            toast(Lang.tr("已忽略今天"));
+        } catch (Throwable t) { noteSwallowed("pendConfirmIgnoreToday", t); }
+    }
+
+    /** 从任意 View 的 Context 取 Activity 并刷新目标列表（行内按钮用）。 */
+    private void refreshListFrom(Context ctx) {
+        try {
+            Activity a = null;
+            if (ctx instanceof Activity) a = (Activity) ctx;
+            if (a == null) a = lastActivity;
+            if (a == null) return;
+            final Activity fa = a;
+            mainHandler.post(new Runnable() { @Override public void run() { showList(fa); } });
+        } catch (Throwable t) { noteSwallowed("refreshListFrom", t); }
+    }
+
+    /** 该条目今天是否已被用户处置过（用于避免每天重复弹提示）。 */
+    private boolean pendConfirmedToday(String prefix, String id) {
+        try {
+            String v = prefs.getString(prefix + "pendcfm_note_" + id, "");
+            if (v == null || v.length() == 0) return false;
+            int bar = v.indexOf('|');
+            return bar > 0 && todayStr().equals(v.substring(0, bar));
+        } catch (Throwable t) { return false; }
+    }
+
+    /**
+     * 跨天清理：昨天遗留的「待确认」不再有意义 —— 它绑的是"那一次发送"，
+     * 新的一天会重新发。留着只会让状态永远停在「待确认」。
+     * @return 清掉的条数
+     */
+    private int sweepStalePendingConfirm() {
+        int n = 0;
+        try {
+            String today = todayStr();
+            int accN = Math.max(1, activatedAccounts());
+            SharedPreferences.Editor e = prefs.edit();
+            for (String k : new ArrayList<String>(prefs.getAll().keySet())) {
+                if (!k.startsWith("acc") || !k.contains("_pendcfm_")) continue;
+                if (!Boolean.TRUE.equals(prefs.getAll().get(k))) continue;
+                // 该条目今天有没有发送记录？没有就是隔天残留
+                int us = k.indexOf('_');
+                String prefix = k.substring(0, us + 1);
+                String id = k.substring(k.indexOf("_pendcfm_") + "_pendcfm_".length());
+                String sentDay = "";
+                try {
+                    long sentAt = prefs.getLong(prefix + "sent_at_" + id, 0L);
+                    if (sentAt > 0L) sentDay = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date(sentAt));
+                } catch (Throwable ignored) {}
+                if (today.equals(sentDay)) continue;      // 今天发的，保留
+                e.remove(k); n++;
+            }
+            if (n > 0) e.apply();
+        } catch (Throwable t) { noteSwallowed("sweepStalePendingConfirm", t); }
+        if (n > 0) jlog("清理跨天残留的「待确认」标记 " + n + " 个");
+        return n;
     }
 
     private static String kGap() { return "jmb_gap"; }

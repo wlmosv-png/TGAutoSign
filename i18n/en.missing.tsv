@@ -74,3 +74,14 @@ Telegram 标志类：{0}	Telegram flag classes: {0}
 自动判定已关闭：机器人回复不会被判成败（设置 → 判定机器人回复）	Auto-detection is off: bot replies won't be judged (Settings → Judging bot replies)
 宽松模式（来者不拒）	Loose mode (accept anything)
 开：点什么学什么（不再按关键词过滤）；判定时**只要机器人有回复就算成功**，\n但命中明确失败词（活动已结束 / 请先关注 / 未绑定 等）仍判失败。\n适合判定词千奇百怪的机器人。关：完全按下面的规则判定。	On: learn whatever you tap (no keyword filter), and **treat any reply as success** when judging — except replies that clearly mean failure (event ended / follow first / not linked, etc.), which still fail.\nFor bots with unpredictable wording. Off: judge purely by the rules below.
+确认已签	Confirm signed
+重试	Retry
+忽略今天	Skip today
+已记为今日已签	Marked as signed today
+已重新发送	Resent
+已忽略今天	Skipped today
+没等到 bot 回复：	No reply from the bot:
+目标已不存在	This target no longer exists
+待确认：确认已签	Pending: confirm signed
+待确认：重试一次	Pending: retry once
+待确认：忽略今天	Pending: skip today

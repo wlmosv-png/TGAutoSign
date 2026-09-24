@@ -39,7 +39,7 @@ check_expect_fail "碎片拼接传入出口"
 sed -i 's|return Lang.tf("{0}  ·  约 {1} 分钟后", tm, left);|return tm + "  ·  约 " + left + " 分钟后";|' "$C"
 check_expect_fail "辅助 String 方法体内裸中文"
 
-sed -i 's|jlog("使用: 在任意聊天输入 /jmb 打开管理界面");|jlog("使用: 在任意聊天输入 /jmb 打开管理界面"); String _t = Lang.tr("这是一个绝不存在的测试键");|' "$C"
+sed -i 's|"使用: 在任意聊天输入 /jmb 打开管理界面");|"使用: 在任意聊天输入 /jmb 打开管理界面"); String _t = Lang.tr("这是一个绝不存在的测试键");|' "$C"
 check_expect_fail "Lang 用了字典没有的键"
 
 sed -i 's|.setNegativeButton(Lang.tr("取消"), null)|.setNegativeButton("取消", null)|' "$C"
