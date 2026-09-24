@@ -92,6 +92,8 @@ public final class TGAutoSignCore {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Set<String> pendingSigns = cs();
     private boolean receiverRegistered = false;
+    /** 网络恢复广播 receiver。必须是字段：stop() 要反注册它（以前是方法局部变量，够不着）。 */
+    private BroadcastReceiver netReceiver = null;
     private int lastAccount = -1;
     // v1.4.0：回调捕获/绑定/调试台 + 每条目前置命令 + 关键词解耦
     private boolean AUTO_LEARN_FILTER = true;
@@ -114,7 +116,8 @@ public final class TGAutoSignCore {
     /** UI 层按钮 hook 的实际触发次数（挂载数 ≠ 触发数）。0 表示该宿主点击不走这些方法，
      *  学习和捕获只能依赖网络层兜底——诊断包显示，避免靠猜。 */
     private final java.util.concurrent.atomic.AtomicInteger uiBtnFire = new java.util.concurrent.atomic.AtomicInteger(0);
-    void uiBtnFired() { uiBtnFire.incrementAndGet(); }
+    // 注：不要另加 uiBtnFired() 包装 —— 实际调用点直接 uiBtnFire.incrementAndGet()，
+    // 包装方法从来没被调用过（check-wiring 抓出来的孤儿）。
 
     // 界面版：最近的前台 Activity（用于弹管理对话框）
     private volatile Activity lastActivity = null;
@@ -776,6 +779,7 @@ public final class TGAutoSignCore {
         } catch (Throwable ignored) {}
         try { lastAccount = currentAccount(); } catch (Throwable ignored) {}
         try { migrateAccountConfigs(); } catch (Throwable ignored) {}   // 全局默认 → 各账号（老用户不丢设置）
+        try { sweepOrphanEntryKeys(); } catch (Throwable ignored) {}    // 清掉历史遗留的孤儿状态键
         registerNetworkReceiver();
         registerActivityListener();
         mainHandler.postDelayed(() -> { try { jlog("=== 启动补签 ==="); timerHook("启动"); } catch (Throwable ignored) {} }, 10000L);
@@ -801,6 +805,27 @@ public final class TGAutoSignCore {
         mainHandler.postDelayed(new Runnable(){ public void run(){ try{ if(!prefs.getBoolean("jmb_tut_seen",false)){ prefs.edit().putBoolean("jmb_tut_seen",true).apply(); toast("输入 /jmb 打开管理面板 · /help 查看教程"); } }catch(Throwable ignored){} } }, 4000L);
     }
 
+
+    /**
+     * 停止本实例的后台工作（热重载 / 模块卸载时调用）。
+     *
+     * 为什么必须有：scheduleTickLoop() 与 schedulePoll() 都是**自递归 postDelayed**，
+     * 没有任何取消机制；网络广播 receiver 也没反注册。LSPosed 热重载后旧实例仍在跑，
+     * 与新实例并行 → 重复签到、重复 Toast、日志交错。
+     */
+    public void stop() {
+        try {
+            started = false;
+            tickLoopOn = false;
+            mainHandler.removeCallbacksAndMessages(null);
+            synchronized (waitingPanel) { waitingPanel.clear(); waitingPanelDeadline.clear(); }
+            pendingSigns.clear();
+            try { if (netReceiver != null) appContext.unregisterReceiver(netReceiver); } catch (Throwable ignored) {}
+            netReceiver = null;
+            receiverRegistered = false;
+            jlog("[生命周期] 实例已停止（热重载 / 卸载）");
+        } catch (Throwable t) { noteSwallowed("stop", t); }
+    }
 
     /** 静默检查更新：12 小时冷却，任何失败都不影响签到主流程 */
     private void checkUpdateSilently() {
@@ -1494,7 +1519,13 @@ public final class TGAutoSignCore {
     private static final String KIND_CB = "cb";
 
     private String entryId(Map<String, Object> m) { return String.valueOf(m.get("id")); }
-    private long entryDid(Map<String, Object> m) { return ((Number) m.get("did")).longValue(); }
+    /** 目标 bot 的数字 ID。缺字段/类型不符时返回 0（调用方普遍用 did==0 判无效）。 */
+    private long entryDid(Map<String, Object> m) {
+        try {
+            Object v = m == null ? null : m.get("did");
+            return v instanceof Number ? ((Number) v).longValue() : 0L;
+        } catch (Throwable t) { return 0L; }
+    }
     private String entryText(Map<String, Object> m) { return String.valueOf(m.get("text")); }
     private String entryKind(Map<String, Object> m) { return m.get("kind") == null ? KIND_TEXT : String.valueOf(m.get("kind")); }
     private byte[] entryData(Map<String, Object> m) { return m.get("data") instanceof byte[] ? (byte[]) m.get("data") : null; }
@@ -1596,8 +1627,35 @@ public final class TGAutoSignCore {
     private static final Set<String> GLOBAL_KEYS = new HashSet<String>(Arrays.asList(
         "jmb_keywords","jmb_retry","jmb_wake_cmd","jmb_alfilter","jmb_autolearn","jmb_autolearn_net","jmb_tut_seen","jmb_prompt_day","update_cooldown_at","update_seen_code","update_last_notice","update_last_error"));
 
+    /**
+     * 条目相关键前缀。
+     *
+     * 注意：这里漏一个前缀的后果不是"少删一点"，而是**状态复活** ——
+     * nextEntryId() 按 <did>_<seq> 生成 id，清空配置后重新添加同一个 bot 会拿到同一个 id，
+     * 残留的 frozen_/snooze_ 会被新条目直接继承（表现为"重新添加了但它就是不签"）。
+     * v1.6.0 补齐了 v1.3.0 之后新增的全部状态键。
+     */
     private static final String[] ENTRY_HEADS = {"learned_", "kind_", "did_", "data_", "hash_", "msg_id_",
-            "pre_", "loc_", "last_", "retry_", "retry_at_", "retry_day_", "sent_at_"};
+            "pre_", "loc_", "last_", "retry_", "retry_at_", "retry_day_", "sent_at_",
+            "frozen_", "snooze_", "pendcfm_", "title_", "fail_streak_", "fail_laststamp_", "fail_alert_",
+            "timer_plan_", "unknown_reply", "sign_days", "streak", "last_sign_date"};
+
+    /**
+     * 清空配置时**必须保留**的全局设置键（显式白名单）。
+     *
+     * 为什么不用"删掉所有像条目的键"这种黑名单写法：每次新增状态键都要记得回来改，
+     * 而"忘了改"的代价是静默的功能异常（见 ENTRY_HEADS 注释）。白名单只会漏保留
+     * （最多是设置被清掉、用户重设一次），不会漏删（漏删会留下看不见的脏状态）。
+     */
+    private static final Set<String> KEEP_ON_CLEAR = new HashSet<String>(Arrays.asList(
+            "jmb_keywords", "jmb_retry", "jmb_wake_cmd", "jmb_alfilter", "jmb_autolearn",
+            "jmb_autolearn_net", "jmb_autolearn_net_confirm", "jmb_tut_seen", "jmb_prompt_day",
+            "jmb_theme", "jmb_lang", "jmb_notify", "jmb_notify_fail_only", "jmb_notify_all_acc",
+            "jmb_sort", "jmb_fx", "jmb_judge", "jmb_judge_custom", "jmb_loose",
+            "jmb_ok_words", "jmb_fail_words", "jmb_blocked_dids", "jmb_exclude", "jmb_config_ts",
+            "jmb_window", "jmb_timer", "jmb_gap", "jmb_missback", "jmb_missdead",
+            "jmb_pending_confirm",
+            "update_cooldown_at", "update_seen_code", "update_last_notice", "update_last_error"));
 
     /** 是不是"目标/状态"键（带 acc 前缀或不带的老格式）；不是的就是设置项 */
     private static boolean isEntryKey(String k) {
@@ -1637,6 +1695,52 @@ public final class TGAutoSignCore {
         return moved + dropped;
     }
 
+    /**
+     * 清理"孤儿状态键"：前缀像条目、但对应条目已经不存在的 frozen_/snooze_/pendcfm_ 等。
+     *
+     * 为什么需要：v1.6.0 之前 clearAllConfig 用的是不完整的 ENTRY_HEADS，删目标时会留下
+     * 这些键；而 nextEntryId() 复用同一个 id，用户重新添加同一个 bot 就会继承旧状态
+     * （最典型的是 frozen_=true → 加回来了却永远不签，且没有任何日志）。
+     * 这里在启动时扫一遍，老用户升级即自动修复。
+     *
+     * @return 清掉的键数
+     */
+    private int sweepOrphanEntryKeys() {
+        int removed = 0;
+        try {
+            Set<String> live = new HashSet<String>();
+            for (Map<String, Object> m : targetsSnapshot()) live.add(entryId(m));
+            // 所有账号的条目都要算"存活"，否则会误删别的账号正在用的状态
+            int accN = Math.max(1, activatedAccounts());
+            for (int i = 0; i < accN; i++) {
+                List<Map<String, Object>> l = new ArrayList<Map<String, Object>>();
+                try { loadTargetsInto(accountPrefix(i), l); } catch (Throwable ignored) {}
+                for (Map<String, Object> m : l) live.add(entryId(m));
+            }
+            SharedPreferences.Editor e = prefs.edit();
+            for (String k : new ArrayList<String>(prefs.getAll().keySet())) {
+                if (!k.startsWith("acc")) continue;
+                int us = k.indexOf('_');
+                if (us <= 0) continue;
+                String body = k.substring(us + 1);
+                String hitId = null;
+                for (String h : ORPHAN_HEADS) {
+                    if (body.startsWith(h)) { hitId = body.substring(h.length()); break; }
+                }
+                if (hitId == null || hitId.length() == 0) continue;
+                if (live.contains(hitId)) continue;
+                e.remove(k); removed++;
+            }
+            if (removed > 0) e.apply();
+        } catch (Throwable t) { noteSwallowed("sweepOrphanEntryKeys", t); }
+        if (removed > 0) jlog("清理孤儿状态键 " + removed + " 个（条目已删但状态残留，会导致重新添加时状态复活）");
+        return removed;
+    }
+
+    /** 只有"必须挂在条目上才有意义"的键才参与孤儿清理；cfg_/daycap_ 这类账号级配置不能碰。 */
+    private static final String[] ORPHAN_HEADS = {"frozen_", "snooze_", "pendcfm_", "title_",
+            "fail_streak_", "fail_laststamp_", "fail_alert_", "sent_at_"};
+
     /** 每天第一次加载时提示一条汇总（之前是每次重启都弹两条，很吵） */
     private void bootToast() {
         try {
@@ -1667,7 +1771,8 @@ public final class TGAutoSignCore {
             SharedPreferences.Editor e = prefs.edit();
             int removed = 0;
             for (String k : new ArrayList<String>(prefs.getAll().keySet())) {
-                if (!isEntryKey(k)) continue;   // 设置项（jmb_* 等）一律保留
+                if (KEEP_ON_CLEAR.contains(k)) continue;                 // 全局设置：保留
+                if (k.startsWith("acc") && k.contains("_cfg_")) continue; // 账号级配置：保留
                 e.remove(k);
                 removed++;
             }
@@ -1808,6 +1913,13 @@ public final class TGAutoSignCore {
     private void handleNetworkCapture(final long did, final int msgId, final byte[] data){
         try {
             if (did == 0 || data == null || data.length == 0) return;
+            // 捕获窗口过期检查（与 UI 路径一致）：以前只有 handleTapCapture 里查，
+            // 网络层兜底不查 → 用户武装捕获后忘了、几小时后点任意按钮仍会弹绑定面板。
+            if (System.currentTimeMillis() - captureArmedAt > 120000L) {
+                captureArmed = false;
+                jlog("【捕获】武装已超过 2 分钟，自动取消（不弹面板）");
+                return;
+            }
             final String label = cbDataLabel(data);
             lastCapDid = did; lastCapMid = msgId;
             final List<Object[]> btns = new ArrayList<Object[]>();
@@ -3999,6 +4111,8 @@ public final class TGAutoSignCore {
     private boolean fastMainOpen = false;
     private volatile boolean inSendReq = false;
     private volatile long bootReadyAt = 0L;
+    /** 「未就绪被跳过」的日志限频时间戳（避免刷屏，又不至于完全无感）。 */
+    private volatile long lastReadySkipLogAt = 0L;
 
     private boolean notReadyYet() {
         return System.currentTimeMillis() < bootReadyAt;
@@ -4668,10 +4782,19 @@ public final class TGAutoSignCore {
         }
 
         private void refreshLog() {
+            // mergedLog 会读最多 8MB×N 个日志文件并解析 2 万行 —— 以前直接在主线程跑，
+            // 日志一多打开"运行日志"就明显卡顿。丢到 IO 线程，回主线程渲染。
+            if (logList == null) return;
+            LOG_IO.execute(new Runnable() { @Override public void run() {
+                final List<LogLine> got = mergedLog(20000);
+                mainHandler.post(new Runnable() { @Override public void run() { renderLog(got); } });
+            } });
+        }
+
+        private void renderLog(final List<LogLine> all) {
             try {
                 if (logList == null) return;
                 logList.removeAllViews();
-                List<LogLine> all = mergedLog(20000);
                 List<LogLine> show = new ArrayList<LogLine>();
                 int errs = 0, warns = 0;
                 String qq = logQuery.toLowerCase(Locale.US);
@@ -5240,6 +5363,7 @@ public final class TGAutoSignCore {
         try {
             String until = prefs.getString(kSnooze(prefix, id), "");
             if (until == null || until.length() == 0) return false;
+            if (findEntryById(id) == null) return false;   // 条目已删 → 残留的 snooze_ 不生效
             return until.compareTo(todayStr()) > 0;
         } catch (Throwable t) { return false; }
     }
@@ -5624,16 +5748,15 @@ public final class TGAutoSignCore {
      */
     private boolean inMissBackTime() {
         if (!MISS_BACK) return false;
-        int[] r = windowRange();
         java.util.Calendar c = java.util.Calendar.getInstance();
         int n = c.get(java.util.Calendar.HOUR_OF_DAY) * 60 + c.get(java.util.Calendar.MINUTE);
-        int start = r != null ? r[0] : 0;
-        if (MISS_DEADLINE >= start) {
-            // 普通情况：窗口开始 ~ 截止（同日）
-            return n >= start && n <= MISS_DEADLINE;
-        }
-        // 截止早于窗口开始 = 跨到次日（如窗口 20:00-23:00、截止 06:00）
-        return n >= start || n <= MISS_DEADLINE;
+        // 用支持跨天的解析：以前这里走 windowRange()，而它对跨天窗口（如 22:00-02:00）
+        // 返回 null → start 退化成 0 → MISS_DEADLINE >= 0 恒成立 → 判成"全天都是补签时段"。
+        // 同文件里的 inWindow() 早就换成了 windowRangeAny，这里当时漏改。
+        // 现在直接委托 SignLogic.inMissBackTime（纯函数、有单测覆盖），消除双实现。
+        int[] any = SignLogic.windowRangeAny(WINDOW);
+        int[] r = any != null ? new int[]{any[0], any[1]} : null;
+        return SignLogic.inMissBackTime(n, r, MISS_DEADLINE, true);
     }
 
     private String nowHM() {
@@ -7476,12 +7599,12 @@ public final class TGAutoSignCore {
     private void registerNetworkReceiver() {
         try {
             if (receiverRegistered) return;
-            BroadcastReceiver receiver = new BroadcastReceiver() {
+            netReceiver = new BroadcastReceiver() {
                 @Override public void onReceive(Context context, Intent intent) {
                     timerHook("网络恢复");
                 }
             };
-            appContext.registerReceiver(receiver, new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION));
+            appContext.registerReceiver(netReceiver, new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION));
             receiverRegistered = true;
         } catch (Throwable ignored) {}
     }
@@ -7585,7 +7708,13 @@ public final class TGAutoSignCore {
      * 与 snooze 的区别：冻结是"永久不要这个"，snooze 是"暂停一段"。
      */
     private boolean isFrozen(String prefix, String id) {
-        try { return prefs.getBoolean(kFrozen(prefix, id), false); } catch (Throwable t) { return false; }
+        try {
+            if (!prefs.getBoolean(kFrozen(prefix, id), false)) return false;
+            // 双保险：条目已被删除时，残留的 frozen_ 不该让"重新添加的同一 bot"继承冻结。
+            // （清空配置走的是白名单删除，正常不会残留；但历史版本留下的脏键还在。）
+            if (findEntryById(id) == null) return false;
+            return true;
+        } catch (Throwable t) { return false; }
     }
 
     private void setFrozen(Map<String, Object> m, int account, boolean frozen) {
@@ -8084,8 +8213,24 @@ public final class TGAutoSignCore {
                 }
             }
         } catch (Throwable ignored) {}
-        if (inSendReq || notReadyYet()) return false;
-        inSendReq = true;
+        // 启动后 30 秒的"未就绪"窗口：以前这里直接 return，且**一行日志都不写**。
+        // 但 Nagram / 官方版的 UI 按钮 hook 挂得上、不触发（实测），网络层是唯一的学习入口 ——
+        // 于是"冷启动 → 立刻点 bot 按钮"表现为彻底没反应，用户以为模块坏了。
+        // 现在：① 用户主动武装的捕获立即放行；② 被跳过时记一条日志，不再静默。
+        // v1.6.0 去掉了原来的 `inSendReq` 前置门：它是**实例级**布尔，任何一次 sendRequest
+        // （包括与签到无关的普通消息、图片上传）在处理期间，会把其他所有请求的学习/捕获
+        // 全部静默跳过 —— 用户连点多个 bot 按钮时只有第一个可能被学到。
+        // 学习本身是幂等的（findCbEntry 去重），不需要全局串行。
+        if (notReadyYet() && !captureArmed) {
+            long nowMs = System.currentTimeMillis();
+            if (nowMs - lastReadySkipLogAt > 5000L) {
+                lastReadySkipLogAt = nowMs;
+                logd("[启动] 尚未就绪（还差 " + ((bootReadyAt - nowMs) / 1000L)
+                     + " 秒），本次回调不处理；点按钮学习请等启动完成后再试");
+            }
+            return false;
+        }
+        inSendReq = true;   // 仅用于"模块自己发起的请求"期间的自我重入保护
         try {
             syncAccount();
             Object req = args != null && args.length > 0 ? args[0] : null;
@@ -8199,8 +8344,36 @@ public final class TGAutoSignCore {
     }
 
     /** 触发源 3.5：bot 回复语义判定（失败撤销 + 退避重试） */
-    public void onUpdateProcessed(Object update) {
+    /** 兼容旧调用点（不带 controller）。 */
+    public void onUpdateProcessed(Object update) { onUpdateProcessed(update, null); }
+
+    /**
+     * 从 MessagesController 实例反解账号索引。
+     *
+     * 为什么必须这么做：processUpdateArray 是**实例方法**，实例上就有 BaseController.currentAccount
+     * （protected final int，apk-index 实测 Nagram 12.10.3 存在）。而 currentAccount() 读的是
+     * UserConfig.selectedAccount —— **全局静态**，多账号下随时可能已经被切走。
+     * 以前这里用全局值定位 prefs 前缀，会把 A 账号 bot 的回复判到 B 账号头上：
+     * 那个账号的目标被写上 last_=今天（漏签且显示已签），或误判失败被撤销已签。
+     *
+     * @return 账号索引；拿不到返回 -1（调用方回退全局值）。
+     */
+    private int accountOfController(Object mc) {
+        if (mc == null) return -1;
+        try {
+            Object v = getFieldVal(mc, "currentAccount");   // 声明在父类 BaseController
+            if (v instanceof Number) {
+                int a = ((Number) v).intValue();
+                if (a >= 0) return a;
+            }
+        } catch (Throwable t) { noteSwallowed("accountOfController", t); }
+        return -1;
+    }
+
+    public void onUpdateProcessed(Object update, Object controller) {
         if (notReadyYet()) return;
+        // 账号在进入判定链之前就钉死，后续所有 prefs 前缀都用它
+        final int ctrlAcc = accountOfController(controller);
         try {
             if (update == null) return;
             // 1.4.7：processUpdate* 的第一参数是 Updates 容器 / List，先解包再逐条判定（此前整条链路从未触发）
@@ -8269,8 +8442,8 @@ public final class TGAutoSignCore {
             }
             mainHandler.post(() -> {
                 try {
-                    String prefix = accountPrefix();
-                    String lower = replyText.toLowerCase();
+                    // 用 hook 实例锁定的账号；拿不到（旧调用点）才回退全局值
+                    String prefix = ctrlAcc >= 0 ? accountPrefix(ctrlAcc) : accountPrefix();
                     // 「已签过/重复」必须先判且同样标记已签：
                     // 否则 last_ 不写 → 日历不绿 → 心跳每 90 秒再发一次（死循环）
                     // 判定逻辑已抽到 SignLogic（纯逻辑、有单测）：返回 {判定码, 命中词}
@@ -8695,13 +8868,21 @@ public final class TGAutoSignCore {
             RETRY_LIMIT = cfg.optInt("retry", RETRY_LIMIT);
             WAKE_CMD = cfg.optString("wake", WAKE_CMD);
             Theme.mode = THEME_MODE;
+            // 必须**同时**写账号级键：cfgStr()/cfgBool()/cfgInt() 是"账号级优先"，
+            // 一旦本机保存过设置（写了 accN_cfg_*），全局 jmb_* 就永远读不到了 ——
+            // 以前这里只写全局键，于是"已应用其他客户端的配置"是句谎话（实际没生效）。
             prefs.edit()
                 .putString(kWindow(), WINDOW)
+                .putString(accountPrefix() + "cfg_window", WINDOW)
                 .putInt("jmb_theme", THEME_MODE)
                 .putBoolean(kTimerEnabled(), TIMER_ENABLED)
+                .putBoolean(accountPrefix() + "cfg_timer", TIMER_ENABLED)
                 .putInt(kGap(), GAP_MIN)
+                .putInt(accountPrefix() + "cfg_gap", GAP_MIN)
                 .putBoolean(kMissBack(), MISS_BACK)
+                .putBoolean(accountPrefix() + "cfg_missback", MISS_BACK)
                 .putInt("jmb_missdead", MISS_DEADLINE)
+                .putInt(accountPrefix() + "cfg_missdead", MISS_DEADLINE)
                 .putString(kKeywords(), LEARN_KEYWORDS)
                 .putString(kExclude(), LEARN_EXCLUDE == null ? "" : LEARN_EXCLUDE)
                 .putString(kBlockedDids(), blockedDidsToStr())

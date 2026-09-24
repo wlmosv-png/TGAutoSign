@@ -34,6 +34,7 @@ public final class SignLogicTest {
         cbLabel();
         verdict();
         extras();
+        v160Regression();
 
         System.out.println("----------------------------------------");
         System.out.println("通过 " + passed + " / 失败 " + failed.size());
@@ -240,6 +241,39 @@ public final class SignLogicTest {
         // 顺序：dup 必须优先于 ok —— 命中词能证明用的哪张表
         Object[] d4 = SignLogic.verdictDetail("您今日已签到成功", null, null, null);
         eq("顺序：dup 表先命中", d4[1], "今日已签");
+    }
+
+    /**
+     * v1.6.0 修复对应的回归用例。
+     *
+     * 每一个都对应一个真实修掉的 bug —— 加进来是为了让"改回去"能被门禁拦住。
+     */
+    private static void v160Regression() {
+        // P1-4：跨天窗口的补签时段判定。
+        // 旧实现走 windowRange()（不支持跨天，返回 null）→ start 退化成 0 →
+        // "窗口开始 ~ 截止"恒成立 = 全天补签。这里锁定正确行为。
+        int[] cross = SignLogic.windowRangeAny("22:00-02:00");
+        tru("跨天窗口可解析", cross != null);
+        tru("跨天标记", SignLogic.crossesMidnight(cross));
+        // 窗口 22:00-02:00、补签截止 06:00 → 12:00 不该在补签时段
+        tru("跨天窗口 12:00 不在补签时段", !SignLogic.inMissBackTime(12 * 60, new int[]{22 * 60, 2 * 60}, 6 * 60, true));
+        tru("跨天窗口 23:00 在补签时段", SignLogic.inMissBackTime(23 * 60, new int[]{22 * 60, 2 * 60}, 6 * 60, true));
+        tru("跨天窗口 01:00 在补签时段", SignLogic.inMissBackTime(60, new int[]{22 * 60, 2 * 60}, 6 * 60, true));
+        tru("跨天窗口 07:00 不在补签时段", !SignLogic.inMissBackTime(7 * 60, new int[]{22 * 60, 2 * 60}, 6 * 60, true));
+        // 普通窗口不回归
+        tru("普通窗口 10:00 在补签时段", SignLogic.inMissBackTime(10 * 60, new int[]{8 * 60, 20 * 60}, 23 * 60, true));
+        tru("补签开关关 → 恒 false", !SignLogic.inMissBackTime(10 * 60, new int[]{8 * 60, 20 * 60}, 23 * 60, false));
+
+        // P3-7：normalizeId 不能返回纯 "-"（下游 Long.parseLong 会抛异常被静默吞）
+        eq("normalizeId 纯负号 → 空串", SignLogic.normalizeId("-"), "");
+        eq("normalizeId 全角负号 → 空串", SignLogic.normalizeId("－"), "");
+        eq("normalizeId 连字符无数字 → 空串", SignLogic.normalizeId("---"), "");
+        eq("normalizeId 正常负数保留", SignLogic.normalizeId("-1001234567890"), "-1001234567890");
+        eq("normalizeId 负号在中间被清掉", SignLogic.normalizeId("123-456"), "123456");
+
+        // 判定顺序：dup 优先于 ok（历史踩过的坑，永久锁定）
+        Object[] d = SignLogic.verdictDetail("签到成功，今日已签到", null, null, null);
+        eq("dup 优先于 ok（命中词证明）", d[1], "今日已签");
     }
 
     private static void extras() {

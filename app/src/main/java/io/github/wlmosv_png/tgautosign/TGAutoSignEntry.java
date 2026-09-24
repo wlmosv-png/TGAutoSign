@@ -394,7 +394,11 @@ public final class TGAutoSignEntry extends XposedModule {
                             .intercept(chain -> {
                                 try {
                                     Object update = chain.getArg(0);
-                                    if (update != null) CORE.onUpdateProcessed(update);
+                                    // 把 MessagesController 实例一起传下去：它自己带 currentAccount
+                                    // （BaseController 字段），判定回复时才能定位到正确的账号。
+                                    Object ctrl = null;
+                                    try { ctrl = chain.getThisObject(); } catch (Throwable ignored) {}
+                                    if (update != null) CORE.onUpdateProcessed(update, ctrl);
                                 } catch (Throwable ignored) {}
                                 return chain.proceed();
                             });
@@ -471,6 +475,9 @@ public final class TGAutoSignEntry extends XposedModule {
         HOOKED_METHODS.clear();
         ATTACH_HOOKED.set(false);
         NOTIFIED.set(false);
+        // 旧实例必须显式停掉：它的心跳/轮询是自递归 postDelayed，光丢引用不会停，
+        // 否则热重载后两个 Core 并行跑（重复签到 + 日志交错）。
+        try { if (CORE != null) CORE.stop(); } catch (Throwable t) { logError("stop old core failed", t); }
         CORE = null;
         try {
             Method attach = Application.class.getDeclaredMethod("attach", Context.class);

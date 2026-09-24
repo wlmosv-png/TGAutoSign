@@ -40,6 +40,55 @@ if [ "${TGAS_SKIP_I18N:-0}" != 1 ] && [ -f "$TGAS_SRC/i18n/check_i18n.py" ]; the
   fi
 fi
 
+# ── 纯逻辑单测门禁：SignLogic 回归测试（零依赖，javac+java 直接跑）──
+# 为什么有这道：Core 8400+ 行没有一行测试，2026-09-23 一天内三个线上事故
+# （按钮学习默认值、账号越界、捕获无效）全是「代码里有、从没验证过行为」——
+# i18n/版本/双语三道门禁一条都拦不住。纯逻辑抽进 SignLogic 后在这里跑断言。
+# 跳过：TGAS_SKIP_TESTS=1
+if [ "${TGAS_SKIP_TESTS:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/SignLogicTest.java" ]; then
+  echo "== 纯逻辑单测 =="
+  _tcls="${TMPDIR:-/tmp}/tgas-tcls-$$"
+  rm -rf "$_tcls"; mkdir -p "$_tcls"
+  if javac -nowarn -encoding UTF-8 -d "$_tcls" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/SignLogic.java" \
+        "$TGAS_SRC/tools/tests/SignLogicTest.java" 2>&1; then
+    if ! java -cp "$_tcls" io.github.wlmosv_png.tgautosign.SignLogicTest; then
+      rm -rf "$_tcls"
+      echo "FATAL: 纯逻辑单测失败（临时跳过：TGAS_SKIP_TESTS=1）" >&2; exit 1
+    fi
+  else
+    rm -rf "$_tcls"
+    echo "FATAL: 单测编译失败（临时跳过：TGAS_SKIP_TESTS=1）" >&2; exit 1
+  fi
+  rm -rf "$_tcls"
+fi
+
+# ── 更新日志双语门禁：最新版本段中英条目必须配对（写不全就出不了包）──
+# 模块界面已国际化，更新日志却长期只有中文；这类"忘记写"不会报错、只会静默存在。
+# 判定：英文条译 >= 中文条目 - 1（允许 1 条豁免）。跳过：TGAS_SKIP_CHLOG=1
+if [ "${TGAS_SKIP_CHLOG:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/check-chlog-i18n.py" ]; then
+  echo "== 更新日志双语检查 =="
+  python3 "$TGAS_SRC/tools/check-chlog-i18n.py" || {
+    echo "FATAL: 更新日志英文不完整（临时跳过：TGAS_SKIP_CHLOG=1）" >&2; exit 1; }
+fi
+
+# ── 版本四查：build.gradle / UpdateChecker / module.prop / CHANGELOG 必须同版本 ──
+if [ "${TGAS_SKIP_VERCHK:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/check-versions.py" ]; then
+  echo "== 版本四查 =="
+  python3 "$TGAS_SRC/tools/check-versions.py" || {
+    echo "FATAL: 版本号四查未通过（临时跳过：TGAS_SKIP_VERCHK=1）" >&2; exit 1; }
+fi
+
+# ── 接线门禁：新增的方法/菜单入口真的被调用了吗 ──
+# 来历：v1.4.1「复制目标到其它账号」界面方法写好了、菜单项也插了，但 runAction 漏了
+# 派发分支；dex 字符串自检全部命中，装上却看不到入口。只看"字符串在不在"是不够的。
+# 跳过：TGAS_SKIP_WIRING=1
+if [ "${TGAS_SKIP_WIRING:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/check-wiring.py" ]; then
+  echo "== 接线自检 =="
+  python3 "$TGAS_SRC/tools/check-wiring.py" "$TGAS_SRC" || {
+    echo "FATAL: 有孤儿方法或菜单项没派发（临时跳过：TGAS_SKIP_WIRING=1）" >&2; exit 1; }
+fi
+
 mkdir -p "$TGAS_WORK"
 rm -rf "$TGAS_WORK/cls" "$TGAS_WORK/dex"; mkdir -p "$TGAS_WORK/cls" "$TGAS_WORK/dex"
 find "$SRC_J" -name '*.java' > "$TGAS_WORK/files.txt"

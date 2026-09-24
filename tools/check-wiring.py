@@ -24,7 +24,7 @@ bad = 0
 MEMBERS = ['showCopyTargets', 'copyTargetsTo', 'perAccountLine', 'acctTargetCount', 'accountsWithoutTargets',
            'showImportPicker', 'showImportMode', 'doImportNow', 'migrateLegacyKeys', 'bootToast',
            'toastDaily', 'toastOnce', 'noteResult', 'flushRoundToast', 'peerFromDialogs', 'countSoftFail',
-           'giveUpTarget', 'isChatOrChannel', 'accountLabel', 'mergedLog', 'logChip', 'logRow',
+           'isChatOrChannel', 'accountLabel', 'mergedLog', 'logChip', 'logRow',
            'refreshLog', 'copyToClip', 'confirmClearLog', 'clearLogNow', 'appendDisk', 'parseLogLine',
            'guessLevel', 'isEntryKey', 'syncAccount', 'targetsSnapshot', 'isPendingFresh', 'numLong', 'strOf']
 orphan = [m for m in MEMBERS if t.count(m) < 2]

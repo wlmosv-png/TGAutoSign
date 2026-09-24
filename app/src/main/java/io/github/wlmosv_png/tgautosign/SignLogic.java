@@ -156,6 +156,10 @@ public final class SignLogic {
         String v = sb.toString();
         if (v.startsWith("-")) v = "-" + v.substring(1).replace("-", "");
         else v = v.replace("-", "");
+        // 只有一个负号（用户粘了 "-" 或 "－"）时返回空串：调用方普遍拿结果去
+        // Long.parseLong，返回 "-" 会抛 NumberFormatException 被静默吞掉，
+        // 表现为"填了 ID 但什么都没发生"。返回空串让调用方走"无效输入"分支。
+        if ("-".equals(v)) return "";
         return v;
     }
 

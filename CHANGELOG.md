@@ -1,5 +1,71 @@
 # 更新日志
 
+## 1.6.0 (123) — 2026-09-24
+
+### 修复 · Fixed
+- **回复判定用错账号（重要）· Reply verdict could land on the wrong account (important)**
+  `processUpdateArray` 是**实例方法**，实例自己就带着账号号（`BaseController.currentAccount`），
+  但模块判定 bot 回复时读的是**全局当前账号**。多账号下切换账号的瞬间收到回复，
+  就会把 A 账号 bot 的回复判到 B 账号头上：那个账号的目标被写上「今天已签」（**漏签却显示已签**），
+  或误判失败被撤销已签。现在从 hook 的实例反解账号，进入判定链之前就钉死。
+  这是「异步回调里读当前账号」这类 bug 的第三处（前两处：定时任务、面板回调）。
+  *processUpdateArray is an instance method and the instance carries its own account (BaseController.currentAccount), yet the verdict path read the global current account. With multiple accounts, a reply arriving right after an account switch was attributed to the wrong account: that account's targets got marked "signed today" (a missed sign that looks done), or a failure wrongly revoked a real sign-in. The account is now resolved from the hooked instance and pinned before the verdict chain runs. This is the third instance of the "async callback reads the current account" bug class (the first two: scheduled tasks, panel callback).*
+- **清空配置会残留状态，导致重新添加的 bot 状态复活（重要）· Clearing config left state behind, resurrecting it on re-add (important)**
+  「清空全部配置」只删了 v1.3.0 时代那批键，后来新增的**冻结 / 暂停 / 待确认 / 连续失败 /
+  自定义标题**等状态键不在删除范围内。而条目 id 按 `<botID>_<序号>` 复用 ——
+  清空后重新添加同一个 bot 会拿到同一个 id，**直接继承 `frozen_=true`**：
+  加回来了却永远不签，且没有任何日志。现在改成白名单删除，并在启动时清理历史孤儿状态键
+  （老用户升级即自动修复）；冻结/暂停判定也加了「条目仍存在」校验做双保险。
+  *"Clear all config" only removed keys from the v1.3.0 era; later state keys (frozen / snoozed / pending-confirm / fail-streak / custom title) survived. Entry ids are reused as botID_seq, so re-adding the same bot after a wipe picked up the old frozen=true and stayed permanently unscheduled with no log line. Deletion is now whitelist-based, orphan state keys are swept at startup (existing users are fixed on upgrade), and the frozen/snoozed checks also verify the entry still exists as a second safeguard.*
+- **冷启动 30 秒内点 bot 按钮毫无反应 · Tapping a bot button within 30 s of launch did nothing**
+  启动后 30 秒的「未就绪」窗口里，网络层的回调学习/捕获/回复判定全部**直接返回且不写日志**。
+  而 Nagram 与官方版的 UI 按钮 hook 只挂载不触发（实测），**网络层是唯一的学习入口** ——
+  于是「打开 TG 就去点签到按钮」表现为彻底没反应，用户以为模块坏了。
+  现在用户主动发起的捕获立即放行，被跳过时也会记一条说明日志。
+  *During the 30-second "not ready" window after launch, network-layer callback learning, capture and reply verdicts all returned early without logging anything. On Nagram and the official client the UI button hook attaches but never fires (measured), so the network layer is the only learning entry point: "open Telegram and tap the check-in button" therefore looked completely dead. User-initiated capture is now allowed through immediately, and skips are logged.*
+- **跨天窗口下补签时段变成全天 · Make-up window became all-day with a midnight-crossing window**
+  `inMissBackTime()` 用的解析函数**不支持跨天**，窗口写 `22:00-02:00` 时它返回「无效」，
+  起始时刻退化成 0，于是「窗口开始 ~ 补签截止」恒成立 = 全天都在补签。
+  同一个文件里的 `inWindow()` 早就换成了支持跨天的版本，这处当时漏改。
+  现已改为委托已有单测覆盖的纯函数，消除双实现。
+  *inMissBackTime() used a parser that does not support midnight-crossing windows. With a 22:00-02:00 window it reported "invalid", the start degraded to 0, and "window start through make-up deadline" was always true, i.e. all-day make-up. inWindow() in the same file had already been migrated; this call site was missed. It now delegates to the unit-tested pure function, removing the duplicate implementation.*
+- **跨端同步的配置在本机不生效 · Synced config never took effect locally**
+  设置读取是「账号级优先」，而同步落盘只写全局键 —— 只要本机保存过一次设置，
+  同步进来的值就永远读不到，日志却打印「已应用其他客户端的配置」（谎报）。
+  现在同步时同时写账号级键。
+  *Settings are read account-first, but the sync path only wrote global keys: once a setting had been saved locally, synced values could never be read, while the log still claimed it had applied config from another client. The sync path now writes the account-scoped keys too.*
+- **连点多个 bot 按钮时只有第一个能被学到 · Rapid button taps: only the first was learned**
+  网络层有一把**实例级**串行锁：任何一次 `sendRequest`（包括与签到无关的普通消息、
+  图片上传）处理期间，其他所有请求的学习/捕获都被静默跳过。学习本身是幂等的，
+  不需要全局串行，已移除该前置门。
+  *The network layer had an instance-wide serialization gate: while any sendRequest was being processed (including unrelated messages and photo uploads), learning and capture for every other request were silently skipped. Learning is idempotent and needs no global serialization, so the gate is gone.*
+- **打开「运行日志」会卡顿 · Opening "Runtime log" stuttered**
+  日志合并会读取最多 8MB×N 个文件并解析两万行，以前直接跑在 UI 线程。
+  现已移到 IO 线程，回主线程渲染。
+  *Log merging reads up to 8 MB x N files and parses 20,000 lines; it ran on the UI thread. It now runs on the IO thread and renders back on the main thread.*
+- **热重载后两个实例并行跑 · Two instances ran in parallel after hot reload**
+  心跳与轮询都是自递归的延迟任务，没有任何取消机制，广播接收器也不反注册 ——
+  热重载只是丢掉引用，旧实例照跑，于是重复签到、日志交错。现已提供显式停止并接入热重载。
+  *The heartbeat and polling loops are self-rescheduling delayed tasks with no cancellation, and the broadcast receiver was never unregistered, so hot reload merely dropped the reference and the old instance kept running: duplicate sign-ins and interleaved logs. An explicit stop is now provided and wired into hot reload.*
+- **启动日志里的数字标题会渲染成错误字形 · Digits in styled titles rendered as wrong glyphs**
+  数学粗体数字的起始码位写错了（`0x1D7F9` 是 Monospace 的「3」），`0` 会渲染成错误字形、
+  `9` 溢出到别的码位。当前调用方标题恰好没有数字，属于潜伏 bug，已修正为 `0x1D7CE`。
+  *The base code point for mathematical bold digits was wrong (0x1D7F9 is Monospace "3"), so 0 rendered as a wrong glyph and 9 overflowed into unrelated code points. Current titles happen to contain no digits, making this latent; corrected to 0x1D7CE.*
+- **花体字有豆腐块 · Script glyphs rendered as tofu**
+  花体字用的是 Script 码位组，其中 11 个码点（B E F H I L M R / e g o）在 Unicode 里
+  **本就未分配**（渲染成方框）。已改用连续的 Bold Script 码位组。
+  *The script style used the Script code point block, where 11 code points (B E F H I L M R / e g o) are unassigned in Unicode and render as boxes. Switched to the gap-free Bold Script block.*
+
+### 工具 · Tooling
+- **仓库里的 `build.sh` 缺三道门禁 · The in-repo build.sh was missing three gates**
+  仓库版只有国际化检查一道门禁，纯逻辑单测、更新日志双语、版本五查都在构建工具目录里 ——
+  任何直接 clone 源码仓的人跑 `./build.sh` 都会绕过它们。现已补齐并新增接线自检门禁。
+  *The in-repo script only ran the i18n gate; the unit tests, bilingual changelog and version checks lived only in the build kit, so anyone cloning the source and running ./build.sh skipped them. All are now in place, plus a new wiring self-check gate.*
+- 纯逻辑单测从 115 条扩到 **129 条**，新增用例逐条对应本次修掉的 bug（改回去会被门禁拦住）。
+  *Unit assertions grew from 115 to 129; each new case maps to a bug fixed here, so a regression is caught by the gate.*
+- 接线自检的成员清单里有早已删除的方法，导致该检查长期空转；已修正并挂进构建。
+  *The wiring checker listed a method that no longer existed, so it had been a no-op; fixed and wired into the build.*
+
 ## 1.5.9 (122) — 2026-09-24
 
 ### 新增 · New
