@@ -40,3 +40,37 @@ Telegram 标志类：{0}	Telegram flag classes: {0}
 账号一览（{0}）	Accounts ({0})
 还没有签到目标，切过去学一个	no targets yet — switch over and learn one
 （还没有目标，去该账号学一个）	 (no targets yet — switch over and learn one)
+判定为成功的附加词（逗号分隔）	Extra words meaning SUCCESS (comma separated)
+判定为失败的附加词（逗号分隔）	Extra words meaning FAILURE (comma separated)
+判断 bot 回复成功/失败用的词。内置了一批常见词；认不出来的回复会记进诊断包，\n见到「未识别回复」就在这加上对应措辞即可。	Words used to tell whether the bot reply means success or failure. Common ones are built in; unrecognized replies are recorded in the diagnostics package — when you see one, add its wording here.
+(没读到按钮，请在 bot 里点一下签到按钮再试)	(No buttons found — tap the bot's check-in button first)
+完成	Done
+自动识别（推荐）	Auto-detect (recommended)
+去 bot 会话点一下它的签到按钮，会自动记忆并每天跟进	Tap its check-in button in the bot chat; it will be remembered and followed daily
+我有签到指令	I have a check-in command
+知道它要求的文本指令（bot ID + 指令）	I know the text command it expects (bot ID + command)
+群 / 频道签到	Group / channel check-in
+在群聊里发签到指令（不是私聊）	Send the check-in command in a group chat (not a private chat)
+(暂无可调试按钮：先在目标 bot 会话里点一次它的签到按钮)	(No buttons to debug yet — tap the target bot's check-in button first)
+ 请在 Telegram 界面使用 /jmb	 Please use /jmb inside Telegram
+ 多账号用户的省事入口：把当前账号的目标整体复制给其它账号，不用一条条重新添加。入口在「全部功能 → 目标」里。	 The easy path for multi-account users: copy this account's targets to another account in one go instead of re-adding them one by one. Find it under "All features → Targets".
+如: 领取完毕,今日完成	e.g. claimed, completed today
+如: 次数已用完,不可领取	e.g. out of attempts, not claimable
+请在 Telegram 界面使用 /jmb	Please use /jmb inside Telegram
+多账号用户的省事入口：把当前账号的目标整体复制给其它账号，不用一条条重新添加。入口在「全部功能 → 目标」里。	The easy path for multi-account users: copy this account's targets to another account in one go instead of re-adding them one by one. Find it under "All features → Targets".
+✅ TGAutoSign 今日签到完成 	✅ TGAutoSign — today's check-in complete 
+✅ TGAutoSign 今日签到完成 {0}	✅ TGAutoSign — today's check-in complete ({0})
+（窗口外·省电）	(outside window · saving power)
+（窗口内·已签完）	(inside window · all signed)
+（窗口内·有未签）	(inside window · pending)
+  间隔=	  interval=
+待确认	Unconfirmed
+已发出但 bot 始终没回复：{0} 标记为「待确认」（不计成功也不计失败，已停止自动重试；想再试可手动点一次）	Sent but the bot never replied: {0} marked "unconfirmed" (not counted as success or failure; auto-retry stopped — retry manually if you like)
+判定机器人回复	Judging bot replies
+自动判定成功 / 失败	Auto-detect success / failure
+开着：按内置词表判断机器人回复是成功还是失败。\n关掉：只记录回复、不判成败（目标需要你自己确认）。	On: uses the built-in word list to decide whether a reply means success or failure.\nOff: replies are only logged, never judged — you confirm targets yourself.
+使用我的自定义词（叠加在内置之上）	Use my own words (on top of the built-ins)
+捕获目标	Capture target
+自动判定已关闭：机器人回复不会被判成败（设置 → 判定机器人回复）	Auto-detection is off: bot replies won't be judged (Settings → Judging bot replies)
+宽松模式（来者不拒）	Loose mode (accept anything)
+开：点什么学什么（不再按关键词过滤）；判定时**只要机器人有回复就算成功**，\n但命中明确失败词（活动已结束 / 请先关注 / 未绑定 等）仍判失败。\n适合判定词千奇百怪的机器人。关：完全按下面的规则判定。	On: learn whatever you tap (no keyword filter), and **treat any reply as success** when judging — except replies that clearly mean failure (event ended / follow first / not linked, etc.), which still fail.\nFor bots with unpredictable wording. Off: judge purely by the rules below.

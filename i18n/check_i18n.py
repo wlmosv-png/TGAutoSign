@@ -399,12 +399,20 @@ def main():
                 covered.add(x)
             continue
 
-        # 情况 B：出口方法内部过 Lang → 安全
+        # 情况 B：出口方法内部过 Lang **且字典里有对应译文** → 才安全。
+        #
+        # 这里以前只要方法内部出现过 Lang.tr 就放行，导致「白名单方法 + 没进字典」
+        # 的漏翻译完全逃过门禁（实测踩到：withIconText 的新文案没进 en.tsv 也不报）。
+        # 现在补一道：白名单方法里的中文字面量也必须能在字典里找到。
         if name in safe_names and name not in ('.setText', '.setHint', '.setTitle', '.setMessage',
                                                 '.setPositiveButton', '.setNegativeButton', '.setNeutralButton'):
             if method_is_safe(src, name, safe_names, set(), keys):
                 for x in lits:
-                    covered.add(x)
+                    if x not in keys:
+                        # 形如 "{0}：目标 {1}" 的模板，字典里存的是原文，直接比对即可
+                        problems.append((ln, name + '(白名单但缺译文)', x))
+                    else:
+                        covered.add(x)
                 continue
 
         # 情况 C：本行就是日志调用 → 不查（原实现用 14 行窗口，会把附近出口全部误豁免）

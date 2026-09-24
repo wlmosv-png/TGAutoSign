@@ -38,6 +38,9 @@ public final class TGAutoSignEntry extends XposedModule {
     private static final AtomicBoolean NOTIFIED = new AtomicBoolean(false);
     private static volatile TGAutoSignCore CORE = null;
     private static final Set<String> HOOKED_METHODS = new HashSet<>();
+    /** UI 层 bot 按钮 hook 命中总数：0 表示该宿主 UI hook 失效（如 Nagram 12.10.x），
+     *  此时捕获/学习只能靠网络层兜底。诊断包会显示，避免每次排障都靠猜。 */
+    public static volatile int BTN_HOOK_COUNT = 0;
 
     private ClassLoader appLoader = null;
 
@@ -220,7 +223,12 @@ public final class TGAutoSignEntry extends XposedModule {
                     logInfo("hooked botButton(" + (structural ? "结构匹配:" + m.getName() : "按名") + " argc=" + argc + ") " + m.toGenericString());
                 } catch (Throwable ignored) {}
             }
-            if (hooked > 0) logInfo("hooked botButton in " + cls.getName() + "（匹配 " + hooked + " 个方法）");
+            if (hooked > 0) {
+                BTN_HOOK_COUNT += hooked;
+                logInfo("hooked botButton in " + cls.getName() + "（匹配 " + hooked + " 个方法）");
+            } else {
+                logInfo("botButton 在 " + cls.getName() + " 未命中任何方法（该宿主可能走网络层兜底）");
+            }
         } catch (Throwable t) {
             logError("hook botButton in " + cls.getName() + " failed", t);
         }

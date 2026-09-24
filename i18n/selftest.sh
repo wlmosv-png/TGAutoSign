@@ -45,7 +45,7 @@ check_expect_fail "Lang 用了字典没有的键"
 sed -i 's|.setNegativeButton(Lang.tr("取消"), null)|.setNegativeButton("取消", null)|' "$C"
 check_expect_fail "AlertDialog 按钮裸中文"
 
-sed -i 's|sb.append(Lang.tf("✅ TGAutoSign 今日签到完成 {0}/{1}", done, total));|sb.append("✅ TGAutoSign 今日签到完成 ").append(done);|' "$C"
+sed -i 's|sb\.append(Lang\.tf("✅ TGAutoSign 今日签到完成 {0}", done));|sb.append("✅ TGAutoSign 今日签到完成 ").append(done);|' "$C"
 check_expect_fail "消息生成器体内裸中文（规则7）"
 
 echo

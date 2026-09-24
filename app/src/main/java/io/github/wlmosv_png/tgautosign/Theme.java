@@ -32,30 +32,70 @@ final class Theme {
      *        ⑥ 系统 uiMode
      * 600ms 缓存，避免绘制期反复探测。
      */
+    /**
+     * 主题深浅判定。
+     *
+     * 顺序很重要（v1.5.8 调整）：
+     *   ① 宿主 API `Theme.isCurrentThemeDark` —— 宿主自己维护的真值，最可靠
+     *   ② 主题属性 windowBackground / colorBackground —— 稳定，不受动画影响
+     *   ③ 画面采样 —— **最后手段**，且要求连续两次一致才采信
+     *   ④ 系统 uiMode —— 兜底
+     *
+     * 为什么把采样从第一位降到第三位：
+     *   采样的是"整屏平均色"。子面板刚弹出（半透明遮罩 / 动画中）、列表滚动、
+     *   软键盘弹出时，采到的都是**瞬时帧**而不是主题色，会判定成相反的明暗 ——
+     *   用户看到的就是"主界面深色，子面板有时变亮"。采样本身不适合判断主题。
+     *
+     * 缓存按 Activity 分别记，避免主界面与子面板互相污染。
+     */
     static boolean dark(Context c) {
         if (mode == 1) { lastHow = "force-light"; lastColor = 0; return false; }
         if (mode == 2) { lastHow = "force-dark"; lastColor = 0; return true; }
 
         long now = System.currentTimeMillis();
-        if (now - darkCacheAt < 600L) return darkCacheVal;
+        String key = cacheKey(c);
+        if (now - darkCacheAt < 600L && key.equals(darkCacheKey)) return darkCacheVal;
 
         boolean val;
         String how;
         lastColor = 0;
+
+        // ① 画面采样 —— **主判据**（历史上一贯准确，v1.5.1 起就用它）。
+        //    但加两道保险，避免子面板动画/遮罩期采到瞬时帧而判反：
+        //      · 同一页面连续两次一致才采信；不一致时先沿用上一次的结论（不翻转）
+        //      · 缓存按页面分开，主界面与子面板互不污染
         Boolean byColor = colorProbe(c);
         if (byColor != null) {
-            val = byColor.booleanValue();
-            how = "ui-color";
+            boolean b = byColor.booleanValue();
+            if (!sampleSeen) {                 // 本进程第一次：直接采信
+                sampleSeen = true; sampleLast = b;
+                val = b; how = "ui-color";
+            } else if (b == sampleLast) {      // 与上次一致：采信
+                val = b; how = "ui-color";
+            } else {                            // 翻转了：极可能是瞬时帧，沿用上次
+                val = sampleLast; how = "ui-color(抖动,沿用上次)";
+            }
         } else {
-            Boolean byApi = darkByThemeClass(c);
-            if (byApi != null) { val = byApi.booleanValue(); how = "theme-api"; }
-            else { val = sysDark(c); how = "sys-uiMode"; }
+            // ② 采样取不到（绘制期 getWidth=0 等）才退回主题属性。
+            //    注意只看 colorBackground：TG 的 windowBackground 在深色下常是白色
+            //    （窗口底色，内容盖在上面），拿它判主题会把深色判成浅色。
+            Boolean byAttr = attrProbe(c);
+            if (byAttr != null) { val = byAttr.booleanValue(); how = "theme-attr"; }
+            else {
+                Boolean byApi = darkByThemeClass(c);
+                if (byApi != null) { val = byApi.booleanValue(); how = "theme-api"; }
+                else { val = sysDark(c); how = "sys-uiMode"; }
+            }
         }
+
         darkCacheAt = now;
         darkCacheVal = val;
+        darkCacheKey = key;
         lastHow = how;
-        if (!themeLogDone) {
+        if (!themeLogDone || val != lastLoggedVal || !how.equals(lastLoggedHow)) {
             themeLogDone = true;
+            lastLoggedVal = val;
+            lastLoggedHow = how;
             try {
                 android.util.Log.i("TGAutoSignModule", "theme dark=" + val + " 来源=" + how
                         + " color=#" + Integer.toHexString(lastColor)
@@ -63,6 +103,37 @@ final class Theme {
             } catch (Throwable ignored) {}
         }
         return val;
+    }
+
+    /** 采样一致性状态（跨调用保持）。 */
+    private static boolean sampleSeen = false;
+    private static boolean sampleLast = false;
+    private static String darkCacheKey = "";
+    private static boolean lastLoggedVal = false;
+    private static String lastLoggedHow = "";
+
+    private static String cacheKey(Context c) {
+        try {
+            android.app.Activity a = findActivity(c);
+            if (a != null) return a.getClass().getName();
+        } catch (Throwable ignored) {}
+        return "";
+    }
+
+    /**
+     * 兜底：主题属性背景色。
+     * 只认 colorBackground —— **不要用 windowBackground**：
+     * TG 的 windowBackground 在深色主题下常是白色（窗口底色，内容盖在上面），
+     * 拿它判主题会把深色误判成浅色（v1.5.8 试过，主界面直接变亮，已回退）。
+     */
+    private static Boolean attrProbe(Context c) {
+        try {
+            android.app.Activity a = findActivity(c);
+            if (a == null) return null;
+            Integer attr = themeAttrColor(a, android.R.attr.colorBackground);
+            if (attr != null) return judge(attr.intValue());
+        } catch (Throwable ignored) {}
+        return null;
     }
 
     private static boolean sysDark(Context c) {
@@ -80,26 +151,9 @@ final class Theme {
             android.app.Activity a = findActivity(c);
             if (a == null) return null;
             // ① 采样当前画面（缩绘成 1 像素的平均色）——最真实，优先级最高
+            // 只做画面采样；属性探测已由 attrProbe 负责（顺序更靠前）
             Integer samp = sampleScreenColor(a);
             if (samp != null) return judge(samp.intValue());
-            // ② 内容区 / decorView 背景 drawable
-            Integer d = null;
-            try {
-                android.view.View ct = a.findViewById(android.R.id.content);
-                if (ct != null) d = colorOf(ct.getBackground());
-            } catch (Throwable ignored) {}
-            if (d == null) {
-                try {
-                    android.view.Window w = a.getWindow();
-                    android.view.View dv = w != null ? w.getDecorView() : null;
-                    if (dv != null) d = colorOf(dv.getBackground());
-                } catch (Throwable ignored) {}
-            }
-            if (d != null) return judge(d.intValue());
-            // ③ 主题属性 windowBackground / colorBackground（含 drawable 引用解析）
-            Integer attr = themeAttrColor(a, android.R.attr.windowBackground);
-            if (attr == null) attr = themeAttrColor(a, android.R.attr.colorBackground);
-            if (attr != null) return judge(attr.intValue());
             return null;
         } catch (Throwable t) {
             return null;
@@ -114,19 +168,34 @@ final class Theme {
     }
 
     /** 把整个界面缩绘到 1x1 像素取平均色（主线程才可绘制）。 */
+    /**
+     * 采样页面平均色。
+     *
+     * **必须采内容区（android.R.id.content），不能采 decorView。**
+     * decorView 会带上对话框/面板的半透明遮罩：深色主题下弹出面板时，
+     * 整屏平均色被遮罩提亮成灰，亮度越过阈值就被判成"浅色" ——
+     * 这正是"主界面深色、子面板变亮"的根因（遮罩会持续存在，不是瞬时帧，
+     * 所以单靠"连续两次一致"也救不了）。
+     * 内容区不含遮罩层，采到的才是真实底色。
+     */
     private static Integer sampleScreenColor(android.app.Activity a) {
         try {
             if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) return null;
             android.view.Window w = a.getWindow();
             if (w == null) return null;
-            android.view.View dv = w.getDecorView();
-            if (dv == null) return null;
-            int wd = dv.getWidth(), ht = dv.getHeight();
+            // 优先内容区（不含对话框遮罩）；拿不到再退回 decorView
+            android.view.View target = null;
+            try {
+                target = a.findViewById(android.R.id.content);
+            } catch (Throwable ignored) {}
+            if (target == null) target = w.getDecorView();
+            if (target == null) return null;
+            int wd = target.getWidth(), ht = target.getHeight();
             if (wd <= 0 || ht <= 0) return null;
             android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(1, 1, android.graphics.Bitmap.Config.ARGB_8888);
             android.graphics.Canvas cv = new android.graphics.Canvas(bmp);
             cv.scale(1f / wd, 1f / ht);
-            dv.draw(cv);
+            target.draw(cv);
             int px = bmp.getPixel(0, 0);
             bmp.recycle();
             if (Color.alpha(px) < 8) return null;

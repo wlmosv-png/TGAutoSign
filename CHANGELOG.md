@@ -1,5 +1,152 @@
 # 更新日志
 
+## 1.5.8 (121) — 2026-09-24
+
+### 修复 · Fixed
+- **子面板弹出来变成亮色，已修 · Panels turned light — fixed**
+  **根因**：面板是 Telegram 的对话框，弹出时在窗口上盖了一层半透明遮罩；主题判定采的是**整屏平均色**，
+  把遮罩一起算进去了 —— 深色底 + 白遮罩平均成灰，亮度越过阈值就判成「浅色」，于是面板整体变亮。
+  遮罩会**持续存在**（不是瞬时帧），所以单靠缓存或"连续两次一致"都救不了。
+  **修法**：采样改取内容区（不含对话框遮罩）；另保留两道保险 —— 同一页面两次采样不一致时沿用上次结论、缓存按页面分开记。
+  *Root cause: panels are Telegram dialogs, and opening one lays a translucent scrim over the window. Theme detection sampled the **whole screen's average colour, scrim included** — dark background plus white scrim averages to grey, crosses the brightness threshold, and flips the verdict to "light", so the panel turns light. The scrim **persists** (it is not a transient frame), so neither caching nor a two-sample confirmation could fix it. **Fix**: sampling now reads the content view, which excludes the dialog scrim, keeping two safeguards — reusing the previous verdict when two samples disagree, and per-page caching.*
+- **主题日志改为「每次变化都记」 · Theme logging now records every change**
+  以前只在首次判定时写一条日志，之后无论判错多少次都不留痕迹 —— 这个 bug 因此一直查不出来。现在一变化就记。
+  *It used to log only the very first verdict, leaving no trace of later mistakes — which is why this bug stayed invisible. Every change is logged now.*
+- **「未识别 bot 回复」不再刷红 · "Unrecognized bot reply" is no longer an error**
+  点充值 / 菜单 / 查询类按钮时，bot 回的本就是业务内容，**永远不可能匹配签到词**，
+  那是正常情况而不是错误。现在这类回复只记调试日志；只有回复**看起来像签到结果**
+  但词表没覆盖时，才提示可以补词。
+  *Tapping a recharge / menu / lookup button naturally gets business content back, which can never match check-in keywords — that is normal, not an error. Such replies are now debug-only; only replies that look like a check-in result but miss the word list raise a hint to add a word.*
+- **同一次点击不再被重复处理 · A single tap is no longer processed multiple times**
+  Telegram 会把同一条更新通过多个数据源投递，实测同一次点击日志重复 2–4 遍（「标记今日已签」出现 3 次、判定重复 2 次），既刷屏又让每日计数虚高。现在按「目标 + 消息 id + 回复内容」在 20 秒窗口内去重，乐观标记也已幂等。
+  *Telegram delivers the same update through several sources; a single tap was logged 2–4 times ("marked signed today" three times, verdict twice), spamming the log and inflating daily counters. Now deduplicated on target + message id + reply text within a 20-second window, and the optimistic mark is idempotent.*
+
+- **i18n 门禁补上白名单漏洞，并修掉 18 处历史漏译 · i18n gate covers the whitelist gap; 18 missing translations fixed**
+  以前只要是走封装方法（`withIconText` / `menuItem` / `tcard` / `adInput` 等）的文案，门禁就**只检查方法内部有没有过 Lang，不检查译文在不在字典里** —— 新加的文案忘进字典完全不会被拦。现在白名单方法**也查字典**，并据此补上了 18 处英文用户此前会看到中文的地方（自动识别的选项、群签到说明、复制目标说明、调试空态、收藏夹摘要标题等）。
+  *Previously any text routed through a helper (`withIconText`, `menuItem`, `tcard`, `adInput`, …) only had to pass Lang internally — the gate never checked whether a translation existed, so a brand-new string could ship untranslated. Helper methods are now dictionary-checked too, which surfaced and fixed 18 places where English users still saw Chinese.*
+- **门禁能抓住「用了封装方法但忘了进字典」 · The gate now catches "helper used, dictionary forgotten"**
+  已用反向测试验证：故意注入一条未进字典的文案会直接构建失败并指到具体行号。
+  *Verified by a negative test: deliberately injecting an untranslated string fails the build with the exact line number.*
+
+- **后台心跳按需降频，夜里不再每 45 秒醒一次 · Heartbeat slows down when there is nothing to do**
+  以前无论白天黑夜、不管今天签没签完，心跳都固定每 45~60 秒唤醒一次（一天约 1,900 次），
+  频繁唤醒会妨碍系统进入深度休眠，用户侧表现为耗电与机身发热。现在分三档：
+  窗口内且有未签目标 = 45 秒；窗口内但今天已签完 = 10 分钟；窗口外 = 15 分钟。
+  窗口**进入**时刻仍由原有的精确闹钟负责，签到准时性不受影响；断网恢复与账号切换照旧立即触发。
+  诊断包会显示当前档位。
+  *The heartbeat used to wake every 45–60 seconds around the clock (≈1,900 times a day) even at night or after everything was signed, which keeps the device out of deep sleep and shows up as battery drain and heat. It now has three tiers: 45 s inside the window with pending targets, 10 min inside the window once all are signed, 15 min outside the window. Window entry is still handled by the existing precise alarm, so punctuality is unaffected; network-recovery and account-switch triggers still fire immediately. The diagnostics package shows the current tier.*
+
+- **定时任务不再重复排队 / 丢任务 · Scheduled tasks no longer pile up or get lost**
+  排新任务时只覆盖了引用、**没取消旧回调**，于是：旧任务仍留在消息队列里，可能和新任务
+  **同时触发、同一目标被签多次**；而且旧任务执行时会把引用清成 null，让调度器以为
+  "没有待发任务"从而再排一个 —— 任务越滚越多。现在排新任务前先取消同类型的旧任务。
+  *Scheduling a new task only overwrote the reference without cancelling the old callback, so the old task stayed queued and could fire alongside the new one (signing the same target twice); worse, when it ran it nulled the reference, making the scheduler think nothing was pending and enqueue another — tasks multiplied. The old task of the same kind is now cancelled first.*
+- **面板刷新触发不再与心跳重复发送 · Panel-refresh trigger no longer double-sends with the heartbeat**
+  「面板已更新 → 立即补签」只防了自身重入，防不住心跳/定时刚给同一目标发过。现在会先检查该目标是否正在发送中。
+  *"Panel updated → sign now" only guarded against its own re-entry, not against the heartbeat or scheduler having just sent the same target. It now checks whether that target is already in flight.*
+
+- **机器人名字只显示一次数字 ID，之后再也取不到 · Bot names stuck as numeric IDs after the first attempt**
+  名字缓存无论成功失败都写入 —— 冷启动时第一次必然取不到（bot 还没进宿主内存），
+  于是把 `null` 缓存住，之后**永远显示数字 ID**，重开列表也不会重试。
+  现在只缓存取到的名字，取不到就下次再试。
+  *The name cache stored its result regardless of success. On a cold start the first lookup always fails (the bot isn't in the host's memory yet), so `null` got cached and the numeric ID stuck forever — reopening the list never retried. Only successful lookups are cached now.*
+
+- **「今天已签到」这类回复现在认得出了 · Common "already signed today" phrasings are recognised now**
+  内置已签词表原先只有「今日已签 / 已经签 / 已签到」等少数写法，遇到「今天已签到」「您已签到」
+  「今日已打卡」「签到已完成」「签到获得积分」这些常见表述就判不出来，用户只能自己去加词。
+  已把中文 12 种、英文 6 种常见写法补进内置表（成功词同样补了「签到完成」「签到获得」等）。
+  *The built-in "already signed" list only had a few phrasings, so common variants such as "今天已签到", "您已签到", "今日已打卡", "签到已完成" or "签到获得积分" were not recognised and users had to add them by hand. 12 Chinese and 6 English variants are now built in, and the success list gained "签到完成" \/ "签到获得" too.*
+- **「本条不是签到结果」不再让人误以为失败 · "Not a check-in result" no longer reads like a failure**
+  机器人一次交互常发多条消息（先菜单\/广告、后结果），而日志对第一条就写「没识别到签到响应，已忽略」，
+  用户看到以为失败了 —— 其实后续回复会正常命中并计入已签。现在措辞改为「本条不是签到结果（继续等后续回复）」，明确它不是最终结论。
+  *A bot often sends several messages per interaction (menu\/ad first, result after), yet the log said "no check-in response recognised, ignored" for the first one, which reads like a failure — while the later reply does match and count. It now says "this message isn't a check-in result (still waiting for further replies)".*
+
+- **「自动判定」被关掉时不再静默 · Auto-detection being off is no longer silent**
+  判定开关若被关掉，日志只说一句"仅记录"，用户看到的是"bot 明明回签到成功、目标却没变绿"，
+  完全无从下手。现在会**弹一次提示**并指向设置项，日志也提级为警告。
+  *With detection off the log only said "recording only", leaving users staring at a bot that clearly replied "check-in successful" while the target stayed unsigned. It now shows a one-time prompt pointing at the setting, and logs at warning level.*
+- **新装用户点 bot 按钮学不会目标（重要） · New installs couldn't learn from button taps (important)**
+  「按钮学习」默认值写成了关闭，而回调学习同样受它管 —— 新装用户按 README 说的「点一次按钮」永远没反应。现在默认开启。
+  *"Button learning" defaulted to off, and callback learning was gated by it too — so new users following the README's "tap once" never got anywhere. Now on by default.*
+- **捕获模式在 Nagram \/ 官方版上无效 · Capture mode did nothing on Nagram \/ official**
+  这两个客户端点击按钮不走已 hook 的方法，捕获只剩网络层入口，此前该入口只记录日志、不接管。现在武装状态下网络层直接弹绑定面板。
+  *On these clients the tap never reaches the hooked methods; capture had only the network path left, which logged but didn't take over. Now it opens the binding panel directly.*
+- **拒绝原因被谎报 · Deny reason was misreported**
+  学习失败时日志固定输出「被排除规则或关键词过滤」，真实原因（最常见是「按钮学习已关闭」）被吞掉。现在打印具体原因。
+  *Failures always logged "blocked by rules or keywords", swallowing the real cause. The actual reason is now printed.*
+- **界面显示的账号号错乱（如显示「账号10」） · Wrong account number shown (e.g. "account 10")**
+  宿主切号时会把 `selectedAccount` 写成越界值（实测只登录 2 个账号却读到 9），
+  而该值直接决定 `acc{N}_` 数据分区 —— 越界会让目标与已签记录全部落进空分区，
+  界面表现为「配置凭空消失」。现在越界一律钳到 0 并记一条日志。
+  *On account switch the host can write an out-of-range `selectedAccount` (measured: 9 while only 2 accounts are signed in). That value picks the `acc{N}_` data partition, so an out-of-range value sends all targets and signed-state into an empty partition and the UI looks like the config vanished. Out-of-range values are now clamped to 0 and logged.*
+- **日志账号前缀过期 · Stale account prefix in logs**
+  `[账号N]` 取自上次签到轮次的缓存，用户没切号也会标错账号。现在带实时账号，并附「武装时账号」用于比对。
+  *The `[account N]` prefix came from the last check-in round's cache and could be wrong even without switching. Logs now carry the live account plus the arming account for comparison.*
+
+- **跨午夜签到窗口现在真的能用 · Windows that cross midnight actually work now**
+  以前窗口写成 `22:00-02:00` 会被当成非法：定时模式**整晚不排期**，非定时模式则把"窗口为空"当"不限"，变成全天都能签。现在两者都按跨天正确处理。
+  *A window like `22:00-02:00` used to be treated as invalid: scheduled mode never planned anything, and non-scheduled mode treated "no window" as "no limit" and would sign all day. Both now handle midnight crossing properly.*
+- **跨客户端同步：账号不再串位 · Cross-client sync no longer mixes up accounts**
+  两台手机的账号顺序不一致时（A机 甲/乙、B机 乙/甲），按索引合并会把甲的签到记录写到乙头上。现在按账号自身的 user id 配对，本机没登录的账号直接跳过。
+  *When the two devices order accounts differently, index-based merging wrote account A's signed-state onto account B. Pairing is now by the account's own user id, and accounts not signed in locally are skipped.*
+- **收到其他客户端的配置后会重排时刻表 · Applying a synced config replans the timer**
+  以前只改字段不重排，当日时刻表还按旧窗口跑，定时签到会跑到窗口外。
+  *Previously only the fields changed, so the day's schedule still used the old window and timed check-ins could fire outside it.*
+- **发送中状态的有效窗口与失败撤销对齐（90 秒 → 30 分钟） · Pending window now matches the failure-undo window**
+  失败撤销特意等慢 bot 到 30 分钟，但发送中状态 90 秒就过期，导致 3 分钟后才回话的 bot 走不到撤销逻辑、失败被记成成功。
+  *The undo path waited up to 30 minutes for slow bots, but the pending state expired after 90 seconds, so a bot replying after 3 minutes never reached it and a failure was recorded as success.*
+- **跨端同步节流 · Cross-client sync is throttled**
+  心跳每 45 秒都会读写同步文件，一小时白写 80 次盘。现在 5 分钟一次，改设置时立即推送。
+  *The heartbeat synced files every 45 seconds (80 pointless writes an hour). Now every 5 minutes, with an immediate push when settings change.*
+- **发版前自动检查测试标记 · Build checks the debug patch tag**
+  `PATCH_TAG` 非空（本机测试标记没清）会直接构建失败，不再靠人记。
+  *A non-empty `PATCH_TAG` now fails the build instead of relying on memory.*
+
+### 新增 · New
+- **判定词改成开关式 · Verdict words became switches**
+  原来要求"自己往里加词"，等于把责任推给用户。现在默认用内置词表判定，另给两个开关：
+  「自动判定成功 / 失败」总开关，以及「使用我的自定义词（叠加在内置之上）」—— 不勾选时输入框隐藏。
+  *It used to ask you to add your own words. Built-in words judge by default now, with a master "auto-detect success / failure" toggle and "use my own words (on top of the built-ins)" — the custom fields stay hidden until you opt in.*
+- **新增「宽松模式（来者不拒）」 · New "loose mode" switch**
+  **开** = 点什么学什么（不再按关键词过滤）+ **只要机器人有回复就算成功**；
+  **但命中明确失败词（活动已结束 / 请先关注 / 未绑定 等）仍判失败** —— 避免 bot 挂了也显示绿色。
+  **关**（默认）= 完全按原有规则判定。开关在「设置 → 判定机器人回复」里。
+  *For bots whose wording never matches the built-in keywords. **On**: learn whatever you tap (no keyword filter) and **treat any reply as success**. **Off** (default): judge by the existing rules. The switch lives under Settings → Judging bot replies.*
+
+
+
+### 可靠性 · Reliability
+
+- **补上纯逻辑单测，并挂进构建门禁 · Pure-logic unit tests, wired into the build gate**
+  签到窗口 \/ 退避 \/ ID 规范化 \/ 回复判定等纯逻辑抽到 `SignLogic`，115 条断言，
+  出包前自动跑，不过就构建失败。此前核心逻辑一行测试都没有。
+  *Window \/ backoff \/ ID normalization \/ reply-verdict logic moved into `SignLogic` with 115 assertions, run automatically before packaging. The core previously had no tests at all.*
+- **bot 回复认不出来时不再静默 · Unrecognized bot replies are no longer silent**
+  以前三张关键词表都不命中就什么都不做，用户看到的是「点了、发出去了、没反应」。
+  现在会记日志并在诊断包留下该条回复原文，同时提供「回复判定词」设置可自行加词。
+  *Previously an unmatched reply did nothing at all, so the UI just looked unresponsive. Now it is logged, the raw reply is kept in the diagnostics package, and custom verdict words can be added in Settings.*
+- **关键路径的异常不再被静默吞掉 · Exceptions on critical paths are no longer swallowed**
+  36 处「catch 后什么都不做」改为记账（签到发送 \/ 回复判定 \/ 心跳 \/ 学习 \/ 同步等），
+  诊断包的「静默异常」从此有实际内容。
+  *36 silent catches on critical paths (sign send, reply verdict, heartbeat, learning, sync) now record instead of vanishing, so the diagnostics counter becomes meaningful.*
+
+### 诊断 · Diagnostics
+
+- **诊断包新增学习与 hook 状态 · Diagnostics now reports learning and hook state**
+  学习开关（按钮 \/ 网络 \/ 关键词过滤 \/ 关键词表）、排除配置（排除的 bot 数 \/ 排除规则 \/ 捕获武装状态）、UI 按钮 hook 状态（挂载数 + 实际触发数）。此前完全不可见。
+  *Learning switches (button \/ network \/ keyword filter \/ keyword list), blocklist config, and UI hook state (methods hooked + actual fire count). Previously invisible.*
+- **诊断包头部显示补丁标记 · Patch tag shown in the diagnostics header**
+  本机测试包用，正式版为空。
+  *Used by local test builds; empty in release builds.*
+- **诊断包新增账号字段原始值 · Diagnostics now shows the raw account field**
+  `selectedAccount` 原始读数 + 已登录账号数，越界时直接标注。用于确认宿主切号的写入行为。
+  *Raw `selectedAccount` reading plus the signed-in account count, flagged when out of range — to confirm what the host writes on account switch.*
+
+### 维护范围 · Supported clients
+
+仅主要维护 `org.telegram.messenger`（官方版）、`xyz.nextalone.nagram`（Nagram）、`com.exteraless.app`（ExteraLess）。
+*Maintained: official Telegram, Nagram, ExteraLess. Other forks still inject if their flag classes are intact, but aren't officially maintained.*
+
 ## 1.5.7 (120) — 2026-09-23
 
 ### 新增

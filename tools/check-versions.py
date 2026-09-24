@@ -57,7 +57,20 @@ def main():
         return 1
     got['CHANGELOG'] = (int(m.group(2)), m.group(1))
 
-    print('  版本四查：')
+    # 第五查：正式包的 PATCH_TAG 必须为空
+    # 本机测试包会往 PATCH_TAG 写标记（如 "capturefix"）好区分产物；
+    # 忘清就发出去，用户的诊断包头会带上测试标记，且下次本机测试分不清版本。
+    pt = re.search(r'PATCH_TAG\s*=\s*"([^"]*)"', u)
+    if pt is None:
+        print('FATAL: UpdateChecker 里读不到 PATCH_TAG')
+        return 1
+    if pt.group(1).strip() != '':
+        print('FATAL: PATCH_TAG 非空（"%s"）—— 这是本机测试标记，正式发版必须清空' % pt.group(1))
+        return 1
+    patch_tag = pt.group(1).strip()
+
+    print('  版本五查（含 PATCH_TAG）：')
+    print('    %-16s %s' % ('PATCH_TAG', '(空) OK' if patch_tag == '' else '"%s" ← 测试标记!' % patch_tag))
     bad = []
     for k in ('build.gradle', 'UpdateChecker', 'module.prop', 'CHANGELOG'):
         code, name = got[k]

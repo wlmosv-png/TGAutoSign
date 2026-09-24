@@ -18,3 +18,7 @@ verify/
 # Python 缓存
 __pycache__/
 *.pyc
+
+# 本地备份
+*.bak-*
+*.bak
