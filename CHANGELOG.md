@@ -3,6 +3,25 @@
 ## 1.6.0 (123) — 2026-09-24
 
 ### 修复 · Fixed
+- **同类问题全量清查：还有三处会把成功当失败 · Same class of bug, full sweep: three more places treated success as failure**
+  上面那条只修了一处，清查后发现**同一个病根还有三处**，全部无条件撤销了已签：
+  ① bot 不回结果（`BOT_RESPONSE_TIMEOUT`）—— 有些机器人本来就不回复签到结论；
+  ② 服务器限流（`FLOOD_WAIT`）—— 限流只是"稍后再试"，不代表没签上；
+  ③ 其他请求层错误 —— 请求已经成功发出并标了已签，后续报错不足以否定它。
+  现在统一用「是否已乐观标记为已签」来区分：已发出且标记成功时，后续第二步失败**只清退避状态、保留已签**。
+  *The entry above fixed only one place. A full sweep found three more with the same root cause, each unconditionally revoking the sign-in: (1) the bot never replying (BOT_RESPONSE_TIMEOUT) — some robots simply never answer with a verdict; (2) server rate limiting (FLOOD_WAIT) — that only means "try again later", not that the check-in failed; (3) other request-layer errors — the request had already been sent and marked. All now share one rule: if the send succeeded and was marked, a later second-step failure clears only the backoff state and keeps the sign-in.*
+- **「等面板」永远超时走兜底（重要）· Panel waiting always timed out into the fallback (important)**
+  回调签到靠"面板刷新事件"驱动：前置命令发出后等面板，面板一到就立即点按钮。
+  但面板事件的唯一入口 `onUpdateProcessed` 开头有一句"启动后 30 秒未就绪就直接返回"，
+  于是**启动窗口内面板事件被整条丢弃** → 等面板必然超时 → 只能走 8 秒兜底 msg_id，
+  而兜底用的旧按钮往往已过期 → 报 `MESSAGE_ID_INVALID`。
+  用户看到的现象是：**机器人明明秒回，模块却一直走兜底**。
+  现在未就绪只限制"模块主动发起的动作"，不再丢被动事件（面板缓存与回复判定都是幂等的，早处理无害）。
+  *Callback sign-in is driven by panel-refresh events: wait for the panel after sending the pre-command, then tap the button as soon as it arrives. But the only entry point for those events, onUpdateProcessed, began with "return if not ready for the first 30 seconds", so during that window the events were dropped entirely: waiting always timed out, forcing the 8-second fallback path with a stale msg_id, which then reported MESSAGE_ID_INVALID. Users saw the bot reply instantly while the module kept falling back. Not-ready now only throttles actions the module initiates, never passive events (panel caching and reply verdicts are idempotent, so handling them early is harmless).*
+- **面板事件触发的补签也用锁定账号 · Panel-triggered make-up sign-in now uses the pinned account**
+  同类清查的最后一处：面板事件延迟 700 毫秒执行，期间若切换账号就会用新账号发旧账号的目标。
+  窗口虽短，但属于同一类问题，已一并锁定（本次原则是一处都不留）。
+  *The last of the sweep: the panel event ran 700 ms later and would use a newly switched account to send an older account's target. Short window, same bug class, now pinned as well — the rule this time was to leave not a single instance.*
 - **明明签到成功，却被判失败并退回「退避中」（重要）· A successful check-in was revoked and shown as "backoff" (important)**
   回调按钮签到分两步：先发前置命令，再点按钮。当前置命令已经完成签到、
   而第二步的按钮因为**消息已更新**被 Telegram 拒绝（`MESSAGE_ID_INVALID`）时，

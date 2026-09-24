@@ -2988,10 +2988,13 @@ public final class TGAutoSignCore {
     private void fireLiveSign(final long did){
         try {
             synchronized (panelHitBusy){ if (panelHitBusy.contains(did)) return; panelHitBusy.add(did); }
+            // 账号在**触发时**锁定：回调延迟 700ms，期间切号就会用新账号发旧账号的目标
+            // （与 armTask / waitingPanel / onUpdateProcessed 同一类问题；本次审查原则是一处都不留）。
+            final int fAcc = currentAccount();
             mainHandler.postDelayed(new Runnable(){ @Override public void run(){
                 synchronized (panelHitBusy){ panelHitBusy.remove(did); }
                 try {
-                    String prefix=accountPrefix();
+                    String prefix=accountPrefix(fAcc);
                     if (!inWindow() && !inMissBackTime()) { logd("[面板事件] "+did+" 窗口外且非补签时段，跳过补签"); return; }
                     List<Map<String, Object>> list=new ArrayList<>();
                     loadTargetsInto(prefix, list);
@@ -3008,7 +3011,7 @@ public final class TGAutoSignCore {
                             if (planMin > nowMin) { logd("[面板事件] "+did+" 定时模式计划 "+String.format("%02d:%02d", planMin/60, planMin%60)+" 未到，交给时刻表"); break; }
                             if (!MISS_BACK) { logd("[面板事件] "+did+" 定时模式已过点且未开补签，跳过"); break; }
                             logd("[面板事件] "+did+" 定时模式已过点，开启补签：立即补");
-                            sendSign(m, currentAccount());
+                            sendSign(m, fAcc);
                             break;
                         }
                         // 心跳/定时可能刚给这个目标发过，正在等回复 —— 别重复发。
@@ -3018,7 +3021,7 @@ public final class TGAutoSignCore {
                             break;
                         }
                         logd("[面板事件] "+did+" 面板已更新且今日未签，立即补签");
-                        sendSign(m, currentAccount());
+                        sendSign(m, fAcc);
                         break;
                     }
                 } catch (Throwable _e8) { noteSwallowed("fireLiveSign", _e8); }
@@ -3256,6 +3259,19 @@ public final class TGAutoSignCore {
                                         logw("已发出但 bot 始终没回复：" + fId
                                              + " 标记为「待确认」（不计成功也不计失败，已停止自动重试；"
                                              + "想再试可手动点一次）");
+                                    } else if (optimisticSigned(fPrefix, fId)) {
+                                        // 请求已经成功发出并标了已签，只是 bot 没回结果。
+                                        // 有些 bot（查询类、菜单类、社工类）本来就不回复签到结论 ——
+                                        // 这不代表签到失败，绝不能撤销已签（否则界面显示"退避中"，
+                                        // 用户看到的就是"明明签过了却说没签"）。
+                                        keepSignedClearBackoff(fPrefix, fId);
+                                        int sil = silentCount(fPrefix, fId) + 1;
+                                        prefs.edit().putInt(fPrefix + "silent_" + fId, sil)
+                                             .putString(fPrefix + "silent_day_" + fId, todayStr()).apply();
+                                        logw("bot 未回结果(" + errText + ")：但已成功发出，保留已签（" + fId
+                                             + "）；该 bot 可能本来就不回复结论");
+                                        noteResult(true);
+                                        return null;
                                     } else {
                                         prefs.edit().putInt(kRetry(fPrefix, fId), tOut + 1)
                                              .remove(kLast(fPrefix, fId))
@@ -3296,11 +3312,26 @@ public final class TGAutoSignCore {
                                     } catch (Throwable _e15) { noteSwallowed("sendSign", _e15); }
                                     if (waitSec < 1L) waitSec = 60L;
                                     long waitMs = waitSec * 1000L + 1500L;
-                                    prefs.edit().putInt(kRetry(fPrefix, fId), prefs.getInt(kRetry(fPrefix, fId), 0) + 1)
-                                         .remove(kLast(fPrefix, fId))
-                                         .putLong(kRetryAt(fPrefix, fId), System.currentTimeMillis() + waitMs)
-                                         .putString(kRetryDay(fPrefix, fId), todayStr()).apply();
-                                    logw("签到遇限流 " + dialogId + " : " + errText + "，等待 " + waitSec + " 秒后自动重试");
+                                    // 限流 = "服务器让你等一会儿"，不是"签到失败"。
+                                    // 若本步已乐观标记成功，保留已签（避免"签了却显示退避中"）。
+                                    if (optimisticSigned(fPrefix, fId)) {
+                                        keepSignedClearBackoff(fPrefix, fId);
+                                        logw("签到遇限流 " + dialogId + " : " + errText
+                                             + "，但已成功发出，保留已签");
+                                    } else {
+                                        prefs.edit().putInt(kRetry(fPrefix, fId), prefs.getInt(kRetry(fPrefix, fId), 0) + 1)
+                                             .remove(kLast(fPrefix, fId))
+                                             .putLong(kRetryAt(fPrefix, fId), System.currentTimeMillis() + waitMs)
+                                             .putString(kRetryDay(fPrefix, fId), todayStr()).apply();
+                                        logw("签到遇限流 " + dialogId + " : " + errText + "，等待 " + waitSec + " 秒后自动重试");
+                                    }
+                                } else if (optimisticSigned(fPrefix, fId)) {
+                                    // 已经成功发出并标了已签，随后的错误不足以否定它 ——
+                                    // 保留已签，只记一条日志（用户可在会话里自查）。
+                                    keepSignedClearBackoff(fPrefix, fId);
+                                    logw("签到后续报错 " + dialogId + " : " + errText
+                                         + "，但已成功发出，保留已签（如需重签可手动点一次）");
+                                    noteResult(true);
                                 } else {
                                     int oldRetry = prefs.getInt(kRetry(fPrefix, fId), 0);
                                     prefs.edit().putInt(kRetry(fPrefix, fId), oldRetry + 1)
@@ -6152,6 +6183,30 @@ public final class TGAutoSignCore {
     }
 
     /**
+     * 该条目是否"已经乐观标记为今日已签"。
+     *
+     * 用途：区分「请求已成功发出并标了已签」与「根本没发出去」。
+     * 前者后续的第二步失败（按钮过期 / bot 不回结果 / 限流）**不代表签到失败**，
+     * 不该撤销已签 —— 这是 v1.6.0 反复踩到的同一个坑（panelStale / BOT_RESPONSE_TIMEOUT /
+     * FLOOD_WAIT 三处都无条件撤销过）。
+     */
+    private boolean optimisticSigned(String prefix, String id) {
+        try {
+            return todayStr().equals(prefs.getString(kLast(prefix, id), ""));
+        } catch (Throwable t) { return false; }
+    }
+
+    /** 只清退避状态、保留已签（第二步失败但第一步已成功时用）。 */
+    private void keepSignedClearBackoff(String prefix, String id) {
+        try {
+            prefs.edit().putInt(kRetry(prefix, id), 0)
+                 .remove(kRetryAt(prefix, id))
+                 .remove(kRetryDay(prefix, id)).apply();
+            clearFailStreak(prefix, id);
+        } catch (Throwable t) { noteSwallowed("keepSignedClearBackoff", t); }
+    }
+
+    /**
      * 从 prefs 前缀反解账号索引（"acc2_" → 2）。
      * 拿不到返回 currentAccount() —— 但调用方不该依赖这个兜底，
      * 凡是"界面渲染时的账号"与"点击时的账号"可能不同的场景，都必须用本方法。
@@ -8655,7 +8710,17 @@ public final class TGAutoSignCore {
     }
 
     public void onUpdateProcessed(Object update, Object controller) {
-        if (notReadyYet()) return;
+        // 启动 30 秒的"未就绪"窗口**不能丢事件**。
+        //
+        // 这里以前是 `if (notReadyYet()) return;` —— 但本方法同时承担两件事：
+        //   ① 缓存 bot 面板（updatePanelLive）→ 它是"等面板"机制的**唯一触发源**
+        //   ② 判定回复
+        // 事件一丢，sendSign 的"等面板"就永远等不到 → 8 秒后只能走兜底 msg_id，
+        // 而兜底的按钮往往已经过期 → 报 MESSAGE_ID_INVALID。
+        // 用户看到的就是"机器人明明秒回，模块却一直走兜底"（实测社工 bot 复现）。
+        //
+        // 未就绪只该限制"模块主动发起的动作"，不该限制"被动接收的事件"：
+        // 面板缓存与回复判定都是幂等的，早处理无害。
         // 账号在进入判定链之前就钉死，后续所有 prefs 前缀都用它
         final int ctrlAcc = accountOfController(controller);
         try {
