@@ -3,6 +3,29 @@
 ## 1.6.0 (123) — 2026-09-24
 
 ### 修复 · Fixed
+- **明明签到成功，却被判失败并退回「退避中」（重要）· A successful check-in was revoked and shown as "backoff" (important)**
+  回调按钮签到分两步：先发前置命令，再点按钮。当前置命令已经完成签到、
+  而第二步的按钮因为**消息已更新**被 Telegram 拒绝（`MESSAGE_ID_INVALID`）时，
+  模块把「第二步失败」当成了「签到整体失败」—— 先撤销已签标记，再排一次退避重试。
+  用户侧看到的是：**已经签过了，状态却是「退避中」**，10 分钟后又白跑一次。
+  关键点是：`MESSAGE_ID_INVALID` 只是"你点的按钮过期了"，**不代表签到失败**，
+  而前置命令往往已经把签到做完（实测社工类机器人：`/start` 即完成签到，按钮只是菜单）。
+  现在有前置命令且已确认发送成功时，按钮过期不再撤销已签，只清掉退避状态。
+  *Callback sign-in runs in two steps: send the pre-command, then press the button. When the pre-command had already completed the check-in but the second step was rejected by Telegram because the message had been updated (MESSAGE_ID_INVALID), the module treated "step two failed" as "the whole check-in failed": it revoked the signed marker and scheduled a backoff retry. Users saw a successful check-in displayed as "backoff", followed by another pointless attempt ten minutes later. MESSAGE_ID_INVALID only means the button is stale, not that the check-in failed, and the pre-command usually finished the job already (measured on support-bot style robots, where /start performs the check-in and the buttons are just a menu). When a pre-command exists and was accepted, a stale button no longer revokes the sign-in; only the backoff state is cleared.*
+- **按钮反复过期导致无限重试 · Stale buttons caused an endless retry loop**
+  有些机器人的按钮随消息变化，每次重新拉取面板都会换一套 msg_id —— 模拟点击永远追不上。
+  模块会一直"拉新面板 → 点击 → 过期 → 再拉"，一天白跑十几次。现在同一目标连续 3 次过期即熔断，
+  日志直接给出出路（把这条改成「文本指令」目标，直接发指令而不是点按钮）。
+  *Some robots regenerate their buttons with each message, so every panel refresh yields a new msg_id and a simulated tap can never keep up. The module kept pulling a fresh panel, tapping, failing and pulling again, wasting a dozen attempts a day. Three consecutive stale results now trip a circuit breaker, and the log states the way out (convert that target to a text-command target that sends the command directly instead of tapping a button).*
+- **不回结果的机器人每天白等超时 · Silent robots made the module wait out a timeout every day**
+  查询类、菜单类机器人本来就不回复签到结论，模块仍会为它们等满超时。
+  现在连续 3 次无响应即停止自动重试并标记「待确认」，交由用户处置。
+  *Query and menu robots never reply with a check-in verdict, yet the module still waited out the timeout for them. After three consecutive silent results it now stops retrying and marks the target "pending" for the user to decide.*
+- **「待确认」的「重试」按钮用错账号 · The pending "retry" action used the wrong account**
+  点击「重试」时读的是**当时的当前账号**，而列表渲染时的账号可能已经被切走 ——
+  于是把 A 账号的目标用 B 账号发了出去（与定时任务、面板回调同一类问题）。
+  现在从该行的账号前缀反解，与界面显示保持一致。
+  *The "retry" action read the current account at tap time, while the account at render time may have changed since, so account A's target was sent from account B (the same class of bug as the scheduled-task and panel-callback cases). It now resolves the account from that row's own prefix, matching what the UI displayed.*
 - **「待确认」是个死状态：看得到、点不动（重要）· "Pending" was a dead state: visible but un-actionable (important)**
   当签到发出后 bot 始终不回复，模块会把它标成「待确认」（不计成功也不计失败，停止自动重试）——
   这个判断本身是对的，但**只做了一半**：状态写得进去，却没有任何清除入口。

@@ -1639,7 +1639,8 @@ public final class TGAutoSignCore {
     private static final String[] ENTRY_HEADS = {"learned_", "kind_", "did_", "data_", "hash_", "msg_id_",
             "pre_", "loc_", "last_", "retry_", "retry_at_", "retry_day_", "sent_at_",
             "frozen_", "snooze_", "pendcfm_", "title_", "fail_streak_", "fail_laststamp_", "fail_alert_",
-            "timer_plan_", "unknown_reply", "sign_days", "streak", "last_sign_date"};
+            "timer_plan_", "unknown_reply", "sign_days", "streak", "last_sign_date",
+            "panelstale_", "panelstale_day_", "silent_", "silent_day_"};
 
     /**
      * 清空配置时**必须保留**的全局设置键（显式白名单）。
@@ -1740,7 +1741,8 @@ public final class TGAutoSignCore {
 
     /** 只有"必须挂在条目上才有意义"的键才参与孤儿清理；cfg_/daycap_ 这类账号级配置不能碰。 */
     private static final String[] ORPHAN_HEADS = {"frozen_", "snooze_", "pendcfm_", "pendcfm_note_",
-            "title_", "fail_streak_", "fail_laststamp_", "fail_alert_", "sent_at_"};
+            "title_", "fail_streak_", "fail_laststamp_", "fail_alert_", "sent_at_",
+            "panelstale_", "panelstale_day_", "silent_", "silent_day_"};
 
     /** 每天第一次加载时提示一条汇总（之前是每次重启都弹两条，很吵） */
     private void bootToast() {
@@ -2805,6 +2807,30 @@ public final class TGAutoSignCore {
         jlog("【网络层自动学习】新目标 " + did + " -> " + t);
     }
 
+    /** 读「bot 连续不回复」计数；跨天自动视为 0。 */
+    private int silentCount(String prefix, String id) {
+        try {
+            if (!todayStr().equals(prefs.getString(prefix + "silent_day_" + id, ""))) return 0;
+            return prefs.getInt(prefix + "silent_" + id, 0);
+        } catch (Throwable t) { return 0; }
+    }
+
+    /** 读熔断计数；跨天自动视为 0（昨天的失败不该影响今天）。 */
+    private int panelStaleCount(String prefix, String id) {
+        try {
+            if (!todayStr().equals(prefs.getString(prefix + "panelstale_day_" + id, ""))) return 0;
+            return prefs.getInt(prefix + "panelstale_" + id, 0);
+        } catch (Throwable t) { return 0; }
+    }
+
+    /** 清掉 panelStale 熔断计数（签到成功 / 用户手动处理后调用）。 */
+    private void clearPanelStale(String prefix, String id) {
+        try {
+            prefs.edit().remove(prefix + "panelstale_" + id)
+                 .remove(prefix + "panelstale_day_" + id).apply();
+        } catch (Throwable t) { noteSwallowed("clearPanelStale", t); }
+    }
+
     private void markSigned(String prefix, String id) {
         // 已经标过就静默返回：这条路径会被重复投递触发多次，
         // 重复执行会让 updateStreak / noteSignedDay 累加、日志刷屏。
@@ -2813,6 +2839,10 @@ public final class TGAutoSignCore {
         if (todayStr().equals(cur)) return;
         prefs.edit().putString(kLast(prefix, id), todayStr())
              .remove(kPendingConfirm(prefix, id))   // 真签成功 → 撤掉"待确认"
+             .remove(prefix + "panelstale_" + id)  // 签成功了 → 清掉"按钮反复过期"的熔断计数
+             .remove(prefix + "panelstale_day_" + id)
+             .remove(prefix + "silent_" + id)      // 有结果了 → 清掉"不回复"计数
+             .remove(prefix + "silent_day_" + id)
              .apply();   // apply 异步落盘，避免回调路径阻塞
         updateStreak(prefix);
         noteSignedDay(prefix);
@@ -3148,13 +3178,50 @@ public final class TGAutoSignCore {
                                         } }, 800L);
                                         logw("回调按钮过期(" + errText + ")：拉新面板后重试（" + fId + "）");
                                     } else {
-                                        // 面板过期 = 签到没发出去，绝不能标"今日已签"。
-                                        // 清掉已签标记 + 排一次稍后重试，当天仍会被补签捞回。
+                                        // ── 关键判定（v1.6.0）──
+                                        // MESSAGE_ID_INVALID 是 TG 在**回调应答阶段**返回的，含义是
+                                        // "你点的按钮所属消息已过期"，**不是签到失败**。
+                                        // 而前置命令（/start 之类）可能已经把签到做完了：
+                                        // 实测社工 bot —— 21:13:57 前置命令返回成功并标了已签，
+                                        // 21:13:59 按钮过期就把已签抹掉 → 界面显示"退避中"，
+                                        // 10 分钟后又重发一次，一天白刷十几次。
+                                        //
+                                        // 原注释的前提「面板过期 = 签到没发出去」只在**没有前置命令**时成立。
+                                        // 有前置命令、且本步已乐观标记为已签 → 按钮过期不影响签到结果。
+                                        boolean preCmdSigned = fPres != null && !fPres.isEmpty()
+                                                && todayStr().equals(prefs.getString(kLast(fPrefix, fId), ""));
+                                        if (preCmdSigned) {
+                                            // 保留已签，只清退避状态；不计失败、不排重试
+                                            prefs.edit().putInt(kRetry(fPrefix, fId), 0)
+                                                 .remove(kRetryAt(fPrefix, fId))
+                                                 .remove(kRetryDay(fPrefix, fId)).apply();
+                                            clearFailStreak(fPrefix, fId);
+                                            logw("回调按钮过期(" + errText + ")：但前置命令已成功，保留已签（"
+                                                 + fId + "）；该 bot 的按钮会随消息变化，建议改用「文本指令」目标");
+                                            noteResult(true);
+                                            return null;
+                                        }
+                                        // 面板过期且前置命令没签成 = 确实没签上，撤销 + 退避
                                         int rtry = prefs.getInt(kRetry(fPrefix, fId), 0) + 1;
                                         prefs.edit().remove(kLast(fPrefix, fId))
                                              .putInt(kRetry(fPrefix, fId), Math.min(rtry, RETRY_LIMIT))
                                              .putLong(kRetryAt(fPrefix, fId), System.currentTimeMillis() + 10L * 60 * 1000)
                                              .putString(kRetryDay(fPrefix, fId), todayStr()).apply();
+                                        // 连续熔断：同一个目标反复"按钮过期"说明它的按钮是动态生成的
+                                        // （每次 /start 都换 msg_id），再重试也是白跑 —— 停手并给出出路。
+                                        int staleN = panelStaleCount(fPrefix, fId) + 1;
+                                        prefs.edit().putInt(fPrefix + "panelstale_" + fId, staleN)
+                                             .putString(fPrefix + "panelstale_day_" + fId, todayStr()).apply();
+                                        if (staleN >= 3) {
+                                            loge("回调面板反复变化（第 " + staleN + " 次，" + errText + "）：已停止重试 "
+                                                 + fId + "。该 bot 的按钮随消息变化，模拟点击无法稳定命中 —— "
+                                                 + "请在「目标列表」把这条改成「文本指令」目标（直接发指令，不点按钮）");
+                                            prefs.edit().putInt(kRetry(fPrefix, fId), RETRY_LIMIT)
+                                                 .putString(kRetryDay(fPrefix, fId), todayStr()).apply();
+                                            noteFailStreak(fPrefix, fId, fDialogId, "按钮反复过期，已熔断");
+                                            noteResult(false);
+                                            return null;
+                                        }
                                         loge("回调面板已变化(" + errText + ")：本次未签成功，将在补签时段自动重试"
                                                 + (rtry >= RETRY_LIMIT ? "（已重试 " + rtry + " 次）" : "")
                                                 + "；也可去 bot 会话手动点一次签到按钮立即修复（" + fId + "）");
@@ -3194,6 +3261,22 @@ public final class TGAutoSignCore {
                                              .remove(kLast(fPrefix, fId))
                                              .putLong(kRetryAt(fPrefix, fId), System.currentTimeMillis() + 15L * 60 * 1000)
                                              .putString(kRetryDay(fPrefix, fId), todayStr()).apply();
+                                        // 「不回结果的 bot」识别：有些 bot 本来就不回复（查询类、菜单类），
+                                        // 每天为它们等满超时纯属浪费，还会刷一屏日志。
+                                        // 累计 3 次无响应就停手，并在目标上留个可见标记。
+                                        int silentN = prefs.getInt(fPrefix + "silent_" + fId, 0) + 1;
+                                        prefs.edit().putInt(fPrefix + "silent_" + fId, silentN)
+                                             .putString(fPrefix + "silent_day_" + fId, todayStr()).apply();
+                                        if (silentN >= 3) {
+                                            prefs.edit().putBoolean(kPendingConfirm(fPrefix, fId), true)
+                                                 .putInt(kRetry(fPrefix, fId), 0)
+                                                 .remove(kRetryAt(fPrefix, fId))
+                                                 .remove(kRetryDay(fPrefix, fId)).commit();
+                                            logw("该 bot 连续 " + silentN + " 次不回复结果：已标记「待确认」并停止自动重试（"
+                                                 + fId + "）。这类 bot 通常不回签到结论，可在目标列表里手动处置");
+                                            noteResult(false);
+                                            return null;
+                                        }
                                         logw("bot 未响应(" + errText + ")：15 分钟后重试（" + fId + "）");
                                         noteResult(false);
                                     }
@@ -6024,7 +6107,7 @@ public final class TGAutoSignCore {
     // 现在给出三个明确动作，并把用户的选择记下来。
 
     /** 用户已确认该目标今天签上了（写 last_，与正常签到成功等价）。 */
-    private void pendConfirmAsSigned(String prefix, String id, long did) {
+    private void pendConfirmAsSigned(String prefix, String id, long did) {   // prefix 已锁定账号
         try {
             markSigned(prefix, id);              // 会顺带 remove(pendcfm_)
             prefs.edit().putString(prefix + "pendcfm_note_" + id,
@@ -6047,7 +6130,11 @@ public final class TGAutoSignCore {
             if (m == null) { toast(Lang.tr("目标已不存在")); return; }
             logs("【待确认】" + did + " 用户点了重试 → 重新发送");
             toast(Lang.tr("已重新发送"));
-            sendSign(m, currentAccount(), true);
+            // 账号必须从 prefix 反解，**不能读 currentAccount()**：
+            // 界面渲染时的账号与点击时的"当前账号"可能不同（用户切过号），
+            // 读当前账号就会把 A 账号的目标用 B 账号发出去 —— 与 armTask/waitingPanel 同一类 bug。
+            // 日志实测过：21:13:48 点重试，21:13:57 却以 [账号1] 发账号2 的目标。
+            sendSign(m, accountOfPrefix(prefix), true);
         } catch (Throwable t) { noteSwallowed("pendConfirmRetry", t); }
     }
 
@@ -6062,6 +6149,26 @@ public final class TGAutoSignCore {
             logs("【待确认】" + did + " 用户忽略今天（今日不再自动重试）");
             toast(Lang.tr("已忽略今天"));
         } catch (Throwable t) { noteSwallowed("pendConfirmIgnoreToday", t); }
+    }
+
+    /**
+     * 从 prefs 前缀反解账号索引（"acc2_" → 2）。
+     * 拿不到返回 currentAccount() —— 但调用方不该依赖这个兜底，
+     * 凡是"界面渲染时的账号"与"点击时的账号"可能不同的场景，都必须用本方法。
+     */
+    private int accountOfPrefix(String prefix) {
+        try {
+            if (prefix != null && prefix.startsWith("acc")) {
+                int us = prefix.indexOf('_');
+                if (us > 3) {
+                    String num = prefix.substring(3, us);
+                    if (num.length() > 0 && num.indexOf('-') < 0) {
+                        return Integer.parseInt(num);
+                    }
+                }
+            }
+        } catch (Throwable t) { noteSwallowed("accountOfPrefix", t); }
+        return currentAccount();
     }
 
     /** 从任意 View 的 Context 取 Activity 并刷新目标列表（行内按钮用）。 */
