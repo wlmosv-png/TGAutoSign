@@ -77,6 +77,9 @@ public final class TGAutoSignCore {
 
     private final Context appContext;
     private final ClassLoader cl;
+
+    /** 模块自身包名：宿主 context 的 getPackageName() 返回的是宿主，拿不到模块，只能写死 */
+    static final String MODULE_PKG = "io.github.wlmosv_png.tgautosign";
     private final SharedPreferences prefs;
     private final Set<String> seenSignals = cs();
     private long lastSeenClean = 0L;
@@ -189,8 +192,10 @@ public final class TGAutoSignCore {
                                                               // 导致新用户点按钮永远学不到；老用户当年手动开过才没暴露）
     private final Set<String> wakeFired = cs(); // 唤醒只触发一次，防循环
     // ── 回调签到状态机（改革）：等面板事件驱动，不再盲等固定延时 ──
-    // waitingPanel: entryId -> did，前置命令已发出、正在等 bot 刷新面板
-    private final java.util.Map<String, Long> waitingPanel = new java.util.HashMap<String, Long>();
+    // waitingPanel: entryId -> {did, acc}，前置命令已发出、正在等 bot 刷新面板。
+    // 账号必须在这里锁定：面板刷新是异步事件（最长 8 秒兜底），期间用户可能切号，
+    // 回调时再读 currentAccount() 就会用新账号去发旧账号的目标（串号 bug）。
+    private final java.util.Map<String, long[]> waitingPanel = new java.util.HashMap<String, long[]>();
     // waitingPanelDeadline: entryId -> 截止时间戳(ms)，超时兜底
     private final java.util.Map<String, Long> waitingPanelDeadline = new java.util.HashMap<String, Long>();
     /** 最近一次更新检查结果（/jmb 菜单与下载动作读取） */
@@ -777,10 +782,16 @@ public final class TGAutoSignCore {
         schedulePoll();
         scheduleTickLoop();   // 心跳常驻：正常签到与补签都靠它兜底
         mainHandler.postDelayed(new Runnable(){ @Override public void run(){ try { syncNow(); } catch (Throwable ignored) {} } }, 12000L);
-        jlog("=== TGAutoSign 模块 v" + UpdateChecker.VERSION_NAME + " 已加载 ===");
-        jlog("宿主: " + safePkg() + " 账号: " + currentAccount() + " 目标: " + targetsSnapshot().size()
+        jlogForce("=== TGAutoSign v" + UpdateChecker.VERSION_NAME + " (" + UpdateChecker.VERSION_CODE + ") 已加载 ===");
+        String _hostPkg158 = safePkg();
+        jlogForce("宿主: " + hostLabel(_hostPkg158) + " [" + _hostPkg158 + "] " + hostVersion(_hostPkg158)
+            + " · " + hostAbi() + " · Android " + android.os.Build.VERSION.RELEASE
+            + " (SDK " + android.os.Build.VERSION.SDK_INT + ")");
+        jlogForce("注入: " + injectHow(_hostPkg158) + " · 模块 " + MODULE_PKG);
+        jlogForce("账号: " + currentAccount() + " 目标: " + targetsSnapshot().size()
             + " 按钮学习: " + (AUTO_LEARN ? "开" : "关") + " 网络学习: " + (AUTO_LEARN_NET ? "开" : "关"));
-        jlog("使用: 在任意聊天输入 /jmb 打开管理界面");
+        jlogForce("使用: 在任意聊天输入 /jmb 打开管理界面");
+        logFlush();   // 强制落盘（jlogForce 已绕过采样）
 
 
 
@@ -811,6 +822,48 @@ public final class TGAutoSignCore {
     // ---------------- 工具 ----------------
     private String todayStr() { return new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date()); }
 
+    /** 宿主友好名：已知客户端给短名，未知 fork 显示包名末段 */
+    private String hostLabel(String pkg) {
+        if (pkg == null || pkg.length() == 0) return "unknown";
+        boolean en = Lang.isEnglish();
+        if ("org.telegram.messenger".equals(pkg)) return en ? "Official" : "官方版";
+        if ("org.telegram.messenger.web".equals(pkg)) return en ? "Official (web)" : "官方版(官网直连)";
+        if ("fork.risin42.nagramx".equals(pkg)) return "Nagram XF";
+        if ("com.exteraless.app".equals(pkg)) return "ExteraLess";
+        if (pkg.startsWith("nu.gpu.nagram") || "xyz.nextalone.nagram".equals(pkg)) return "Nagram";
+        int i = pkg.lastIndexOf('.');
+        return i > 0 ? pkg.substring(i + 1) : pkg;
+    }
+
+    /** 宿主版本名 + 版本码（失败返回 ?，不影响主流程） */
+    private String hostVersion(String pkg) {
+        try {
+            android.content.pm.PackageInfo pi = appContext.getPackageManager().getPackageInfo(pkg, 0);
+            long vc;
+            try { vc = pi.getLongVersionCode(); }
+            catch (Throwable t) { vc = pi.versionCode; }
+            return pi.versionName + " (" + vc + ")";
+        } catch (Throwable t) { return "?"; }
+    }
+
+    /** 主 ABI（32/64 位适配排查用） */
+    private String hostAbi() {
+        try {
+            String[] a = android.os.Build.SUPPORTED_ABIS;
+            return (a != null && a.length > 0) ? a[0] : "?";
+        } catch (Throwable t) { return "?"; }
+    }
+
+    /** 注入方式（英文模式走英文，避免英文用户看到中文） */
+    private String injectHow(String pkg) {
+        String d;
+        try { d = Hosts.describe(pkg, cl); } catch (Throwable t) { d = "?"; }
+        if (!Lang.isEnglish()) return d;
+        if ("已知客户端".equals(d)) return "known client";
+        if ("不支持".equals(d)) return "unsupported";
+        return "capability probe (Telegram-Android fork)";
+    }
+
     /** 宿主包名（多客户端排查用；失败返回 unknown，不影响主流程） */
     private String safePkg() {
         try { return appContext.getPackageName(); } catch (Throwable t) { return "unknown"; }
@@ -838,20 +891,31 @@ public final class TGAutoSignCore {
     /**
      * 当前账号索引。
      *
-     * 必须钳制：宿主 UserConfig.selectedAccount 是**静态字段**，多账号切换时可能短暂
-     * 甚至持续被写成越界值（实测用户切到第二个账号后读到 9，而只登录了 2 个）。
-     * 一旦把越界值用于 acc{N}_ 前缀，目标表 / 已签记录 / 待签状态全部会去读一个
-     * **空分区** —— 界面表现为"配置凭空消失"，比单纯标错账号严重得多。
-     * 所以：越界一律钳到 0，并留一条日志便于追查宿主行为。
+     * 历史教训（v1.5.8 → v1.5.9 回退）：
+     * v1.5.8 曾在此处把越界值「钳到 0」，出发点是不让界面因越界而读到空分区。
+     * 但实测证明这个假设是错的 —— 宿主 UserConfig.selectedAccount 是**静态字段**，
+     * 在部分客户端（如 fork.risin42.nagramx，登录 4 个账号）会读到 7、9 这类
+     * 大于「已登录数」的值，而它们**是合法的账号索引**（账号数据就存在 acc9_ 里）。
+     * 钳到 0 的后果是把用户重定向到**另一个账号**的分区：目标表、已签记录、
+     * 重试退避全部读错，用户侧表现为「账号1的配置变成了账号2的」，
+     * 比「读到空分区」严重得多。
+     *
+     * 现在的策略：
+     *  - 正常范围内：原样返回（与 v1.5.7 一致）。
+     *  - 负值：不可能合法，退回 0 并记日志（不能返回负数，否则 accountPrefix()
+     *    会拼出 "acc-1_" 这种垃圾分区）。
+     *  - 越界但为正：仍原样返回（宁可按用户当前账号操作，也不改到别的账号头上），
+     *    只记一条日志便于追查宿主行为。
      */
     private int currentAccount() {
         try {
             Object v = getFieldVal(null, classEx("org.telegram.messenger.UserConfig"), "selectedAccount");
             int c = ((Number) v).intValue();
             lastRawAccount = c;
-            int total = activatedAccounts();
-            if (c < 0 || c >= total) {
-                warnAccountOutOfRange(c, total);
+            if (c < 0) {
+                // 负值不可能是合法索引。不能返回 -1：accountPrefix() 会拼出 "acc-1_"
+                // 这种垃圾分区（有 57 处调用点）。退回 0 并记日志。
+                warnAccountOutOfRange(c, activatedAccounts());
                 return 0;
             }
             return c;
@@ -865,8 +929,9 @@ public final class TGAutoSignCore {
             String sig = raw + "/" + total;
             if (sig.equals(lastAccRangeSig)) return;
             lastAccRangeSig = sig;
-            logw("[账号] selectedAccount=" + raw + " 越界（已登录 " + total + " 个），已按 0 处理"
-                 + " —— 宿主切号时写入了非法值；若界面账号号对不上，请把这条日志发给作者");
+            logw("[账号] selectedAccount=" + raw + "（已登录 " + total + " 个）"
+                 + (raw < 0 ? "，值非法，已退回 0（不再改写为其它账号）"
+                            : "，大于已登录数 —— 但仍是合法索引，按原值使用（不再改到别的账号）"));
         } catch (Throwable ignored) {}
     }
 
@@ -1121,6 +1186,37 @@ public final class TGAutoSignCore {
 
     void jlog(String msg) { jlog(guessLevel(msg), msg); }
         void logd(String msg) { jlog(LV_DEBUG, msg); }
+        /** 强制落盘：绕过 INFO 采样（采样 5 秒窗口会把同批启动行丢掉），启动/诊断信息必须用它 */
+        void jlogForce(String msg) {
+            try {
+                long now = System.currentTimeMillis();
+                String cx = ctxTag();
+                LogLine l = new LogLine(now, LV_INFO, String.valueOf(msg), cx);
+                Log.i(TAG, msg);
+                synchronized (logBuffer) {
+                    logBuffer.add(l);
+                    while (logBuffer.size() > 1200) logBuffer.remove(0);
+                    diskQueue.add(l.flat());
+                }
+            } catch (Throwable ignored) {}
+        }
+
+        /** 立即落盘：jlog 有采样（INFO 连续输出会被丢），启动信息必须完整进文件 */
+        void logFlush() {
+            try {
+                final List<String> batch;
+                synchronized (logBuffer) {
+                    if (diskQueue.isEmpty()) return;
+                    batch = new ArrayList<String>(diskQueue);
+                    diskQueue.clear();
+                    diskFlushAt = System.currentTimeMillis();
+                }
+                final java.io.File dir = logDir();
+                final String day = dayStr();
+                LOG_IO.execute(new Runnable() { @Override public void run() { appendDisk(dir, day, batch); } });
+            } catch (Throwable ignored) {}
+        }
+
         void logs(String msg) { jlog(LV_OK, msg); }
         void logw(String msg) { jlog(LV_WARN, msg); }
         void loge(String msg) { jlog(LV_ERR, msg); }
@@ -2190,9 +2286,11 @@ public final class TGAutoSignCore {
     private void onPanelRefreshedForWaiting(long did) {
         try {
             String hitId = null;
+            int hitAcc = -1;
             synchronized (waitingPanel) {
-                for (java.util.Map.Entry<String, Long> e : waitingPanel.entrySet()) {
-                    if (e.getValue() != null && e.getValue() == did) { hitId = e.getKey(); break; }
+                for (java.util.Map.Entry<String, long[]> e : waitingPanel.entrySet()) {
+                    long[] v = e.getValue();
+                    if (v != null && v.length > 1 && v[0] == did) { hitId = e.getKey(); hitAcc = (int) v[1]; break; }
                 }
                 if (hitId != null) {
                     waitingPanel.remove(hitId);
@@ -2210,7 +2308,9 @@ public final class TGAutoSignCore {
                 // 必须传 manual=true 跳过串行闸：闸门是这次签到自己在第一步占下的，
                 // 不跳过就会"自己拦自己"——面板刷新了却点不出去，永远卡在"已有签到在途"
                 //（实测 ExteraLess 上 8439387373_cb1 反复被拦、始终签不上）。
-                if (target != null) sendSign(target, currentAccount(), true);
+                // 用发起时锁定的账号，不用 currentAccount()：面板刷新可能隔几秒，
+                // 期间切号会把这个目标发到错误账号（与定时任务 armTask 同类 bug）。
+                if (target != null) sendSign(target, hitAcc >= 0 ? hitAcc : currentAccount(), true);
             }
         } catch (Throwable _e1) { noteSwallowed("onPanelRefreshedForWaiting", _e1); }
     }
@@ -2839,7 +2939,7 @@ public final class TGAutoSignCore {
             }, 45000L);
             // 改革：发前置命令前就建立「等面板」状态，面板刷新事件一到立即命中（不因递归延时错过）
             synchronized (waitingPanel) {
-                waitingPanel.put(id, dialogId);
+                waitingPanel.put(id, new long[]{dialogId, account});
                 waitingPanelDeadline.put(id, System.currentTimeMillis() + 8000L);
             }
             jlog("[" + id + "] 前置命令将发送，先进入等面板状态（did=" + dialogId + "）");
@@ -5925,6 +6025,7 @@ public final class TGAutoSignCore {
             if (!TIMER_ENABLED) return;
             if (!inWindow()) return;              // 未到点目标只在窗口内，窗口外交给 sweepDue 补
             if (pendingTimerFire != null) return;
+            final int _schedAcc = currentAccount();
             String prefix = accountPrefix();
             ensureTimerPlan(prefix);
             List<Map<String, Object>> plan = timerPlan(prefix);
@@ -5938,7 +6039,7 @@ public final class TGAutoSignCore {
                 if (fireMin <= nowMin) continue;   // 已到点 → 交给 sweepDue 立即处理
                 long delayMs = (fireMin - nowMin) * 60000L - c.get(java.util.Calendar.SECOND) * 1000L;
                 if (delayMs < 0) delayMs = 0;
-                armTask(m, delayMs, false, "[定时] 下一目标 " + m.get("text") + " 于 " + hhmm(fireMin) + " 触发");
+                armTask(m, delayMs, false, "[定时] 下一目标 " + m.get("text") + " 于 " + hhmm(fireMin) + " 触发", _schedAcc);
                 return;
             }
         } catch (Throwable t) {
@@ -5959,6 +6060,7 @@ public final class TGAutoSignCore {
             boolean mb = inMissBackTime();
             if (!win && !mb) return;
             if (pendingSweep != null) return;
+            final int _schedAcc = currentAccount();
             String prefix = accountPrefix();
             ensureTimerPlan(prefix);
             List<Map<String, Object>> plan = timerPlan(prefix);
@@ -5982,7 +6084,7 @@ public final class TGAutoSignCore {
                     delayMs = 60000L + (long) (random.nextInt(240000));    // 窗口后：1~5 分钟随机补
                     tag = "[定时] 错过补签 " + m.get("text") + "（原计划 " + hhmm(fireMin) + "）约 " + (delayMs / 60000L) + " 分钟后触发";
                 }
-                armTask(m, delayMs, true, tag);
+                armTask(m, delayMs, true, tag, _schedAcc);
                 return;
             }
         } catch (Throwable t) {
@@ -5991,21 +6093,29 @@ public final class TGAutoSignCore {
     }
 
     /** 排一个待执行的签到任务（sweep=true 走巡检查道，false 走精确排期）。 */
-    private void armTask(final Map<String, Object> m, long delayMs, final boolean sweep, String tag) {
+    private void armTask(final Map<String, Object> m, long delayMs, final boolean sweep, String tag, final int acc) {
         final Map<String, Object> fm = m;
+        // 账号在「排任务时」就钉死：延迟可达 1~5 分钟，期间用户可能切号。
+        // 以前执行时才取 accountPrefix()/currentAccount()，会把旧账号的目标
+        // 用新账号发出去（用户反馈「账号1给账号2配置的 bot 发消息」）。
         Runnable r = new Runnable() {
             @Override public void run() {
                 try {
                     if (sweep) pendingSweep = null; else pendingTimerFire = null;
                     if (!TIMER_ENABLED || (!inWindow() && !inMissBackTime())) { kickSchedule(); return; }
-                    String fPrefix = accountPrefix();
+                    // 账号变了就作废这次任务：它属于旧账号，不能拿新账号发
+                    if (acc != currentAccount()) {
+                        jlog("[定时] 账号已切换（任务属 acc" + acc + "，当前 acc" + currentAccount() + "），取消本次任务");
+                        kickSchedule(); return;
+                    }
+                    String fPrefix = accountPrefix(acc);
                     String fid = String.valueOf(fm.get("id"));
                     if (todayStr().equals(prefs.getString(kLast(fPrefix, fid), ""))) { kickSchedule(); return; }
                     long fdid = ((Number) fm.get("did")).longValue();
                     Map<String, Object> entry = findEntryById(fid);
                     if (entry == null) { kickSchedule(); return; }
                     jlog("[定时] 执行签到 " + fdid + " " + (KIND_CB.equals(fm.get("kind")) ? "[回调] " : "text=") + fm.get("text"));
-                    sendSign(entry, currentAccount());
+                    sendSign(entry, acc);
                 } catch (Throwable ignored) {}
             }
         };
@@ -7200,7 +7310,14 @@ public final class TGAutoSignCore {
                 sb.append(" (").append(UpdateChecker.PATCH_TAG).append(")");
             sb.append(" =====\n");
             sb.append("时间: ").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date())).append("\n");
-            sb.append("宿主: ").append(safePkg()).append("\n");
+            String _dp158 = safePkg();
+            sb.append("宿主: ").append(hostLabel(_dp158)).append(" [").append(_dp158).append("] ")
+              .append(hostVersion(_dp158)).append("\n");
+            sb.append("宿主架构: ").append(hostAbi())
+              .append("   Android: ").append(android.os.Build.VERSION.RELEASE)
+              .append(" (SDK ").append(android.os.Build.VERSION.SDK_INT).append(")\n");
+            sb.append("注入方式: ").append(injectHow(_dp158))
+              .append("   模块: ").append(MODULE_PKG).append(" (").append(UpdateChecker.VERSION_CODE).append(")\n");
             sb.append("当前账号: ").append(accountLabel(currentAccount())).append("  目标数: ").append(targetsSnapshot().size()).append("\n");
             sb.append("签到窗口: ").append(WINDOW == null || WINDOW.isEmpty() ? "不限" : WINDOW)
               .append("  定时模式: ").append(TIMER_ENABLED ? "开" : "关").append("\n");
@@ -7227,10 +7344,11 @@ public final class TGAutoSignCore {
               .append("  捕获武装=").append(captureArmed ? "是" : "否")
               .append("  武装时账号=").append(captureAcc < 0 ? "无" : accountLabel(captureAcc)).append("\n");
             sb.append("账号字段: selectedAccount=").append(lastRawAccount)
-              .append("  已登录=").append(activatedAccounts())
-              .append(lastRawAccount >= 0 && lastRawAccount >= activatedAccounts()
-                      ? "  ← 越界，已按 0 处理（宿主切号写入了非法值）" : "")
-              .append("\n");
+              .append("  已登录=").append(activatedAccounts());
+            if (lastRawAccount < 0) sb.append("  ← 值为负，非法，本轮跳过账号操作");
+            else if (lastRawAccount >= activatedAccounts())
+                sb.append("  ← 大于已登录数，但按原值使用（索引即分区，不再改写）");
+            sb.append("\n");
             try {
                 String unk = todayUnknownReply();
                 if (unk != null && unk.length() > 0)

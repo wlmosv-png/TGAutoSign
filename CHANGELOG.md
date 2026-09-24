@@ -1,5 +1,48 @@
 # 更新日志
 
+## 1.5.9 (122) — 2026-09-24
+
+### 新增 · New
+- **日志与诊断包显示详细版本信息 · Detailed version info in logs and the diagnostics bundle**
+  启动日志现在输出：模块版本名 + 版本码、宿主友好名 + 包名 + 版本名/码、CPU 架构、
+  Android 版本、注入方式（已知客户端 / 能力探测命中）、模块包名。诊断包同步补全。
+  排查「装了没生效」「版本对不上」「到底哪个包在跑」不再靠猜。
+  *Startup log now reports the module version name + code, the host's friendly name + package + version name/code, CPU ABI, Android version, the injection method (known client / capability probe) and the module package. The diagnostics bundle matches. No more guessing which package is running or which version is installed.*
+- **宿主友好名支持英文 · Host friendly names follow the UI language**
+  英文界面下输出 Official \/ Nagram \/ ExteraLess，不再在英文环境里出现中文宿主名。
+  *English UI now prints Official \/ Nagram \/ ExteraLess instead of Chinese host names.*
+
+### 修复 · Fixed
+- **定时任务用错账号发送（重要）· Scheduled tasks sent from the wrong account (important)**
+  定时任务排进队列时**不记录自己属于哪个账号**，执行时才去读「当前账号」。
+  而它的延迟可达 1~5 分钟（窗口内 3~15 秒、窗口后 1~5 分钟随机），
+  期间只要切过账号，任务就会用**新账号**去给**旧账号的目标**发签到消息 ——
+  用户侧表现为「账号1自动给只有账号2配置的 bot 发了消息」。
+  现已改为排任务时锁定账号，执行前再校验一次：账号变了就作废本次任务并重排，
+  绝不拿新账号发旧账号的目标。
+  *Scheduled tasks did not record which account they belonged to and read the "current account" only at execution time. With delays of 1–5 minutes (3–15 s inside the window, 1–5 min random after it), any account switch in between made the task send from the **new** account to the **old** account's targets — reported as "account 1 automatically messaged a bot only configured on account 2". Tasks now capture their account when scheduled and re-verify before firing; if the account changed, the task is dropped and rescheduled instead of sending.*
+- **回调签到用错账号（重要）· Callback sign-in used the wrong account (important)**
+  与上一条同源：回调按钮签到分两步（先发前置命令 → 等 bot 刷新面板 → 点按钮），
+  而「等面板」状态里**只记了会话、没记账号**。第二步是异步回调（最长 8 秒兜底），
+  期间切号就会拿**新账号**去点**旧账号的目标**的按钮。
+  现已把账号与等待状态一起锁定，回调时用发起时的账号发送。
+  *Same root cause as above: callback sign-in runs in two steps (send the pre-command → wait for the bot to refresh its panel → press the button), and the “waiting” state recorded only the dialog, not the account. The second step is an async callback (up to 8 s fallback), so switching accounts in between pressed the **old** account’s button from the **new** account. The account is now captured together with the waiting state and used for the callback.*
+- **账号配置串号（重要）· Account configs were mixed up (important)**
+  v1.5.8 给「当前账号」加了一道越界保护：读到超出已登录数的索引就按 0 处理。
+  出发点是好的（怕读到空分区导致「配置凭空消失」），但**前提是错的** ——
+  实测部分客户端（如 Nagram XF，登录 4 个账号）`selectedAccount` 会读到 7、9，
+  而**那些是合法索引**，账号数据就存在 `acc9_` 里。被改成 0 之后，模块去读的是
+  **另一个账号**的分区：目标、已签记录、重试退避全部错位，用户侧表现为
+  「账号1的配置变成了账号2的」。
+  现已回退：索引原值使用，不再改写到别的账号；只有负值（不可能合法）才跳过本轮操作。
+  日志与诊断包会注明「大于已登录数但按原值使用」，便于继续追查宿主行为。
+  *v1.5.8 added an out-of-range guard for the current account: an index beyond the signed-in count was coerced to 0. The intent was reasonable (avoid reading an empty partition, which looks like "config vanished"), but the assumption was wrong — on some clients (e.g. Nagram XF with 4 accounts) `selectedAccount` reads 7 or 9, and those are legitimate indexes whose data lives under `acc9_`. Coercing to 0 made the module read **another account's** partition, so targets, signed-state and backoff all landed on the wrong account — reported as "account 1's config turned into account 2's". Reverted: the index is used as-is, never rewritten to a different account; only negative values (which cannot be valid) skip the round. The log and diagnostics bundle now note "greater than signed-in count, used as-is" so the host's behaviour stays traceable.*
+- **启动日志只落盘第一行 · Only the first startup line reached the log file**
+  日志为省电做了落盘采样（INFO 连续输出只在首次落盘），而启动那几行几乎同一毫秒写出，
+  结果只有首行进了文件，后面几行在「运行日志」里看得到、导出文件里却没有。
+  现已新增绕过采样的强制落盘，启动信息完整入档。
+  *Log writing is sampled to save power (consecutive INFO lines only flush on the first), and the startup lines are emitted within the same millisecond — so only the first reached the file; the rest appeared in the in-app log but not in the exported file. A sampling-bypassing forced flush now writes them all.*
+
 ## 1.5.8 (121) — 2026-09-24
 
 ### 修复 · Fixed

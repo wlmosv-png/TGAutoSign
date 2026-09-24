@@ -42,8 +42,8 @@ public final class UpdateChecker {
     public static final String MODULE_ID = "io.github.wlmosv_png.tgautosign";
     /** 必须与 app/build.gradle 的 versionCode / versionName 手工保持一致
      *  （AGP 8 默认不生成 BuildConfig，这里不依赖它）。 */
-    public static final int VERSION_CODE = 121;
-    public static final String VERSION_NAME = "1.5.8";
+    public static final int VERSION_CODE = 122;
+    public static final String VERSION_NAME = "1.5.9";
     /** 本机测试包的补丁标记（正式发版时置空）。诊断包里会显示，
      *  用来区分"装了修复版"和"装了原始 1.5.7"——两者版本号相同。 */
     public static final String PATCH_TAG = "";
