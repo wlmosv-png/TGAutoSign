@@ -127,6 +127,9 @@ public final class SignLogic {
 
     // ─────────────────────── 重试退避 ───────────────────────
 
+    /** 单目标单日失败次数上限：达到即冻结到明天（防"成功清零/失败+1"震荡导致的反复重签）。 */
+    public static final int FAILS_PER_DAY_LIMIT = 3;
+
     private static final long[] BACKOFF = {
             5L * 60 * 1000, 15L * 60 * 1000, 45L * 60 * 1000,
             2L * 60 * 60 * 1000, 4L * 60 * 60 * 1000
@@ -190,6 +193,34 @@ public final class SignLogic {
     // ─────────────────────── 回复语义判定 ───────────────────────
 
     /** 判定结果。 */
+    /**
+     * 「重试也不会成功」的确定性失败词。
+     *
+     * 这些情形与"签到时机不对"不同 —— 用户没关注 bot、活动结束了、账号没资格，
+     * 再签一百次也是同一句话。命中即当日冻结，不再进重试队列。
+     *
+     * 必须与 FAIL_WORDS_DEFAULT 有交集：判定顺序是先查本表、再查失败表。
+     * 现场（2026-09-25）：目标 7719383660 因 bot 先回"正在签到"（算成功、retry 清零）
+     * 再回"请先关注"（算失败、retry 只加到 1），在 0/1 之间震荡，一天被签了 8 次。
+     */
+    public static final String[] PERMANENT_FAIL_WORDS = {
+            "请先关注", "未关注", "没有资格", "活动已结束", "已过期",
+            "请先开始", "not allowed"
+    };
+
+    /**
+     * 该命中词是否属于「确定性失败」。
+     * 传入的是 verdictDetail 返回的命中词，不是整段回复。
+     */
+    public static boolean isPermanentFail(String hitWord) {
+        if (hitWord == null || hitWord.length() == 0) return false;
+        String h = hitWord.toLowerCase();
+        for (String w : PERMANENT_FAIL_WORDS) {
+            if (w != null && h.contains(w.toLowerCase())) return true;
+        }
+        return false;
+    }
+
     public static final int V_SIGNED = 0;   // 成功（或 bot 说已签过，等价于今天签过了）
     public static final int V_FAILED = 1;   // 明确失败 → 撤销已签 + 退避重试
     public static final int V_UNKNOWN = 2;  // 认不出来 → 不猜，留痕

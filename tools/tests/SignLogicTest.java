@@ -36,6 +36,7 @@ public final class SignLogicTest {
         extras();
         signGate();
         accountClamp();
+        permanentFail();
         v160Regression();
 
         System.out.println("----------------------------------------");
@@ -372,5 +373,42 @@ public final class SignLogicTest {
         tru("负值算钳制", SignLogic.accountClamped(-1, 3));
         tru("正常不算钳制", !SignLogic.accountClamped(1, 3));
         tru("total=1 raw=2 不算钳制（按原值用）", !SignLogic.accountClamped(2, 1));
+    }
+
+    /** 确定性失败词：命中即应冻结当天，不再重试。 */
+    private static void permanentFail() {
+        // 属于确定性失败
+        tru("请先关注 → 确定性失败", SignLogic.isPermanentFail("请先关注"));
+        tru("未关注 → 确定性失败", SignLogic.isPermanentFail("未关注"));
+        tru("没有资格 → 确定性失败", SignLogic.isPermanentFail("没有资格"));
+        tru("活动已结束 → 确定性失败", SignLogic.isPermanentFail("活动已结束"));
+        tru("已过期 → 确定性失败", SignLogic.isPermanentFail("已过期"));
+        tru("not allowed → 确定性失败", SignLogic.isPermanentFail("not allowed"));
+        tru("大小写不敏感", SignLogic.isPermanentFail("Not Allowed"));
+
+        // 不属于（这些该走普通重试）
+        tru("签到失败 → 非确定性", !SignLogic.isPermanentFail("签到失败"));
+        tru("try again → 非确定性", !SignLogic.isPermanentFail("try again"));
+        tru("invalid → 非确定性", !SignLogic.isPermanentFail("invalid"));
+        tru("空串 → 非确定性", !SignLogic.isPermanentFail(""));
+        tru("null → 非确定性", !SignLogic.isPermanentFail(null));
+
+        // 与 verdictDetail 联动：确定性失败词必须先被认成 V_FAILED
+        Object[] vd = SignLogic.verdictDetail("请先关注本频道再签到", null, null, null);
+        eq("「请先关注」判为 V_FAILED", ((Integer) vd[0]).intValue(), SignLogic.V_FAILED);
+        tru("命中词可被 isPermanentFail 认出", SignLogic.isPermanentFail(String.valueOf(vd[1])));
+
+        // 现场回归（2026-09-25 目标 7719383660）：
+        // bot 先回"✅ 正在签到,请稍后..."（词表认不出 → V_UNKNOWN，
+        //   但宽松模式「有回复即算成功」把它当成功 → retry 清零）
+        // 再回"请先关注"（命中确定性失败词 → 冻结当天）
+        Object[] v1 = SignLogic.verdictDetail("✅ 正在签到,请稍后...", null, null, null);
+        eq("「正在签到」词表认不出 → V_UNKNOWN", ((Integer) v1[0]).intValue(), SignLogic.V_UNKNOWN);
+        Object[] v2 = SignLogic.verdictDetail("请先关注", null, null, null);
+        eq("「请先关注」判为 V_FAILED", ((Integer) v2[0]).intValue(), SignLogic.V_FAILED);
+        tru("确定性失败词可被认出（冻结依据）", SignLogic.isPermanentFail(String.valueOf(v2[1])));
+        // 说明：V_UNKNOWN 走的是宽松模式分支，不由本函数决定；这里只锁定词表行为。
+
+        eq("单日失败上限 = 3", SignLogic.FAILS_PER_DAY_LIMIT, 3);
     }
 }

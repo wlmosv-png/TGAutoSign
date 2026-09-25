@@ -1813,7 +1813,8 @@ public final class TGAutoSignCore {
             "pre_", "loc_", "last_", "retry_", "retry_at_", "retry_day_", "sent_at_",
             "frozen_", "snooze_", "pendcfm_", "title_", "fail_streak_", "fail_laststamp_", "fail_alert_",
             "timer_plan_", "unknown_reply", "sign_days", "streak", "last_sign_date",
-            "panelstale_", "panelstale_day_", "silent_", "silent_day_"};
+            "panelstale_", "panelstale_day_", "silent_", "silent_day_",
+            "fails_today_", "fails_day_", "permfail_"};
 
     /**
      * 清空配置时**必须保留**的全局设置键（显式白名单）。
@@ -1997,7 +1998,8 @@ public final class TGAutoSignCore {
     /** 只有"必须挂在条目上才有意义"的键才参与孤儿清理；cfg_/daycap_ 这类账号级配置不能碰。 */
     private static final String[] ORPHAN_HEADS = {"frozen_", "snooze_", "pendcfm_", "pendcfm_note_",
             "title_", "fail_streak_", "fail_laststamp_", "fail_alert_", "sent_at_",
-            "panelstale_", "panelstale_day_", "silent_", "silent_day_"};
+            "panelstale_", "panelstale_day_", "silent_", "silent_day_",
+            "fails_today_", "fails_day_", "permfail_"};
 
     /** 每天第一次加载时提示一条汇总（之前是每次重启都弹两条，很吵） */
     private void bootToast() {
@@ -3439,8 +3441,10 @@ public final class TGAutoSignCore {
     private int sendSign(Map<String, Object> entry, AccountManager.Ctx ctx, boolean manual) {
         final int account = ctx.account;
         pace();
-        // 每条目标一个链路 id：解析 → 发出 → 响应 → 判定 可串联
-        setCtxTrace("t" + Integer.toHexString(random.nextInt(0xFFFF)));
+        // 每条目标一个链路 id：解析 → 发出 → 响应 → 判定 可串联。
+        // 前缀带账号（a0_/a1_）：多账号并行时全局随机数会撞号，日志里
+        // 同一个 tXXXX 横跨两个账号，排障时极易误判成"串号"。
+        setCtxTrace("a" + account + "_" + Integer.toHexString(random.nextInt(0xFFFF)));
         // 日志上下文跟随「实际发送的账号」，避免全账号循环里延迟任务沿用上一个账号的标签
         try { ctxAcc = accountLabel(account); ctxRound++; } catch (Throwable _e10) { noteSwallowed("sendSign", _e10); }
         final long dialogId = entryDid(entry);
@@ -3457,6 +3461,9 @@ public final class TGAutoSignCore {
         _gate.inFlight = isPendingFresh(_pfx, id);
         _gate.signedToday = todayStr().equals(prefs.getString(kLast(_pfx, id), ""));
         _gate.sentPendingFresh = isSentPendingFresh(_pfx, id);
+        // 今日熔断（失败达上限 / 命中确定性失败词）——manual 也拦：
+        // 「请先关注」这类再点一百次也是同一句话，不该让用户手动触发时白跑。
+        _gate.disabled = isDailyBlocked(_pfx, id) || isPermanentFailedToday(_pfx, id);
         int _skip = SignLogic.decideSign(_gate);
         if (_skip != SignLogic.SKIP_NONE) {
             logd("目标 " + id + " 跳过发送（" + SignLogic.skipLabel(_skip) + "）");
@@ -4001,7 +4008,8 @@ public final class TGAutoSignCore {
                 gate.sentPendingFresh = isSentPendingFresh(prefix, id);
                 gate.retryExhausted = retries >= RETRY_LIMIT;
                 gate.inBackoff = now < prefs.getLong(kRetryAt(prefix, id), 0L);
-                gate.disabled = isBotBlocked(entryDid(m)) || isSnoozed(prefix, id) || isFrozen(prefix, id);
+                gate.disabled = isBotBlocked(entryDid(m)) || isSnoozed(prefix, id) || isFrozen(prefix, id)
+                        || isDailyBlocked(prefix, id) || isPermanentFailedToday(prefix, id);
                 int skip = SignLogic.decideSign(gate);
                 if (skip != SignLogic.SKIP_NONE) {
                     if (skip == SignLogic.SKIP_ALREADY_SIGNED) signed++;
@@ -6765,6 +6773,16 @@ public final class TGAutoSignCore {
     /** 账号级待确认池键。唯一真相源在 Keys，这里只做转发（勿再内联字面量）。 */
     private static String kPendingConfirm(int account) { return Keys.pendingConfirm(account); }
     private static String kFrozen(String prefix, String id) { return prefix + "frozen_" + id; }
+    /**
+     * 当天失败次数（独立计数器，只增不减）。
+     * 与 retry_ 的区别：retry_ 会被「成功判定」清零，导致"成功/失败交替"时永远涨不上去
+     * （现场 2026-09-25：目标 7719383660 在 0/1 之间震荡，一天被签 8 次）。
+     */
+    private static String kFailsToday(String prefix, String id) { return prefix + "fails_today_" + id; }
+    /** 上面那个计数所属的日期，用于跨天重置。 */
+    private static String kFailsDay(String prefix, String id) { return prefix + "fails_day_" + id; }
+    /** 当天是否命中过确定性失败词（命中即当天不再重试）。 */
+    private static String kPermFail(String prefix, String id) { return prefix + "permfail_" + id; }
     /** 「待确认」：发出去了但 bot 始终没回复，不算成功也不算失败，且不再自动重试。 */
     private static String kPendingConfirm(String prefix, String id) { return prefix + "pendcfm_" + id; }
     private boolean isPendingConfirm(String prefix, String id) {
@@ -6874,7 +6892,9 @@ public final class TGAutoSignCore {
         // 只看"能不能跳过"、不做归因。单一实现（见调度区注释 S3）。
         try {
             if (stateStore.isSignedToday(prefix, id)) return true;   // 今天已签
-            return isInFlightOrPending(prefix, id);                  // 在途 or 已发出待结论
+            if (isInFlightOrPending(prefix, id)) return true;        // 在途 or 已发出待结论
+            // 今日熔断：失败达上限 or 命中确定性失败词 → 今天不再排期，明天自动恢复
+            return isDailyBlocked(prefix, id) || isPermanentFailedToday(prefix, id);
         } catch (Throwable t) { return false; }
     }
 
@@ -7426,6 +7446,7 @@ public final class TGAutoSignCore {
             for (Map<String, Object> m : l) {
                 String id = entryId(m);
                 if (isFrozen(prefix, id)) continue;
+                if (isDailyBlocked(prefix, id) || isPermanentFailedToday(prefix, id)) continue;   // 今日熔断
                 if (!today.equals(prefs.getString(kLast(prefix, id), ""))) return true;
             }
         } catch (Throwable ignored) {}
@@ -8378,6 +8399,52 @@ public final class TGAutoSignCore {
      * 条目是否被冻结（用户就地关闭）：冻结的条目不签到、也不参与重新学习。
      * 与 snooze 的区别：冻结是"永久不要这个"，snooze 是"暂停一段"。
      */
+    /**
+     * 当天失败计数 +1，并在达到上限时冻结该目标到明天。
+     *
+     * 为什么要独立于 retry_：retry_ 会被「成功判定」清零。当 bot 先回
+     * "正在签到"（宽松模式算成功 → retry=0）再回"请先关注"（算失败 → retry=1）时，
+     * 计数在 0/1 震荡，永远到不了 RETRY_LIMIT，一天被反复重签。
+     *
+     * @param permanent 是否确定性失败（请先关注 / 活动已结束 等）—— 命中即立刻冻结
+     * @return 是否已冻结
+     */
+    private boolean bumpFailsToday(String prefix, String id, boolean permanent) {
+        try {
+            String today = todayStr();
+            String dayKey = kFailsDay(prefix, id);
+            int n = prefs.getInt(kFailsToday(prefix, id), 0);
+            // 跨天重置：计数只对当天有效
+            if (!today.equals(prefs.getString(dayKey, ""))) n = 0;
+            n++;
+            boolean blocked = permanent || n >= SignLogic.FAILS_PER_DAY_LIMIT;
+            prefs.edit().putInt(kFailsToday(prefix, id), n)
+                 .putString(dayKey, today).commit();
+            if (blocked) {
+                logw("[熔断] " + id + " 今日失败 " + n + " 次"
+                        + (permanent ? "（确定性失败：重试不会成功）" : "")
+                        + "，今日不再自动重试");
+            }
+            return blocked;
+        } catch (Throwable t) { noteSwallowed("bumpFailsToday", t); return false; }
+    }
+
+    /** 该目标今天是否已被熔断（失败次数达上限）。跨天自动恢复。 */
+    private boolean isDailyBlocked(String prefix, String id) {
+        try {
+            if (!todayStr().equals(prefs.getString(kFailsDay(prefix, id), ""))) return false;
+            return prefs.getInt(kFailsToday(prefix, id), 0) >= SignLogic.FAILS_PER_DAY_LIMIT;
+        } catch (Throwable t) { return false; }
+    }
+
+    /** 该目标今天是否命中过确定性失败词（请先关注 等），命中一次即当天不再重试。 */
+    private boolean isPermanentFailedToday(String prefix, String id) {
+        try {
+            if (!todayStr().equals(prefs.getString(kFailsDay(prefix, id), ""))) return false;
+            return prefs.getBoolean(kPermFail(prefix, id), false);
+        } catch (Throwable t) { return false; }
+    }
+
     private boolean isFrozen(String prefix, String id) {
         try {
             if (!prefs.getBoolean(kFrozen(prefix, id), false)) return false;
@@ -9289,13 +9356,21 @@ public final class TGAutoSignCore {
                             long sentAt = prefs.getLong(prefix + "sent_at_" + id, 0);
                             if (System.currentTimeMillis() - sentAt > PENDING_TTL_MS) continue;   // 与 isPendingFresh 同一常量
                             int cur = prefs.getInt(kRetry(prefix, id), 0);
+                            // 确定性失败（请先关注/活动已结束…）重试无意义；其它失败用当天独立计数兜底。
+                            boolean permanent = SignLogic.isPermanentFail(hitWord);
+                            if (permanent) {
+                                prefs.edit().putBoolean(kPermFail(prefix, id), true).commit();
+                            }
+                            boolean blocked = bumpFailsToday(prefix, id, permanent);
                             prefs.edit()
                                 .remove(kLast(prefix, id))
-                                .putInt(kRetry(prefix, id), cur + 1)
+                                .putInt(kRetry(prefix, id), blocked ? RETRY_LIMIT : cur + 1)
                                 .putLong(kRetryAt(prefix, id), System.currentTimeMillis() + backoffDelay(Math.max(cur, 1)))
                                 .putString(kRetryDay(prefix, id), todayStr())
                                 .commit();
-                            logw("【回复判定】" + did + " 命中「" + hitWord + "」→ 判定未成功，撤销已签并安排重试 (id=" + id + ")");
+                            logw("【回复判定】" + did + " 命中「" + hitWord + "」→ 判定未成功"
+                                 + (permanent ? "（确定性失败，今日不再重试）" : "")
+                                 + "，撤销已签" + (blocked ? "并当日熔断" : "并安排重试") + " (id=" + id + ")");
                             noteResult(ctrlAcc >= 0 ? ctrlAcc : currentAccount(), false);
                             return;
                         }
