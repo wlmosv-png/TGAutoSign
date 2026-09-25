@@ -10110,20 +10110,20 @@ public final class TGAutoSignCore {
         rlLabel.setTypeface(android.graphics.Typeface.MONOSPACE);
         rlRow.addView(rlLabel, new LinearLayout.LayoutParams(0, -2, 1f));
         Button rlMinus = mkBtn(act); rlMinus.setText("−");
-        final EditText rl = new EditText(act); rl.setText(String.valueOf(RETRY_LIMIT)); rl.setInputType(android.text.InputType.TYPE_CLASS_NUMBER); rl.setGravity(android.view.Gravity.CENTER); rl.setTextSize(Theme.TS_BODY);
+        R.retryLimitEd = new EditText(act); R.retryLimitEd.setText(String.valueOf(RETRY_LIMIT)); R.retryLimitEd.setInputType(android.text.InputType.TYPE_CLASS_NUMBER); R.retryLimitEd.setGravity(android.view.Gravity.CENTER); R.retryLimitEd.setTextSize(Theme.TS_BODY);
         Button rlPlus = mkBtn(act); rlPlus.setText("+");
-        rlMinus.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ try { int vv=Integer.parseInt(R.retryLimitEd.getText().toString().trim()); vv=Math.max(1,vv-1); rl.setText(String.valueOf(vv)); } catch (Throwable ignored) {} } });
-        rlPlus.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ try { int vv=Integer.parseInt(R.retryLimitEd.getText().toString().trim()); vv=Math.min(99,vv+1); rl.setText(String.valueOf(vv)); } catch (Throwable ignored) {} } });
+        rlMinus.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ try { int vv=Integer.parseInt(R.retryLimitEd.getText().toString().trim()); vv=Math.max(1,vv-1); R.retryLimitEd.setText(String.valueOf(vv)); } catch (Throwable ignored) {} } });
+        rlPlus.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ try { int vv=Integer.parseInt(R.retryLimitEd.getText().toString().trim()); vv=Math.min(99,vv+1); R.retryLimitEd.setText(String.valueOf(vv)); } catch (Throwable ignored) {} } });
         rlRow.addView(rlMinus, new LinearLayout.LayoutParams(0, -2, 1f));
-        rlRow.addView(rl, new LinearLayout.LayoutParams(0, -2, 2.2f));
+        rlRow.addView(R.retryLimitEd, new LinearLayout.LayoutParams(0, -2, 2.2f));
         rlRow.addView(rlPlus, new LinearLayout.LayoutParams(0, -2, 1f));
         card3.addView(rlRow);
         TextView wcLab = new TextView(act); wcLab.setText(Lang.tr("全局默认唤醒命令")); leadIcon(act, wcLab, "keyboard", Theme.termMuted(act)); wcLab.setTextSize(Theme.TS_SECOND); wcLab.setTextColor(Theme.termMuted(act));
         wcLab.setTypeface(android.graphics.Typeface.MONOSPACE); wcLab.setPadding(dp(2), dp(6), dp(2), dp(4));
         card3.addView(wcLab);
-        EditText wc = adInput(act, "如 /start；条目自带前置命令优先", 0);
-        wc.setText(WAKE_CMD == null ? "" : WAKE_CMD);
-        card3.addView(wc);
+        R.wakeCmdEd = adInput(act, "如 /start；条目自带前置命令优先", 0);
+        R.wakeCmdEd.setText(WAKE_CMD == null ? "" : WAKE_CMD);
+        card3.addView(R.wakeCmdEd);
         box.addView(card3);
 
     }
