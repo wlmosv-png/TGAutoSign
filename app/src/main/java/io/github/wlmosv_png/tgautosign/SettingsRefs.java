@@ -36,9 +36,16 @@ public final class SettingsRefs {
 
     // 输入
     public EditText gapEd;      // 错开间隔
-    public EditText excludeEd;  // 排除规则
-    public EditText okWordsEd;  // 附加成功词
-    public EditText failWordsEd;// 附加失败词
+
+    // 关键词与策略（保存块要读）
+    public EditText keywordsEd;   // 签到关键词
+    public EditText excludeEd;    // 排除规则
+    public EditText okWordsEd;    // 附加成功词
+    public EditText failWordsEd;  // 附加失败词
+
+    // 操作区（保存块要读）
+    public EditText retryLimitEd; // 重试上限
+    public EditText wakeCmdEd;    // 唤醒命令
 
     // 签到窗口（分区内用时间选择器改动，保存时读取）
     public int[] wStart;

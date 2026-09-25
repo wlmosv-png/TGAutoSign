@@ -7682,176 +7682,24 @@ public final class TGAutoSignCore {
             // ── 签到核心 ──（实现见 buildSectionSignCore）
             buildSectionSignCore(R);
 
-            // ── 学习行为 ──
-            sectionHeader(box, act, "▍学习行为");
-            LinearLayout card2 = new LinearLayout(act); card2.setOrientation(LinearLayout.VERTICAL);
-            card2.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x26)));
-            card2.setPadding(dp(12), dp(8), dp(12), dp(8));
-            LinearLayout.LayoutParams c2lp = new LinearLayout.LayoutParams(-1, -2);
-            c2lp.setMargins(0, dp(2), 0, dp(6));
-            card2.setLayoutParams(c2lp);
-            final android.widget.Switch alSw = swRow(act, "按钮学习", AUTO_LEARN);
-            card2.addView(alSw);
-            TextView alSub = new TextView(act); alSub.setTextSize(Theme.TS_CAPTION); alSub.setTextColor(Theme.termFaint(act)); alSub.setTypeface(Theme.text());
-            alSub.setText(Lang.tr("点一下 bot 按钮就自动加到列表"));
-            alSub.setPadding(dp(4), 0, dp(4), dp(4));
-            card2.addView(alSub);
-            final android.widget.Switch anSw = swRow(act, "网络学习", AUTO_LEARN_NET);
-            card2.addView(anSw);
-            TextView anSub = new TextView(act); anSub.setTextSize(Theme.TS_CAPTION); anSub.setTextColor(Theme.termFaint(act)); anSub.setTypeface(Theme.text());
-            anSub.setText(Lang.tr("自动识别你在 bot 里发的签到文本"));
-            anSub.setPadding(dp(4), 0, dp(4), dp(4));
-            card2.addView(anSub);
-            final android.widget.Switch anCfgSw = swRow(act, "网络学习需确认", AUTO_LEARN_NET_CONFIRM);
-            card2.addView(anCfgSw);
-            TextView anCfgSub = new TextView(act); anCfgSub.setTextSize(Theme.TS_CAPTION); anCfgSub.setTextColor(Theme.termFaint(act)); anCfgSub.setTypeface(Theme.text());
-            anCfgSub.setText(Lang.tr("命中后先进「待确认」列表，你手动确认才加入（防验证码类 bot 误加）"));
-            anCfgSub.setPadding(dp(4), 0, dp(4), dp(4));
-            card2.addView(anCfgSub);
-            final android.widget.Switch afSw = swRow(act, "关键词过滤", AUTO_LEARN_FILTER);
-            card2.addView(afSw);
-            TextView afSub = new TextView(act); afSub.setTextSize(Theme.TS_CAPTION); afSub.setTextColor(Theme.termFaint(act)); afSub.setTypeface(Theme.text());
-            afSub.setText(Lang.tr("只收文案命中关键词的按钮，防误加"));
-            afSub.setPadding(dp(4), 0, dp(4), dp(2));
-            card2.addView(afSub);
-            box.addView(card2);
+            // ── 学习行为 ──（实现见 buildSectionLearn）
+            buildSectionLearn(R);
 
-            // ── 关键词与策略 ──
-            sectionHeader(box, act, "▍关键词与策略");
-            LinearLayout card3 = new LinearLayout(act); card3.setOrientation(LinearLayout.VERTICAL);
-            card3.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x26)));
-            card3.setPadding(dp(12), dp(10), dp(12), dp(10));
-            LinearLayout.LayoutParams c3lp = new LinearLayout.LayoutParams(-1, -2);
-            c3lp.setMargins(0, dp(2), 0, dp(6));
-            card3.setLayoutParams(c3lp);
-            TextView kwLab = new TextView(act); kwLab.setText(Lang.tr("学习关键词（逗号分隔）")); leadIcon(act, kwLab, "key", Theme.termMuted(act)); kwLab.setTextSize(Theme.TS_SECOND); kwLab.setTextColor(Theme.termMuted(act));
-            kwLab.setTypeface(android.graphics.Typeface.MONOSPACE); kwLab.setPadding(dp(2), dp(2), dp(2), dp(4));
-            card3.addView(kwLab);
-            EditText kw = adInput(act, "如: 签到,打卡,checkin", 0);
-            kw.setText(LEARN_KEYWORDS == null ? "" : String.valueOf(LEARN_KEYWORDS));
-            card3.addView(kw);
-
-            // ── 排除规则（黑名单）：一行一条，支持正则 ──
-            TextView exLab = new TextView(act);
-            exLab.setText(Lang.tr("排除规则（一行一条，命中不学习）"));
-            leadIcon(act, exLab, "trash", Theme.termPink(act));
-            exLab.setTextSize(Theme.TS_SECOND); exLab.setTextColor(Theme.termMuted(act));
-            exLab.setTypeface(android.graphics.Typeface.MONOSPACE);
-            exLab.setPadding(dp(2), dp(10), dp(2), dp(4));
-            card3.addView(exLab);
-            final EditText ex = adInput(act, "如: 点击图中事物（一行一条）", 3);
-            ex.setText(LEARN_EXCLUDE == null ? "" : String.valueOf(LEARN_EXCLUDE));
-            ex.setMinLines(2);
-            card3.addView(ex);
-            TextView exTip = new TextView(act);
-            exTip.setTextSize(Theme.TS_CAPTION); exTip.setTextColor(Theme.termFaint(act));
-            exTip.setTypeface(Theme.text());
-            exTip.setText(Lang.tr("匹配 bot 回复正文 + 按钮文案。普通关键词按子串（不分大小写）；\n用 / 包裹当正则，如 /^每日.*点击/ 。# 开头为注释。"));
-            exTip.setPadding(dp(4), dp(4), dp(4), dp(2));
-            card3.addView(exTip);
-
-            // ── 回复判定词（自定义）：bot 回复换措辞导致判不出成功/失败时用 ──
-            TextView okLab = new TextView(act);
-            okLab.setText(Lang.tr("判定机器人回复"));
-            leadIcon(act, okLab, "key", Theme.termGreen(act));
-            okLab.setTextSize(Theme.TS_SECOND); okLab.setTextColor(Theme.termMuted(act));
-            okLab.setTypeface(android.graphics.Typeface.MONOSPACE);
-            okLab.setPadding(dp(2), dp(10), dp(2), dp(4));
-            card3.addView(okLab);
-
-            // 宽松模式：最省心的那一档 —— 学什么都收、回了就算成功
-            final android.widget.Switch loSw = swRow(act, "宽松模式（来者不拒）", LOOSE_MODE);
-            card3.addView(loSw);
-            TextView loTip = new TextView(act); loTip.setTextSize(Theme.TS_CAPTION);
-            loTip.setTextColor(Theme.termFaint(act)); loTip.setTypeface(Theme.text());
-            loTip.setText(Lang.tr("开：点什么学什么（不再按关键词过滤）；判定时**只要机器人有回复就算成功**，\n但命中明确失败词（活动已结束 / 请先关注 / 未绑定 等）仍判失败。\n适合判定词千奇百怪的机器人。关：完全按下面的规则判定。"));
-            loTip.setPadding(dp(4), dp(2), dp(4), dp(6));
-            card3.addView(loTip);
-
-            // 开关式：默认用内置词表判定成功/失败，不再要求用户"自己加词"。
-            final android.widget.Switch rvSw = swRow(act, "自动判定成功 / 失败", JUDGE_ENABLED);
-            card3.addView(rvSw);
-            TextView rvTip = new TextView(act); rvTip.setTextSize(Theme.TS_CAPTION);
-            rvTip.setTextColor(Theme.termFaint(act)); rvTip.setTypeface(Theme.text());
-            rvTip.setText(Lang.tr("开着：按内置词表判断机器人回复是成功还是失败。\n关掉：只记录回复、不判成败（目标需要你自己确认）。"));
-            rvTip.setPadding(dp(4), dp(4), dp(4), dp(2));
-            card3.addView(rvTip);
-
-            // 自定义补充词（可选）：只在需要时填，且要求开关开着
-            final android.widget.Switch mySw = swRow(act, "使用我的自定义词（叠加在内置之上）", JUDGE_USE_CUSTOM);
-            card3.addView(mySw);
-            final EditText okW = adInput(act, "如: 领取完毕,今日完成", 0);
-            okW.setText(strOf("jmb_ok_words"));
-            okW.setVisibility(JUDGE_USE_CUSTOM ? android.view.View.VISIBLE : android.view.View.GONE);
-            card3.addView(okW);
-            final EditText failW = adInput(act, "如: 次数已用完,不可领取", 0);
-            failW.setText(strOf("jmb_fail_words"));
-            failW.setVisibility(JUDGE_USE_CUSTOM ? android.view.View.VISIBLE : android.view.View.GONE);
-            card3.addView(failW);
-            mySw.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
-                @Override public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
-                    okW.setVisibility(on ? android.view.View.VISIBLE : android.view.View.GONE);
-                    failW.setVisibility(on ? android.view.View.VISIBLE : android.view.View.GONE);
-                }
-            });
-
-            // ── 排除的 bot ──
-            TextView blLab = new TextView(act);
-            blLab.setText(Lang.tr("排除的 bot"));
-            leadIcon(act, blLab, "bot", Theme.termPink(act));
-            blLab.setTextSize(Theme.TS_SECOND); blLab.setTextColor(Theme.termMuted(act));
-            blLab.setTypeface(android.graphics.Typeface.MONOSPACE);
-            blLab.setPadding(dp(2), dp(10), dp(2), dp(4));
-            card3.addView(blLab);
-            final TextView blVal = new TextView(act);
-            blVal.setTextSize(Theme.TS_CAPTION); blVal.setTextColor(Theme.termFaint(act));
-            blVal.setTypeface(Theme.text());
-            final Runnable refreshBl = new Runnable() { @Override public void run() {
-                if (LEARN_BLOCKED_DIDS.isEmpty()) blVal.setText(Lang.tr("(未排除任何 bot)"));
-                else blVal.setText(Lang.tf("已排除 {0} 个 bot", LEARN_BLOCKED_DIDS.size()));
-            } };
-            refreshBl.run();
-            blVal.setPadding(dp(4), dp(2), dp(4), dp(4));
-            card3.addView(blVal);
-            Button blBtn = mkBtn(act); withIconText(act, blBtn, "bot", "选择要排除的 bot");
-            blBtn.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
-                try { showBlockedBotPicker(act, refreshBl); } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
-            } });
-            card3.addView(blBtn);
-            LinearLayout rlRow = new LinearLayout(act); rlRow.setOrientation(LinearLayout.HORIZONTAL); rlRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
-            rlRow.setPadding(dp(2), dp(8), dp(2), dp(4));
-            TextView rlLabel = new TextView(act); rlLabel.setText(Lang.tr("每日重试上限")); leadIcon(act, rlLabel, "repeat", Theme.termMuted(act)); rlLabel.setTextSize(Theme.TS_SECOND); rlLabel.setTextColor(Theme.termMuted(act));
-            rlLabel.setTypeface(android.graphics.Typeface.MONOSPACE);
-            rlRow.addView(rlLabel, new LinearLayout.LayoutParams(0, -2, 1f));
-            Button rlMinus = mkBtn(act); rlMinus.setText("−");
-            final EditText rl = new EditText(act); rl.setText(String.valueOf(RETRY_LIMIT)); rl.setInputType(android.text.InputType.TYPE_CLASS_NUMBER); rl.setGravity(android.view.Gravity.CENTER); rl.setTextSize(Theme.TS_BODY);
-            Button rlPlus = mkBtn(act); rlPlus.setText("+");
-            rlMinus.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ try { int vv=Integer.parseInt(rl.getText().toString().trim()); vv=Math.max(1,vv-1); rl.setText(String.valueOf(vv)); } catch (Throwable ignored) {} } });
-            rlPlus.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ try { int vv=Integer.parseInt(rl.getText().toString().trim()); vv=Math.min(99,vv+1); rl.setText(String.valueOf(vv)); } catch (Throwable ignored) {} } });
-            rlRow.addView(rlMinus, new LinearLayout.LayoutParams(0, -2, 1f));
-            rlRow.addView(rl, new LinearLayout.LayoutParams(0, -2, 2.2f));
-            rlRow.addView(rlPlus, new LinearLayout.LayoutParams(0, -2, 1f));
-            card3.addView(rlRow);
-            TextView wcLab = new TextView(act); wcLab.setText(Lang.tr("全局默认唤醒命令")); leadIcon(act, wcLab, "keyboard", Theme.termMuted(act)); wcLab.setTextSize(Theme.TS_SECOND); wcLab.setTextColor(Theme.termMuted(act));
-            wcLab.setTypeface(android.graphics.Typeface.MONOSPACE); wcLab.setPadding(dp(2), dp(6), dp(2), dp(4));
-            card3.addView(wcLab);
-            EditText wc = adInput(act, "如 /start；条目自带前置命令优先", 0);
-            wc.setText(WAKE_CMD == null ? "" : WAKE_CMD);
-            card3.addView(wc);
-            box.addView(card3);
+            // ── 关键词与策略 ──（实现见 buildSectionKeywords）
+            buildSectionKeywords(R);
 
             // ── 操作 ──
             sectionHeader(box, act, "▍操作");
             Button ok = mkBtnPrimary(act);
             withIconText(act, ok, "save", "保存设置");
             ok.setOnClickListener(v -> {
-                String k = kw.getText().toString().trim();
+                String k = R.keywordsEd.getText().toString().trim();
                 LEARN_KEYWORDS = k.isEmpty() ? DEF_KEYWORDS : k;
                 try {
-                    int r = Integer.parseInt(rl.getText().toString().trim());
+                    int r = Integer.parseInt(R.retryLimitEd.getText().toString().trim());
                     if (r > 0 && r <= 99) RETRY_LIMIT = r;
                 } catch (Throwable ignored) {}
-                WAKE_CMD = wc.getText().toString().trim();
+                WAKE_CMD = R.wakeCmdEd.getText().toString().trim();
                 String wv = String.format("%02d:%02d-%02d:%02d", R.wStart[0] / 60, R.wStart[0] % 60, R.wEnd[0] / 60, R.wEnd[0] % 60);
                 if (windowRangeOf(wv) == null) { toast("时间范围错误：结束需晚于开始"); return; }
                 boolean winChanged = !String.valueOf(WINDOW).equals(wv);
@@ -7872,13 +7720,13 @@ public final class TGAutoSignCore {
                 if (winChanged) jlog("[定时] 窗口已改 " + oldWindow + " → " + wv + "，当日计划作废待重排");
                 scheduleWindowWake();
                 if (inWindow()) { if (TIMER_ENABLED) kickSchedule(); else enqueueTry("进入窗口"); }
-                AUTO_LEARN = alSw.isChecked();
-                AUTO_LEARN_NET = anSw.isChecked();
-                AUTO_LEARN_NET_CONFIRM = anCfgSw.isChecked();
-                AUTO_LEARN_FILTER = afSw.isChecked();
-                JUDGE_ENABLED = rvSw.isChecked();
-                LOOSE_MODE = loSw.isChecked();
-                JUDGE_USE_CUSTOM = mySw.isChecked();
+                AUTO_LEARN = R.autoLearnSw.isChecked();
+                AUTO_LEARN_NET = R.autoLearnNetSw.isChecked();
+                AUTO_LEARN_NET_CONFIRM = R.autoLearnNetCfmSw.isChecked();
+                AUTO_LEARN_FILTER = R.autoLearnFilterSw.isChecked();
+                JUDGE_ENABLED = R.judgeSw.isChecked();
+                LOOSE_MODE = R.looseSw.isChecked();
+                JUDGE_USE_CUSTOM = R.judgeCustomSw.isChecked();
                 boolean _cfgSaveOk = true;
                 try {
                     android.content.SharedPreferences.Editor ed = prefs.edit();
@@ -7893,14 +7741,14 @@ public final class TGAutoSignCore {
                       .putBoolean("jmb_judge", JUDGE_ENABLED)
                       .putBoolean("jmb_loose", LOOSE_MODE)
                       .putBoolean("jmb_judge_custom", JUDGE_USE_CUSTOM)
-                      .putString("jmb_ok_words", okW.getText().toString().trim())
-                      .putString("jmb_fail_words", failW.getText().toString().trim())
+                      .putString("jmb_ok_words", R.okWordsEd.getText().toString().trim())
+                      .putString("jmb_fail_words", R.failWordsEd.getText().toString().trim())
                       .putBoolean("jmb_notify", NOTIFY_ON)
                       .putBoolean("jmb_notify_fail_only", NOTIFY_FAIL_ONLY);
                     putCfg(ed, "window", WINDOW);
                     putCfg(ed, "timer", TIMER_ENABLED);
                     putCfg(ed, "gap", GAP_MIN);
-                    LEARN_EXCLUDE = String.valueOf(ex.getText()).trim();
+                    LEARN_EXCLUDE = String.valueOf(R.excludeEd.getText()).trim();
                     putCfg(ed, "exclude", LEARN_EXCLUDE);
                     putCfg(ed, "blocked_dids", blockedDidsToStr());
                     putCfg(ed, "missback", MISS_BACK);
@@ -10079,6 +9927,176 @@ public final class TGAutoSignCore {
             } catch (Throwable t) { toast(Lang.tf("预览失败: {0}", t)); }
         } });
         card1.addView(planBtn);
+
+    }
+
+
+    /** 设置 · 学习行为分区（从 showSettings 抽出）。 */
+    private void buildSectionLearn(final SettingsRefs R) {
+        final Activity act = R.act;
+        final LinearLayout box = R.box;
+        sectionHeader(box, act, "▍学习行为");
+        LinearLayout card2 = new LinearLayout(act); card2.setOrientation(LinearLayout.VERTICAL);
+        card2.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x26)));
+        card2.setPadding(dp(12), dp(8), dp(12), dp(8));
+        LinearLayout.LayoutParams c2lp = new LinearLayout.LayoutParams(-1, -2);
+        c2lp.setMargins(0, dp(2), 0, dp(6));
+        card2.setLayoutParams(c2lp);
+        R.autoLearnSw = swRow(act, "按钮学习", AUTO_LEARN);
+        card2.addView(R.autoLearnSw);
+        TextView alSub = new TextView(act); alSub.setTextSize(Theme.TS_CAPTION); alSub.setTextColor(Theme.termFaint(act)); alSub.setTypeface(Theme.text());
+        alSub.setText(Lang.tr("点一下 bot 按钮就自动加到列表"));
+        alSub.setPadding(dp(4), 0, dp(4), dp(4));
+        card2.addView(alSub);
+        R.autoLearnNetSw = swRow(act, "网络学习", AUTO_LEARN_NET);
+        card2.addView(R.autoLearnNetSw);
+        TextView anSub = new TextView(act); anSub.setTextSize(Theme.TS_CAPTION); anSub.setTextColor(Theme.termFaint(act)); anSub.setTypeface(Theme.text());
+        anSub.setText(Lang.tr("自动识别你在 bot 里发的签到文本"));
+        anSub.setPadding(dp(4), 0, dp(4), dp(4));
+        card2.addView(anSub);
+        R.autoLearnNetCfmSw = swRow(act, "网络学习需确认", AUTO_LEARN_NET_CONFIRM);
+        card2.addView(R.autoLearnNetCfmSw);
+        TextView anCfgSub = new TextView(act); anCfgSub.setTextSize(Theme.TS_CAPTION); anCfgSub.setTextColor(Theme.termFaint(act)); anCfgSub.setTypeface(Theme.text());
+        anCfgSub.setText(Lang.tr("命中后先进「待确认」列表，你手动确认才加入（防验证码类 bot 误加）"));
+        anCfgSub.setPadding(dp(4), 0, dp(4), dp(4));
+        card2.addView(anCfgSub);
+        R.autoLearnFilterSw = swRow(act, "关键词过滤", AUTO_LEARN_FILTER);
+        card2.addView(R.autoLearnFilterSw);
+        TextView afSub = new TextView(act); afSub.setTextSize(Theme.TS_CAPTION); afSub.setTextColor(Theme.termFaint(act)); afSub.setTypeface(Theme.text());
+        afSub.setText(Lang.tr("只收文案命中关键词的按钮，防误加"));
+        afSub.setPadding(dp(4), 0, dp(4), dp(2));
+        card2.addView(afSub);
+        box.addView(card2);
+
+    }
+
+
+    /** 设置 · 关键词与策略分区（从 showSettings 抽出）。 */
+    private void buildSectionKeywords(final SettingsRefs R) {
+        final Activity act = R.act;
+        final LinearLayout box = R.box;
+        sectionHeader(box, act, "▍关键词与策略");
+        LinearLayout card3 = new LinearLayout(act); card3.setOrientation(LinearLayout.VERTICAL);
+        card3.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x26)));
+        card3.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout.LayoutParams c3lp = new LinearLayout.LayoutParams(-1, -2);
+        c3lp.setMargins(0, dp(2), 0, dp(6));
+        card3.setLayoutParams(c3lp);
+        TextView kwLab = new TextView(act); kwLab.setText(Lang.tr("学习关键词（逗号分隔）")); leadIcon(act, kwLab, "key", Theme.termMuted(act)); kwLab.setTextSize(Theme.TS_SECOND); kwLab.setTextColor(Theme.termMuted(act));
+        kwLab.setTypeface(android.graphics.Typeface.MONOSPACE); kwLab.setPadding(dp(2), dp(2), dp(2), dp(4));
+        card3.addView(kwLab);
+        R.keywordsEd = adInput(act, "如: 签到,打卡,checkin", 0);
+        R.keywordsEd.setText(LEARN_KEYWORDS == null ? "" : String.valueOf(LEARN_KEYWORDS));
+        card3.addView(R.keywordsEd);
+
+        // ── 排除规则（黑名单）：一行一条，支持正则 ──
+        TextView exLab = new TextView(act);
+        exLab.setText(Lang.tr("排除规则（一行一条，命中不学习）"));
+        leadIcon(act, exLab, "trash", Theme.termPink(act));
+        exLab.setTextSize(Theme.TS_SECOND); exLab.setTextColor(Theme.termMuted(act));
+        exLab.setTypeface(android.graphics.Typeface.MONOSPACE);
+        exLab.setPadding(dp(2), dp(10), dp(2), dp(4));
+        card3.addView(exLab);
+        R.excludeEd = adInput(act, "如: 点击图中事物（一行一条）", 3);
+        R.excludeEd.setText(LEARN_EXCLUDE == null ? "" : String.valueOf(LEARN_EXCLUDE));
+        R.excludeEd.setMinLines(2);
+        card3.addView(R.excludeEd);
+        TextView exTip = new TextView(act);
+        exTip.setTextSize(Theme.TS_CAPTION); exTip.setTextColor(Theme.termFaint(act));
+        exTip.setTypeface(Theme.text());
+        exTip.setText(Lang.tr("匹配 bot 回复正文 + 按钮文案。普通关键词按子串（不分大小写）；\n用 / 包裹当正则，如 /^每日.*点击/ 。# 开头为注释。"));
+        exTip.setPadding(dp(4), dp(4), dp(4), dp(2));
+        card3.addView(exTip);
+
+        // ── 回复判定词（自定义）：bot 回复换措辞导致判不出成功/失败时用 ──
+        TextView okLab = new TextView(act);
+        okLab.setText(Lang.tr("判定机器人回复"));
+        leadIcon(act, okLab, "key", Theme.termGreen(act));
+        okLab.setTextSize(Theme.TS_SECOND); okLab.setTextColor(Theme.termMuted(act));
+        okLab.setTypeface(android.graphics.Typeface.MONOSPACE);
+        okLab.setPadding(dp(2), dp(10), dp(2), dp(4));
+        card3.addView(okLab);
+
+        // 宽松模式：最省心的那一档 —— 学什么都收、回了就算成功
+        R.looseSw = swRow(act, "宽松模式（来者不拒）", LOOSE_MODE);
+        card3.addView(R.looseSw);
+        TextView loTip = new TextView(act); loTip.setTextSize(Theme.TS_CAPTION);
+        loTip.setTextColor(Theme.termFaint(act)); loTip.setTypeface(Theme.text());
+        loTip.setText(Lang.tr("开：点什么学什么（不再按关键词过滤）；判定时**只要机器人有回复就算成功**，\n但命中明确失败词（活动已结束 / 请先关注 / 未绑定 等）仍判失败。\n适合判定词千奇百怪的机器人。关：完全按下面的规则判定。"));
+        loTip.setPadding(dp(4), dp(2), dp(4), dp(6));
+        card3.addView(loTip);
+
+        // 开关式：默认用内置词表判定成功/失败，不再要求用户"自己加词"。
+        R.judgeSw = swRow(act, "自动判定成功 / 失败", JUDGE_ENABLED);
+        card3.addView(R.judgeSw);
+        TextView rvTip = new TextView(act); rvTip.setTextSize(Theme.TS_CAPTION);
+        rvTip.setTextColor(Theme.termFaint(act)); rvTip.setTypeface(Theme.text());
+        rvTip.setText(Lang.tr("开着：按内置词表判断机器人回复是成功还是失败。\n关掉：只记录回复、不判成败（目标需要你自己确认）。"));
+        rvTip.setPadding(dp(4), dp(4), dp(4), dp(2));
+        card3.addView(rvTip);
+
+        // 自定义补充词（可选）：只在需要时填，且要求开关开着
+        R.judgeCustomSw = swRow(act, "使用我的自定义词（叠加在内置之上）", JUDGE_USE_CUSTOM);
+        card3.addView(R.judgeCustomSw);
+        R.okWordsEd = adInput(act, "如: 领取完毕,今日完成", 0);
+        R.okWordsEd.setText(strOf("jmb_ok_words"));
+        R.okWordsEd.setVisibility(JUDGE_USE_CUSTOM ? android.view.View.VISIBLE : android.view.View.GONE);
+        card3.addView(R.okWordsEd);
+        R.failWordsEd = adInput(act, "如: 次数已用完,不可领取", 0);
+        R.failWordsEd.setText(strOf("jmb_fail_words"));
+        R.failWordsEd.setVisibility(JUDGE_USE_CUSTOM ? android.view.View.VISIBLE : android.view.View.GONE);
+        card3.addView(R.failWordsEd);
+        R.judgeCustomSw.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            @Override public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
+                R.okWordsEd.setVisibility(on ? android.view.View.VISIBLE : android.view.View.GONE);
+                R.failWordsEd.setVisibility(on ? android.view.View.VISIBLE : android.view.View.GONE);
+            }
+        });
+
+        // ── 排除的 bot ──
+        TextView blLab = new TextView(act);
+        blLab.setText(Lang.tr("排除的 bot"));
+        leadIcon(act, blLab, "bot", Theme.termPink(act));
+        blLab.setTextSize(Theme.TS_SECOND); blLab.setTextColor(Theme.termMuted(act));
+        blLab.setTypeface(android.graphics.Typeface.MONOSPACE);
+        blLab.setPadding(dp(2), dp(10), dp(2), dp(4));
+        card3.addView(blLab);
+        final TextView blVal = new TextView(act);
+        blVal.setTextSize(Theme.TS_CAPTION); blVal.setTextColor(Theme.termFaint(act));
+        blVal.setTypeface(Theme.text());
+        final Runnable refreshBl = new Runnable() { @Override public void run() {
+            if (LEARN_BLOCKED_DIDS.isEmpty()) blVal.setText(Lang.tr("(未排除任何 bot)"));
+            else blVal.setText(Lang.tf("已排除 {0} 个 bot", LEARN_BLOCKED_DIDS.size()));
+        } };
+        refreshBl.run();
+        blVal.setPadding(dp(4), dp(2), dp(4), dp(4));
+        card3.addView(blVal);
+        Button blBtn = mkBtn(act); withIconText(act, blBtn, "bot", "选择要排除的 bot");
+        blBtn.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
+            try { showBlockedBotPicker(act, refreshBl); } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
+        } });
+        card3.addView(blBtn);
+        LinearLayout rlRow = new LinearLayout(act); rlRow.setOrientation(LinearLayout.HORIZONTAL); rlRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        rlRow.setPadding(dp(2), dp(8), dp(2), dp(4));
+        TextView rlLabel = new TextView(act); rlLabel.setText(Lang.tr("每日重试上限")); leadIcon(act, rlLabel, "repeat", Theme.termMuted(act)); rlLabel.setTextSize(Theme.TS_SECOND); rlLabel.setTextColor(Theme.termMuted(act));
+        rlLabel.setTypeface(android.graphics.Typeface.MONOSPACE);
+        rlRow.addView(rlLabel, new LinearLayout.LayoutParams(0, -2, 1f));
+        Button rlMinus = mkBtn(act); rlMinus.setText("−");
+        final EditText rl = new EditText(act); rl.setText(String.valueOf(RETRY_LIMIT)); rl.setInputType(android.text.InputType.TYPE_CLASS_NUMBER); rl.setGravity(android.view.Gravity.CENTER); rl.setTextSize(Theme.TS_BODY);
+        Button rlPlus = mkBtn(act); rlPlus.setText("+");
+        rlMinus.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ try { int vv=Integer.parseInt(R.retryLimitEd.getText().toString().trim()); vv=Math.max(1,vv-1); rl.setText(String.valueOf(vv)); } catch (Throwable ignored) {} } });
+        rlPlus.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ try { int vv=Integer.parseInt(R.retryLimitEd.getText().toString().trim()); vv=Math.min(99,vv+1); rl.setText(String.valueOf(vv)); } catch (Throwable ignored) {} } });
+        rlRow.addView(rlMinus, new LinearLayout.LayoutParams(0, -2, 1f));
+        rlRow.addView(rl, new LinearLayout.LayoutParams(0, -2, 2.2f));
+        rlRow.addView(rlPlus, new LinearLayout.LayoutParams(0, -2, 1f));
+        card3.addView(rlRow);
+        TextView wcLab = new TextView(act); wcLab.setText(Lang.tr("全局默认唤醒命令")); leadIcon(act, wcLab, "keyboard", Theme.termMuted(act)); wcLab.setTextSize(Theme.TS_SECOND); wcLab.setTextColor(Theme.termMuted(act));
+        wcLab.setTypeface(android.graphics.Typeface.MONOSPACE); wcLab.setPadding(dp(2), dp(6), dp(2), dp(4));
+        card3.addView(wcLab);
+        EditText wc = adInput(act, "如 /start；条目自带前置命令优先", 0);
+        wc.setText(WAKE_CMD == null ? "" : WAKE_CMD);
+        card3.addView(wc);
+        box.addView(card3);
 
     }
 
