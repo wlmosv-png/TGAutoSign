@@ -35,6 +35,7 @@ public final class SignLogicTest {
         verdict();
         extras();
         signGate();
+        accountClamp();
         v160Regression();
 
         System.out.println("----------------------------------------");
@@ -343,5 +344,33 @@ public final class SignLogicTest {
         // 标签不为空（日志要用）
         tru("skipLabel 有文案", SignLogic.skipLabel(SignLogic.SKIP_SENT_PENDING).length() > 0);
         eq("skipLabel 放行 → 空串", SignLogic.skipLabel(SignLogic.SKIP_NONE), "");
+    }
+
+    /** 账号索引钳制：多账号串号的根治点，必须有回归。 */
+    private static void accountClamp() {
+        // 正常范围：原样
+        eq("3账号 raw=0 -> 0", SignLogic.clampAccount(0, 3), 0);
+        eq("3账号 raw=1 -> 1", SignLogic.clampAccount(1, 3), 1);
+        eq("3账号 raw=2 -> 2", SignLogic.clampAccount(2, 3), 2);
+
+        // 越界（用户报的场景）：宿主写 3，3 个账号合法索引只到 2
+        eq("3账号 raw=3(越界) -> 2", SignLogic.clampAccount(3, 3), 2);
+        eq("2账号 raw=2(越界) -> 1", SignLogic.clampAccount(2, 2), 1);
+        eq("4账号 raw=9(越界) -> 3", SignLogic.clampAccount(9, 4), 3);
+
+        // 负值 -> 0
+        eq("raw=-1 -> 0", SignLogic.clampAccount(-1, 3), 0);
+        eq("raw=-99 -> 0", SignLogic.clampAccount(-99, 3), 0);
+
+        // total 不可信（反射失败回退 1）：正数索引按原值，别丢回账号1
+        eq("total=1 raw=2 -> 2（total 不可信）", SignLogic.clampAccount(2, 1), 2);
+        eq("total=1 raw=0 -> 0", SignLogic.clampAccount(0, 1), 0);
+        eq("total=0 raw=1 -> 1", SignLogic.clampAccount(1, 0), 1);
+
+        // 是否发生钳制（告警用）
+        tru("越界算钳制", SignLogic.accountClamped(3, 3));
+        tru("负值算钳制", SignLogic.accountClamped(-1, 3));
+        tru("正常不算钳制", !SignLogic.accountClamped(1, 3));
+        tru("total=1 raw=2 不算钳制（按原值用）", !SignLogic.accountClamped(2, 1));
     }
 }

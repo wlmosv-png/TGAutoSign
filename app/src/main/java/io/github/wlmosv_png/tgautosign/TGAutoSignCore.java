@@ -733,6 +733,41 @@ public final class TGAutoSignCore {
         this.appContext = appContext.getApplicationContext() != null ? appContext.getApplicationContext() : appContext;
         this.cl = cl;
         this.prefs = this.appContext.getSharedPreferences("tg_autosign_gen", 0);
+        // 账号管理器：反射用宿主 loader（模块 loader 看不到宿主类）
+        this.accountManager = new AccountManager(cl);
+        this.accountManager.setWarner(new AccountManager.Warner() {
+            @Override public void warnOutOfRange(int raw, int total, int used) {
+                logw("[账号] selectedAccount=" + raw + " 越界（已登录 " + total + " 个）"
+                     + (raw < 0 ? "，值非法，已退回 0"
+                                : "，已按 " + (used == raw ? "原值使用（账号数不可信）" : "最后一个账号（索引 " + used + "）处理"))
+                     + " —— 宿主切号时写入了异常值；若界面账号号对不上，请把这条日志发给作者");
+            }
+        });
+        // 账号数回退：反射失败时扫 prefs 里实际存在的最大账号分区
+        this.accountManager.setCountProvider(new AccountManager.CountProvider() {
+            @Override public int activatedAccounts() { return scanAccountsFromPrefs(); }
+        });
+    }
+
+    /** 扫 prefs 推断账号数（形如 acc{N}_ 的最大 N + 1）。反射失败时的回退。 */
+    private int scanAccountsFromPrefs() {
+        try {
+            int maxAcc = -1;
+            for (String k : prefs.getAll().keySet()) {
+                if (!k.startsWith("acc")) continue;
+                int us = k.indexOf('_');
+                if (us <= 3) continue;
+                String num = k.substring(3, us);
+                boolean allDigit = num.length() > 0;
+                for (int i = 0; i < num.length(); i++) {
+                    char ch = num.charAt(i);
+                    if (ch < '0' || ch > '9') { allDigit = false; break; }
+                }
+                if (!allDigit) continue;
+                try { int v = Integer.parseInt(num); if (v > maxAcc) maxAcc = v; } catch (Throwable ignored) {}
+            }
+            return maxAcc >= 0 ? maxAcc + 1 : 1;
+        } catch (Throwable t) { return 1; }
     }
 
 
@@ -775,6 +810,7 @@ public final class TGAutoSignCore {
             // 且账号可用即放行），bootReadyAt 退化为上限兜底。
             if (bootReadyAt == 0L) bootReadyAt = System.currentTimeMillis() + 8000L;
             DEBUG_OVERFLOW_SIM = prefs.getBoolean("jmb_dbg_overflow", false);
+            try { accountManager.setOverflowSim(DEBUG_OVERFLOW_SIM); } catch (Throwable ignored) {}
             AUTO_LEARN = prefs.getBoolean("jmb_autolearn", AUTO_LEARN);
             AUTO_LEARN_FILTER = prefs.getBoolean("jmb_alfilter", AUTO_LEARN_FILTER);
             // jmb_judge 是 v1.5.8 新键，默认开。**尊重用户显式关闭**：
@@ -920,40 +956,19 @@ public final class TGAutoSignCore {
      * 表现为「账号3 获取不到签到目标」（用户实际反馈）。
      * 回退顺序：① 宿主 API；② prefs 里存在过的最大账号分区 + 1；③ 至少 1。
      */
+    /**
+     * 已激活账号数。Refactor 1.6.1：实现搬到 AccountManager
+     * （反射失败时的 prefs 扫描回退也在那边，避免两处各写一套）。
+     */
     private int activatedAccounts() {
-        try {
-            Object n = staticInvoke(classEx("org.telegram.messenger.UserConfig"), "getActivatedAccountsCount", new Class<?>[0], new Object[0]);
-            if (n instanceof Number) {
-                int c = ((Number) n).intValue();
-                if (c > 0) return c;
-            }
-        } catch (Throwable _eAA) { noteSwallowed("activatedAccounts(reflect)", _eAA); }
-        // 回退：扫描 prefs，找形如 acc{N}_ 前缀里最大的 N
-        try {
-            int maxAcc = -1;
-            for (String k : prefs.getAll().keySet()) {
-                if (!k.startsWith("acc")) continue;
-                int us = k.indexOf('_');
-                if (us <= 3) continue;
-                String num = k.substring(3, us);
-                boolean allDigit = num.length() > 0;
-                for (int i = 0; i < num.length(); i++) {
-                    char ch = num.charAt(i);
-                    if (ch < '0' || ch > '9') { allDigit = false; break; }
-                }
-                if (!allDigit) continue;
-                try {
-                    int v = Integer.parseInt(num);
-                    if (v > maxAcc) maxAcc = v;
-                } catch (Throwable ignored) {}
-            }
-            if (maxAcc >= 0) return maxAcc + 1;
-        } catch (Throwable _eAA2) { noteSwallowed("activatedAccounts(scan)", _eAA2); }
-        return 1;
+        return accountManager.activatedAccounts();
     }
 
     /** 越界模拟开关（排障用）：打开后 currentAccount() 强制返回越界值。 */
     private boolean DEBUG_OVERFLOW_SIM = false;
+
+    /** 账号上下文管理（重构 1.6.1）：解析、钳制、Ctx 捕获。 */
+    private final AccountManager accountManager;
 
     /** currentAccount() 读到的原始值（未经钳制），仅用于诊断包展示。 */
     private volatile int lastRawAccount = -1;
@@ -981,43 +996,17 @@ public final class TGAutoSignCore {
      *   而新登录的账号索引最大。钳到 0 反而把用户丢回第 1 个账号。
      *   负值仍归 0（不能返回负数，否则 accountPrefix() 拼出 acc-1_ 垃圾分区）。
      */
+    /**
+     * 当前账号索引（已钳制）。
+     *
+     * Refactor 1.6.1：实现搬到 AccountManager（决策核心在 SignLogic.clampAccount，
+     * 有单测覆盖多账号边界）。此处只做转接，保证既有 77 个调用点行为不变。
+     * 后续会把调用点改为持有 AccountManager.Ctx，让编译器挡住"忘记传账号"。
+     */
     private int currentAccount() {
-        try {
-            // 越界模拟（排障用，默认关）：把读取值替换成一个**必然越界**的数，
-            // 走下面完全相同的钳制逻辑，从而在只有 2 个账号的环境里验证：
-            // 解析到哪个账号、读哪个分区、界面显示什么。不碰宿主、不碰真实数据。
-            int c;
-            if (DEBUG_OVERFLOW_SIM) {
-                c = activatedAccounts();   // total 本身即越界（合法索引只到 total-1）
-            } else {
-                Object v = getFieldVal(null, classEx("org.telegram.messenger.UserConfig"), "selectedAccount");
-                c = ((Number) v).intValue();
-            }
-            lastRawAccount = c;
-            int total = activatedAccounts();
-            if (c < 0) {
-                // 负值不可能合法。不能返回 -1：accountPrefix() 会拼出 "acc-1_" 垃圾分区。
-                warnAccountOutOfRange(c, total);
-                return 0;
-            }
-            if (c >= total) {
-                // 越界 → 钳到**最后一个合法索引**（不是 0）。
-                // 用户实际反馈：登录 3 个账号切到第 3 个时，宿主写入 selectedAccount=3
-                // （3 个账号合法索引只有 0/1/2）；v1.5.8 钳到 0 导致界面显示「账号1」。
-                // 宿主写越界值时意图几乎总是"刚登录/刚切换的那个"，而新账号索引最大。
-                //
-                // 例外：total 明显不可信（==1 而索引却 >0）时不要钳 —— 那多半是
-                // activatedAccounts() 反射失败，硬钳会把用户丢回账号1（用户反馈过
-                // 「账号3 获取不到签到目标」）。此时按原值使用，只记日志。
-                if (total <= 1) {
-                    warnAccountOutOfRange(c, total);
-                    return c;
-                }
-                warnAccountOutOfRange(c, total);
-                return total - 1;
-            }
-            return c;
-        } catch (Throwable t) { return 0; }
+        int a = accountManager.current();
+        lastRawAccount = accountManager.lastRaw();
+        return a;
     }
 
     /** 越界告警去重：同一组值只记一次，避免刷屏。 */

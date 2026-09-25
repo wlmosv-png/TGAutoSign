@@ -347,4 +347,36 @@ public final class SignLogic {
             default:                  return "";
         }
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // 账号索引钳制（纯逻辑，可单测）
+    //
+    // AccountManager.current() 的决策核心抽到这里，便于测试覆盖多账号边界。
+    // 规则（1.6.1 定稿）：
+    //   raw < 0            -> 0            （负值不可能合法；不能返回负数，
+    //                                       否则 prefix() 会拼出 acc-1_ 垃圾分区）
+    //   raw >= total 且 total>1 -> total-1 （越界；宿主写越界值时意图通常是
+    //                                       "刚登录/刚切换的那个"，其索引最大）
+    //   raw >= total 且 total<=1 -> raw    （total 明显不可信：只有 1 个账号却读到
+    //                                       正数索引，多半是反射失败；此时宁可按原值用，
+    //                                       也不能把用户丢回账号1 —— 用户实测过
+    //                                       "账号3 获取不到签到目标"）
+    //   其它               -> raw
+    // ────────────────────────────────────────────────────────────────
+
+    /** 钳制后的账号索引。 */
+    public static int clampAccount(int raw, int total) {
+        if (raw < 0) return 0;
+        if (total <= 0) return raw < 0 ? 0 : raw;
+        if (raw >= total) {
+            if (total <= 1) return raw;
+            return total - 1;
+        }
+        return raw;
+    }
+
+    /** 是否发生了钳制（用于日志/告警）。 */
+    public static boolean accountClamped(int raw, int total) {
+        return raw < 0 || (raw >= total && total > 1);
+    }
 }
