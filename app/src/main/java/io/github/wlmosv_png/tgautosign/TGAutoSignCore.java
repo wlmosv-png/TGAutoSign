@@ -6685,10 +6685,12 @@ public final class TGAutoSignCore {
      * 单一实现，避免再出现"某个入口漏写一段判断"。
      */
     private boolean skipScheduling(String prefix, String id) {
+        // 与 SignLogic.decideSign 的"非 manual"分支同义，但这里是高频路径，
+        // 只看"能不能跳过"、不做归因。单一实现（见调度区注释 S3）。
         try {
-            if (todayStr().equals(prefs.getString(kLast(prefix, id), ""))) return true;   // 今天已签
+            if (stateStore.isSignedToday(prefix, id)) return true;                        // 今天已签
             if (isPendingFresh(prefix, id)) return true;                                  // 请求在途
-            return isSentPendingFresh(prefix, id);                                        // 已发出待结论
+            return stateStore.isSentPendingFresh(prefix, id, PENDING_TTL_MS);             // 已发出待结论
         } catch (Throwable t) { return false; }
     }
 
@@ -7003,6 +7005,32 @@ public final class TGAutoSignCore {
     /** 精确排期：把下一个「未到点」的目标排到它的计划时刻。只负责准时；后台被压制由 sweepDue 兜底。 */
     private Runnable pendingTimerFire = null;   // 待触发的精确到点任务
     private Runnable pendingSweep = null;       // 待触发的巡检查道任务
+
+    // ════════════════════════════════════════════════════════════════
+    //  调度区（Refactor 1.6.1 · 步骤 7）
+    //
+    //  职责：决定"什么时候、对哪个账号、发哪个目标"，并排期。
+    //  不负责：实际发送（→ sendSign）、状态判定（→ SignStateStore/SignLogic）。
+    //
+    //  入口清单（共 11 个，改动时按此顺序理解）：
+    //    ① scheduleWindowWake   窗口进入时刻的精确闹钟
+    //    ② scheduleTimerPlan    把"下一个未到点目标"排到它的计划时刻
+    //    ③ sweepDue             到点巡检：处理"计划已到/已过但今天未签"
+    //    ④ armTask              实际排期（postDelayed），**已用 Ctx 锁定账号**
+    //    ⑤ kickSchedule         统一入口：sweepDue + scheduleTimerPlan（SCHED_LOCK 保护）
+    //    ⑥ scheduleTickLoop     心跳（三档间隔，自适应）
+    //    ⑦ schedulePoll         轮询补签
+    //    ⑧ skipScheduling       闸门：已签/在途/已发出待结论 → 跳过
+    //    ⑨ isSentPendingFresh   闸门辅助：判断"已发出且未到判定时限"
+    //    ⑩ markEnqueueFor       排队去重（按账号）
+    //    ⑪ enqueueTry           非定时模式的排队入口
+    //
+    //  不变式：
+    //    S1. 同一目标同一时刻**只有一个**待发任务（armTask 先 removeCallbacks 旧的）
+    //    S2. 所有异步任务持有 Ctx，执行时不读 currentAccount()
+    //    S3. 闸门判断只有一个实现（skipScheduling / SignLogic.decideSign）
+    //    S4. sweepDue 进入即累加 panelstale 类计数（旧的"只在 else 分支累加"是 bug）
+    // ════════════════════════════════════════════════════════════════
 
     private void scheduleTimerPlan() {
         try {
