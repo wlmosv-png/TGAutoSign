@@ -733,6 +733,16 @@ public final class TGAutoSignCore {
         this.appContext = appContext.getApplicationContext() != null ? appContext.getApplicationContext() : appContext;
         this.cl = cl;
         this.prefs = this.appContext.getSharedPreferences("tg_autosign_gen", 0);
+        this.store = new PrefsStore(this.prefs);
+        this.stateStore = new SignStateStore(this.store);
+        this.stateStore.setHooks(new SignStateStore.Hooks() {
+            @Override public void onSigned(String prefix, String id) {
+                try { updateStreak(prefix); } catch (Throwable ignored) {}
+                try { noteSignedDay(prefix); } catch (Throwable ignored) {}
+            }
+            @Override public void logWarn(String msg) { logw(msg); }
+            @Override public void swallow(String where, Throwable t) { noteSwallowed(where, t); }
+        });
         // 账号管理器：反射用宿主 loader（模块 loader 看不到宿主类）
         this.accountManager = new AccountManager(cl);
         this.accountManager.setWarner(new AccountManager.Warner() {
@@ -966,6 +976,13 @@ public final class TGAutoSignCore {
 
     /** 越界模拟开关（排障用）：打开后 currentAccount() 强制返回越界值。 */
     private boolean DEBUG_OVERFLOW_SIM = false;
+
+    /** 签到状态读写中心（重构 1.6.1 · 步骤 4）：last_/opt_/retry_/fail_streak_ 的唯一入口。 */
+    private final SignStateStore stateStore;
+
+    /** 持久化访问层（重构 1.6.1 · 步骤 2）：统一落盘策略，状态机键一律 commit。 */
+    /** 持久化访问层（重构 1.6.1 · 步骤 2）：统一落盘策略，状态机键一律 commit。 */
+    private final PrefsStore store;
 
     /** 账号上下文管理（重构 1.6.1）：解析、钳制、Ctx 捕获。 */
     private final AccountManager accountManager;
@@ -1225,16 +1242,7 @@ public final class TGAutoSignCore {
     }
 
     private void clearFailStreak(String prefix, String id) {
-        try {
-            if (prefs.getInt(prefix + "fail_streak_" + id, 0) == 0
-                    && prefs.getString(prefix + "fail_date_" + id, "").isEmpty()) return;
-            prefs.edit()
-                .remove(prefix + "fail_date_" + id)
-                .remove(prefix + "fail_laststamp_" + id)
-                .remove(prefix + "fail_streak_" + id)
-                .remove(prefix + "fail_alert_" + id)
-                .apply();
-        } catch (Throwable ignored) {}
+        stateStore.clearFailStreak(prefix, id);
     }
 
     /** 组装并发送今日签到摘要。 */
@@ -2990,25 +2998,9 @@ public final class TGAutoSignCore {
     }
 
     private void markSigned(String prefix, String id) {
-        // 已经标过就静默返回：这条路径会被重复投递触发多次，
-        // 重复执行会让 updateStreak / noteSignedDay 累加、日志刷屏。
-        String key = prefix + id;
-        String cur = prefs.getString(kLast(prefix, id), "");
-        if (todayStr().equals(cur)) {
-            // 已经标过今日已签 —— 但**清理不能跳过**。
-            // 历史 bug：这里直接 return，导致「确认已签」按钮永远清不掉 pendcfm_
-            // （用户点「确认已签」时 last_ 常常已是今天，markSigned 当场早退，
-            //   remove(pendcfm_) 从未执行 → 按钮赖着不走，日志却报"已计入今日已签"）。
-            clearPostSignState(prefix, id);
-            return;
-        }
-        prefs.edit().putString(kLast(prefix, id), todayStr()).apply(); // apply 异步落盘，避免回调路径阻塞
-        clearPostSignState(prefix, id);
-        updateStreak(prefix);
-        noteSignedDay(prefix);
-        // logw 而非 jlog：jlog 是 INFO 级，受采样影响会被丢 —— 而这是"今天签上了"
-        // 最关键的证据，丢了会让用户以为没生效（实测踩过）。
-        logw("标记今日已签 " + id);
+        // 重构 1.6.1：实现搬到 SignStateStore（那里集中维护"写 last_ 必须连带清理"
+        // 等不变式）。此处保留薄封装，既有 6 个调用点不变。
+        stateStore.markSigned(prefix, id);
     }
 
     /**
@@ -3017,23 +3009,7 @@ public final class TGAutoSignCore {
      * 任何"今天签上了"的路径都必须调它，而不是各写各的。
      */
     private void clearPostSignState(String prefix, String id) {
-        try {
-            prefs.edit()
-                 .remove(kPendingConfirm(prefix, id))       // 有结论了 → 撤掉"待确认"
-                 .remove(prefix + "panelstale_" + id)       // 签成功了 → 清掉"按钮反复过期"熔断计数
-                 .remove(prefix + "panelstale_day_" + id)
-                 .remove(prefix + "silent_" + id)           // 有结果了 → 清掉"不回复"计数
-                 .remove(prefix + "silent_day_" + id)
-                 .remove(kRetry(prefix, id))                // 已签 → 今日不再重试
-                 .remove(kRetryAt(prefix, id))
-                 .remove(kRetryDay(prefix, id))
-                 .apply();
-            prefs.edit().remove(kOpt(prefix, id)).apply();   // 有最终结论了 → 撤掉乐观标记
-            // 失败计数必须一起清 —— 否则"连续失败天数"会跨过成功的日子继续累加。
-            // （markSigned 的 6 个调用点以前都不清 fail_streak_，只有"请求返回成功"
-            //   那条路径清，于是出现 Toast 说连续失败、列表说已签的分裂。）
-            clearFailStreak(prefix, id);
-        } catch (Throwable _eCS) { noteSwallowed("clearPostSignState", _eCS); }
+        stateStore.clearPostSignState(prefix, id);
     }
 
     private void markSignedFromRequest(long did, String text) {
@@ -3236,11 +3212,21 @@ public final class TGAutoSignCore {
     private int sendSign(Map<String, Object> entry, int account) { return sendSign(entry, account, false); }
 
     /**
+     * 兼容入口：调用方已知账号索引。
+     * @deprecated 异步路径请用 {@link #sendSign(Map, AccountManager.Ctx, boolean)} ——
+     *             它把账号"钉死"在发起时刻，避免执行时读到别的账号。
+     */
+    private int sendSign(Map<String, Object> entry, int account, boolean manual) {
+        return sendSign(entry, accountManager.ctxOf(account, "sendSign(int)"), manual);
+    }
+
+    /**
      * @param manual 用户显式操作：豁免"今天已签/重试用尽/退避"这类进度限制。
      * @return SignLogic.SKIP_* 码；SKIP_NONE 表示请求**确实发出去了**。
      *         调用方应据此提示用户，不要无条件 toast"已发起"。
      */
-    private int sendSign(Map<String, Object> entry, int account, boolean manual) {
+    private int sendSign(Map<String, Object> entry, AccountManager.Ctx ctx, boolean manual) {
+        final int account = ctx.account;
         pace();
         // 每条目标一个链路 id：解析 → 发出 → 响应 → 判定 可串联
         setCtxTrace("t" + Integer.toHexString(random.nextInt(0xFFFF)));
@@ -3254,7 +3240,7 @@ public final class TGAutoSignCore {
         // 判据收敛到 SignLogic.decideSign（纯逻辑 + 单测），所有触发源共用。
         // 历史问题：去重分散在 4 处（节流 / pendingSigns / kLast / 排队时间戳），
         // 彼此不知道对方存在 → 同一 bot 连发两条（用户实测 1.5.8）。
-        final String _pfx = accountPrefix(account);
+        final String _pfx = ctx.prefix;   // Ctx 已锁定账号前缀
         SignLogic.SignGate _gate = new SignLogic.SignGate();
         _gate.manual = manual;
         _gate.inFlight = isPendingFresh(_pfx, id);
@@ -3821,6 +3807,9 @@ public final class TGAutoSignCore {
             }
         }
         final int fAccount = account;
+        // 重构 1.6.1：这一批发送是**逐个 postDelayed**（间隔 3~10 秒），
+        // 期间用户可能切号 —— 用捕获的 Ctx 而非执行时读账号。
+        final AccountManager.Ctx batchCtx = accountManager.ctxOf(account, "trySignAll/" + reason);
         long acc = 0L;
         for (Map<String, Object> m : todo) {
             final Map<String, Object> fm = m;
@@ -3829,7 +3818,7 @@ public final class TGAutoSignCore {
                     try {
                         long did = entryDid(fm);
                         logd("[" + reason + "] 尝试签到 " + did + " " + (KIND_CB.equals(entryKind(fm)) ? "[回调] " : "text=") + entryText(fm));
-                        sendSign(fm, fAccount, force);
+                        sendSign(fm, batchCtx, force);
                     } catch (Throwable t) {
                         jlog("trySignAll 发送异常 " + entryDid(fm) + " : " + t);
                     }
@@ -6670,18 +6659,12 @@ public final class TGAutoSignCore {
 
     /** "已发出、且还在等结论的时效内"——超过 PENDING_TTL_MS 才允许再发。 */
     private boolean isSentPendingFresh(String prefix, String id) {
-        try {
-            if (!optimisticToday(prefix, id)) return false;
-            long sent = prefs.getLong(prefix + "sent_at_" + id, 0L);
-            if (sent <= 0L) return true;   // 有 opt_ 无时间戳：保守视为在飞
-            return System.currentTimeMillis() - sent < PENDING_TTL_MS;
-        } catch (Throwable t) { return false; }
+        return stateStore.isSentPendingFresh(prefix, id, PENDING_TTL_MS);
     }
 
     /** 该条目今天是否"已发出请求但尚无最终结论"。 */
     private boolean optimisticToday(String prefix, String id) {
-        try { return todayStr().equals(prefs.getString(kOpt(prefix, id), "")); }
-        catch (Throwable t) { return false; }
+        return stateStore.isOptimisticToday(prefix, id);
     }
 
     /**
@@ -6701,12 +6684,7 @@ public final class TGAutoSignCore {
 
     /** 只清退避状态、保留已签（第二步失败但第一步已成功时用）。 */
     private void keepSignedClearBackoff(String prefix, String id) {
-        try {
-            prefs.edit().putInt(kRetry(prefix, id), 0)
-                 .remove(kRetryAt(prefix, id))
-                 .remove(kRetryDay(prefix, id)).apply();
-            clearFailStreak(prefix, id);
-        } catch (Throwable t) { noteSwallowed("keepSignedClearBackoff", t); }
+        stateStore.keepSignedClearBackoff(prefix, id);
     }
 
     /**
@@ -7074,17 +7052,22 @@ public final class TGAutoSignCore {
         // 账号在「排任务时」就钉死：延迟可达 1~5 分钟，期间用户可能切号。
         // 以前执行时才取 accountPrefix()/currentAccount()，会把旧账号的目标
         // 用新账号发出去（用户反馈「账号1给账号2配置的 bot 发消息」）。
+        //
+        // 重构 1.6.1：改为捕获 AccountManager.Ctx —— 不可变快照，
+        // 执行时只用它，**完全不读 currentAccount()**（原来的"执行时校验"保留，
+        // 用于发现"用户切号了"这种需要放弃的场景，但不再依赖它来取前缀）。
+        final AccountManager.Ctx ctx = accountManager.ctxOf(acc, "armTask");
         Runnable r = new Runnable() {
             @Override public void run() {
                 try {
                     if (sweep) pendingSweep = null; else pendingTimerFire = null;
                     if (!TIMER_ENABLED || (!inWindow() && !inMissBackTime())) { kickSchedule(); return; }
                     // 账号变了就作废这次任务：它属于旧账号，不能拿新账号发
-                    if (acc != currentAccount()) {
-                        jlog("[定时] 账号已切换（任务属 acc" + acc + "，当前 acc" + currentAccount() + "），取消本次任务");
+                    if (ctx.account != currentAccount()) {
+                        jlog("[定时] 账号已切换（任务属 acc" + ctx.account + "，当前 acc" + currentAccount() + "），取消本次任务");
                         kickSchedule(); return;
                     }
-                    String fPrefix = accountPrefix(acc);
+                    String fPrefix = ctx.prefix;
                     String fid = String.valueOf(fm.get("id"));
                     if (skipScheduling(fPrefix, fid)) {
                         logd("[定时] " + fid + " 跳过排期（已签/在途/已发出待结论）");
@@ -7094,7 +7077,7 @@ public final class TGAutoSignCore {
                     Map<String, Object> entry = findEntryById(fid);
                     if (entry == null) { kickSchedule(); return; }
                     jlog("[定时] 执行签到 " + fdid + " " + (KIND_CB.equals(fm.get("kind")) ? "[回调] " : "text=") + fm.get("text"));
-                    sendSign(entry, acc);
+                    sendSign(entry, ctx, false);   // 用排任务时捕获的 Ctx
                 } catch (Throwable ignored) {}
             }
         };
