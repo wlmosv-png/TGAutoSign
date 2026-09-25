@@ -517,6 +517,7 @@ public final class Lang {
         EN.put("还没连续签到，今天去签一个", "No streak yet — sign in today to start one");
         EN.put("重绑为回调（去点它的按钮）", "Rebind as callback (tap its button)");
         EN.put("🧪 {0} 失败: {1}", "🧪 {0} failed: {1}");
+        EN.put("{0}：签到完成 {1} 个", "{0}: signed {1}");
         EN.put("「{0}」今日重试次数已用完", "\"{0}\" has used up today's retries");
         EN.put("「{0}」已发出、正在等结果", "\"{0}\" sent; waiting for the result");
         EN.put("「{0}」正在签到中，请稍候", "\"{0}\" is signing, please wait");
@@ -663,6 +664,7 @@ public final class Lang {
         EN.put("捕获模式已开启：去 bot 会话里点一次它的按钮，我会列出该消息所有按钮供你绑定", "Capture mode is on: open the bot's chat and tap its button once — all buttons in that message will be listed for binding.");
         EN.put("以下目标来自「网络学习」，确认后才会加入自动签到。点「加入」确认，点「忽略」丢弃。", "These targets came from \"network learning\" and are only added after you confirm. Tap Add to accept or Skip to discard.");
         EN.put("当前共 {0} 个账号。默认只改本账号（{1}…），点上面按钮才会同步到其它账号。", "{0} accounts in total. By default only this account ({1}…) is changed; use the button above to sync to the others.");
+        EN.put("{0}：签到完成 {1} 个，{2} 个没成功（/jmb → 📄 运行日志 里有原因）", "{0}: signed {1}, {2} failed (see /jmb → 📄 Logs for reasons)");
         EN.put("开 = 窗口内按随机时刻逐个签（防风控，推荐）；关 = 检测到未签就马上签（限窗口内）", "On = sign each target at a random time inside the window (recommended, avoids rate limits); Off = sign as soon as an unsigned target is detected (still inside the window)");
         EN.put("清空会同时删掉当前列表和落盘的历史日志文件。\n建议先「导出再清空」留一份，方便之后对账。", "Clearing removes both the current list and the log files on disk.\nExport a copy first so you still have it for reference.");
         EN.put("自动 = 读宿主当前配色（取不到再看系统深色）；识别不准时可手动锁定，保存后重开界面生效", "Auto = read the host's current colours (falls back to the system dark setting). If it's wrong, lock it manually — takes effect after saving and reopening.");

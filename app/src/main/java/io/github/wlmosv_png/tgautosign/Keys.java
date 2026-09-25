@@ -49,6 +49,7 @@ public final class Keys {
     public static String tutSeen()           { return "jmb_tut_seen"; }
     public static String configTs()          { return "jmb_config_ts"; }
     public static String pendingConfirm()    { return "jmb_pending_confirm"; }
+    public static String pendingConfirm(int account) { return "acc" + account + "_pending_confirm"; }
     public static String dbgOverflow()       { return "jmb_dbg_overflow"; }
 
     // ───────────── per-target（<prefix><name>_<id>）─────────────
