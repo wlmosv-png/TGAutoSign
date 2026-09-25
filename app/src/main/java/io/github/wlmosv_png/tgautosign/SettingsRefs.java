@@ -40,6 +40,10 @@ public final class SettingsRefs {
     public EditText okWordsEd;  // 附加成功词
     public EditText failWordsEd;// 附加失败词
 
+    // 签到窗口（分区内用时间选择器改动，保存时读取）
+    public int[] wStart;
+    public int[] wEnd;
+
     // 可变值（分区内改动，保存时读取）
     public String window = "";          // 签到窗口
     public int missDeadlineMin = 23 * 60;

@@ -7679,225 +7679,8 @@ public final class TGAutoSignCore {
             // ── 通知 ──（实现见 buildSectionNotify）
             buildSectionNotify(R);
 
-            // ── 签到核心 ──
-            sectionHeader(box, act, "▍签到核心");
-            LinearLayout card1 = new LinearLayout(act); card1.setOrientation(LinearLayout.VERTICAL);
-            card1.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x26)));
-            card1.setPadding(dp(12), dp(10), dp(12), dp(10));
-            LinearLayout.LayoutParams c1lp = new LinearLayout.LayoutParams(-1, -2);
-            c1lp.setMargins(0, dp(2), 0, dp(6));
-            card1.setLayoutParams(c1lp);
-            final android.widget.Switch tmSw = swRow(act, "定时签到", TIMER_ENABLED);
-            tmSw.setTextSize(Theme.TS_BODY);
-            card1.addView(tmSw);
-            TextView tmSub = new TextView(act); tmSub.setTextSize(Theme.TS_CAPTION); tmSub.setTextColor(Theme.termFaint(act)); tmSub.setTypeface(Theme.text());
-            tmSub.setText(Lang.tr("开 = 窗口内按随机时刻逐个签（防风控，推荐）；关 = 检测到未签就马上签（限窗口内）"));
-            tmSub.setPadding(dp(4), 0, dp(4), dp(6));
-            card1.addView(tmSub);
-            box.addView(card1);
-            // 时间选择：两个按钮弹系统时间选择器，免手输
-            final int[] wRange = windowRange();
-            final int[] wStart = { wRange != null ? wRange[0] : 8 * 60 + 30 };
-            final int[] wEnd   = { wRange != null ? wRange[1] : 20 * 60 + 30 };
-            LinearLayout wRow = new LinearLayout(act); wRow.setOrientation(LinearLayout.HORIZONTAL); wRow.setGravity(android.view.Gravity.CENTER_VERTICAL); wRow.setPadding(dp(4), dp(4), dp(4), dp(4));
-            TextView wLab = new TextView(act); wLab.setText(Lang.tr("签到时间")); leadIcon(act, wLab, "clock", Theme.termCyan(act)); wLab.setTextSize(Theme.TS_BODY); wLab.setTextColor(Theme.termTxt(act));
-            wLab.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-            wRow.addView(wLab, new LinearLayout.LayoutParams(0, -2, 1f));
-            final Button wb1 = mkBtn(act); wb1.setTextSize(Theme.TS_BODY);
-            final Button wb2 = mkBtn(act); wb2.setTextSize(Theme.TS_BODY);
-            final Runnable refreshW = new Runnable() { @Override public void run() {
-                wb1.setText(String.format("%02d:%02d", wStart[0] / 60, wStart[0] % 60));
-                wb2.setText(String.format("%02d:%02d", wEnd[0] / 60, wEnd[0] % 60));
-            } };
-            wb1.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
-                new android.app.TimePickerDialog(act, new android.app.TimePickerDialog.OnTimeSetListener(){
-                    @Override public void onTimeSet(android.widget.TimePicker tp, int h, int m) { wStart[0] = h * 60 + m; refreshW.run(); }
-                }, wStart[0] / 60, wStart[0] % 60, true).show();
-            } });
-            wb2.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
-                new android.app.TimePickerDialog(act, new android.app.TimePickerDialog.OnTimeSetListener(){
-                    @Override public void onTimeSet(android.widget.TimePicker tp, int h, int m) { wEnd[0] = h * 60 + m; refreshW.run(); }
-                }, wEnd[0] / 60, wEnd[0] % 60, true).show();
-            } });
-            refreshW.run();
-            wRow.addView(wb1, new LinearLayout.LayoutParams(0, -2, 1.2f));
-            TextView wSep = new TextView(act); wSep.setText(" — "); wSep.setTextColor(Theme.termMuted(act)); wSep.setGravity(android.view.Gravity.CENTER);
-            wRow.addView(wSep, new LinearLayout.LayoutParams(-2, -2));
-            wRow.addView(wb2, new LinearLayout.LayoutParams(0, -2, 1.2f));
-            card1.addView(wRow);
-            TextView wTip = new TextView(act); wTip.setTextSize(Theme.TS_CAPTION); wTip.setTextColor(Theme.termFaint(act)); wTip.setTypeface(Theme.text());
-            wTip.setText(Lang.tr("每目标在窗口内各占一段随机时刻，互不重叠"));
-            wTip.setPadding(dp(4), 0, dp(4), dp(6));
-            card1.addView(wTip);
-            // 错开间隔：0=自动均分，>0=固定最小间隔分钟
-            LinearLayout gapRow = new LinearLayout(act); gapRow.setOrientation(LinearLayout.HORIZONTAL); gapRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
-            gapRow.setPadding(dp(4), dp(4), dp(4), dp(6));
-            TextView gapLab = new TextView(act); gapLab.setText(Lang.tr("错开间隔")); leadIcon(act, gapLab, "gap", Theme.termMuted(act)); gapLab.setTextSize(Theme.TS_SECOND); gapLab.setTextColor(Theme.termMuted(act));
-            gapLab.setTypeface(android.graphics.Typeface.MONOSPACE);
-            gapRow.addView(gapLab, new LinearLayout.LayoutParams(0, -2, 1f));
-            Button gapMinus = mkBtn(act); gapMinus.setText("−");
-            final EditText gapEd = new EditText(act);
-            gapEd.setText(String.valueOf(GAP_MIN));
-            gapEd.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-            gapEd.setGravity(android.view.Gravity.CENTER);
-            gapEd.setTextSize(Theme.TS_BODY);
-            gapEd.setSingleLine(true);
-            gapEd.setTextColor(Theme.termTxt(act));
-            gapEd.setBackground(termBorder(act, Theme.termCardInput(act), Theme.withAlpha(Theme.termCyan(act), 0x33)));
-            Button gapPlus = mkBtn(act); gapPlus.setText("+");
-            gapMinus.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ try { int vv=Integer.parseInt(gapEd.getText().toString().trim()); vv=Math.max(0,vv-5); gapEd.setText(String.valueOf(vv)); } catch (Throwable ignored) {} } });
-            gapPlus.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ try { int vv=Integer.parseInt(gapEd.getText().toString().trim()); vv=Math.min(240,vv+5); gapEd.setText(String.valueOf(vv)); } catch (Throwable ignored) {} } });
-            gapRow.addView(gapMinus, new LinearLayout.LayoutParams(0, -2, 1f));
-            gapRow.addView(gapEd, new LinearLayout.LayoutParams(0, -2, 1.6f));
-            gapRow.addView(gapPlus, new LinearLayout.LayoutParams(0, -2, 1f));
-            card1.addView(gapRow);
-            TextView gapTip = new TextView(act); gapTip.setTextSize(Theme.TS_CAPTION); gapTip.setTextColor(Theme.termFaint(act)); gapTip.setTypeface(Theme.text());
-            gapTip.setText(Lang.tr("0=按目标数自动均分；如设 30，则相邻目标至少隔 30 分钟"));
-            gapTip.setPadding(dp(4), 0, dp(4), dp(2));
-            card1.addView(gapTip);
-            final android.widget.Switch mbSw = swRow(act, "错过补签", MISS_BACK);
-            mbSw.setTextSize(Theme.TS_BODY);
-            card1.addView(mbSw);
-            TextView mbTip = new TextView(act); mbTip.setTextSize(Theme.TS_CAPTION); mbTip.setTextColor(Theme.termFaint(act)); mbTip.setTypeface(Theme.text());
-            mbTip.setText(Lang.tr("关掉 TG 期间错过的签到点：开=错过后随机延迟 1~5 分钟自动补；关=错过即跳过（默认）"));
-            mbTip.setPadding(dp(4), 0, dp(4), dp(2));
-            card1.addView(mbTip);
-            // 补签截止：窗口结束后仍可补到该时间（与签到窗口解耦，避免当天错过作废）
-            final int[] mdMin = { MISS_DEADLINE };
-            LinearLayout mdRow = new LinearLayout(act); mdRow.setOrientation(LinearLayout.HORIZONTAL); mdRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
-            mdRow.setPadding(dp(4), dp(4), dp(4), dp(6));
-            TextView mdLab = new TextView(act); mdLab.setText(Lang.tr("补签截止")); leadIcon(act, mdLab, "hourglass", Theme.termMuted(act)); mdLab.setTextSize(Theme.TS_SECOND); mdLab.setTextColor(Theme.termMuted(act));
-            mdLab.setTypeface(android.graphics.Typeface.MONOSPACE);
-            mdRow.addView(mdLab, new LinearLayout.LayoutParams(0, -2, 1f));
-            final Button mdb = mkBtn(act); mdb.setTextSize(Theme.TS_BODY);
-            final Runnable refreshMd = new Runnable() { @Override public void run() {
-                mdb.setText(String.format("%02d:%02d", mdMin[0] / 60, mdMin[0] % 60));
-            } };
-            mdb.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
-                new android.app.TimePickerDialog(act, new android.app.TimePickerDialog.OnTimeSetListener(){
-                    @Override public void onTimeSet(android.widget.TimePicker tp, int h, int m) { mdMin[0] = h * 60 + m; refreshMd.run(); }
-                }, mdMin[0] / 60, mdMin[0] % 60, true).show();
-            } });
-            refreshMd.run();
-            mdRow.addView(mdb, new LinearLayout.LayoutParams(0, -2, 1.2f));
-            card1.addView(mdRow);
-            TextView mdTip = new TextView(act); mdTip.setTextSize(Theme.TS_CAPTION); mdTip.setTextColor(Theme.termFaint(act)); mdTip.setTypeface(Theme.text());
-            mdTip.setText(Lang.tr("窗口结束后仍会补签到到这个时间（如 23:00），过了才真正放弃；仅「错过补签」开启时生效"));
-            mdTip.setPadding(dp(4), 0, dp(4), dp(2));
-            card1.addView(mdTip);
-            Button planBtn = mkBtn(act); withIconText(act, planBtn, "list", "查看今日计划");
-            planBtn.setTextColor(Theme.termCyan(act));
-            planBtn.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
-                try {
-                    String fPrefix = accountPrefix();
-                    ensureTimerPlan(fPrefix);
-                    List<Map<String, Object>> plan = timerPlan(fPrefix);
-                    // 计划时刻 id -> HH:MM
-                    java.util.Map<String, String> minById = new java.util.HashMap<>();
-                    for (Map<String, Object> m : plan) {
-                        int mn = ((Number) m.get("min")).intValue();
-                        minById.put(String.valueOf(m.get("id")), String.format("%02d:%02d", mn / 60, mn % 60));
-                    }
-                    List<Map<String, Object>> all = new ArrayList<>();
-                    loadTargetsInto(fPrefix, all);
-                    if (all.isEmpty()) { toast("还没有签到目标"); return; }
-
-                    LinearLayout pl = new LinearLayout(act);
-                    pl.setOrientation(LinearLayout.VERTICAL);
-                    pl.setPadding(dp(6), dp(6), dp(6), dp(6));
-                    TextView head = new TextView(act);
-                    head.setTextSize(Theme.TS_CAPTION); head.setTextColor(Theme.termMuted(act)); head.setTypeface(android.graphics.Typeface.MONOSPACE);
-                    head.setText(Lang.tf("今日计划 · {0} 个目标 · 随机错开", all.size()));
-                    head.setPadding(dp(4), 0, dp(4), dp(8));
-                    pl.addView(head);
-
-                    int doneN = 0;
-                    for (Map<String, Object> m : all) {
-                        final long did = entryDid(m);
-                        String id = entryId(m);
-                        String txt = entryText(m);
-                        if (txt.length() > 14) txt = txt.substring(0, 14) + "…";
-                        boolean done = todayStr().equals(prefs.getString(kLast(fPrefix, id), ""));
-                        if (done) doneN++;
-                        String tm = minById.get(id);
-
-                        LinearLayout row = new LinearLayout(act);
-                        row.setOrientation(LinearLayout.HORIZONTAL);
-                        row.setGravity(Gravity.CENTER_VERTICAL);
-                        row.setPadding(dp(10), dp(8), dp(10), dp(8));
-                        row.setBackground(termBorder(act, Theme.termCard(act), done
-                                ? Theme.withAlpha(Theme.termGreen(act), 0x40)
-                                : Theme.withAlpha(Theme.termCyan(act), 0x26)));
-                        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
-                        rlp.setMargins(0, dp(2), 0, dp(2));
-                        row.setLayoutParams(rlp);
-
-                        // 状态徽章
-                        TextView badge = new TextView(act);
-                        badge.setTextSize(Theme.TS_CAPTION); badge.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-                        badge.setPadding(dp(6), dp(3), dp(6), dp(3));
-                        if (done) {
-                            badge.setText(Lang.tr("已签"));
-                            badge.setTextColor(Theme.termGreen(act));
-                            badge.setBackground(termBorder(act, Theme.withAlpha(Theme.termGreen(act), 0x12), Theme.withAlpha(Theme.termGreen(act), 0x59)));
-                        } else {
-                            badge.setText(Lang.tr("待签"));
-                            badge.setTextColor(Theme.termAmber(act));
-                            badge.setBackground(termBorder(act, Theme.withAlpha(Theme.termAmber(act), 0x12), Theme.withAlpha(Theme.termAmber(act), 0x59)));
-                        }
-                        row.addView(badge, new LinearLayout.LayoutParams(-2, -2));
-
-                        // bot 简称 + 指令
-                        LinearLayout col = new LinearLayout(act);
-                        col.setOrientation(LinearLayout.VERTICAL);
-                        col.setPadding(dp(8), 0, dp(4), 0);
-                        String bn = botName(did);
-                        String title = (bn != null && bn.length() > 0) ? bn : String.valueOf(did);
-                        if (title.length() > 12) title = title.substring(0, 12) + "…";
-                        TextView t1 = new TextView(act);
-                        t1.setTextSize(Theme.TS_BODY); t1.setTextColor(Theme.termTxt(act)); t1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-                        t1.setText(title);
-                        col.addView(t1);
-                        TextView t2 = new TextView(act);
-                        t2.setTextSize(Theme.TS_CAPTION); t2.setTextColor(Theme.termMuted(act)); t2.setTypeface(android.graphics.Typeface.MONOSPACE);
-                        t2.setText(txt);
-                        t2.setPadding(0, dp(1), 0, 0);
-                        col.addView(t2);
-                        row.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
-
-                        // 右侧时间
-                        TextView time = new TextView(act);
-                        time.setTextSize(Theme.TS_BODY); time.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-                        if (done) {
-                            long sentAt = 0L;
-                            try { sentAt = prefs.getLong(fPrefix + "sent_at_" + id, 0L); } catch (Throwable ignored) {}
-                            if (sentAt > 0) {
-                                java.util.Calendar cc = java.util.Calendar.getInstance();
-                                cc.setTimeInMillis(sentAt);
-                                time.setText(String.format("%02d:%02d", cc.get(java.util.Calendar.HOUR_OF_DAY), cc.get(java.util.Calendar.MINUTE)));
-                                time.setTextColor(Theme.termGreen(act));
-                            } else {
-                                time.setText("✔"); time.setTextColor(Theme.termGreen(act));
-                            }
-                        } else if (tm != null) {
-                            time.setText(tm);
-                            time.setTextColor(Theme.termCyan(act));
-                        } else {
-                            time.setText(Lang.tr("明日排"));
-                            time.setTextColor(Theme.termFaint(act));
-                        }
-                        row.addView(time, new LinearLayout.LayoutParams(-2, -2));
-                        pl.addView(row);
-                    }
-                    TextView foot = new TextView(act);
-                    foot.setTextSize(Theme.TS_CAPTION); foot.setTextColor(Theme.termFaint(act)); foot.setTypeface(Theme.text());
-                    foot.setText(Lang.tf("已签 {0} / {1} · 时间=已签时刻 / 待签计划时刻", doneN, all.size()));
-                    foot.setPadding(dp(4), dp(6), dp(4), 0);
-                    pl.addView(foot);
-                    showDialog(act, "今日计划", pl, "关闭");
-                } catch (Throwable t) { toast(Lang.tf("预览失败: {0}", t)); }
-            } });
-            card1.addView(planBtn);
+            // ── 签到核心 ──（实现见 buildSectionSignCore）
+            buildSectionSignCore(R);
 
             // ── 学习行为 ──
             sectionHeader(box, act, "▍学习行为");
@@ -8069,21 +7852,21 @@ public final class TGAutoSignCore {
                     if (r > 0 && r <= 99) RETRY_LIMIT = r;
                 } catch (Throwable ignored) {}
                 WAKE_CMD = wc.getText().toString().trim();
-                String wv = String.format("%02d:%02d-%02d:%02d", wStart[0] / 60, wStart[0] % 60, wEnd[0] / 60, wEnd[0] % 60);
+                String wv = String.format("%02d:%02d-%02d:%02d", R.wStart[0] / 60, R.wStart[0] % 60, R.wEnd[0] / 60, R.wEnd[0] % 60);
                 if (windowRangeOf(wv) == null) { toast("时间范围错误：结束需晚于开始"); return; }
                 boolean winChanged = !String.valueOf(WINDOW).equals(wv);
                 String oldWindow = WINDOW;
                 WINDOW = wv;
-                TIMER_ENABLED = tmSw.isChecked();
+                TIMER_ENABLED = R.timerSw.isChecked();
                 NOTIFY_ON = R.notifySw.isChecked();
                 NOTIFY_FAIL_ONLY = R.notifyFailSw.isChecked();
                 THEME_MODE = R.themeMode;
                 Theme.mode = THEME_MODE;
                 try { android.content.SharedPreferences.Editor le = prefs.edit(); le.putInt("jmb_lang", Lang.MODE); le.apply(); } catch (Throwable ignored) {}
-                MISS_BACK = mbSw.isChecked();
-                try { MISS_DEADLINE = mdMin[0]; if (MISS_DEADLINE < 0) MISS_DEADLINE = 0; if (MISS_DEADLINE > 24 * 60 - 1) MISS_DEADLINE = 24 * 60 - 1; } catch (Throwable ignored) {}
+                MISS_BACK = R.missBackSw.isChecked();
+                try { MISS_DEADLINE = R.missDeadlineMin; if (MISS_DEADLINE < 0) MISS_DEADLINE = 0; if (MISS_DEADLINE > 24 * 60 - 1) MISS_DEADLINE = 24 * 60 - 1; } catch (Throwable ignored) {}
                 scheduleTickLoop();   // 确保心跳在跑（开启补签后立即可用，不等触发源）
-                try { GAP_MIN = Integer.parseInt(gapEd.getText().toString().trim()); if (GAP_MIN < 0) GAP_MIN = 0; if (GAP_MIN > 240) GAP_MIN = 240; } catch (Throwable ignored) {}
+                try { GAP_MIN = Integer.parseInt(R.gapEd.getText().toString().trim()); if (GAP_MIN < 0) GAP_MIN = 0; if (GAP_MIN > 240) GAP_MIN = 240; } catch (Throwable ignored) {}
                 // 清掉旧时刻表，重新按新设置生成（窗口/间隔/补签改动都走这里）
                 try { prefs.edit().remove(kTimerPlan(accountPrefix(), todayStr())).apply(); } catch (Throwable ignored) {}
                 if (winChanged) jlog("[定时] 窗口已改 " + oldWindow + " → " + wv + "，当日计划作废待重排");
@@ -10068,6 +9851,234 @@ public final class TGAutoSignCore {
         nTip.setPadding(dp(4), dp(4), dp(4), 0);
         cardN.addView(nTip);
         box.addView(cardN);
+
+    }
+
+
+    /** 设置 · 签到核心分区（从 showSettings 抽出：定时/窗口/间隔/补签）。 */
+    private void buildSectionSignCore(final SettingsRefs R) {
+        final Activity act = R.act;
+        final LinearLayout box = R.box;
+        sectionHeader(box, act, "▍签到核心");
+        LinearLayout card1 = new LinearLayout(act); card1.setOrientation(LinearLayout.VERTICAL);
+        card1.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x26)));
+        card1.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout.LayoutParams c1lp = new LinearLayout.LayoutParams(-1, -2);
+        c1lp.setMargins(0, dp(2), 0, dp(6));
+        card1.setLayoutParams(c1lp);
+        R.timerSw = swRow(act, "定时签到", TIMER_ENABLED);
+        R.timerSw.setTextSize(Theme.TS_BODY);
+        card1.addView(R.timerSw);
+        TextView tmSub = new TextView(act); tmSub.setTextSize(Theme.TS_CAPTION); tmSub.setTextColor(Theme.termFaint(act)); tmSub.setTypeface(Theme.text());
+        tmSub.setText(Lang.tr("开 = 窗口内按随机时刻逐个签（防风控，推荐）；关 = 检测到未签就马上签（限窗口内）"));
+        tmSub.setPadding(dp(4), 0, dp(4), dp(6));
+        card1.addView(tmSub);
+        box.addView(card1);
+        // 时间选择：两个按钮弹系统时间选择器，免手输
+        final int[] wRange = windowRange();
+        final int[] wStart = { wRange != null ? wRange[0] : 8 * 60 + 30 };
+        R.wStart = wStart;   // 保存块也要读（跨作用域）
+        final int[] wEnd   = { wRange != null ? wRange[1] : 20 * 60 + 30 };
+        R.wEnd = wEnd;
+        LinearLayout wRow = new LinearLayout(act); wRow.setOrientation(LinearLayout.HORIZONTAL); wRow.setGravity(android.view.Gravity.CENTER_VERTICAL); wRow.setPadding(dp(4), dp(4), dp(4), dp(4));
+        TextView wLab = new TextView(act); wLab.setText(Lang.tr("签到时间")); leadIcon(act, wLab, "clock", Theme.termCyan(act)); wLab.setTextSize(Theme.TS_BODY); wLab.setTextColor(Theme.termTxt(act));
+        wLab.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        wRow.addView(wLab, new LinearLayout.LayoutParams(0, -2, 1f));
+        final Button wb1 = mkBtn(act); wb1.setTextSize(Theme.TS_BODY);
+        final Button wb2 = mkBtn(act); wb2.setTextSize(Theme.TS_BODY);
+        final Runnable refreshW = new Runnable() { @Override public void run() {
+            wb1.setText(String.format("%02d:%02d", wStart[0] / 60, wStart[0] % 60));
+            wb2.setText(String.format("%02d:%02d", wEnd[0] / 60, wEnd[0] % 60));
+        } };
+        wb1.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
+            new android.app.TimePickerDialog(act, new android.app.TimePickerDialog.OnTimeSetListener(){
+                @Override public void onTimeSet(android.widget.TimePicker tp, int h, int m) { wStart[0] = h * 60 + m; refreshW.run(); }
+            }, wStart[0] / 60, wStart[0] % 60, true).show();
+        } });
+        wb2.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
+            new android.app.TimePickerDialog(act, new android.app.TimePickerDialog.OnTimeSetListener(){
+                @Override public void onTimeSet(android.widget.TimePicker tp, int h, int m) { wEnd[0] = h * 60 + m; refreshW.run(); }
+            }, wEnd[0] / 60, wEnd[0] % 60, true).show();
+        } });
+        refreshW.run();
+        wRow.addView(wb1, new LinearLayout.LayoutParams(0, -2, 1.2f));
+        TextView wSep = new TextView(act); wSep.setText(" — "); wSep.setTextColor(Theme.termMuted(act)); wSep.setGravity(android.view.Gravity.CENTER);
+        wRow.addView(wSep, new LinearLayout.LayoutParams(-2, -2));
+        wRow.addView(wb2, new LinearLayout.LayoutParams(0, -2, 1.2f));
+        card1.addView(wRow);
+        TextView wTip = new TextView(act); wTip.setTextSize(Theme.TS_CAPTION); wTip.setTextColor(Theme.termFaint(act)); wTip.setTypeface(Theme.text());
+        wTip.setText(Lang.tr("每目标在窗口内各占一段随机时刻，互不重叠"));
+        wTip.setPadding(dp(4), 0, dp(4), dp(6));
+        card1.addView(wTip);
+        // 错开间隔：0=自动均分，>0=固定最小间隔分钟
+        LinearLayout gapRow = new LinearLayout(act); gapRow.setOrientation(LinearLayout.HORIZONTAL); gapRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        gapRow.setPadding(dp(4), dp(4), dp(4), dp(6));
+        TextView gapLab = new TextView(act); gapLab.setText(Lang.tr("错开间隔")); leadIcon(act, gapLab, "gap", Theme.termMuted(act)); gapLab.setTextSize(Theme.TS_SECOND); gapLab.setTextColor(Theme.termMuted(act));
+        gapLab.setTypeface(android.graphics.Typeface.MONOSPACE);
+        gapRow.addView(gapLab, new LinearLayout.LayoutParams(0, -2, 1f));
+        Button gapMinus = mkBtn(act); gapMinus.setText("−");
+        R.gapEd = new EditText(act);
+        R.gapEd.setText(String.valueOf(GAP_MIN));
+        R.gapEd.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        R.gapEd.setGravity(android.view.Gravity.CENTER);
+        R.gapEd.setTextSize(Theme.TS_BODY);
+        R.gapEd.setSingleLine(true);
+        R.gapEd.setTextColor(Theme.termTxt(act));
+        R.gapEd.setBackground(termBorder(act, Theme.termCardInput(act), Theme.withAlpha(Theme.termCyan(act), 0x33)));
+        Button gapPlus = mkBtn(act); gapPlus.setText("+");
+        gapMinus.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ try { int vv=Integer.parseInt(R.gapEd.getText().toString().trim()); vv=Math.max(0,vv-5); R.gapEd.setText(String.valueOf(vv)); } catch (Throwable ignored) {} } });
+        gapPlus.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ try { int vv=Integer.parseInt(R.gapEd.getText().toString().trim()); vv=Math.min(240,vv+5); R.gapEd.setText(String.valueOf(vv)); } catch (Throwable ignored) {} } });
+        gapRow.addView(gapMinus, new LinearLayout.LayoutParams(0, -2, 1f));
+        gapRow.addView(R.gapEd, new LinearLayout.LayoutParams(0, -2, 1.6f));
+        gapRow.addView(gapPlus, new LinearLayout.LayoutParams(0, -2, 1f));
+        card1.addView(gapRow);
+        TextView gapTip = new TextView(act); gapTip.setTextSize(Theme.TS_CAPTION); gapTip.setTextColor(Theme.termFaint(act)); gapTip.setTypeface(Theme.text());
+        gapTip.setText(Lang.tr("0=按目标数自动均分；如设 30，则相邻目标至少隔 30 分钟"));
+        gapTip.setPadding(dp(4), 0, dp(4), dp(2));
+        card1.addView(gapTip);
+        R.missBackSw = swRow(act, "错过补签", MISS_BACK);
+        R.missBackSw.setTextSize(Theme.TS_BODY);
+        card1.addView(R.missBackSw);
+        TextView mbTip = new TextView(act); mbTip.setTextSize(Theme.TS_CAPTION); mbTip.setTextColor(Theme.termFaint(act)); mbTip.setTypeface(Theme.text());
+        mbTip.setText(Lang.tr("关掉 TG 期间错过的签到点：开=错过后随机延迟 1~5 分钟自动补；关=错过即跳过（默认）"));
+        mbTip.setPadding(dp(4), 0, dp(4), dp(2));
+        card1.addView(mbTip);
+        // 补签截止：窗口结束后仍可补到该时间（与签到窗口解耦，避免当天错过作废）
+        R.missDeadlineMin = MISS_DEADLINE;
+        LinearLayout mdRow = new LinearLayout(act); mdRow.setOrientation(LinearLayout.HORIZONTAL); mdRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        mdRow.setPadding(dp(4), dp(4), dp(4), dp(6));
+        TextView mdLab = new TextView(act); mdLab.setText(Lang.tr("补签截止")); leadIcon(act, mdLab, "hourglass", Theme.termMuted(act)); mdLab.setTextSize(Theme.TS_SECOND); mdLab.setTextColor(Theme.termMuted(act));
+        mdLab.setTypeface(android.graphics.Typeface.MONOSPACE);
+        mdRow.addView(mdLab, new LinearLayout.LayoutParams(0, -2, 1f));
+        final Button mdb = mkBtn(act); mdb.setTextSize(Theme.TS_BODY);
+        final Runnable refreshMd = new Runnable() { @Override public void run() {
+            mdb.setText(String.format("%02d:%02d", R.missDeadlineMin / 60, R.missDeadlineMin % 60));
+        } };
+        mdb.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
+            new android.app.TimePickerDialog(act, new android.app.TimePickerDialog.OnTimeSetListener(){
+                @Override public void onTimeSet(android.widget.TimePicker tp, int h, int m) { R.missDeadlineMin = h * 60 + m; refreshMd.run(); }
+            }, R.missDeadlineMin / 60, R.missDeadlineMin % 60, true).show();
+        } });
+        refreshMd.run();
+        mdRow.addView(mdb, new LinearLayout.LayoutParams(0, -2, 1.2f));
+        card1.addView(mdRow);
+        TextView mdTip = new TextView(act); mdTip.setTextSize(Theme.TS_CAPTION); mdTip.setTextColor(Theme.termFaint(act)); mdTip.setTypeface(Theme.text());
+        mdTip.setText(Lang.tr("窗口结束后仍会补签到到这个时间（如 23:00），过了才真正放弃；仅「错过补签」开启时生效"));
+        mdTip.setPadding(dp(4), 0, dp(4), dp(2));
+        card1.addView(mdTip);
+        Button planBtn = mkBtn(act); withIconText(act, planBtn, "list", "查看今日计划");
+        planBtn.setTextColor(Theme.termCyan(act));
+        planBtn.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
+            try {
+                String fPrefix = accountPrefix();
+                ensureTimerPlan(fPrefix);
+                List<Map<String, Object>> plan = timerPlan(fPrefix);
+                // 计划时刻 id -> HH:MM
+                java.util.Map<String, String> minById = new java.util.HashMap<>();
+                for (Map<String, Object> m : plan) {
+                    int mn = ((Number) m.get("min")).intValue();
+                    minById.put(String.valueOf(m.get("id")), String.format("%02d:%02d", mn / 60, mn % 60));
+                }
+                List<Map<String, Object>> all = new ArrayList<>();
+                loadTargetsInto(fPrefix, all);
+                if (all.isEmpty()) { toast("还没有签到目标"); return; }
+
+                LinearLayout pl = new LinearLayout(act);
+                pl.setOrientation(LinearLayout.VERTICAL);
+                pl.setPadding(dp(6), dp(6), dp(6), dp(6));
+                TextView head = new TextView(act);
+                head.setTextSize(Theme.TS_CAPTION); head.setTextColor(Theme.termMuted(act)); head.setTypeface(android.graphics.Typeface.MONOSPACE);
+                head.setText(Lang.tf("今日计划 · {0} 个目标 · 随机错开", all.size()));
+                head.setPadding(dp(4), 0, dp(4), dp(8));
+                pl.addView(head);
+
+                int doneN = 0;
+                for (Map<String, Object> m : all) {
+                    final long did = entryDid(m);
+                    String id = entryId(m);
+                    String txt = entryText(m);
+                    if (txt.length() > 14) txt = txt.substring(0, 14) + "…";
+                    boolean done = todayStr().equals(prefs.getString(kLast(fPrefix, id), ""));
+                    if (done) doneN++;
+                    String tm = minById.get(id);
+
+                    LinearLayout row = new LinearLayout(act);
+                    row.setOrientation(LinearLayout.HORIZONTAL);
+                    row.setGravity(Gravity.CENTER_VERTICAL);
+                    row.setPadding(dp(10), dp(8), dp(10), dp(8));
+                    row.setBackground(termBorder(act, Theme.termCard(act), done
+                            ? Theme.withAlpha(Theme.termGreen(act), 0x40)
+                            : Theme.withAlpha(Theme.termCyan(act), 0x26)));
+                    LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
+                    rlp.setMargins(0, dp(2), 0, dp(2));
+                    row.setLayoutParams(rlp);
+
+                    // 状态徽章
+                    TextView badge = new TextView(act);
+                    badge.setTextSize(Theme.TS_CAPTION); badge.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+                    badge.setPadding(dp(6), dp(3), dp(6), dp(3));
+                    if (done) {
+                        badge.setText(Lang.tr("已签"));
+                        badge.setTextColor(Theme.termGreen(act));
+                        badge.setBackground(termBorder(act, Theme.withAlpha(Theme.termGreen(act), 0x12), Theme.withAlpha(Theme.termGreen(act), 0x59)));
+                    } else {
+                        badge.setText(Lang.tr("待签"));
+                        badge.setTextColor(Theme.termAmber(act));
+                        badge.setBackground(termBorder(act, Theme.withAlpha(Theme.termAmber(act), 0x12), Theme.withAlpha(Theme.termAmber(act), 0x59)));
+                    }
+                    row.addView(badge, new LinearLayout.LayoutParams(-2, -2));
+
+                    // bot 简称 + 指令
+                    LinearLayout col = new LinearLayout(act);
+                    col.setOrientation(LinearLayout.VERTICAL);
+                    col.setPadding(dp(8), 0, dp(4), 0);
+                    String bn = botName(did);
+                    String title = (bn != null && bn.length() > 0) ? bn : String.valueOf(did);
+                    if (title.length() > 12) title = title.substring(0, 12) + "…";
+                    TextView t1 = new TextView(act);
+                    t1.setTextSize(Theme.TS_BODY); t1.setTextColor(Theme.termTxt(act)); t1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+                    t1.setText(title);
+                    col.addView(t1);
+                    TextView t2 = new TextView(act);
+                    t2.setTextSize(Theme.TS_CAPTION); t2.setTextColor(Theme.termMuted(act)); t2.setTypeface(android.graphics.Typeface.MONOSPACE);
+                    t2.setText(txt);
+                    t2.setPadding(0, dp(1), 0, 0);
+                    col.addView(t2);
+                    row.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
+
+                    // 右侧时间
+                    TextView time = new TextView(act);
+                    time.setTextSize(Theme.TS_BODY); time.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+                    if (done) {
+                        long sentAt = 0L;
+                        try { sentAt = prefs.getLong(fPrefix + "sent_at_" + id, 0L); } catch (Throwable ignored) {}
+                        if (sentAt > 0) {
+                            java.util.Calendar cc = java.util.Calendar.getInstance();
+                            cc.setTimeInMillis(sentAt);
+                            time.setText(String.format("%02d:%02d", cc.get(java.util.Calendar.HOUR_OF_DAY), cc.get(java.util.Calendar.MINUTE)));
+                            time.setTextColor(Theme.termGreen(act));
+                        } else {
+                            time.setText("✔"); time.setTextColor(Theme.termGreen(act));
+                        }
+                    } else if (tm != null) {
+                        time.setText(tm);
+                        time.setTextColor(Theme.termCyan(act));
+                    } else {
+                        time.setText(Lang.tr("明日排"));
+                        time.setTextColor(Theme.termFaint(act));
+                    }
+                    row.addView(time, new LinearLayout.LayoutParams(-2, -2));
+                    pl.addView(row);
+                }
+                TextView foot = new TextView(act);
+                foot.setTextSize(Theme.TS_CAPTION); foot.setTextColor(Theme.termFaint(act)); foot.setTypeface(Theme.text());
+                foot.setText(Lang.tf("已签 {0} / {1} · 时间=已签时刻 / 待签计划时刻", doneN, all.size()));
+                foot.setPadding(dp(4), dp(6), dp(4), 0);
+                pl.addView(foot);
+                showDialog(act, "今日计划", pl, "关闭");
+            } catch (Throwable t) { toast(Lang.tf("预览失败: {0}", t)); }
+        } });
+        card1.addView(planBtn);
 
     }
 
