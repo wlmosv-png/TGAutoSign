@@ -34,6 +34,7 @@ public final class SignLogicTest {
         cbLabel();
         verdict();
         extras();
+        signGate();
         v160Regression();
 
         System.out.println("----------------------------------------");
@@ -284,5 +285,63 @@ public final class SignLogicTest {
         tru("附加词解析 3 条", a != null && a.length == 3);
         String[] b = SignLogic.parseExtraWords("全角，逗号");
         tru("附加词支持全角逗号", b != null && b.length == 2);
+    }
+
+    /** 统一签到闸（decideSign）：这是"同一 bot 连发两条"的根治点，必须有回归。 */
+    private static void signGate() {
+        // 空对象 → 放行
+        eq("gate 空 → 放行", SignLogic.decideSign(new SignLogic.SignGate()), SignLogic.SKIP_NONE);
+
+        // 自动路径
+        SignLogic.SignGate g = new SignLogic.SignGate();
+        g.signedToday = true;
+        eq("已签 → 跳过", SignLogic.decideSign(g), SignLogic.SKIP_ALREADY_SIGNED);
+
+        g = new SignLogic.SignGate();
+        g.sentPendingFresh = true;
+        eq("已发出待结论 → 跳过", SignLogic.decideSign(g), SignLogic.SKIP_SENT_PENDING);
+
+        g = new SignLogic.SignGate();
+        g.retryExhausted = true;
+        eq("重试用尽 → 跳过", SignLogic.decideSign(g), SignLogic.SKIP_RETRY_EXHAUST);
+
+        g = new SignLogic.SignGate();
+        g.inBackoff = true;
+        eq("退避中 → 跳过", SignLogic.decideSign(g), SignLogic.SKIP_BACKOFF);
+
+        g = new SignLogic.SignGate();
+        g.disabled = true;
+        eq("停用 → 跳过", SignLogic.decideSign(g), SignLogic.SKIP_DISABLED);
+
+        // 在途：manual 也不放行（防并发双发）
+        g = new SignLogic.SignGate();
+        g.manual = true;
+        g.inFlight = true;
+        eq("在途 + manual → 仍跳过", SignLogic.decideSign(g), SignLogic.SKIP_IN_FLIGHT);
+
+        // manual 豁免今日进度类限制
+        g = new SignLogic.SignGate();
+        g.manual = true;
+        g.signedToday = true;
+        g.sentPendingFresh = true;
+        g.retryExhausted = true;
+        g.inBackoff = true;
+        eq("manual 豁免进度限制 → 放行", SignLogic.decideSign(g), SignLogic.SKIP_NONE);
+
+        // manual 不豁免 disabled
+        g = new SignLogic.SignGate();
+        g.manual = true;
+        g.disabled = true;
+        eq("manual 不豁免停用", SignLogic.decideSign(g), SignLogic.SKIP_DISABLED);
+
+        // 优先级：在途 > 已签（在途更"硬"）
+        g = new SignLogic.SignGate();
+        g.inFlight = true;
+        g.signedToday = true;
+        eq("在途优先于已签", SignLogic.decideSign(g), SignLogic.SKIP_IN_FLIGHT);
+
+        // 标签不为空（日志要用）
+        tru("skipLabel 有文案", SignLogic.skipLabel(SignLogic.SKIP_SENT_PENDING).length() > 0);
+        eq("skipLabel 放行 → 空串", SignLogic.skipLabel(SignLogic.SKIP_NONE), "");
     }
 }

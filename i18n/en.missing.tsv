@@ -85,3 +85,21 @@ Telegram 标志类：{0}	Telegram flag classes: {0}
 待确认：确认已签	Pending: confirm signed
 待确认：重试一次	Pending: retry once
 待确认：忽略今天	Pending: skip today
+── 多账号串号排查 ──	── Multi-account ID mixup check ──
+模拟已关	Simulation off
+模拟已开：解析为 {0}	Simulation on: parsed as {0}
+模拟生效：{0} 个账号 → 解析 {1}（acc{2}_，目标 {3} 个）	Simulation active: {0} accounts -> parsed {1} (acc{2}_, {3} targets)
+真实读取：selectedAccount={0} → {1}	Actual read: selectedAccount={0} -> {1}
+越界模拟（强制 selectedAccount = 已登录数）	Overflow simulation (force selectedAccount = logged-in count)
+「{0}」今天已经签过了	"{0}" is already signed today
+「{0}」正在签到中，请稍候	"{0}" is signing, please wait
+「{0}」已发出、正在等结果	"{0}" sent; waiting for the result
+「{0}」今日重试次数已用完	"{0}" has used up today's retries
+「{0}」失败退避中，稍后自动重试	"{0}" is backing off after failure; will retry later
+「{0}」已停用 / 暂停 / 冻结	"{0}" is disabled / paused / frozen
+「{0}」发送失败：取不到会话数据，先进该会话发一条消息	"{0}" send failed: cannot read the chat data; send a message there first
+已发出	Sent
+已对全部启用账号发起签到，结果见日志	Sign-in started for all enabled accounts; see the log
+已对 {0} 个目标发起签到，结果见运行日志	Sign-in started for {0} targets; see the run log
+没有可签的目标（都签过了 / 暂停 / 冻结）	No targets to sign (all signed / paused / frozen)
+设置保存失败：写盘出错，请检查存储空间	Failed to save settings: disk write error; check storage space

@@ -277,4 +277,74 @@ public final class SignLogic {
         }
         return out.isEmpty() ? null : out.toArray(new String[0]);
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // 统一签到调度：决策部分（纯逻辑，可单测）
+    //
+    // 背景：模块有 6+ 个触发源都在"想签到"（进入窗口 / 心跳检测 / 打开聊天 /
+    // 网络恢复 / 定时巡检 / 交互），去重曾分散在 4 个地方（节流 lastTryTime、
+    // pendingSigns、kLast、排队时间戳），彼此不知道对方存在 —— 导致
+    // "同一个 bot 连发两条签到"（用户实测 1.5.8：09:13:01 与 09:13:15 各发一次）。
+    //
+    // 这里把"该不该发"的判定收敛成纯函数，由调用方提供状态快照。
+    // 好处：① 所有路径共用同一套判据；② 可单测覆盖；③ 加新触发源自动获得去重。
+    // ────────────────────────────────────────────────────────────────
+
+    /** 跳过原因（用于日志归因）。 */
+    public static final int SKIP_NONE          = 0;   // 可以发
+    public static final int SKIP_ALREADY_SIGNED = 1;  // 今天已签
+    public static final int SKIP_IN_FLIGHT      = 2;  // 请求在途
+    public static final int SKIP_SENT_PENDING   = 3;  // 已发出、等结论（且在时效内）
+    public static final int SKIP_RETRY_EXHAUST  = 4;  // 今日重试已用尽
+    public static final int SKIP_BACKOFF        = 5;  // 退避中
+    public static final int SKIP_DISABLED       = 6;  // 暂停/冻结/被排除
+    public static final int SKIP_SEND_FAIL      = 7;  // 过了闸但发送过程失败（会话取不到等）
+
+    /** 参数打包，避免调用方传一长串布尔。 */
+    public static final class SignGate {
+        public boolean manual;              // 用户显式操作（绕过所有"今天已签"类限制）
+        public boolean signedToday;         // kLast == today
+        public boolean inFlight;            // pendingSigns 命中
+        public boolean sentPendingFresh;    // opt_ == today 且 sent_at 在时效内
+        public boolean retryExhausted;      // 今日重试达上限
+        public boolean inBackoff;           // now < retryAt
+        public boolean disabled;            // 暂停/冻结/被排除
+    }
+
+    /**
+     * 统一决策：返回 SKIP_* 之一。
+     *
+     * 顺序有意如此（从"最确定的拒绝"到"最不确定的"）：
+     *   已签 > 在途 > 已发出待结论 > 用尽 > 退避 > 停用
+     * manual 只豁免"已签/用尽/退避"这类**今日进度**限制，
+     * 不豁免"在途"（避免并发双发）。
+     */
+    public static int decideSign(SignGate g) {
+        if (g == null) return SKIP_NONE;
+        if (g.inFlight) return SKIP_IN_FLIGHT;                 // 并发保护，manual 也不放行
+        if (!g.manual) {
+            if (g.signedToday) return SKIP_ALREADY_SIGNED;
+            if (g.sentPendingFresh) return SKIP_SENT_PENDING;
+            if (g.retryExhausted) return SKIP_RETRY_EXHAUST;
+            if (g.inBackoff) return SKIP_BACKOFF;
+            if (g.disabled) return SKIP_DISABLED;
+        } else {
+            if (g.disabled) return SKIP_DISABLED;
+        }
+        return SKIP_NONE;
+    }
+
+    /** 跳过原因的短标签（进日志，便于统计"到底被谁拦住了"）。 */
+    public static String skipLabel(int code) {
+        switch (code) {
+            case SKIP_ALREADY_SIGNED: return "今天已签";
+            case SKIP_IN_FLIGHT:      return "请求在途";
+            case SKIP_SENT_PENDING:   return "已发出待结论";
+            case SKIP_RETRY_EXHAUST:  return "今日重试已用尽";
+            case SKIP_BACKOFF:        return "退避中";
+            case SKIP_DISABLED:       return "已停用/冻结/排除";
+            case SKIP_SEND_FAIL:      return "发送失败（会话数据取不到）";
+            default:                  return "";
+        }
+    }
 }

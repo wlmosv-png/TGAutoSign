@@ -163,6 +163,7 @@ public final class Lang {
         EN.put("已冻结", "Frozen");
         EN.put("已删除", "Deleted");
         EN.put("已加入", "Added");
+        EN.put("已发出", "Sent");
         EN.put("已忽略", "Skipped");
         EN.put("已排除", "Blocked");
         EN.put("已放弃", "Gave up");
@@ -234,6 +235,7 @@ public final class Lang {
         EN.put("未签置顶", "Unsigned first");
         EN.put("条目操作", "Entry actions");
         EN.put("检查更新", "Check updates");
+        EN.put("模拟已关", "Simulation off");
         EN.put("添加目标", "Add target");
         EN.put("清空配置", "Clear config");
         EN.put("目标列表", "Targets");
@@ -473,12 +475,14 @@ public final class Lang {
         EN.put("② 添加目标（三种方式）", "2. Add targets (3 ways)");
         EN.put("④ 用什么节奏签（设置）", "4. Signing pace (settings)");
         EN.put("✅ 签到完成 {0} 个", "✅ Signed {0}");
+        EN.put("「{0}」今天已经签过了", "\"{0}\" is already signed today");
         EN.put("保存后生效，日志不翻译。", "Takes effect after saving. Logs are not translated.");
         EN.put("如: 领取完毕,今日完成", "e.g. claimed, completed today");
         EN.put("已复制，粘到任意聊天即可", "Copied — paste it into any chat");
         EN.put("已导出到「下载」：{0}", "Exported to Downloads: {0}");
         EN.put("当前只有 1 个登录账号", "Only 1 account signed in");
         EN.put("检查更新未成功: {0}", "Update check failed: {0}");
+        EN.put("模拟已开：解析为 {0}", "Simulation on: parsed as {0}");
         EN.put("没有匹配「{0}」的日志", "No logs matching \"{0}\"");
         EN.put("生成诊断包失败: {0}", "Could not build the diagnostics bundle: {0}");
         EN.put("界面语言：English", "Language: English");
@@ -490,6 +494,7 @@ public final class Lang {
         EN.put("Telegram 标志类：", "Telegram flag classes:");
         EN.put("[更多日志] → 运行日志", "[More logs] → Logs");
         EN.put("{0}（失败 {1} 次）", "{0} (failed {1}×)");
+        EN.put("── 多账号串号排查 ──", "── Multi-account ID mixup check ──");
         EN.put("主题：{0}（保存后生效）", "Theme: {0} (takes effect after saving)");
         EN.put("今日补签 · {0} 目标", "Make-up today · {0} targets");
         EN.put("全部签到（{0} 个条目）", "Sign all ({0} items)");
@@ -512,6 +517,9 @@ public final class Lang {
         EN.put("还没连续签到，今天去签一个", "No streak yet — sign in today to start one");
         EN.put("重绑为回调（去点它的按钮）", "Rebind as callback (tap its button)");
         EN.put("🧪 {0} 失败: {1}", "🧪 {0} failed: {1}");
+        EN.put("「{0}」今日重试次数已用完", "\"{0}\" has used up today's retries");
+        EN.put("「{0}」已发出、正在等结果", "\"{0}\" sent; waiting for the result");
+        EN.put("「{0}」正在签到中，请稍候", "\"{0}\" is signing, please wait");
         EN.put("停用该账号（不参与自动签到）", "Disable this account (skip auto sign)");
         EN.put("加载更多（还有 {0} 条）", "Load more ({0} left)");
         EN.put("取消「仅测试」（恢复自动签）", "Unmark \"test only\" (resume auto-sign)");
@@ -559,6 +567,7 @@ public final class Lang {
         EN.put("$ (暂无日志消息，稍后自动出现)", "$ (no log messages yet — they will appear shortly)");
         EN.put("TGAutoSign · 检查更新", "TGAutoSign · Check for updates");
         EN.put("{0}  ·  约 {1} 分钟后", "{0}  ·  in ~{1} min");
+        EN.put("「{0}」失败退避中，稍后自动重试", "\"{0}\" is backing off after failure; will retry later");
         EN.put("使用我的自定义词（叠加在内置之上）", "Use my own words (on top of the built-ins)");
         EN.put("已复制到 {0}：新增 {1} 个", "Copied to {0}: {1} added");
         EN.put("已复制最近 {0} 行日志到剪贴板", "Copied the last {0} log lines to the clipboard");
@@ -568,6 +577,8 @@ public final class Lang {
         EN.put("签到指令，如：/qd 或 📅 签到", "Sign-in command, e.g. /qd or 📅 Check in");
         EN.put("\n\n{0} 现在有 {1} 个目标。", "\n\n{0} currently has {1} targets.");
         EN.put("▍已排除的 bot（取消勾选可解除）", "BLOCKED BOTS (uncheck to unblock)");
+        EN.put("「{0}」已停用 / 暂停 / 冻结", "\"{0}\" is disabled / paused / frozen");
+        EN.put("已对全部启用账号发起签到，结果见日志", "Sign-in started for all enabled accounts; see the log");
         EN.put("自动识别你在 bot 里发的签到文本", "Detects the sign-in text you type in bots automatically");
         EN.put("错误 {0} · 警告 {1}{2}", "Errors {0} · Warnings {1}{2}");
         EN.put("{0}：目标 {1} · 已签 {2}", "{0}: {1} targets · {2} signed");
@@ -576,6 +587,7 @@ public final class Lang {
         EN.put("如 /start；条目自带前置命令优先", "e.g. /start; the entry's own pre-commands take priority");
         EN.put("当前账号：{0}（共登录 {1} 个）", "Current account: {0} ({1} signed in)");
         EN.put("目标 {0} · 已签 {1}/{2}", "{0} targets  ·  {1}/{2} signed");
+        EN.put("设置保存失败：写盘出错，请检查存储空间", "Failed to save settings: disk write error; check storage space");
         EN.put("跟随系统：系统语言非中文时自动切英文。", "System: switches to English when your system language isn't Chinese.");
         EN.put("选择要查看日志的目标（点「全部」恢复）", "Choose a target to filter logs (tap \"All\" to reset)");
         EN.put(" · 已载入 {0} / 共 {1} 条", " · loaded {0} of {1}");
@@ -596,10 +608,12 @@ public final class Lang {
         EN.put("{0} · 原计划 {1} · 实际 {2}", "{0} · planned {1} · actual {2}");
         EN.put("原计划 {0} · 后台 1~5 分钟随机补", "Planned {0} · retries in the background within 1–5 min");
         EN.put("回调按钮读取正常（按实例字段取，不依赖类名）", "Callback buttons readable (read from instance fields, no class names needed)");
+        EN.put("已对 {0} 个目标发起签到，结果见运行日志", "Sign-in started for {0} targets; see the run log");
         EN.put("请在 Telegram 界面内使用 /jmb", "Use /jmb inside Telegram");
         EN.put("{0}：目标 {1} · 已签 {2}/{3}", "{0}: {1} targets · {2}/{3} signed");
         EN.put("✅ TGAutoSign 今日签到完成 {0}", "✅ TGAutoSign — today's check-in complete ({0})");
         EN.put("备注名（显示用，可空；如「每日签到」「查档」）", "Label (display only, optional; e.g. \"daily sign-in\")");
+        EN.put("没有可签的目标（都签过了 / 暂停 / 冻结）", "No targets to sign (all signed / paused / frozen)");
         EN.put("知道它要求的文本指令（bot ID + 指令）", "I know the text command it expects (bot ID + command)");
         EN.put("按钮定位文案（重开面板按此找回按钮，默认=标签）", "Button locator text (used to find the button again when the panel reopens; defaults to the label)");
         EN.put("(没读到按钮，请在 bot 里点一下签到按钮再试)", "(No buttons found — tap the bot's check-in button first)");
@@ -618,15 +632,18 @@ public final class Lang {
         EN.put("群 ID（形如 -1001234567890，含负号）", "Group ID (like -1001234567890, minus sign included)");
         EN.put("输入 /jmb 打开管理面板 · /help 查看教程", "Send /jmb to open the panel · /help for the guide");
         EN.put("1 = 13 天前 · 14 = 今天（绿 = 已签到）", "1 = 13 days ago · 14 = today (green = signed)");
+        EN.put("「{0}」发送失败：取不到会话数据，先进该会话发一条消息", "\"{0}\" send failed: cannot read the chat data; send a message there first");
         EN.put("下面是最近会话里的群 / 频道。点一条即可填入群 ID。", "Recent groups / channels are listed below. Tap one to fill in the group ID.");
         EN.put("去 bot 会话点一下它的签到按钮，会自动记忆并每天跟进", "Tap its check-in button in the bot chat; it will be remembered and followed daily");
         EN.put("取 InputPeer 失败，先在会话里点一下该 bot", "Could not get InputPeer — tap the bot in your chat list first");
         EN.put("前置命令序列（逗号或换行分隔，可空；发送后拉面板再点按钮）", "Pre-command sequence (comma- or newline-separated, optional; sent first to pull up the panel before tapping)");
         EN.put("去该 bot 会话点一下要绑的签到按钮，会自动作为回调新增", "Open that bot's chat and tap the sign-in button you want to bind — it will be added as a callback automatically.");
+        EN.put("真实读取：selectedAccount={0} → {1}", "Actual read: selectedAccount={0} -> {1}");
         EN.put("(暂无可调试按钮：先在目标 bot 会话里点一次它的签到按钮)", "(No buttons to debug yet — tap the target bot's check-in button first)");
         EN.put("0=按目标数自动均分；如设 30，则相邻目标至少隔 30 分钟", "0 = spread evenly by target count; set 30 to force at least 30 minutes between targets");
         EN.put("已签 {0} / {1} · 时间=已签时刻 / 待签计划时刻", "Signed {0} / {1} · time = when it was signed / when it is planned");
         EN.put("群 ID 必须是数字（负数），例：-1001234567890", "The group ID must be a number (negative), e.g. -1001234567890");
+        EN.put("越界模拟（强制 selectedAccount = 已登录数）", "Overflow simulation (force selectedAccount = logged-in count)");
         EN.put("(暂无目标，点「添加目标」，或直接点 bot 的签到按钮自动学习)", "(no targets — tap \"Add target\", or just tap the bot's sign-in button to learn it)");
         EN.put("共 {0} 个登录账号（切换 Telegram 账号即切换目标集）", "{0} accounts signed in (switching Telegram accounts switches the target set)");
         EN.put("自动判定已关闭：机器人回复不会被判成败（设置 → 判定机器人回复）", "Auto-detection is off: bot replies won't be judged (Settings → Judging bot replies)");
@@ -640,6 +657,7 @@ public final class Lang {
         EN.put("内置为通用示例模板，点选后把 bot ID 和指令改成你的签到 bot。", "These are generic example presets — after picking one, replace the bot ID and command with your own.");
         EN.put("这类按钮无法用回调模拟；文本键盘类请用「文本指令」目标（文本=按钮文字）", "This kind of button cannot be simulated with a callback. For text keyboards use a \"Text command\" target (text = the button label).");
         EN.put("匹配 bot 回复正文 + 按钮文案。用 / 包裹当正则，# 开头为注释。", "Matches the bot's reply text and button labels. Wrap in / to use a regex; lines starting with # are comments.");
+        EN.put("模拟生效：{0} 个账号 → 解析 {1}（acc{2}_，目标 {3} 个）", "Simulation active: {0} accounts -> parsed {1} (acc{2}_, {3} targets)");
         EN.put("示例模板：改成你的 bot（数字 ID 在 bot 里发 /start 可得）", "Example template: replace with your own bot (send /start to the bot to get its numeric ID)");
         EN.put("签到完成 {0} 个，{1} 个没成功（/jmb → 📄 运行日志 里有原因）", "Signed {0}, {1} failed (see /jmb → 📄 Logs for reasons)");
         EN.put("捕获模式已开启：去 bot 会话里点一次它的按钮，我会列出该消息所有按钮供你绑定", "Capture mode is on: open the bot's chat and tap its button once — all buttons in that message will be listed for binding.");
