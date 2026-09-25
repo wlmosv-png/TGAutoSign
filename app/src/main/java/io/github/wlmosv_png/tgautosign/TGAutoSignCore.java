@@ -1326,7 +1326,11 @@ public final class TGAutoSignCore {
                 synchronized (logBuffer) {
                     logBuffer.add(l);
                     while (logBuffer.size() > 1200) logBuffer.remove(0);
-                    if (lv >= LV_WARN || diskQueue.size() >= 20 || now - diskFlushAt > 5000L) {
+                    // 落盘条件（步骤 5 显式化）：
+                    //   lv >= LV_WARN           → 状态变更/错误，必定落盘（排障骨架）
+                    //   队列达 20 条 / 距上次 5s → 顺带把低级别也刷下去
+                    // 也就是说 LV_DEBUG/LV_INFO **可能永久丢失**，别把关键证据放这两级。
+                    if (shouldPersist(lv, diskQueue.size(), now - diskFlushAt)) {
                         diskQueue.add(l.flat());
                     }
                     if (diskQueue.size() >= 20 || now - diskFlushAt > 5000L) {
@@ -1339,6 +1343,11 @@ public final class TGAutoSignCore {
                     }
                 }
             } catch (Throwable ignored) {}
+        }
+
+        /** 是否应该落盘（规则见调用点注释与 guessLevel 文档）。 */
+        private static boolean shouldPersist(int lv, int queueSize, long sinceFlushMs) {
+            return lv >= LV_WARN || queueSize >= 20 || sinceFlushMs > 5000L;
         }
 
         /** 当前上下文串：账号|轮次|链路（没有的不带）。 */
@@ -1511,14 +1520,40 @@ public final class TGAutoSignCore {
 
 
         /** 旧的 jlog(String) 调用点按关键词推断级别；重要路径已改成显式 logs/logw/loge */
+        /**
+         * 按文案猜级别（仅在调用 jlog(String) 时使用）。
+         *
+         * ⚠️ 分级规则（步骤 5 固化，新增日志照此归类）：
+         *   唯一硬约束是"落盘条件"：{@code lv >= LV_WARN} 才**必定**写盘；
+         *   LV_INFO/LV_DEBUG 会被采样丢弃（队列满 20 或 5 秒刷盘才顺带写）。
+         *   而排障最需要的"状态变更"证据绝不能丢，所以它们必须是 LV_WARN。
+         *
+         *   宁可高报级别（多写几条盘）也不要漏证据 —— 日志文件不大，
+         *   而漏掉"今天签上了"的代价是用户以为功能坏了。
+         */
         private static int guessLevel(String m) {
             if (m == null) return LV_INFO;
-            if (m.contains("异常") || m.contains("失败") || m.contains("错误") || m.contains("崩溃")) return LV_ERR;
-            if (m.contains("重试") || m.contains("退避") || m.contains("限流") || m.contains("未找到")
-                    || m.contains("跳过") || m.contains("警告") || m.contains("没有")) return LV_WARN;
+            // ① 错误
+            if (m.contains("异常") || m.contains("失败") || m.contains("错误") || m.contains("崩溃")
+                    || m.contains("熔断")) return LV_ERR;
+            // ② 状态变更 —— 必须落盘（这些是排障的骨架）
+            if (m.contains("标记今日已签") || m.contains("标记已发出") || m.contains("标记为「待确认」")
+                    || m.contains("待确认") || m.contains("已计入已签") || m.contains("计入已签")
+                    || m.contains("已停止重试") || m.contains("停止重试")
+                    || m.contains("重试") || m.contains("退避") || m.contains("限流")
+                    || m.contains("跳过发送") || m.contains("跳过排期") || m.contains("跳过本次")
+                    || m.contains("未找到") || m.contains("警告") || m.contains("没有可签")
+                    || m.contains("账号实况") || m.contains("账号跟随") || m.contains("越过")) return LV_WARN;
+            // ③ 用户可感知的成功动作
             if (m.contains("成功") || m.contains("已添加") || m.contains("已保存") || m.contains("已绑定")
-                    || m.contains("已删除") || m.contains("已导入") || m.contains("已复制") || m.contains("已发送")) return LV_OK;
-            if (m.contains("[按钮]") || m.contains("dump:") || m.contains("[候选]") || m.contains("已登记")) return LV_DEBUG;
+                    || m.contains("已删除") || m.contains("已导入") || m.contains("已导出")
+                    || m.contains("已复制") || m.contains("已发送") || m.contains("已冻结") || m.contains("已解冻")
+                    || m.contains("已恢复") || m.contains("已暂停") || m.contains("已排除")) return LV_OK;
+            // ④ 内部细节（可丢）
+            if (m.contains("[按钮]") || m.contains("dump:") || m.contains("[候选]") || m.contains("已登记")
+                    || m.contains("[面板]") || m.contains("[去重]") || m.contains("节流")
+                    || m.contains("[回复判定]") || m.contains("窗口外") || m.contains("[活动]")
+                    || m.contains("[定时]") && m.contains("跳过")) return LV_DEBUG;
             return LV_INFO;
         }
 
@@ -7635,77 +7670,14 @@ public final class TGAutoSignCore {
             LinearLayout box = new LinearLayout(act);
             box.setOrientation(LinearLayout.VERTICAL);
             box.setPadding(dp(16), dp(8), dp(16), dp(8));
+            // 控件句柄容器：分区方法往里写，保存块从里读（见 SettingsRefs）
+            final SettingsRefs R = new SettingsRefs(act, box);
 
-            // ── 外观 ──
-            sectionHeader(box, act, "▍外观");
-            LinearLayout card0 = new LinearLayout(act); card0.setOrientation(LinearLayout.VERTICAL);
-            card0.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termPink(act), 0x26)));
-            card0.setPadding(dp(12), dp(10), dp(12), dp(10));
-            LinearLayout.LayoutParams c0lp = new LinearLayout.LayoutParams(-1, -2);
-            c0lp.setMargins(0, dp(2), 0, dp(6));
-            card0.setLayoutParams(c0lp);
-            final int[] tMode = { THEME_MODE };
-            final Button tbSw = mkBtn(act); tbSw.setTextSize(Theme.TS_BODY);
-            final Runnable refreshT = new Runnable() { @Override public void run() {
-                tbSw.setText(Lang.tr(tMode[0] == 0 ? "自动（跟宿主主题）" : (tMode[0] == 1 ? "始终日间（浅色）" : "始终夜间（终端风）")));
-            } };
-            tbSw.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
-                tMode[0] = (tMode[0] + 1) % 3;
-                refreshT.run();
-                Theme.mode = tMode[0];
-                toast(Lang.tf("主题：{0}（保存后生效）", Lang.tr(tMode[0] == 0 ? "自动" : (tMode[0] == 1 ? "日间" : "夜间"))));
-            } });
-            refreshT.run();
-            card0.addView(tbSw, new LinearLayout.LayoutParams(-1, -2));
-            TextView tTip = new TextView(act); tTip.setTextSize(Theme.TS_CAPTION); tTip.setTextColor(Theme.termFaint(act));
-            tTip.setTypeface(Theme.text());
-            tTip.setText(Lang.tr("自动 = 读宿主当前配色（取不到再看系统深色）；识别不准时可手动锁定，保存后重开界面生效"));
-            tTip.setPadding(dp(4), dp(4), dp(4), 0);
-            card0.addView(tTip);
+            // ── 外观 ──（实现见 buildSectionAppearance）
+            buildSectionAppearance(R);
 
-            // 界面语言：跟随系统 / 中文 / English
-            final int[] lMode = { Lang.MODE };
-            final Button lbSw = mkBtn(act); lbSw.setTextSize(Theme.TS_BODY);
-            final TextView lTip = new TextView(act); lTip.setTextSize(Theme.TS_CAPTION); lTip.setTextColor(Theme.termFaint(act)); lTip.setTypeface(Theme.text());
-            final Runnable refreshL = new Runnable() { @Override public void run() {
-                lbSw.setText(Lang.tr(lMode[0] == 0 ? "界面语言：跟随系统" : (lMode[0] == 1 ? "界面语言：中文" : "界面语言：English")));
-            } };
-            lbSw.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
-                lMode[0] = (lMode[0] + 1) % 3;
-                Lang.MODE = lMode[0];
-                refreshL.run();
-                lTip.setText(Lang.tr(lMode[0] == 0 ? "界面语言：跟随系统" : (lMode[0] == 1 ? "界面语言：中文" : "界面语言：English")));
-                toast(Lang.tf("语言：{0}（保存后生效）", Lang.tr(lMode[0] == 0 ? "跟随系统" : (lMode[0] == 1 ? "中文" : "English"))));
-            } });
-            refreshL.run();
-            LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(-1, -2);
-            llp.topMargin = dp(8);
-            card0.addView(lbSw, llp);
-            lTip.setText(Lang.tr(lMode[0] == 0 ? "跟随系统：系统语言非中文时自动切英文。" : "保存后生效，日志不翻译。"));
-            lTip.setPadding(dp(4), dp(4), dp(4), 0);
-            card0.addView(lTip);
-            box.addView(card0);
-
-            // ── 通知 ──
-            sectionHeader(box, act, "▍通知");
-            LinearLayout cardN = new LinearLayout(act); cardN.setOrientation(LinearLayout.VERTICAL);
-            cardN.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termGreen(act), 0x26)));
-            cardN.setPadding(dp(12), dp(10), dp(12), dp(10));
-            LinearLayout.LayoutParams cnlp = new LinearLayout.LayoutParams(-1, -2);
-            cnlp.setMargins(0, dp(2), 0, dp(6));
-            cardN.setLayoutParams(cnlp);
-            final android.widget.Switch nfSw = swRow(act, "签到结果通知", NOTIFY_ON);
-            nfSw.setTextSize(Theme.TS_BODY);
-            cardN.addView(nfSw);
-            final android.widget.Switch nfoSw = swRow(act, "只通知失败", NOTIFY_FAIL_ONLY);
-            nfoSw.setTextSize(Theme.TS_BODY);
-            cardN.addView(nfoSw);
-            TextView nTip = new TextView(act); nTip.setTextSize(Theme.TS_CAPTION); nTip.setTextColor(Theme.termFaint(act));
-            nTip.setTypeface(Theme.text());
-            nTip.setText(Lang.tr("每账号每天一条摘要，发到自己的「收藏夹」（不弹系统通知）。目标连续 3 天失败会额外提醒。"));
-            nTip.setPadding(dp(4), dp(4), dp(4), 0);
-            cardN.addView(nTip);
-            box.addView(cardN);
+            // ── 通知 ──（实现见 buildSectionNotify）
+            buildSectionNotify(R);
 
             // ── 签到核心 ──
             sectionHeader(box, act, "▍签到核心");
@@ -8103,9 +8075,9 @@ public final class TGAutoSignCore {
                 String oldWindow = WINDOW;
                 WINDOW = wv;
                 TIMER_ENABLED = tmSw.isChecked();
-                NOTIFY_ON = nfSw.isChecked();
-                NOTIFY_FAIL_ONLY = nfoSw.isChecked();
-                THEME_MODE = tMode[0];
+                NOTIFY_ON = R.notifySw.isChecked();
+                NOTIFY_FAIL_ONLY = R.notifyFailSw.isChecked();
+                THEME_MODE = R.themeMode;
                 Theme.mode = THEME_MODE;
                 try { android.content.SharedPreferences.Editor le = prefs.edit(); le.putInt("jmb_lang", Lang.MODE); le.apply(); } catch (Throwable ignored) {}
                 MISS_BACK = mbSw.isChecked();
@@ -10015,4 +9987,88 @@ public final class TGAutoSignCore {
             }
         }
     }
+
+    /** 设置 · 外观分区（从 showSettings 抽出，见 SettingsRefs 说明）。 */
+    private void buildSectionAppearance(final SettingsRefs R) {
+        final Activity act = R.act;
+        final LinearLayout box = R.box;
+        // ── 外观 ──
+        sectionHeader(box, act, "▍外观");
+        LinearLayout card0 = new LinearLayout(act); card0.setOrientation(LinearLayout.VERTICAL);
+        card0.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termPink(act), 0x26)));
+        card0.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout.LayoutParams c0lp = new LinearLayout.LayoutParams(-1, -2);
+        c0lp.setMargins(0, dp(2), 0, dp(6));
+        card0.setLayoutParams(c0lp);
+        R.themeMode = THEME_MODE;
+        final Button tbSw = mkBtn(act); tbSw.setTextSize(Theme.TS_BODY);
+        final Runnable refreshT = new Runnable() { @Override public void run() {
+            tbSw.setText(Lang.tr(R.themeMode == 0 ? "自动（跟宿主主题）" : (R.themeMode == 1 ? "始终日间（浅色）" : "始终夜间（终端风）")));
+        } };
+        tbSw.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
+            R.themeMode = (R.themeMode + 1) % 3;
+            refreshT.run();
+            Theme.mode = R.themeMode;
+            toast(Lang.tf("主题：{0}（保存后生效）", Lang.tr(R.themeMode == 0 ? "自动" : (R.themeMode == 1 ? "日间" : "夜间"))));
+        } });
+        refreshT.run();
+        card0.addView(tbSw, new LinearLayout.LayoutParams(-1, -2));
+        TextView tTip = new TextView(act); tTip.setTextSize(Theme.TS_CAPTION); tTip.setTextColor(Theme.termFaint(act));
+        tTip.setTypeface(Theme.text());
+        tTip.setText(Lang.tr("自动 = 读宿主当前配色（取不到再看系统深色）；识别不准时可手动锁定，保存后重开界面生效"));
+        tTip.setPadding(dp(4), dp(4), dp(4), 0);
+        card0.addView(tTip);
+
+        // 界面语言：跟随系统 / 中文 / English
+        final int[] lMode = { Lang.MODE };
+        final Button lbSw = mkBtn(act); lbSw.setTextSize(Theme.TS_BODY);
+        final TextView lTip = new TextView(act); lTip.setTextSize(Theme.TS_CAPTION); lTip.setTextColor(Theme.termFaint(act)); lTip.setTypeface(Theme.text());
+        final Runnable refreshL = new Runnable() { @Override public void run() {
+            lbSw.setText(Lang.tr(lMode[0] == 0 ? "界面语言：跟随系统" : (lMode[0] == 1 ? "界面语言：中文" : "界面语言：English")));
+        } };
+        lbSw.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
+            lMode[0] = (lMode[0] + 1) % 3;
+            Lang.MODE = lMode[0];
+            refreshL.run();
+            lTip.setText(Lang.tr(lMode[0] == 0 ? "界面语言：跟随系统" : (lMode[0] == 1 ? "界面语言：中文" : "界面语言：English")));
+            toast(Lang.tf("语言：{0}（保存后生效）", Lang.tr(lMode[0] == 0 ? "跟随系统" : (lMode[0] == 1 ? "中文" : "English"))));
+        } });
+        refreshL.run();
+        LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(-1, -2);
+        llp.topMargin = dp(8);
+        card0.addView(lbSw, llp);
+        lTip.setText(Lang.tr(lMode[0] == 0 ? "跟随系统：系统语言非中文时自动切英文。" : "保存后生效，日志不翻译。"));
+        lTip.setPadding(dp(4), dp(4), dp(4), 0);
+        card0.addView(lTip);
+        box.addView(card0);
+
+    }
+
+
+    /** 设置 · 通知分区（从 showSettings 抽出）。 */
+    private void buildSectionNotify(final SettingsRefs R) {
+        final Activity act = R.act;
+        final LinearLayout box = R.box;
+        sectionHeader(box, act, "▍通知");
+        LinearLayout cardN = new LinearLayout(act); cardN.setOrientation(LinearLayout.VERTICAL);
+        cardN.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termGreen(act), 0x26)));
+        cardN.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout.LayoutParams cnlp = new LinearLayout.LayoutParams(-1, -2);
+        cnlp.setMargins(0, dp(2), 0, dp(6));
+        cardN.setLayoutParams(cnlp);
+        R.notifySw = swRow(act, "签到结果通知", NOTIFY_ON);
+        R.notifySw.setTextSize(Theme.TS_BODY);
+        cardN.addView(R.notifySw);
+        R.notifyFailSw = swRow(act, "只通知失败", NOTIFY_FAIL_ONLY);
+        R.notifyFailSw.setTextSize(Theme.TS_BODY);
+        cardN.addView(R.notifyFailSw);
+        TextView nTip = new TextView(act); nTip.setTextSize(Theme.TS_CAPTION); nTip.setTextColor(Theme.termFaint(act));
+        nTip.setTypeface(Theme.text());
+        nTip.setText(Lang.tr("每账号每天一条摘要，发到自己的「收藏夹」（不弹系统通知）。目标连续 3 天失败会额外提醒。"));
+        nTip.setPadding(dp(4), dp(4), dp(4), 0);
+        cardN.addView(nTip);
+        box.addView(cardN);
+
+    }
+
 }
