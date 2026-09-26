@@ -117,6 +117,14 @@ You installed a debug build. Uninstall it, then install the official APK from th
 
 ## 📜 更新日志 · Changelog
 
+### v1.6.1 (124) — 2026-09-27
+
+**Fixed**: Sent state silently fell back to "pending" and re-sent (important). · Payment / menu buttons were learned as check-in targets (important). · Account crossover in network-layer learning. · Account index clamping now only normalises negatives.
+
+**New**: Two more supported clients. · Cleanup logging for mislearned entries.
+
+**Tooling**: README changelog generator now understands block-style bilingual entries. · New build gate: README changelog must stay in sync. · Pure-logic unit tests grew from 174 to 222.
+
 ### v1.6.0 (123) — 2026-09-26
 
 **Architecture**: Account isolation moved from convention to structure. · Six single-responsibility classes extracted from the core file. · Pure logic is now unit-testable. · Storage keys consolidated into a single source of truth. · Flush policy made explicit.
@@ -126,16 +134,6 @@ You installed a debug build. Uninstall it, then install the official APK from th
 **New**: Detailed version info in logs and the diagnostics bundle. · Host friendly names follow the UI language.
 
 **Tooling**: The in-repo build.sh was missing three gates. · Unit assertions grew from 115 to 174. · The wiring checker listed a method that no longer existed.
-
-### v1.5.8 (121) — 2026-09-24
-
-**Fixed**: Panels turned light — fixed · Theme logging now records every change · "Unrecognized bot reply" is no longer an error · A single tap is no longer processed multiple times · i18n gate covers the whitelist gap; 18 missing translations fixed · The gate now catches "helper used, dictionary forgotten" · Heartbeat slows down when there is nothing to do · Scheduled tasks no longer pile up or get lost · Panel-refresh trigger no longer double-sends with the heartbeat · Bot names stuck as numeric IDs after the first attempt · Common "already signed today" phrasings are recognised now · "Not a check-in result" no longer reads like a failure · Auto-detection being off is no longer silent · New installs couldn't learn from button taps (important) · Capture mode did nothing on Nagram \/ official · Deny reason was misreported · Wrong account number shown (e.g. "account 10") · Stale account prefix in logs · Windows that cross midnight actually work now · Cross-client sync no longer mixes up accounts · Applying a synced config replans the timer · Pending window now matches the failure-undo window · Cross-client sync is throttled · Build checks the debug patch tag
-
-**New**: Verdict words became switches · New "loose mode" switch
-
-**Reliability**: Pure-logic unit tests, wired into the build gate · Unrecognized bot replies are no longer silent · Exceptions on critical paths are no longer swallowed
-
-**Diagnostics**: Diagnostics now reports learning and hook state · Patch tag shown in the diagnostics header · Diagnostics now shows the raw account field
 
 [Full changelog →](https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md)
 

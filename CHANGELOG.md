@@ -1,5 +1,139 @@
 # 更新日志
 
+## 1.6.1 (124) — 2026-09-27
+
+> 承接 1.6.0 的账号隔离重构，修掉三个会在日常使用中反复咬人的问题，
+> 并把「用户报的现象」逐条落到可验证的状态机上。
+
+### 修复 · Fixed
+
+- **「已发出」会悄悄退回「待签」，导致重复签到（重要）**
+  1.6.0 新增了「已发出」状态，但它的生命周期有缺口：回调按钮目标发出后只写 `sent_at_`
+   （乐观标记），「已签」要等回复判定才写。若该 bot 把结论放在 callback answer 里、
+   **不再另发消息**，回复判定永远等不到它 —— 于是等 `sent_at_` 过了 30 分钟时效，
+   状态会**退回「待签」**，被巡检重新排期再发一遍。
+  用户感受是「明明签上了却显示已发出，过一阵又变回没签」。
+  现在改为：发出超过 10 分钟仍无结论，**转「待确认」**（而不是退回「待签」），
+  复用已有的处置条（确认已签 / 重试 / 忽略今天），用户看得到、点得动。
+  判定逻辑集中在 `SignLogic.sentPhase` / `shouldPromoteToPending`（纯函数，有单测），
+  心跳、定时巡检、界面渲染三处都会触发归位。
+
+  Sent state silently fell back to "pending" and re-sent (important).
+  1.6.0 introduced a "sent" state, but its lifecycle had a gap: a callback-button target only
+  writes the optimistic `sent_at_` marker, while "signed" waits for reply verdicts. If the bot
+  puts its verdict in the callback answer and never sends another message, the verdict never
+  arrives — so once `sent_at_` exceeded its 30-minute window the state fell back to "pending"
+  and the scheduler sent it again. Users saw "signed but showing sent, then unsigned again".
+  Now: after 10 minutes with no verdict the target moves to "needs confirmation" (instead of
+  falling back to pending) and reuses the existing action row (confirm / retry / ignore).
+  The decision lives in `SignLogic.sentPhase` / `shouldPromoteToPending` (pure, unit-tested);
+  the heartbeat, the scheduled sweep and UI rendering all trigger it.
+
+- **把支付 / 菜单按钮学成了签到目标（重要）**
+  实测模块把某 bot 的**支付按钮**学成签到目标，并且真的去点：日志里出现
+  `已添加目标 … -> [回调] pay:alipay`、`pay:wxpay`，随后
+  `[全账号] 尝试签到 … [回调] pay:alipay`。而且它会**自我繁殖** ——
+  每点一次就多一条目标（同一类回调从 2 次涨到 15 次）。
+  根因：学习入口在「宽松模式」下直接放行。宽松模式的本意是「判定词对不上也学」，
+  不该扩到「这压根不是签到按钮也学」。
+  现在加了一道**独立于宽松模式**的硬闸门：按钮 data 命中非签到前缀
+  （`pay:` / `ub_menu_` / `menu:` / `lang:` / `invite:` / `cancel` / `unbind` …）、
+  或文案命中非签到词（支付 / 充值 / 邀请 / 绑定 / 注册 / 登录 / 取消 …）、
+  或 data 形如随机 token（4–12 位纯 hex），任何模式都不学。
+  拿不准的一律放行 —— 真签到按钮被误挡会让用户完全签不了，比多学一个按钮严重得多。
+  短英文词（menu / help / back）**不**进文案黑名单：有些 bot 的签到入口就叫 "Menu"。
+  同时启动时会扫掉**已经误学**的条目（只删确定性命中前缀的，不删启发式命中的）。
+
+  Payment / menu buttons were learned as check-in targets (important).
+  The module learned a bot's payment buttons as check-in targets and actually tapped them
+  (`已添加目标 … -> [回调] pay:alipay`, then `[all accounts] check-in … [回调] pay:alipay`).
+  Worse, it multiplied: every tap added another target (same class grew from 2 to 15).
+  Root cause: the learning entry let everything through in "loose mode", whose intent is
+  "learn even when verdict words do not match", not "learn buttons that are not check-ins".
+  A hard gate now sits **outside** loose mode: button data matching a non-check-in prefix
+  (`pay:` / `ub_menu_` / `menu:` / `lang:` / `invite:` / `cancel` / `unbind` …), labels
+  containing non-check-in words (pay / recharge / invite / bind / register / login / cancel …),
+  or data looking like a random token (4–12 hex chars) are never learned, in any mode.
+  Anything ambiguous passes through — blocking a real check-in button would leave users unable
+  to sign in at all, which is far worse than learning one extra button. Short English words
+  (menu / help / back) stay out of the label list because some bots name their check-in entry
+  "Menu". On startup, already-mislearned entries are swept (only definite prefix matches).
+
+- **网络层学习的账号串号**
+  学习日志里出现「前缀=账号2、内容=acc账号1」—— 同一行两个账号。
+  异步回调里读「当前账号」正是 1.6.0 声称已杜绝的串号根因，这条路径漏了。
+  改用本次网络请求所属的账号（`hookAccount`），不再读 `currentAccount()`。
+
+  Account crossover in network-layer learning.
+  A learning log line showed "prefix = account 2, body = acc account 1" — two accounts in one
+  line. Reading the "current account" inside an async callback is exactly the root cause 1.6.0
+  claimed to have eliminated; this path was missed. It now uses the account that owns the
+  network request (`hookAccount`) instead of `currentAccount()`.
+
+- **账号索引钳制改成"只归一化负值"**
+  索引不再钳到「已登录数 - 1」。`selectedAccount` 读到的值**不等于**账号的「第几个」——
+  实测部分客户端（如 Nagram XF 登录 4 个账号）会读到 7、9，那些是**合法索引**，
+  数据就存在 `acc9_` 里。钳制会让模块读到**另一个账号**的分区。
+  真实槽位改由 `SharedConfig.activeAccounts` 读取，界面序号与真实索引分离
+  （`displayIndexOf` / `slotOfDisplayIndex`）。定时心跳与补签巡检也改为遍历真实槽位。
+
+  Account index clamping now only normalises negatives.
+  The index is no longer clamped to "signed-in count - 1". The value read from `selectedAccount`
+  is **not** the account's ordinal — on some clients (e.g. Nagram XF with four accounts) it
+  reads 7 or 9, and those are legitimate indexes whose data lives under `acc9_`. Clamping made
+  the module read **another account's** partition. Real slots now come from
+  `SharedConfig.activeAccounts`, and display ordinals are decoupled from real indexes
+  (`displayIndexOf` / `slotOfDisplayIndex`). The heartbeat and make-up sweep iterate real slots.
+
+### 新增 · New
+
+- **适配客户端新增两个**
+  `tw.nekomimi.nekogram`（Nekogram）与 `it.belloworld.mercurygram`（Mercurygram）加入
+  白名单与作用域清单，真机实测注入成功。
+
+  Two more supported clients.
+  `tw.nekomimi.nekogram` (Nekogram) and `it.belloworld.mercurygram` (Mercurygram) joined the
+  whitelist and the scope list; injection verified on real devices.
+
+- **误学条目的清理日志**
+  启动时清理已误学的目标会记一条日志，列出被删的条目与原因，用户可核对。
+
+  Cleanup logging for mislearned entries.
+  Startup cleanup of mislearned targets logs each removed entry with its reason, so users can
+  verify.
+
+### 工具 · Tooling
+
+- **README 更新日志生成器支持「中英成块对照」格式**
+  生成器此前只认内联格式 `- **中文 · English**`，而 1.6.0 的 CHANGELOG 改成了中英成块对照，
+  于是英文段整段生成不出来 —— 就算发布时跑了也白跑。现已支持两种格式，
+  并补上节名映射与超长首句截断。
+
+  README changelog generator now understands block-style bilingual entries.
+  The generator only understood the inline `- **Chinese · English**` form, while 1.6.0's
+  CHANGELOG switched to block-style bilingual entries — so the English section came out empty
+  even when the generator ran at release time. Both forms are supported now, with section-name
+  mapping and long-first-sentence truncation.
+
+- **构建新增「README 更新日志同步」门禁**
+  用生成器重算段落，与 README 里现有段落逐字节比对，不一致即构建失败。
+  把「发布时记得跑生成器」从人的记性变成构建能拦下来的事。
+
+  New build gate: README changelog must stay in sync.
+  The generator recomputes the section and compares it byte-for-byte with the one in the README;
+  a mismatch fails the build. "Remember to run the generator at release time" is now something
+  the build catches, not something a human must remember.
+
+- **纯逻辑单测 174 → 222 条**
+  新增两组：`sentPhaseLifecycle`（状态三态、时钟回拨、无时间戳的保守处理、升级条件互斥）
+  与 `nonSignButtonFilter`（实测支付/菜单/随机 token 必须拦，真签到按钮必须放行，含边界）。
+
+  Pure-logic unit tests grew from 174 to 222.
+  Two new groups: `sentPhaseLifecycle` (three-state lifecycle, clock rollback, conservative
+  handling of missing timestamps, mutually exclusive promotion conditions) and
+  `nonSignButtonFilter` (observed payment/menu/random-token buttons must be blocked; real
+  check-in buttons must pass; boundary cases included).
+
 ## 1.6.0 (123) — 2026-09-26
 
 > 累积更新：自 1.5.8 以来的全部改动合并发布，含一次账号隔离体系重构。
