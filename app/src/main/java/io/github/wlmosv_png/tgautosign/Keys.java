@@ -66,6 +66,8 @@ public final class Keys {
     public static String pendingCfm(String p, String id){ return p + "pendcfm_" + id; }
     public static String pendingNote(String p, String id){ return p + "pendcfm_note_" + id; }
     public static String sentAt(String p, String id)    { return p + "sent_at_" + id; }
+    /** bot 在 callback answer 里回过内容（但词表没识别出结果）。用于区分"有响应/无响应"。 */
+    public static String answered(String p, String id)  { return p + "answered_" + id; }
     public static String title(String p, String id)     { return p + "title_" + id; }
     public static String kind(String p, String id)      { return p + "kind_" + id; }
     public static String did(String p, String id)       { return p + "did_" + id; }
@@ -102,7 +104,7 @@ public final class Keys {
      */
     public static final String[] ENTRY_HEADS = {
             "learned_", "kind_", "did_", "data_", "hash_", "msg_id_",
-            "pre_", "loc_", "last_", "opt_", "retry_", "retry_at_", "retry_day_", "sent_at_",
+            "pre_", "loc_", "last_", "opt_", "retry_", "retry_at_", "retry_day_", "sent_at_", "answered_",
             "frozen_", "snooze_", "pendcfm_", "pendcfm_note_", "title_",
             "fail_streak_", "fail_laststamp_", "fail_alert_", "fail_date_",
             "panelstale_", "panelstale_day_", "silent_", "silent_day_", "peerkind_"
@@ -114,6 +116,6 @@ public final class Keys {
     public static final String[] ORPHAN_HEADS = {
             "frozen_", "snooze_", "pendcfm_", "pendcfm_note_",
             "title_", "fail_streak_", "fail_laststamp_", "fail_alert_", "fail_date_",
-            "sent_at_", "opt_", "panelstale_", "panelstale_day_", "silent_", "silent_day_"
+            "sent_at_", "opt_", "answered_", "panelstale_", "panelstale_day_", "silent_", "silent_day_"
     };
 }

@@ -148,7 +148,8 @@ public final class SignStateStore {
                     .remove(Keys.silentDay(prefix, id))
                     .remove(Keys.retry(prefix, id))
                     .remove(Keys.retryAt(prefix, id))
-                    .remove(Keys.retryDay(prefix, id)));
+                    .remove(Keys.retryDay(prefix, id))
+                    .remove(Keys.answered(prefix, id)));
             clearFailStreak(prefix, id);
         } catch (Throwable t) { swallow("clearPostSignState", t); }
     }

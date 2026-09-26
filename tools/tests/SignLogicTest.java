@@ -37,6 +37,7 @@ public final class SignLogicTest {
         signGate();
         accountClamp();
         permanentFail();
+        sentPhaseLifecycle();
         v160Regression();
 
         System.out.println("----------------------------------------");
@@ -251,6 +252,62 @@ public final class SignLogicTest {
      *
      * 每一个都对应一个真实修掉的 bug —— 加进来是为了让"改回去"能被门禁拦住。
      */
+    /**
+     * 「已发出」状态生命周期回归。
+     *
+     * 复现用户报的 bug（2026-09-27）：
+     *   cb 目标发出后显示「已发出」；bot 若把结论放在 callback answer 里、不再另发消息，
+     *   回复判定永远等不到 → 过了 sent_at_ 时效后状态**退回「待签」** → 被重新排期重发。
+     *   用户感受：签上了却显示已发出，过一阵又变回没签。
+     *
+     * 修法：超时后转「待确认」（而不是退回待签），并给用户处置入口。
+     */
+    private static void sentPhaseLifecycle() {
+        final long TTL = 10L * 60 * 1000;   // SILENT_TO_PENDING_MS
+        final long T0  = 1_700_000_000_000L;
+
+        // ── 没发过 -> 待签 ──
+        eq("没发过 -> NONE", SignLogic.sentPhase(false, 0L, T0, TTL), SignLogic.SENT_NONE);
+
+        // ── 刚发出 -> 已发出 ──
+        eq("刚发出 -> FRESH", SignLogic.sentPhase(true, T0, T0, TTL), SignLogic.SENT_FRESH);
+        eq("5 分钟后 -> FRESH", SignLogic.sentPhase(true, T0, T0 + 5 * 60_000L, TTL), SignLogic.SENT_FRESH);
+        eq("恰好 TTL -> FRESH（边界含等于）",
+           SignLogic.sentPhase(true, T0, T0 + TTL, TTL), SignLogic.SENT_FRESH);
+
+        // ── 超时 -> 待确认 ──
+        eq("TTL+1ms -> STALE",
+           SignLogic.sentPhase(true, T0, T0 + TTL + 1, TTL), SignLogic.SENT_STALE);
+        eq("30 分钟后 -> STALE",
+           SignLogic.sentPhase(true, T0, T0 + 30 * 60_000L, TTL), SignLogic.SENT_STALE);
+
+        // ── 取不到时间戳：保守算"还在时效内"，绝不能当过期（会重复发送） ──
+        eq("有 opt_ 无 sent_at_ -> FRESH（保守）",
+           SignLogic.sentPhase(true, 0L, T0, TTL), SignLogic.SENT_FRESH);
+        eq("有 opt_ 负时间戳 -> FRESH（保守）",
+           SignLogic.sentPhase(true, -1L, T0, TTL), SignLogic.SENT_FRESH);
+
+        // ── 时钟回拨（sent_at_ 在未来）：不当过期 ──
+        eq("sent_at_ 在未来 -> FRESH",
+           SignLogic.sentPhase(true, T0 + 60_000L, T0, TTL), SignLogic.SENT_FRESH);
+
+        // ── 升级判定：只有"发了+超时+今天没结论+没处置过"才升级 ──
+        tru("超时且未签 -> 升级",
+            SignLogic.shouldPromoteToPending(true, T0, T0 + TTL + 1, TTL, false, false, false));
+        tru("超时但今天已签 -> 不升级",
+            !SignLogic.shouldPromoteToPending(true, T0, T0 + TTL + 1, TTL, true, false, false));
+        tru("超时但已是待确认 -> 不升级",
+            !SignLogic.shouldPromoteToPending(true, T0, T0 + TTL + 1, TTL, false, true, false));
+        tru("超时但重试已用尽 -> 不升级",
+            !SignLogic.shouldPromoteToPending(true, T0, T0 + TTL + 1, TTL, false, false, true));
+        tru("还在时效内 -> 不升级",
+            !SignLogic.shouldPromoteToPending(true, T0, T0 + 60_000L, TTL, false, false, false));
+        tru("没发过 -> 不升级",
+            !SignLogic.shouldPromoteToPending(false, 0L, T0 + TTL + 1, TTL, false, false, false));
+        tru("有 opt_ 无时间戳 -> 不升级（保守）",
+            !SignLogic.shouldPromoteToPending(true, 0L, T0 + TTL + 1, TTL, false, false, false));
+    }
+
     private static void v160Regression() {
         // P1-4：跨天窗口的补签时段判定。
         // 旧实现走 windowRange()（不支持跨天，返回 null）→ start 退化成 0 →

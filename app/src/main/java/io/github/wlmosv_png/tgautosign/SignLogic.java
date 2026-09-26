@@ -411,4 +411,57 @@ public final class SignLogic {
     public static boolean accountOutOfRange(int raw, int total) {
         return raw >= 0 && total > 0 && raw >= total;
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // 「已发出」状态的生命周期（纯逻辑，可单测）
+    //
+    // 背景（用户报的 bug，2026-09-27）：
+    //   cb（回调按钮）目标发出后状态显示「已发出」。若该 bot 把结论放在
+    //   callback answer 里、不再另发消息，回复判定永远等不到 → kLast 永不写。
+    //   等 sent_at_ 过了时效（30 分钟），状态会**退回「待签」**，于是被重新
+    //   排期重发。用户感受：签上了却显示已发出，过一阵又变回没签。
+    //
+    // 修法：把「发出多久」这件事抽成纯函数，Core 只负责读写 prefs。
+    //   时效内            -> SENT_FRESH   显示「已发出」
+    //   超时但今天没结论  -> SENT_STALE   转「待确认」，给用户处置入口
+    //   没发过            -> SENT_NONE    显示「待签」
+    // ────────────────────────────────────────────────────────────────
+
+    public static final int SENT_NONE  = 0;   // 今天没发过
+    public static final int SENT_FRESH = 1;   // 已发出，还在等结论的时效内
+    public static final int SENT_STALE = 2;   // 发出过但已超时效、仍无结论
+
+    /**
+     * 判定某目标「今天发出过、且处于什么阶段」。
+     *
+     * @param sentToday  今天是否发过（有 opt_ 标记）
+     * @param sentAtMs   发出时刻（0 表示取不到）
+     * @param nowMs      当前时刻
+     * @param ttlMs      等结论的时效
+     *
+     * 注意：`sentAtMs <= 0` 且有 opt_ 标记时**保守视为还在时效内** ——
+     * 取不到时间戳多半是刚重启或跨账号写入，当成"过期"会导致重复发送。
+     * 这与 isSentPendingFresh 的既有语义保持一致。
+     */
+    public static int sentPhase(boolean sentToday, long sentAtMs, long nowMs, long ttlMs) {
+        if (!sentToday) return SENT_NONE;
+        if (sentAtMs <= 0L) return SENT_FRESH;
+        long age = nowMs - sentAtMs;
+        if (age < 0L) return SENT_FRESH;        // 时钟回拨，保守处理
+        return age > ttlMs ? SENT_STALE : SENT_FRESH;
+    }
+
+    /**
+     * 是否应当把「已发出」升级为「待确认」。
+     *
+     * 只在"发了、超时、今天还没结论、也没被处置过"时升级 ——
+     * 已签 / 已有待确认 / 已放弃 都不该被覆盖。
+     */
+    public static boolean shouldPromoteToPending(boolean sentToday, long sentAtMs,
+                                                 long nowMs, long ttlMs,
+                                                 boolean signedToday, boolean alreadyPending,
+                                                 boolean retryExhausted) {
+        if (signedToday || alreadyPending || retryExhausted) return false;
+        return sentPhase(sentToday, sentAtMs, nowMs, ttlMs) == SENT_STALE;
+    }
 }

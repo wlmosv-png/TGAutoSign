@@ -2144,7 +2144,7 @@ public final class TGAutoSignCore {
 
     /** 只有"必须挂在条目上才有意义"的键才参与孤儿清理；cfg_/daycap_ 这类账号级配置不能碰。 */
     private static final String[] ORPHAN_HEADS = {"frozen_", "snooze_", "pendcfm_", "pendcfm_note_",
-            "title_", "fail_streak_", "fail_laststamp_", "fail_alert_", "sent_at_",
+            "title_", "fail_streak_", "fail_laststamp_", "fail_alert_", "sent_at_", "answered_", "answered_",
             "panelstale_", "panelstale_day_", "silent_", "silent_day_",
             "fails_today_", "fails_day_", "permfail_"};
 
@@ -4060,6 +4060,15 @@ public final class TGAutoSignCore {
                                         noteResult(fAccount, false);
                                     } else {
                                         logd("【就地对答】" + fId + " 返回未命中词表，留给回复判定: " + clip(ans, 40));
+                                        // 记录"bot 确实回了内容"这一事实（不改判定，只留痕）。
+                                        // 用途：状态层据此区分两种「已发出」——
+                                        //   ① bot 有响应但词表没认出 → 很可能已签上，值得优先提示"确认已签"
+                                        //   ② 完全没响应（查询类/菜单类 bot）→ 本就是常态，别误导用户
+                                        try {
+                                            if (ans != null && ans.trim().length() > 0) {
+                                                prefs.edit().putString(Keys.answered(fPrefix, fId), todayStr()).apply();
+                                            }
+                                        } catch (Throwable ignored) {}
                                     }
                                 } catch (Throwable _eJV) { noteSwallowed("sendSign(judgeAnswer)", _eJV); }
                                 // 只记录，不撤销、不猜成败。
@@ -4520,6 +4529,13 @@ public final class TGAutoSignCore {
         // 「已发出、正在等结果」：以前没有这个状态，请求发出后仍显示"待签" ——
         // 用户以为没签上会反复点（被闸拦住又没有反馈）。如实区分"已发/未发"。
         if (isSentPendingFresh(prefix, id) || isPendingFresh(prefix, id)) return Lang.tr("已发出");
+        // 发出已久、sent_at_ 已过期但仍无结论：不能再显示「待签」——
+        // 那会让用户以为压根没发过，且会被巡检重新排期重发（用户实测"签了又变回没签"）。
+        // 若命中这条，就地转成「待确认」并如实显示，让用户有处置入口。
+        if (sentButStale(prefix, id)) {
+            promoteSilentToPending(prefix, id, "ui-refresh");
+            return Lang.tr("待确认");
+        }
         if (retries > 0) return Lang.tr("重试中");
         return Lang.tr("待签");
     }
@@ -6946,6 +6962,79 @@ public final class TGAutoSignCore {
         catch (Throwable _eC) { noteSwallowed("clearPendingConfirm", _eC); }
     }
 
+    // ── 「已发出」超时自动转「待确认」（2026-09-27）──
+    //
+    // 背景（用户报的 bug）：cb（回调按钮）目标发出后，状态显示「已发出」。
+    // 若该 bot 把签到结论放在 callback answer 里、不再另发消息，回复判定永远等不到它，
+    // kLast 就永远不写 → 状态一直停在「已发出」；等 PENDING_TTL_MS（30 分钟）过后
+    // sent_at_ 失效，状态又**退回「待签」**，于是被重新排期再发一次。
+    // 用户感受是「签成功了却显示已发出」，而且过一阵又变回没签。
+    //
+    // 修法：发出后超过 SILENT_TO_PENDING_MS 仍无结论，就主动转成「待确认」——
+    // 复用 v1.6.0 已有的处置条（确认已签 / 重试 / 忽略今天），用户看得到、点得动。
+    // 不替 bot 判成功（那是骗人），也不当失败（会无谓重试），只如实告知"没等到回复"。
+    private static final long SILENT_TO_PENDING_MS = 10L * 60 * 1000;
+
+    /**
+     * 今天发过、但已超出「等结论」时效，且没有结论落库 —— 即"发了但不知道结果"。
+     *
+     * 与 isSentPendingFresh 互补：那个判"还在时效内"，这个判"已过时效但发过"。
+     * 两者一起覆盖 sent_at_ 的整个生命周期，不留"既不显示已发出、也不显示待签"的缝。
+     */
+    private boolean sentButStale(String prefix, String id) {
+        try {
+            boolean sentToday = stateStore.isOptimisticToday(prefix, id);
+            long sent = prefs.getLong(prefix + "sent_at_" + id, 0L);
+            return SignLogic.sentPhase(sentToday, sent, System.currentTimeMillis(),
+                                       SILENT_TO_PENDING_MS) == SignLogic.SENT_STALE;
+        } catch (Throwable t) { return false; }
+    }
+
+    /** 已发出但久无结论 → 转「待确认」。返回是否发生了转换。 */
+    private boolean promoteSilentToPending(String prefix, String id, String why) {
+        try {
+            // 判定集中在 SignLogic.shouldPromoteToPending（纯逻辑 + 单测覆盖）
+            boolean signedToday = todayStr().equals(prefs.getString(kLast(prefix, id), ""));
+            boolean alreadyPending = prefs.getBoolean(kPendingConfirm(prefix, id), false);
+            boolean retryExhausted = prefs.getInt(kRetry(prefix, id), 0) >= RETRY_LIMIT;
+            boolean sentToday = stateStore.isOptimisticToday(prefix, id);
+            long sent = prefs.getLong(prefix + "sent_at_" + id, 0L);
+            long now = System.currentTimeMillis();
+            if (!SignLogic.shouldPromoteToPending(sentToday, sent, now, SILENT_TO_PENDING_MS,
+                                                  signedToday, alreadyPending, retryExhausted)) return false;
+            long age = sent > 0L ? (now - sent) : 0L;
+            // 条目已不存在就不必标了（避免孤儿键）
+            if (findEntryById(id, accountOfPrefix(prefix)) == null) return false;
+
+            prefs.edit()
+                 .putBoolean(kPendingConfirm(prefix, id), true)
+                 .putInt(kRetry(prefix, id), 0)
+                 .remove(kRetryAt(prefix, id))
+                 .remove(kRetryDay(prefix, id))
+                 .remove(prefix + "sent_at_" + id)
+                 .commit();
+            boolean answered = todayStr().equals(prefs.getString(Keys.answered(prefix, id), ""));
+            logw("已发出 " + (age / 60000L) + " 分钟仍无签到结论：" + id
+                 + " 标记为「待确认」（" + why + (answered ? " · bot 有响应但未识别出结果" : " · bot 未响应") + "）"
+                 + "。不计成功也不计失败，已停止自动重试；"
+                 + "请在目标列表点「确认已签 / 重试 / 忽略今天」处置");
+            return true;
+        } catch (Throwable t) { noteSwallowed("promoteSilentToPending", t); return false; }
+    }
+
+    /** 扫描某账号下所有「已发出且超时」的目标，转待确认。返回转换个数。 */
+    private int promoteSilentToPendingAll(String prefix) {
+        int n = 0;
+        try {
+            List<Map<String, Object>> list = new ArrayList<Map<String, Object>>();
+            loadTargetsInto(prefix, list);
+            for (Map<String, Object> m : list) {
+                if (promoteSilentToPending(prefix, entryId(m), "sweep")) n++;
+            }
+        } catch (Throwable t) { noteSwallowed("promoteSilentToPendingAll", t); }
+        return n;
+    }
+
     // ── 「待确认」的用户处置（v1.6.0）──
     // 背景：以前这个状态只写不读 —— 置位后除了"手动测试"没有任何清除入口，
     // 用户永远卡在「待确认」，而重试计数已被清零 → 每天照发、照超时、照标待确认（死循环）。
@@ -7390,6 +7479,12 @@ public final class TGAutoSignCore {
             if (pendingTimerFire != null) return;
             final int _schedAcc = currentAccount();
             String prefix = accountPrefix();
+            // 先做状态归位：把"已发出但久无结论"的转「待确认」，
+            // 否则它们会被 skipScheduling 当作"在途"一直跳过、或过期后被当"没发过"重发。
+            // 遍历全部槽位（不读 currentAccount）：其它账号的在途目标同样需要归位。
+            for (int _pa2 : accountSlots()) {
+                promoteSilentToPendingAll(accountPrefix(_pa2));
+            }
             ensureTimerPlan(prefix);
             List<Map<String, Object>> plan = timerPlan(prefix);
             java.util.Calendar c = java.util.Calendar.getInstance();
@@ -7550,6 +7645,14 @@ public final class TGAutoSignCore {
                     syncNow();   // 跨客户端同步：先并别家的状态，再把本机写出去
                 } catch (Throwable _e23) { noteSwallowed("scheduleTickLoop", _e23); }
                 try {
+                    // 每轮心跳顺手把"发出很久仍无结论"的目标转成「待确认」。
+                    // 放在这里而不是只放界面：用户不开面板时也能转换，
+                    // 状态不会长期停在「已发出」然后悄悄退回「待签」。
+                    try {
+                        for (int _pa : accountSlots()) {
+                            promoteSilentToPendingAll(accountPrefix(_pa));
+                        }
+                    } catch (Throwable _eP) { noteSwallowed("tick-promote", _eP); }
                     if (TIMER_ENABLED) {
                         kickSchedule();
                     } else if (inWindow()) {
