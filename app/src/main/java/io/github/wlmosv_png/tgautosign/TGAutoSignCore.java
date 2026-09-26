@@ -7556,8 +7556,10 @@ public final class TGAutoSignCore {
                         // 非定时模式：遍历所有启用账号，各有未签就签（含非当前账号）
                         int cur = currentAccount();
                         if (hasUnsignedTarget()) enqueueTry("心跳检测");
-                        int nAcc = Math.max(1, activatedAccounts());
-                        for (int i = 0; i < nAcc; i++) {
+                        // 遍历真实账号槽位，而不是 0..activatedAccounts()-1。
+                        // selectedAccount 读到的值不等于账号的「第几个」（实测 Nagram XF
+                        // 会读到 7、9），按连续区间遍历会漏掉或错位。
+                        for (int i : accountSlots()) {
                             if (i == cur) continue;
                             if (!isAccountEnabled(i)) continue;
                             if (accountHasUnsigned(i)) {
