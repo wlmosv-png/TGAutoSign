@@ -1,186 +1,369 @@
 # 更新日志
+
 ## 1.6.0 (123) — 2026-09-26
 
-> 本次为累积更新：自 1.5.8 以来的全部改动合并发布，包含一次账号隔离体系重构。
-
-### 新增 · New
-- **日志与诊断包显示详细版本信息 · Detailed version info in logs and the diagnostics bundle**
-  启动日志现在输出：模块版本名 + 版本码、宿主友好名 + 包名 + 版本名/码、CPU 架构、
-  Android 版本、注入方式（已知客户端 / 能力探测命中）、模块包名。诊断包同步补全。
-  排查「装了没生效」「版本对不上」「到底哪个包在跑」不再靠猜。
-  *Startup log now reports the module version name + code, the host's friendly name + package + version name/code, CPU ABI, Android version, the injection method (known client / capability probe) and the module package. The diagnostics bundle matches. No more guessing which package is running or which version is installed.*
-- **宿主友好名支持英文 · Host friendly names follow the UI language**
-  英文界面下输出 Official / Nagram / ExteraLess，不再在英文环境里出现中文宿主名。
-  *English UI now prints Official / Nagram / ExteraLess instead of Chinese host names.*
+> 累积更新：自 1.5.8 以来的全部改动合并发布，含一次账号隔离体系重构。
 
 ### 修复 · Fixed
-- **账号串号全链路清除（重要）· Account crossover eliminated across the whole chain (important)**
-  病根只有一个：**在异步回调或延迟任务里读「当前账号」**。回调执行时用户可能已经切到别的账号，
+
+- **账号串号：六条路径全部改为锁定账号（重要）**
+  病根只有一个 —— **在异步回调或延迟任务里读「当前账号」**。回调执行时用户可能已经切到别的账号，
   于是拿新账号去发旧账号的目标。本次把这条根因的落点全部扫清，覆盖六条路径：
   定时任务（延迟 1~5 分钟）、回调签到等面板（异步最长 8 秒）、面板事件补签（延迟 700 毫秒）、
-  网络层学习、收藏夹告警、结果归因与汇总通知。
-  全部改为**在发起时锁定账号**，执行时只用锁定值，不再读「当前账号」。
-  *One root cause: reading the "current account" inside asynchronous callbacks or delayed tasks.
-  By the time the callback runs the user may have switched accounts, so a new account sent an old
-  account's target. Every instance of that root cause has been cleared across six paths: scheduled
+  网络层学习、收藏夹告警、结果归因与汇总通知。全部改为**在发起时锁定账号**，执行时只用锁定值。
+  此前用户报告「账号1自动给只有账号2配置的 bot 发了消息」，即由此而来。
+
+  Account crossover — all six paths now pin the account.
+  There was a single root cause: reading the "current account" inside an asynchronous callback or a
+  delayed task. By the time the callback runs the user may have switched accounts, so a new account
+  sent an older account's target. This release clears every instance across six paths: scheduled
   tasks (1–5 min delay), callback sign-in waiting for a panel (up to 8 s async), panel-triggered
   make-up sign-in (700 ms delay), network-layer learning, saved-message alerts, and result
-  attribution plus summary notifications. All now capture the account when the work is initiated
-  and use only that captured value.*
-- **全账号签到时结果串到别的账号 · A full-account round reported one account's tally as another's**
-  结果统计内部读「当前账号」，于是账号 A 的成绩会显示成账号 B 的。现在改为显式传入账号，
-  并按账号独立聚合、逐账号提示与汇总通知。
-  *Result tallying read the "current account" internally, so account A's score was shown as account B's. It now takes an explicit account, aggregates per account, and reports and notifies per account.*
-- **账号配置串号：越界保护反而读到别人的分区（重要）· Out-of-range guard made the module read another account's partition (important)**
-  v1.5.8 给「当前账号」加了一道越界保护：读到超出已登录数的索引就按 0 处理。
-  出发点是好的（怕读到空分区导致「配置凭空消失」），但**前提是错的** ——
-  实测部分客户端（如 Nagram XF，登录 4 个账号）`selectedAccount` 会读到 7、9，
-  而**那些是合法索引**，账号数据就存在 `acc9_` 里。被改成 0 之后，模块去读的是
-  **另一个账号**的分区：目标、已签记录、重试退避全部错位，用户侧表现为
-  「账号1的配置变成了账号2的」。
-  现已回退：索引原值使用，不再改写到别的账号；只有负值（不可能合法）才跳过本轮操作。
-  日志与诊断包会注明「大于已登录数但按原值使用」，便于继续追查宿主行为。
-  *v1.5.8 added an out-of-range guard for the current account: an index beyond the signed-in count was coerced to 0. The intent was reasonable (avoid reading an empty partition, which looks like "config vanished"), but the assumption was wrong — on some clients (e.g. Nagram XF with 4 accounts) `selectedAccount` reads 7 or 9, and those are legitimate indexes whose data lives under `acc9_`. Coercing to 0 made the module read **another account's** partition, so targets, signed-state and backoff all landed on the wrong account — reported as "account 1's config turned into account 2's". Reverted: the index is used as-is, never rewritten to a different account; only negative values (which cannot be valid) skip the round. The log and diagnostics bundle now note "greater than signed-in count, used as-is" so the host's behaviour stays traceable.*
-- **「待确认」池按账号隔离，并自动迁移旧数据 · The "pending" pool is now per-account, with automatic migration**
+  attribution plus summary notifications. All of them now capture the account when the work is
+  initiated and use only that captured value. This is what produced the report "account 1
+  automatically messaged a bot that only exists on account 2".
+
+- **越界保护反而读到别人的分区（重要）**
+  v1.5.8 加了一道保护：读到超出已登录数的索引就按 0 处理。出发点是好的，但**前提是错的** ——
+  实测部分客户端（如 Nagram XF 登录 4 个账号）`selectedAccount` 会读到 7、9，
+  **那些是合法索引**，数据就存在 `acc9_` 里。被改成 0 之后，模块读的是**另一个账号**的分区：
+  目标、已签记录、重试退避全部错位，表现为「账号1的配置变成了账号2的」。
+  现已回退：索引原值使用，只有负值（不可能合法）才跳过本轮。
+
+  Out-of-range guard read another account's partition (important).
+  v1.5.8 added a guard that coerced an index beyond the signed-in count to 0. The intent was
+  reasonable, but the assumption was wrong: on some clients (e.g. Nagram XF with four accounts)
+  selectedAccount reads 7 or 9, and those are legitimate indexes whose data lives under acc9_.
+  Coercing to 0 made the module read another account's partition, misplacing targets, signed state
+  and backoff — reported as "account 1's config turned into account 2's". Reverted: the index is
+  used as-is, and only negative values (which cannot be valid) skip the round.
+
+- **失败目标被反复重签（重要）**
+  机器人连回两条消息是常态，两条消息的判定结果会互相抵消：第一条「正在签到,请稍后…」
+  被宽松模式当作成功并把重试计数清零，第二条「请先关注」判失败只把计数加到 1 ——
+  计数永远在 0 和 1 之间震荡，涨不到上限，于是每一轮都被重新选中。**实测有目标一天被签了 8 次。**
+  现在加两道熔断：**确定性失败词**（请先关注 / 活动已结束 / 已过期 等）命中即当日停止；
+  其它失败用**当天独立计数**（不受"成功清零"影响）累计 3 次后同样当日停止。跨天自动恢复。
+
+  Failed targets were signed over and over (important).
+  Robots commonly send two replies whose verdicts cancel each other out: the first ("signing in,
+  please wait") is treated as success by loose mode and resets the retry counter, while the second
+  ("please follow first") counts as a failure and bumps it to 1 — so the counter oscillates between
+  0 and 1, never reaching the cap, and the target is re-selected every round. One target was signed
+  8 times in a single day. Two circuit breakers are now in place: permanent-failure phrases
+  (follow-first / event ended / expired) stop the target for the day immediately, and other failures
+  accumulate in a day-scoped counter that is immune to the success reset. Both reset automatically
+  the next day.
+
+- **同一账号重复排期发送（重要）**
+  排下一次定时任务时只检查了「内存中是否正在发送」，漏了「已发出但还没等到结论」。
+  内存状态在进程重启后是空的，于是重启后一遇网络恢复之类的触发，就会把同一个目标再排一次 ——
+  现象是同一账号同一目标被连发两条。现在两半一起查，并统一到一个判断入口，避免以后再分叉。
+
+  Duplicate scheduling within one account (important).
+  Scheduling the next timed task only checked "is a send in flight in memory", missing the other
+  half: "already sent, still awaiting a verdict". In-memory state is empty after a process restart,
+  so the first trigger — such as network recovery — queued the same target again, sending twice to
+  the same account and target. Both halves are now checked together behind a single entry point so
+  they cannot diverge again.
+
+- **明明签到成功，却被判失败并退回「退避中」（重要）**
+  回调按钮签到分两步。当前置命令已经完成签到、而第二步的按钮因为**消息已更新**被 Telegram 拒绝
+  （`MESSAGE_ID_INVALID`）时，模块把「第二步失败」当成了「签到整体失败」：先撤销已签标记，
+  再排一次退避重试。用户侧看到的是**已经签过了，状态却是「退避中」**，10 分钟后又白跑一次。
+  `MESSAGE_ID_INVALID` 只是"按钮过期了"，**不代表签到失败**。现已改为：前置命令确认发送成功时，
+  按钮过期不再撤销已签，只清掉退避状态。
+
+  A successful check-in was revoked and shown as "backoff" (important).
+  Callback sign-in runs in two steps. When the pre-command had already completed the check-in but
+  the second step's button was rejected by Telegram because the message had been updated
+  (MESSAGE_ID_INVALID), the module treated "step two failed" as "the whole check-in failed": it
+  revoked the signed marker and scheduled a backoff retry. Users saw a completed check-in displayed
+  as "backoff", followed by another pointless attempt ten minutes later. MESSAGE_ID_INVALID only
+  means the button is stale, not that the check-in failed. Now, when a pre-command was accepted, a
+  stale button no longer revokes the sign-in — only the backoff state is cleared.
+
+- **「等面板」永远超时走兜底（重要）**
+  回调签到靠"面板刷新事件"驱动。但该事件的唯一入口开头有一句"启动后 30 秒未就绪就直接返回"，
+  于是**启动窗口内面板事件被整条丢弃** → 等面板必然超时 → 只能走 8 秒兜底 msg_id，
+  而兜底用的旧按钮往往已过期 → 报 `MESSAGE_ID_INVALID`。用户看到的是
+  **机器人明明秒回，模块却一直走兜底**。现在未就绪只限制"模块主动发起的动作"，不再丢被动事件。
+
+  Panel waiting always timed out into the fallback (important).
+  Callback sign-in is driven by panel-refresh events, but the only entry point for those events
+  began with "return if not ready for the first 30 seconds" — so during that window the events were
+  dropped entirely, waiting always timed out, and the flow fell back to an 8-second stale msg_id
+  that reported MESSAGE_ID_INVALID. Users saw the bot reply instantly while the module kept falling
+  back. Not-ready now only throttles actions the module initiates, never passive events.
+
+- **同类问题全量清查：还有三处会把成功当失败**
+  同一个病根还有三处，全部无条件撤销了已签：① bot 不回结果（`BOT_RESPONSE_TIMEOUT`）——
+  有些机器人本来就不回复签到结论；② 服务器限流（`FLOOD_WAIT`）—— 限流只是"稍后再试"，
+  不代表没签上；③ 其他请求层错误 —— 请求已经成功发出并标了已签，后续报错不足以否定它。
+  现在统一用「是否已乐观标记为已签」来区分：已发出且标记成功时，后续第二步失败只清退避状态。
+
+  Same class of bug, full sweep: three more places treated success as failure.
+  Three more instances of the same root cause unconditionally revoked the sign-in: (1) the bot never
+  replying (BOT_RESPONSE_TIMEOUT) — some robots simply never send a verdict; (2) server rate
+  limiting (FLOOD_WAIT) — that only means "try again later", not that the check-in failed; (3) other
+  request-layer errors — the request had already been sent and marked. All now share one rule: if
+  the send succeeded and was marked, a later second-step failure clears only the backoff state.
+
+- **「待确认」池按账号隔离，并自动迁移旧数据**
   待确认池原来是一个全局键，多个账号的候选目标混在一起，点「加入」还可能加到错的账号。
   现按账号分键存储，并提供一次性迁移：旧数据搬到账号 1，**若账号 1 已有内容则保留现有、不覆盖**，
   迁移完成后删除旧键。整个过程幂等，只执行一次。
-  *The pending pool used to be one global key, mixing candidates from every account, so tapping "Add" could file a target under the wrong one. It is now stored per account, with a one-time migration: legacy data moves to account 1, existing account-1 content wins (never overwritten), and the old key is removed afterwards. The whole step is idempotent and runs once.*
-- **失败目标被反复重签（重要）· Failed targets were signed over and over (important)**
-  机器人连回两条消息是常态，而两条消息的判定结果会互相抵消：第一条「正在签到,请稍后…」
-  被宽松模式当作成功并把重试计数清零，第二条「请先关注」判失败只把计数加到 1 ——
-  计数永远在 0 和 1 之间震荡，涨不到上限，于是每一轮都被重新选中。实测有目标一天被签了 8 次。
-  现在加两道熔断：**确定性失败词**（请先关注 / 活动已结束 / 已过期 等，重试不会改变结果）
-  命中即当日停止；其它失败用**当天独立计数**（不受"成功清零"影响）累计 3 次后同样当日停止。
-  两者都只对当天生效，跨天自动恢复。
-  *Robots commonly send two replies, and their verdicts cancel each other out: the first ("signing in, please wait") is treated as success by loose mode and resets the retry counter, while the second ("please follow first") counts as a failure that bumps it to 1 — so the counter oscillates between 0 and 1, never reaching the cap, and the target is re-selected every round. One target was signed 8 times in a day. Two circuit breakers are now in place: permanent-failure phrases (follow-first / event ended / expired — retrying cannot change the outcome) stop the target for the day immediately, and other failures accumulate in a day-scoped counter that is immune to the success reset. Both apply to the current day only and reset automatically.*
-- **同一账号重复排期发送（重要）· Duplicate scheduling within one account (important)**
-  排下一次定时任务时只检查了「内存中是否正在发送」，漏了「已发出但还没等到结论」这一半。
-  内存状态在进程重启后是空的，于是重启后一遇到网络恢复之类的触发，就会把同一个目标再排一次 ——
-  现象是同一账号同一目标被连发两条。现在两半一起查，并统一到一个判断入口，避免以后再分叉。
-  *Scheduling the next timed task only checked "is a send in flight in memory", missing the other half: "already sent, still awaiting a verdict". In-memory state is empty after a process restart, so the first trigger (such as network recovery) would queue the same target again — the same account and target getting two sends. Both halves are now checked together behind a single entry point so they cannot diverge again.*
-- **日志里的链路编号会跨账号重复 · Chain ids in the log could repeat across accounts**
-  链路编号原本是全局随机数，多账号并行时会撞号 —— 同一个编号横跨两个账号，
-  排查时极易误判成"串号"。现在编号带账号前缀，一眼可辨。
-  *Chain ids were global random numbers and collided when accounts ran in parallel: one id spanning two accounts, easily mistaken for account crossover while troubleshooting. The id now carries an account prefix.*
-- **清空配置会误删账号级待确认池 · Clearing config wrongly deleted the per-account pending pool**
-  清空配置的保留名单是精确字符串匹配，表达不了 `acc<N>_` 这种不定后缀，
-  于是旧的全局池被保留、新的账号级池反而被删掉 —— 同一份数据换个键名后行为不一致。
-  现在单独判定并保留。
-  *The keep-list used exact string matching, which cannot express the variable `acc<N>_` prefix, so the legacy global pool was kept while the new per-account pool was deleted — the same data behaved differently under a new key name. It is now matched and kept explicitly.*
-- **同类问题全量清查：还有三处会把成功当失败 · Same class of bug, full sweep: three more places treated success as failure**
-  清查后发现**同一个病根还有三处**，全部无条件撤销了已签：
-  ① bot 不回结果（`BOT_RESPONSE_TIMEOUT`）—— 有些机器人本来就不回复签到结论；
-  ② 服务器限流（`FLOOD_WAIT`）—— 限流只是"稍后再试"，不代表没签上；
-  ③ 其他请求层错误 —— 请求已经成功发出并标了已签，后续报错不足以否定它。
-  现在统一用「是否已乐观标记为已签」来区分：已发出且标记成功时，后续第二步失败**只清退避状态、保留已签**。
-  *A full sweep found three more places with the same root cause, each unconditionally revoking the sign-in: (1) the bot never replying (BOT_RESPONSE_TIMEOUT) — some robots simply never answer with a verdict; (2) server rate limiting (FLOOD_WAIT) — that only means "try again later", not that the check-in failed; (3) other request-layer errors — the request had already been sent and marked. All now share one rule: if the send succeeded and was marked, a later second-step failure clears only the backoff state and keeps the sign-in.*
-- **「等面板」永远超时走兜底（重要）· Panel waiting always timed out into the fallback (important)**
-  回调签到靠"面板刷新事件"驱动：前置命令发出后等面板，面板一到就立即点按钮。
-  但面板事件的唯一入口 `onUpdateProcessed` 开头有一句"启动后 30 秒未就绪就直接返回"，
-  于是**启动窗口内面板事件被整条丢弃** → 等面板必然超时 → 只能走 8 秒兜底 msg_id，
-  而兜底用的旧按钮往往已过期 → 报 `MESSAGE_ID_INVALID`。
-  用户看到的现象是：**机器人明明秒回，模块却一直走兜底**。
-  现在未就绪只限制"模块主动发起的动作"，不再丢被动事件（面板缓存与回复判定都是幂等的，早处理无害）。
-  *Callback sign-in is driven by panel-refresh events: wait for the panel after sending the pre-command, then tap the button as soon as it arrives. But the only entry point for those events, onUpdateProcessed, began with "return if not ready for the first 30 seconds", so during that window the events were dropped entirely: waiting always timed out, forcing the 8-second fallback path with a stale msg_id, which then reported MESSAGE_ID_INVALID. Users saw the bot reply instantly while the module kept falling back. Not-ready now only throttles actions the module initiates, never passive events (panel caching and reply verdicts are idempotent, so handling them early is harmless).*
-- **明明签到成功，却被判失败并退回「退避中」（重要）· A successful check-in was revoked and shown as "backoff" (important)**
-  回调按钮签到分两步：先发前置命令，再点按钮。当前置命令已经完成签到、
-  而第二步的按钮因为**消息已更新**被 Telegram 拒绝（`MESSAGE_ID_INVALID`）时，
-  模块把「第二步失败」当成了「签到整体失败」—— 先撤销已签标记，再排一次退避重试。
-  用户侧看到的是：**已经签过了，状态却是「退避中」**，10 分钟后又白跑一次。
-  关键点是：`MESSAGE_ID_INVALID` 只是"你点的按钮过期了"，**不代表签到失败**，
-  而前置命令往往已经把签到做完（实测社工类机器人：`/start` 即完成签到，按钮只是菜单）。
-  现在有前置命令且已确认发送成功时，按钮过期不再撤销已签，只清掉退避状态。
-  *Callback sign-in runs in two steps: send the pre-command, then press the button. When the pre-command had already completed the check-in but the second step was rejected by Telegram because the message had been updated (MESSAGE_ID_INVALID), the module treated "step two failed" as "the whole check-in failed": it revoked the signed marker and scheduled a backoff retry. Users saw a successful check-in displayed as "backoff", followed by another pointless attempt ten minutes later. MESSAGE_ID_INVALID only means the button is stale, not that the check-in failed, and the pre-command usually finished the job already (measured on support-bot style robots, where /start performs the check-in and the buttons are just a menu). When a pre-command exists and was accepted, a stale button no longer revokes the sign-in; only the backoff state is cleared.*
-- **按钮反复过期导致无限重试 · Stale buttons caused an endless retry loop**
-  有些机器人的按钮随消息变化，每次重新拉取面板都会换一套 msg_id —— 模拟点击永远追不上。
-  模块会一直"拉新面板 → 点击 → 过期 → 再拉"，一天白跑十几次。现在同一目标连续 3 次过期即熔断，
-  日志直接给出出路（把这条改成「文本指令」目标，直接发指令而不是点按钮）。
-  *Some robots regenerate their buttons with each message, so every panel refresh yields a new msg_id and a simulated tap can never keep up. The module kept pulling a fresh panel, tapping, failing and pulling again, wasting a dozen attempts a day. Three consecutive stale results now trip a circuit breaker, and the log states the way out (convert that target to a text-command target that sends the command directly instead of tapping a button).*
-- **不回结果的机器人每天白等超时 · Silent robots made the module wait out a timeout every day**
-  查询类、菜单类机器人本来就不回复签到结论，模块仍会为它们等满超时。
-  现在连续 3 次无响应即停止自动重试并标记「待确认」，交由用户处置。
-  *Query and menu robots never reply with a check-in verdict, yet the module still waited out the timeout for them. After three consecutive silent results it now stops retrying and marks the target "pending" for the user to decide.*
-- **「待确认」的「重试」按钮用错账号 · The "pending" retry button used the wrong account**
-  *The retry button in the pending list used the current account instead of the target's own.*
-- **「待确认」是个死状态：看得到、点不动（重要）· "Pending" was a dead state: visible but un-actionable (important)**
-  这个状态以前只写不读 —— 置位后除了"手动测试"没有任何清除入口，
-  用户永远卡在「待确认」，而重试计数已被清零 → 每天照发、照超时、照标待确认（死循环）。
-  现在给出三个明确动作（重试 / 忽略 / 删除），并把用户的选择记下来。
-  *The state used to be write-only: once set there was no way to clear it apart from a manual test, so users were stuck on "pending" forever while the retry counter had already been reset — sending, timing out and re-marking every day. Three explicit actions are now offered (retry / ignore / delete) and the user's choice is recorded.*
-- **回复判定用错账号（重要）· Reply verdict could land on the wrong account (important)**
-  回复判定在异步回调里执行，读的是「当前账号」的目标列表。
-  切过账号之后，机器人发来的结论会被记到别的账号上。
-  现在按消息所属账号取目标列表。
-  *Reply verdicts ran in an async callback and read the current account's target list. After an account switch, a bot's verdict was recorded against the wrong account. The list is now taken from the account the message belongs to.*
-- **清空配置会残留状态，导致重新添加的 bot 状态复活（重要）· Clearing config left state behind, resurrecting it on re-add (important)**
+
+  The "pending" pool is now per-account, with automatic migration.
+  The pending pool used to be one global key, mixing candidates from every account, so tapping
+  "Add" could file a target under the wrong one. It is now stored per account, with a one-time
+  migration: legacy data moves to account 1, existing account-1 content wins (never overwritten),
+  and the old key is removed afterwards. The whole step is idempotent and runs once.
+
+- **「待确认」是个死状态：看得到、点不动（重要）**
+  这个状态以前只写不读 —— 置位后除了"手动测试"没有任何清除入口，用户永远卡在「待确认」，
+  而重试计数已被清零 → 每天照发、照超时、照标待确认（死循环）。现在给出三个明确动作
+  （重试 / 忽略 / 删除），并把用户的选择记下来。
+
+  "Pending" was a dead state: visible but un-actionable (important).
+  The state used to be write-only: once set there was no way to clear it apart from a manual test,
+  so users were stuck on "pending" forever while the retry counter had already been reset —
+  sending, timing out and re-marking every day. Three explicit actions are now offered (retry /
+  ignore / delete) and the user's choice is recorded.
+
+- **回复判定用错账号（重要）**
+  回复判定在异步回调里执行，读的是「当前账号」的目标列表。切过账号之后，
+  机器人发来的结论会被记到别的账号上。现在按消息所属账号取目标列表。
+
+  Reply verdict could land on the wrong account (important).
+  Reply verdicts ran in an async callback and read the current account's target list. After an
+  account switch, a bot's verdict was recorded against the wrong account. The list is now taken
+  from the account the message belongs to.
+
+- **全账号签到时结果串到别的账号**
+  结果统计内部读「当前账号」，于是账号 A 的成绩会显示成账号 B 的。现在改为显式传入账号，
+  并按账号独立聚合、逐账号提示与汇总通知。
+
+  A full-account round reported one account's tally as another's.
+  Result tallying read the "current account" internally, so account A's score was shown as account
+  B's. It now takes an explicit account, aggregates per account, and reports and notifies per
+  account.
+
+- **清空配置会残留状态，导致重新添加的 bot 状态复活（重要）**
   条目 id 按 `<会话>_<序号>` 生成，清空配置后重新添加同一个 bot 会拿到同一个 id，
-  残留的冻结 / 暂停 / 已放弃状态被新条目直接继承（表现为"重新添加了但它就是不签"）。
+  残留的冻结 / 暂停 / 已放弃状态被新条目直接继承，表现为"重新添加了但它就是不签"。
   现在补齐了 v1.3.0 之后新增的全部状态键前缀，并增加孤儿状态键清理。
-  *Entry ids are generated as `<dialog>_<seq>`, so re-adding the same bot after clearing config yields the same id and inherits leftover frozen / snoozed / given-up state (it "just won't sign in" after re-adding). All state-key prefixes added since v1.3.0 are now covered, plus orphan-state cleanup.*
-- **冷启动 30 秒内点 bot 按钮毫无反应 · Tapping a bot button within 30 s of a cold start did nothing**
-  未就绪窗口同样挡掉了主动学习。现在按钮学习不受该窗口限制。
-  *The not-ready window also blocked active learning. Button learning is no longer gated by it.*
-- **跨天窗口下补签时段变成全天 · The make-up window became all day when it crossed midnight**
-  补签时段跨天时区间判断失效，导致全天都算补签时段。
-  *The make-up window's range check failed when it crossed midnight, making the whole day count as make-up time.*
-- **跨端同步的配置在本机不生效 · Configs synced from another client did not apply locally**
-  *Configs synced from another client were not applied on this device.*
-- **连点多个 bot 按钮时只有第一个能被学到 · Only the first of several bot buttons was learned**
-  *Tapping several bot buttons in a row only learned the first one.*
-- **打开「运行日志」会卡顿 · Opening "Logs" stuttered**
+
+  Clearing config left state behind, resurrecting it on re-add (important).
+  Entry ids are generated as `<dialog>_<seq>`, so re-adding the same bot after clearing config
+  yields the same id and inherits leftover frozen / snoozed / given-up state — it "just won't sign
+  in" after re-adding. All state-key prefixes added since v1.3.0 are now covered, plus orphan-state
+  cleanup.
+
+- **清空配置会误删账号级待确认池**
+  清空配置的保留名单是精确字符串匹配，表达不了 `acc<N>_` 这种不定后缀，于是旧的全局池被保留、
+  新的账号级池反而被删掉 —— 同一份数据换个键名后行为不一致。现在单独判定并保留。
+
+  Clearing config wrongly deleted the per-account pending pool.
+  The keep-list used exact string matching, which cannot express the variable `acc<N>_` prefix, so
+  the legacy global pool was kept while the new per-account pool was deleted — the same data
+  behaved differently under a new key name. It is now matched and kept explicitly.
+
+- **按钮反复过期导致无限重试**
+  有些机器人的按钮随消息变化，每次重新拉取面板都会换一套 msg_id，模拟点击永远追不上。
+  模块会一直"拉新面板 → 点击 → 过期 → 再拉"，一天白跑十几次。现在同一目标连续 3 次过期即熔断，
+  日志直接给出出路（把这条改成「文本指令」目标）。
+
+  Stale buttons caused an endless retry loop.
+  Some robots regenerate their buttons with each message, so every panel refresh yields a new msg_id
+  and a simulated tap can never keep up. The module kept pulling a fresh panel, tapping, failing and
+  pulling again, wasting a dozen attempts a day. Three consecutive stale results now trip a circuit
+  breaker, and the log states the way out: convert that target to a text-command target.
+
+- **不回结果的机器人每天白等超时**
+  查询类、菜单类机器人本来就不回复签到结论，模块仍会为它们等满超时。现在连续 3 次无响应
+  即停止自动重试并标记「待确认」，交由用户处置。
+
+  Silent robots made the module wait out a timeout every day.
+  Query and menu robots never reply with a check-in verdict, yet the module still waited out the
+  timeout for them. After three consecutive silent results it now stops retrying and marks the
+  target "pending" for the user to decide.
+
+- **设置界面保存时闪退**
+  重构设置界面时抽出了控件容器，其中两个控件的引用只改了读取处、没改定义处，点保存时空指针。
+  已修正，并对全部控件做了一次读写配对自查。
+
+  Crash when saving in the settings screen.
+  The settings refactor extracted a control container, but two controls had their reads updated
+  while their definitions were not, causing a null-pointer crash on save. Fixed, plus a full
+  read/write pairing audit of every control.
+
+- **打开「运行日志」会卡顿**
   日志渲染在主线程逐行构建，长日志会明显卡顿。现在限制渲染量并改为异步读取。
-  *Log rendering built every line on the main thread, so long logs stuttered. The amount rendered is now bounded and reading is asynchronous.*
-- **热重载后两个实例并行跑 · Two instances ran in parallel after a hot reload**
-  *A hot reload could leave two module instances running side by side.*
-- **启动日志里的数字标题会渲染成错误字形 · Numeric headings rendered as wrong glyphs in the startup log**
-  *Numeric headings in the startup log rendered with the wrong glyphs.*
-- **花体字有豆腐块 · Decorative text showed tofu boxes**
-  *Decorative text rendered as tofu boxes on some devices.*
-- **启动日志只落盘第一行 · Only the first startup line reached the log file**
+
+  Opening "Logs" stuttered.
+  Log rendering built every line on the main thread, so long logs stuttered. The amount rendered is
+  now bounded and reading is asynchronous.
+
+- **启动日志只落盘第一行**
   日志为省电做了落盘采样（INFO 连续输出只在首次落盘），而启动那几行几乎同一毫秒写出，
-  结果只有首行进了文件，后面几行在「运行日志」里看得到、导出文件里却没有。
-  现已新增绕过采样的强制落盘，启动信息完整入档。
-  *Log writing is sampled to save power (consecutive INFO lines only flush on the first), and the startup lines are emitted within the same millisecond — so only the first reached the file; the rest appeared in the in-app log but not in the exported file. A sampling-bypassing forced flush now writes them all.*
-- **设置界面保存时闪退 · Crash when saving in the settings screen**
-  重构设置界面时抽出了控件容器，其中两个控件的引用只改了读取处、没改定义处，
-  点保存时空指针。已修正，并对全部控件做了一次读写配对自查。
-  *The settings refactor extracted a control container, but two controls had their reads updated while their definitions were not, causing a null-pointer crash on save. Fixed, plus a full read/write pairing audit of every control.*
+  结果只有首行进了文件。现已新增绕过采样的强制落盘，启动信息完整入档。
+
+  Only the first startup line reached the log file.
+  Log writing is sampled to save power (consecutive INFO lines only flush on the first), and the
+  startup lines are emitted within the same millisecond — so only the first reached the file. A
+  sampling-bypassing forced flush now writes them all.
+
+- **冷启动 30 秒内点 bot 按钮毫无反应**
+  未就绪窗口同样挡掉了主动学习。现在按钮学习不受该窗口限制。
+
+  Tapping a bot button within 30 s of a cold start did nothing.
+  The not-ready window also blocked active learning. Button learning is no longer gated by it.
+
+- **跨天窗口下补签时段变成全天**
+  补签时段跨天时区间判断失效，导致全天都算补签时段。
+
+  The make-up window became all day when it crossed midnight.
+  The make-up window's range check failed when it crossed midnight, making the whole day count as
+  make-up time.
+
+- **跨端同步的配置在本机不生效**
+  从其他客户端同步过来的配置没有被应用。
+
+  Configs synced from another client did not apply locally.
+  Configs synced from another client were not applied on this device.
+
+- **连点多个 bot 按钮时只有第一个能被学到**
+  连续点击多个按钮时，只有第一个会被记住。
+
+  Only the first of several bot buttons was learned.
+  Tapping several bot buttons in a row only learned the first one.
+
+- **日志里的链路编号会跨账号重复**
+  链路编号原本是全局随机数，多账号并行时会撞号，同一个编号横跨两个账号，
+  排查时极易误判成"串号"。现在编号带账号前缀，一眼可辨。
+
+  Chain ids in the log could repeat across accounts.
+  Chain ids were global random numbers and collided when accounts ran in parallel: one id spanning
+  two accounts, easily mistaken for account crossover while troubleshooting. The id now carries an
+  account prefix.
+
+- **热重载后两个实例并行跑**
+  热重载可能留下两个模块实例同时运行。
+
+  Two instances ran in parallel after a hot reload.
+  A hot reload could leave two module instances running side by side.
+
+- **启动日志里的数字标题渲染成错误字形**
+  启动日志中的数字标题会显示成错误的字形。
+
+  Numeric headings rendered as wrong glyphs in the startup log.
+  Numeric headings in the startup log rendered with the wrong glyphs.
+
+- **花体字有豆腐块**
+  部分设备上装饰性文字会显示成方框。
+
+  Decorative text showed tofu boxes.
+  Decorative text rendered as tofu boxes on some devices.
+
+- **「待确认」的「重试」按钮用错账号**
+  待确认列表里的重试按钮读的是当前账号，而不是该目标所属的账号。
+
+  The "pending" retry button used the wrong account.
+  The retry button in the pending list used the current account instead of the target's own.
+
+### 新增 · New
+
+- **日志与诊断包显示详细版本信息**
+  启动日志现在输出：模块版本名 + 版本码、宿主友好名 + 包名 + 版本名/码、CPU 架构、
+  Android 版本、注入方式（已知客户端 / 能力探测命中）、模块包名。诊断包同步补全。
+  排查「装了没生效」「版本对不上」「到底哪个包在跑」不再靠猜。
+
+  Detailed version info in logs and the diagnostics bundle.
+  The startup log now reports the module version name and code, the host's friendly name, package
+  and version name/code, the CPU ABI, the Android version, the injection method (known client or
+  capability probe) and the module package. The diagnostics bundle matches. No more guessing
+  whether the module loaded, which version is installed, or which package is running.
+
+- **宿主友好名支持英文**
+  英文界面下输出 Official / Nagram / ExteraLess，不再在英文环境里出现中文宿主名。
+
+  Host friendly names follow the UI language.
+  English UI now prints Official / Nagram / ExteraLess instead of Chinese host names.
 
 ### 内部重构 · Internal refactor
+
 > 无用户可见行为变化，仅提升可维护性与可测试性。
 
-- **键名收敛到唯一真相源（`Keys.java`）· Storage keys consolidated into a single source of truth**
-  键生成函数原来散落在核心文件的 4 处，改一个键名要 grep 全文且极易漏
-  （历史事故：日志名从 `run.log` 改为 `run-YYYYMMDD.log` 时漏改 4 处，静默失效）。
-  *Key-building helpers were scattered across four places in the core file; renaming one key meant grepping the whole file and was easy to miss (a past incident: the log file name change from run.log to run-YYYYMMDD.log missed four call sites and failed silently).*
-- **账号上下文快照（`AccountManager.java`）· Account context snapshot**
+- **账号上下文快照（`AccountManager.java`）**
   核心文件里有 75 处 `currentAccount()`、67 处无参 `accountPrefix()`，全部读宿主静态字段。
   现在统一走不可变 `Ctx`，延迟任务只认快照，从结构上消除串号。
-  *The core file had 75 calls to currentAccount() and 67 to the no-arg accountPrefix(), all reading a host static field. They now go through an immutable Ctx, and delayed work only honours the snapshot — removing account crossover structurally.*
-- **持久化访问层（`PrefsStore.java`）· Persistence access layer**
-  原来有 244 处直接访问 prefs，其中 81 处 `edit`、落盘方式（apply/commit）没有任何规则。
+
+  Account context snapshot (AccountManager.java).
+  The core file had 75 calls to currentAccount() and 67 to the no-arg accountPrefix(), all reading
+  a host static field. They now go through an immutable Ctx, and delayed work only honours the
+  snapshot — removing account crossover structurally.
+
+- **键名收敛到唯一真相源（`Keys.java`）**
+  键生成函数原来散落在核心文件的 4 处，改一个键名要 grep 全文且极易漏。
+  （历史事故：日志名从 `run.log` 改为 `run-YYYYMMDD.log` 时漏改 4 处，静默失效。）
+
+  Storage keys consolidated into a single source of truth (Keys.java).
+  Key-building helpers were scattered across four places in the core file; renaming one key meant
+  grepping the whole file and was easy to miss. A past incident: the log file name change from
+  run.log to run-YYYYMMDD.log missed four call sites and failed silently.
+
+- **持久化访问层（`PrefsStore.java`）**
+  原来有 244 处直接访问 prefs，其中 81 处 `edit`，落盘方式（apply / commit）没有任何规则。
   现在状态变更一律 `commit`，其余 `apply`，并明确哪些变更必须落盘。
-  *There were 244 direct prefs accesses, 81 of them edit calls, with no rule for apply vs commit. State changes now always commit, everything else applies, and which changes must persist is explicit.*
-- **签到状态读写集中（`SignStateStore.java`）· Sign-in state I/O centralised**
-  相关方法原来散在核心文件 5500 行的跨度里。
-  *The related methods were spread across a 5,500-line span of the core file.*
-- **设置面板分区（`SettingsRefs.java`）· Settings panel split into sections**
+
+  Persistence access layer (PrefsStore.java).
+  There were 244 direct prefs accesses, 81 of them edit calls, with no rule for apply versus
+  commit. State changes now always commit, everything else applies, and which changes must persist
+  is explicit.
+
+- **签到状态读写集中（`SignStateStore.java`）**
+  相关方法原来散在核心文件 5500 行的跨度里，现已集中并明确不变式。
+
+  Sign-in state I/O centralised (SignStateStore.java).
+  The related methods were spread across a 5,500-line span of the core file. They are now
+  centralised with explicit invariants.
+
+- **设置面板分区（`SettingsRefs.java`）**
   `showSettings` 从 555 行缩到 123 行，拆成 5 个分区方法。
-  *showSettings shrank from 555 lines to 123, split into five section builders.*
-- **纯逻辑层扩充（`SignLogic.java`）· Pure-logic layer expanded**
+
+  Settings panel split into sections (SettingsRefs.java).
+  showSettings shrank from 555 lines to 123, split into five section builders.
+
+- **纯逻辑层扩充（`SignLogic.java`）**
   时间窗、退避、判定、闸门等无 Android 依赖的逻辑集中到此处，可直接跑单测。
-  *Time windows, backoff, verdicts and the sign gate — logic with no Android dependency — now live here and are unit-testable.*
+
+  Pure-logic layer expanded (SignLogic.java).
+  Time windows, backoff, verdicts and the sign gate — logic with no Android dependency — now live
+  here and are unit-testable.
 
 ### 工具 · Tooling
-- **仓库里的 `build.sh` 缺三道门禁 · The in-repo build.sh was missing three gates**
+
+- **仓库里的 `build.sh` 缺三道门禁**
   仓库版只有国际化检查一道门禁，纯逻辑单测、更新日志双语、版本五查都在构建工具目录里 ——
   任何直接 clone 源码仓的人跑 `./build.sh` 都会绕过它们。现已补齐并新增接线自检门禁。
-  *The in-repo script only ran the i18n gate; the unit tests, bilingual changelog and version checks lived only in the build kit, so anyone cloning the source and running ./build.sh skipped them. All are now in place, plus a new wiring self-check gate.*
-- 纯逻辑单测从 115 条扩到 **174 条**，新增用例逐条对应本次修掉的 bug（改回去会被门禁拦住）。
-  *Unit assertions grew from 115 to 174; each new case maps to a bug fixed here, so a regression is caught by the gate.*
-- 接线自检的成员清单里有早已删除的方法，导致该检查长期空转；已修正并挂进构建。
-  *The wiring checker listed a method that no longer existed, so it had been a no-op; fixed and wired into the build.*
+
+  The in-repo build.sh was missing three gates.
+  The in-repo script only ran the i18n gate; the unit tests, bilingual changelog and version checks
+  lived only in the build kit, so anyone cloning the source and running ./build.sh skipped them.
+  All are now in place, plus a new wiring self-check gate.
+
+- **纯逻辑单测从 115 条扩到 174 条**
+  新增用例逐条对应本次修掉的 bug，改回去会被门禁拦住。
+
+  Unit assertions grew from 115 to 174.
+  Each new case maps to a bug fixed here, so a regression is caught by the gate.
+
+- **接线自检的成员清单里有早已删除的方法**
+  导致该检查长期空转；已修正并挂进构建。
+
+  The wiring checker listed a method that no longer existed.
+  The check had been a no-op for a long time; fixed and wired into the build.
 
 ## 1.5.8 (121) — 2026-09-24
 

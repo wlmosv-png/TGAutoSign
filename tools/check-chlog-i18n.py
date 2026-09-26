@@ -25,7 +25,7 @@ import os
 import re
 import sys
 
-ALLOWANCE = 1
+ALLOWANCE = 0   # 英文一个都不能少（Operator 2026-09-26 定）
 
 BASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 CHLOG = os.path.join(BASE, 'CHANGELOG.md')
@@ -57,23 +57,34 @@ def main():
 
     # 逐行数：中文条目 / 英文条译
     cjk = re.compile(r'[\u4e00-\u9fff]')
+    # 条目格式（2026-09-26 起）：中文在上、英文在下，各成一段。
+    #   - **中文标题**
+    #     中文正文（可多行）
+    #     <空行>
+    #     English heading.
+    #     English body (可多行)
+    #     <空行>
+    # 一个「中文条目」= 以 "- **" 开头且含 CJK 的行。
+    # 一个「英文条译」= 该条目之后、下一个 "- **" 之前，出现的首个
+    #                   非空、不以 | # > 开头、且不含 CJK 的正文行。
+    cjk = re.compile(r'[\u4e00-\u9fff]')
     zh_items = []      # 中文条目行号
-    en_gloss = []      # 英文斜体句行号
-    cur = None
+    en_gloss = []      # 英文条译行号（每个中文条目至多算一次）
     for k, l in enumerate(seg):
         st = l.strip()
         if st.startswith('- **') and cjk.search(st):
             zh_items.append(k)
-            cur = ('zh', k)
-            continue
-        # 英文条译：缩进的斜体整句
-        if re.match(r'^\s+\*[^*].*\*\s*$', l) and cjk.search(st) is None:
-            en_gloss.append(k)
-            cur = ('en', k)
-            continue
-        # 表格行 / 标题 / 空行 / 维护范围等 —— 不参与计数
-        if st.startswith(('|', '#', '>', '仅')) or st == '':
-            cur = None
+
+    # 为每个中文条目找它自己的英文段（上界是下一条中文条目）
+    for n, idx in enumerate(zh_items):
+        upper = zh_items[n + 1] if n + 1 < len(zh_items) else len(seg)
+        for j in range(idx + 1, upper):
+            st = seg[j].strip()
+            if st == '' or st.startswith(('|', '#', '>')):
+                continue
+            if cjk.search(st) is None:
+                en_gloss.append(j)
+                break
 
     nzh, nen = len(zh_items), len(en_gloss)
     limit = nzh - ALLOWANCE
@@ -89,13 +100,14 @@ def main():
     if nen < limit:
         # 打印缺译文的中文条目，便于直接补
         missing = []
-        for idx in zh_items:
+        for n, idx in enumerate(zh_items):
+            upper = zh_items[n + 1] if n + 1 < len(zh_items) else len(seg)
             found = False
-            for j in range(idx + 1, min(idx + 8, len(seg))):
+            for j in range(idx + 1, upper):
                 st = seg[j].strip()
-                if st.startswith('- **'):
-                    break
-                if re.match(r'^\s+\*[^*].*\*\s*$', seg[j]) and not cjk.search(st):
+                if st == '' or st.startswith(('|', '#', '>')):
+                    continue
+                if cjk.search(st) is None:
                     found = True
                     break
             if not found:
