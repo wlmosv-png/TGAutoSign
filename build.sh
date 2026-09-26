@@ -89,6 +89,50 @@ if [ "${TGAS_SKIP_WIRING:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/check-wiring.py" ]
     echo "FATAL: 有孤儿方法或菜单项没派发（临时跳过：TGAS_SKIP_WIRING=1）" >&2; exit 1; }
 fi
 
+# ── README 同步门禁：README 的更新日志段必须与 CHANGELOG.md 一致 ──
+# 来历：README 的更新日志段是从 CHANGELOG 生成的「手写副本」，2026-09-23 写脚本
+# 就是为了治它跑偏；结果 1.6.0 发布时又忘了跑 —— 模块仓 README 停在 1.5.8，
+# 用户从 LSPosed 进来看到的是旧版。这次把「跑没跑」变成构建时能拦下来的事。
+# 判定：用生成器重算段落，与 README 里现有段落逐字节比对，不一致即失败。
+# 跳过：TGAS_SKIP_READMESYNC=1
+if [ "${TGAS_SKIP_READMESYNC:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/gen-readme-changelog.py" ]; then
+  echo "== README 更新日志同步 =="
+  _rdtmp="${TMPDIR:-/tmp}/tgas-rd-$$"
+  rm -rf "$_rdtmp"; mkdir -p "$_rdtmp"
+  if ( cd "$TGAS_SRC" && python3 tools/gen-readme-changelog.py --versions 2 ) > "$_rdtmp/zh.new" 2>/dev/null \
+     && ( cd "$TGAS_SRC" && python3 tools/gen-readme-changelog.py --versions 2 --lang en ) > "$_rdtmp/en.new" 2>/dev/null; then
+    _bad=0
+    for pair in "README.md:zh" "README.en.md:en"; do
+      _f="${pair%%:*}"; _lang="${pair##*:}"
+      [ -f "$TGAS_SRC/$_f" ] || continue
+      python3 - "$TGAS_SRC/$_f" "$_rdtmp/$_lang.new" <<'PYEOF' || _bad=1
+import io, re, sys
+path, gen = sys.argv[1], sys.argv[2]
+s = io.open(path, encoding="utf-8").read()
+new = io.open(gen, encoding="utf-8").read().rstrip("\n")
+m = re.search(r"^##\s*📜[^\n]*\n", s, re.M)
+if not m:
+    print("  FATAL: %s 里没有更新日志段" % path); sys.exit(1)
+end = m.end() + re.search(r"^##\s", s[m.end():], re.M).start()
+cur = s[m.start():end].rstrip("\n")
+if cur != new:
+    print("  FATAL: %s 的更新日志段与 CHANGELOG 不一致" % path)
+    print("         跑: python3 tools/gen-readme-changelog.py [--lang en] 并替换该段")
+    sys.exit(1)
+print("  OK   %s" % path)
+PYEOF
+    done
+    if [ "$_bad" = 1 ]; then
+      rm -rf "$_rdtmp"
+      echo "FATAL: README 更新日志段未同步（临时跳过：TGAS_SKIP_READMESYNC=1）" >&2
+      exit 1
+    fi
+  else
+    echo "WARN: 生成 README 段落失败，跳过该门禁" >&2
+  fi
+  rm -rf "$_rdtmp"
+fi
+
 mkdir -p "$TGAS_WORK"
 rm -rf "$TGAS_WORK/cls" "$TGAS_WORK/dex"; mkdir -p "$TGAS_WORK/cls" "$TGAS_WORK/dex"
 find "$SRC_J" -name '*.java' > "$TGAS_WORK/files.txt"
