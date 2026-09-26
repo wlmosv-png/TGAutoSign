@@ -464,4 +464,108 @@ public final class SignLogic {
         if (signedToday || alreadyPending || retryExhausted) return false;
         return sentPhase(sentToday, sentAtMs, nowMs, ttlMs) == SENT_STALE;
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // 按钮「可学性」判定（纯逻辑，可单测）
+    //
+    // 背景（2026-09-27 实测）：模块把 8439387373 的**支付按钮**学成了签到目标，
+    // 并且真的去点：
+    //     已添加目标 8439387373 -> [回调] pay:alipay
+    //     已添加目标 8439387373 -> [回调] pay:wxpay
+    //     [全账号(2/2)] 尝试签到 8439387373 [回调] pay:alipay
+    // 而且会自我繁殖：每点一次就被学成一条新目标（09-23 出现 2 次 → 09-27 涨到 15 次）。
+    //
+    // 根因：learnDenyReason 在「宽松模式」下直接放行（来者不拒），
+    // 于是支付/菜单类按钮畅通无阻。宽松模式的本意是「判定词对不上也学」，
+    // 不该扩到「明显不是签到的按钮也学」——所以这里加一道**独立于宽松模式**的硬闸门。
+    //
+    // 判定依据（从实测数据归纳，保守优先）：
+    //   ① data 的 ASCII 形态命中明确非签到前缀（pay: / ub_menu_ 等）
+    //   ② 按钮文案命中明确非签到词（支付 / 充值 / 绑定 / 菜单 等）
+    //   ③ data 过短且形如随机 hex（每次变化，学了也没用）
+    // 只挡「明显不是签到」的；拿不准的一律放行，避免误伤真签到按钮。
+    // ────────────────────────────────────────────────────────────────
+
+    /**
+     * data 前缀黑名单（小写匹配）。这些都是实测见过的非签到按钮。
+     *
+     * public 是因为 TGAutoSignCore.sweepLearnedJunkEntries() 要用同一份名单
+     * 清理历史误学条目 —— 保持单一真相源，别在两处各写一套。
+     */
+    public static final String[] JUNK_DATA_PREFIXES = {
+            "pay:", "pay_", "pay-",           // 支付：pay:alipay / pay:wxpay / pay:menu
+            "ub_menu_",                       // 用户面板菜单：ub_menu_bind / ub_menu_register / ub_menu_library
+            "menu:", "menu_", "help:", "help_",   // 菜单与帮助
+            "lang:", "language_",             // 语言切换
+            "invite:", "share:", "promo:",    // 邀请 / 分享 / 推广
+            "cancel", "close", "back",        // 取消 / 关闭 / 返回
+            "unbind", "logout", "signout"     // 解绑 / 登出
+    };
+
+    /** 文案黑名单（子串匹配，小写）。 */
+    private static final String[] BAD_LABELS = {
+            "支付", "充值", "付款", "付费", "购买", "下单", "结算", "缴费",
+            "邀请", "分享", "推广", "返利", "提现", "余额",
+            "绑定", "解绑", "注册", "登录", "退出登录", "注销",
+            "菜单", "帮助", "教程", "设置", "语言", "切换",
+            "取消", "关闭", "返回", "上一步", "返回上一级",
+            "客服", "联系", "广告", "赞助",
+            "pay", "buy", "purchase", "checkout", "recharge", "topup", "top-up",
+            "invite", "share", "promo", "referral", "withdraw",
+            "bind", "unbind", "register", "signup", "sign-up", "login", "logout",
+            "tutorial", "settings", "language", "support", "contact", "advert",
+            // 注：menu / help / back / close / cancel 这类**短英文词**不放进文案黑名单 ——
+            // 有些 bot 的签到入口就叫 "Menu"，子串匹配会误伤真签到按钮。
+            // 它们仍由 data 前缀名单拦截（menu: / help: / cancel 等，带分隔符才判）。
+    };
+
+    /** 纯 hex 且长度在此区间、且无分隔符 → 视为随机 token（学了也没意义）。 */
+    private static boolean looksLikeRandomHex(String s) {
+        if (s == null) return false;
+        int n = s.length();
+        if (n < 4 || n > 12) return false;
+        for (int i = 0; i < n; i++) {
+            char c = s.charAt(i);
+            boolean hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+            if (!hex) return false;
+        }
+        // 全 hex 但长度 >= 4：可能真是随机 token，也可能是 "sign" 之类被误伤？
+        // "sign" 含 s/i/g/n，i/g/n 不是 hex 字符 → 不会被误判。
+        // 但 "cafe" / "dead" 这类是合法 hex 单词，极少见，接受这点风险。
+        return true;
+    }
+
+    /**
+     * 该按钮是否**明显不该被学成签到目标**。
+     *
+     * @param label 按钮文案（已从 data 解码或 UI 取到的可读文本），可为空
+     * @param data  回调 data 原文（UTF-8 形态），可为空
+     * @return 非 null 表示拒绝，值是拒绝原因（用于日志）
+     *
+     * 设计原则：**只挡明显的**。拿不准返回 null（放行），宁可漏挡不可误伤 ——
+     * 真签到按钮被挡住会让用户完全签不了，比多学一个按钮严重得多。
+     */
+    public static String obviousNonSignButton(String label, String data) {
+        String d = data == null ? "" : data.trim().toLowerCase();
+        String lb = label == null ? "" : label.trim().toLowerCase();
+
+        // ① data 前缀黑名单
+        if (d.length() > 0) {
+            for (String p : JUNK_DATA_PREFIXES) {
+                if (d.startsWith(p)) return "按钮标识像「" + p + "」类非签到操作";
+            }
+        }
+
+        // ② 文案黑名单（label 与 data 都查；data 常是可读串）
+        String hay = lb + "\n" + d;
+        for (String w : BAD_LABELS) {
+            if (hay.contains(w)) return "按钮文案含非签到词「" + w + "」";
+        }
+
+        // ③ 随机 hex token
+        if (d.length() > 0 && looksLikeRandomHex(d)) {
+            return "按钮标识像随机 token（长度 " + d.length() + " 的纯 hex）";
+        }
+        return null;
+    }
 }

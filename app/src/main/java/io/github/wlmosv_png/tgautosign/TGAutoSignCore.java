@@ -837,6 +837,12 @@ public final class TGAutoSignCore {
         try { lastAccount = currentAccount(); } catch (Throwable ignored) {}
         try { migrateAccountConfigs(); } catch (Throwable ignored) {}   // 全局默认 → 各账号（老用户不丢设置）
         try { sweepOrphanEntryKeys(); } catch (Throwable ignored) {}    // 清掉历史遗留的孤儿状态键
+        // 清掉历史误学的非签到目标（支付/菜单按钮）。遍历全部槽位，不读 currentAccount。
+        try {
+            int _junk = 0;
+            for (int _ja : accountSlots()) _junk += sweepLearnedJunkEntries(accountPrefix(_ja));
+            if (_junk > 0) jlogForce("已清理 " + _junk + " 个误学目标（支付/菜单类按钮，不是签到目标）");
+        } catch (Throwable t) { noteSwallowed("start-sweep-junk", t); }
         try { sweepStalePendingConfirm(); } catch (Throwable ignored) {} // 清掉跨天残留的「待确认」
         registerNetworkReceiver();
         registerActivityListener();
@@ -2110,6 +2116,67 @@ public final class TGAutoSignCore {
      *
      * @return 清掉的键数
      */
+    /**
+     * 清理**已学到的明显非签到目标**（2026-09-27）。
+     *
+     * 背景：修复前，模块会把支付/菜单按钮学成签到目标并真的去点 ——
+     * 实测 8439387373 学出了 pay:alipay / pay:wxpay，且会自我繁殖
+     * （每点一次多一条，09-23 出现 2 次 → 09-27 涨到 15 次）。
+     * 光在入口拦新学习不够，已经躺在目标列表里的这些条目还得清掉。
+     *
+     * 保守策略：**只删 data 命中确定性前缀黑名单的条目**。
+     *   · 前缀（pay: / ub_menu_ / ...）是确定的，不可能是真签到按钮
+     *   · 不用"随机 hex"规则删 —— 那条只是启发式，有误伤风险，只用于拦新学习
+     *   · 同时清掉这些条目的关联状态键（last_/opt_/retry_/... ），不留孤儿
+     *
+     * @return 删除的条目数
+     */
+    private int sweepLearnedJunkEntries(String prefix) {
+        int removed = 0;
+        try {
+            List<Map<String, Object>> list = new ArrayList<Map<String, Object>>();
+            loadTargetsInto(prefix, list);
+            for (Map<String, Object> m : list) {
+                String id = entryId(m);
+                if (id == null || id.length() == 0) continue;
+                if (!KIND_CB.equals(entryKind(m))) continue;          // 只查回调类（文本指令不涉及）
+                Object dataObj = m.get("data");
+                if (!(dataObj instanceof byte[])) continue;
+                String data = "";
+                try { data = new String((byte[]) dataObj, "UTF-8"); } catch (Throwable ignored) { continue; }
+                String low = data.trim().toLowerCase();
+                boolean junk = false;
+                for (String p : SignLogic.JUNK_DATA_PREFIXES) {
+                    if (low.startsWith(p)) { junk = true; break; }
+                }
+                if (!junk) continue;
+
+                // 删条目 + 关联状态键
+                prefs.edit()
+                     .remove(prefix + "kind_" + id)
+                     .remove(prefix + "text_" + id)
+                     .remove(prefix + "data_" + id)
+                     .remove(prefix + "hash_" + id)
+                     .remove(prefix + "msg_id_" + id)
+                     .remove(prefix + "title_" + id)
+                     .remove(prefix + "peerkind_" + id)
+                     .remove(prefix + "pre_" + id)
+                     .remove(prefix + "loc_" + id)
+                     .remove(kLast(prefix, id))
+                     .remove(kRetry(prefix, id))
+                     .remove(kRetryAt(prefix, id))
+                     .remove(kRetryDay(prefix, id))
+                     .remove(Keys.opt(prefix, id))
+                     .remove(Keys.answered(prefix, id))
+                     .remove(kPendingConfirm(prefix, id))
+                     .commit();
+                removed++;
+                jlogForce("清理误学目标：" + entryText(m) + "（" + id + " · data=" + data + " 不是签到按钮）");
+            }
+        } catch (Throwable t) { noteSwallowed("sweepLearnedJunkEntries", t); }
+        return removed;
+    }
+
     private int sweepOrphanEntryKeys() {
         int removed = 0;
         try {
@@ -8747,7 +8814,24 @@ public final class TGAutoSignCore {
      * 返回 null 表示允许学习；返回非 null 是拒绝原因（用于日志）。
      */
     private String learnDenyReason(long did, String text, String context) {
+        return learnDenyReason(did, text, null, context);
+    }
+
+    /**
+     * 学习拒绝原因（带 data）。
+     *
+     * @param data 回调按钮的 data 原文；文本类目标传 null。
+     *
+     * 2026-09-27 加固：新增一道**独立于宽松模式**的硬闸门 ——
+     * 宽松模式的本意是「判定词对不上也学」，不该扩到「支付/菜单按钮也学」。
+     * 实测模块把 8439387373 的 pay:alipay / pay:wxpay 学成签到目标并真的去点。
+     */
+    private String learnDenyReason(long did, String text, String data, String context) {
         try {
+            // ⓪ 硬闸门：明显不是签到的按钮，任何模式都不学（含宽松模式）
+            String obvious = SignLogic.obviousNonSignButton(text, data == null ? null : data);
+            if (obvious != null) return obvious;
+
             // 宽松模式：来者不拒 —— 点什么学什么（仍然尊重「排除的 bot」，
             // 因为那是用户明确拉黑的整只 bot，不属于"判定词对不上"的范畴）。
             if (LOOSE_MODE) {
@@ -9030,7 +9114,8 @@ public final class TGAutoSignCore {
             Object text = buttonText(button);
             if (text == null) return;
             String t = String.valueOf(text);
-            String deny = !AUTO_LEARN ? "按钮学习已关闭" : learnDenyReason(did, t, panelContext(did));
+            byte[] _bd1 = isCallbackButton(button) ? buttonData(button) : null;
+            String deny = !AUTO_LEARN ? "按钮学习已关闭" : learnDenyReason(did, t, _bd1 == null ? null : new String(_bd1, "UTF-8"), panelContext(did));
             if (deny != null) { logd("[按钮·结构] uid=" + did + " text=" + t + "（" + deny + "，不自动学习）"); return; }
             if (isCallbackButton(button)) {
                 byte[] data = buttonData(button);
@@ -9116,7 +9201,8 @@ public final class TGAutoSignCore {
             if (did != null && text != null) {
                 String t = String.valueOf(text);
                 long u = ((Number) did).longValue();
-                String deny = !AUTO_LEARN ? "按钮学习已关闭" : learnDenyReason(u, t, panelContext(u));
+                byte[] _bd2 = isCallbackButton(proto) ? buttonData(proto) : null;
+                String deny = !AUTO_LEARN ? "按钮学习已关闭" : learnDenyReason(u, t, _bd2 == null ? null : new String(_bd2, "UTF-8"), panelContext(u));
                 if (deny != null) { logd("[按钮] uid=" + did + " text=" + t + "（" + deny + "，不自动学习；可用 捕获/调试台 手动绑定）"); return; }
                 if (isCallbackButton(proto)) {
                     byte[] data = buttonData(proto);
@@ -9152,7 +9238,8 @@ public final class TGAutoSignCore {
             if (did != null && text != null) {
                 String t = String.valueOf(text);
                 long u = ((Number) did).longValue();
-                String deny = !AUTO_LEARN ? "按钮学习已关闭" : learnDenyReason(u, t, panelContext(u));
+                byte[] _bd2 = isCallbackButton(proto) ? buttonData(proto) : null;
+                String deny = !AUTO_LEARN ? "按钮学习已关闭" : learnDenyReason(u, t, _bd2 == null ? null : new String(_bd2, "UTF-8"), panelContext(u));
                 if (deny != null) { logd("[按钮] uid=" + did + " text=" + t + "（" + deny + "，不自动学习；可用 捕获/调试台 手动绑定）"); return; }
                 if (isCallbackButton(proto)) {
                     byte[] data = buttonData(proto);
@@ -9271,7 +9358,12 @@ public final class TGAutoSignCore {
                                 try { Object m2 = getFieldValSafe(req, "msg_id"); if (m2 instanceof Number) mid0 = ((Number) m2).intValue(); } catch (Throwable ignored) {}
                                 // 先算清拒绝原因，别再把它吞掉：旧版这句谎报「被排除规则或关键词过滤」，
                                 // 实际最常见的原因是「按钮学习已关闭」（AUTO_LEARN 默认 false）。
-                                String deny = !AUTO_LEARN ? "按钮学习已关闭（设置→学习行为→按钮学习）" : learnDenyReason(u, disp, panelContext(u));
+                                // ⓪ 硬闸门：明显非签到的按钮（支付/菜单/随机 token），任何模式都不学。
+                                //    宽松模式只该放宽"判定词对不上"，不该放宽"这压根不是签到按钮"。
+                                String _obv = SignLogic.obviousNonSignButton(disp, new String(d, "UTF-8"));
+                                String deny = !AUTO_LEARN ? "按钮学习已关闭（设置→学习行为→按钮学习）"
+                                            : (_obv != null ? _obv
+                                              : learnDenyReason(u, disp, new String(d, "UTF-8"), panelContext(u)));
                                 if (captureArmed) {
                                     // 捕获兜底：UI 层按钮 hook 不命中时（Nagram 实测），网络层是唯一入口。
                                     captureArmed = false;
@@ -9283,12 +9375,15 @@ public final class TGAutoSignCore {
                                         // 用容错读取，取不到就传 0。
                                         Object h = getFieldValSafe(req, "hash");
                                         learnCallback(u, disp, d, h instanceof Number ? ((Number) h).longValue() : 0L, mid0);
-                                        jlog("【网络层学习·回调】acc=" + accountLabel(currentAccount()) + " " + u + " -> [" + disp + "] data=" + Base64.getEncoder().encodeToString(d) + " msg_id=" + mid0);
+                                        // 账号必须用 hookAccount（本次网络请求所属账号），
+                                        // 不能用 currentAccount() —— 那是"此刻界面上选中的账号"，
+                                        // 异步回调里读它会串号（实测日志出现前缀=账号2、内容=账号1）。
+                                        jlog("【网络层学习·回调】acc=" + accountLabel(hookAccount) + " " + u + " -> [" + disp + "] data=" + Base64.getEncoder().encodeToString(d) + " msg_id=" + mid0);
                                     } catch (Throwable lt) {
                                         loge("[网络层学习·回调] 失败: " + lt);
                                     }
                                 } else {
-                                    logd("[回调] acc=" + accountLabel(currentAccount()) + " uid=" + u + " data=" + Base64.getEncoder().encodeToString(d) + "（不学习：" + deny + "）");
+                                    logd("[回调] acc=" + accountLabel(hookAccount) + " uid=" + u + " data=" + Base64.getEncoder().encodeToString(d) + "（不学习：" + deny + "）");
                                 }
                             } else {
                                 logd("[回调] uid=" + u + " 跳过学习: alreadyBound=" + (findCbEntry(u, d) != null) + " dataLen=" + d.length);

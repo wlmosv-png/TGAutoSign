@@ -38,6 +38,7 @@ public final class SignLogicTest {
         accountClamp();
         permanentFail();
         sentPhaseLifecycle();
+        nonSignButtonFilter();
         v160Regression();
 
         System.out.println("----------------------------------------");
@@ -306,6 +307,70 @@ public final class SignLogicTest {
             !SignLogic.shouldPromoteToPending(false, 0L, T0 + TTL + 1, TTL, false, false, false));
         tru("有 opt_ 无时间戳 -> 不升级（保守）",
             !SignLogic.shouldPromoteToPending(true, 0L, T0 + TTL + 1, TTL, false, false, false));
+    }
+
+    /**
+     * 非签到按钮过滤回归。
+     *
+     * 复现实测事故（2026-09-27）：模块把 8439387373 的支付按钮学成签到目标并真的去点，
+     * 且自我繁殖（09-23 出现 2 次 → 09-27 涨到 15 次）。
+     *
+     * 设计原则：**只挡明显的**。真签到按钮被误挡会让用户完全签不了，
+     * 比多学一个按钮严重得多 —— 所以"拿不准"必须放行。
+     */
+    private static void nonSignButtonFilter() {
+        // ── 必须挡住：实测见过的支付/菜单按钮 ──
+        tru("pay:alipay 要挡", SignLogic.obviousNonSignButton("支付宝", "pay:alipay") != null);
+        tru("pay:wxpay 要挡", SignLogic.obviousNonSignButton("微信支付", "pay:wxpay") != null);
+        tru("pay:menu 要挡", SignLogic.obviousNonSignButton("支付菜单", "pay:menu") != null);
+        tru("ub_menu_bind 要挡", SignLogic.obviousNonSignButton("绑定", "ub_menu_bind") != null);
+        tru("ub_menu_register 要挡", SignLogic.obviousNonSignButton("注册", "ub_menu_register") != null);
+        tru("ub_menu_library 要挡", SignLogic.obviousNonSignButton("资源库", "ub_menu_library") != null);
+
+        // ── 文案黑名单（data 干净、但文案明显不是签到）──
+        tru("文案「立即支付」要挡", SignLogic.obviousNonSignButton("立即支付", "abc123def") != null);
+        tru("文案「充值」要挡", SignLogic.obviousNonSignButton("充值", "xyz789") != null);
+        tru("文案「邀请好友」要挡", SignLogic.obviousNonSignButton("邀请好友", "inv1") != null);
+        tru("文案「取消」要挡", SignLogic.obviousNonSignButton("取消", "zzz") != null);
+        tru("英文 pay 要挡", SignLogic.obviousNonSignButton("Pay now", "a1b2") != null);
+        tru("英文 logout 要挡", SignLogic.obviousNonSignButton("Logout", "q1w2") != null);
+
+        // ── 随机 hex token（长度 4-12 的纯 hex）──
+        tru("随机 hex 4b780f 要挡", SignLogic.obviousNonSignButton("", "4b780f") != null);
+        tru("随机 hex f9f106 要挡", SignLogic.obviousNonSignButton("", "f9f106") != null);
+        tru("随机 hex 8d9e2a 要挡", SignLogic.obviousNonSignButton("", "8d9e2a") != null);
+
+        // ── 必须放行：真签到按钮（绝不能误伤）──
+        tru("sign 要放行", SignLogic.obviousNonSignButton("签到", "sign") == null);
+        tru("checkin 要放行", SignLogic.obviousNonSignButton("签到", "checkin") == null);
+        tru("daily_check 要放行", SignLogic.obviousNonSignButton("每日签到", "daily_check") == null);
+        tru("qd 要放行", SignLogic.obviousNonSignButton("签到", "qd") == null);
+        tru("长 data 要放行", SignLogic.obviousNonSignButton("签到", "checkin_daily_20260927") == null);
+        tru("空输入要放行", SignLogic.obviousNonSignButton(null, null) == null);
+        tru("空串要放行", SignLogic.obviousNonSignButton("", "") == null);
+
+        // ── 边界：sign 不是纯 hex（含 s/i/g/n），不能被随机规则误伤 ──
+        tru("sign 不是 hex", SignLogic.obviousNonSignButton("", "sign") == null);
+        // 短英文词（menu/help/back）不进文案黑名单：有些 bot 的签到入口就叫 "Menu"，
+        // 子串匹配会误伤真签到按钮。它们仍由 data 前缀名单拦截（menu: 带分隔符才判）。
+        tru("文案 menu 要放行（避免误伤）", SignLogic.obviousNonSignButton("menu", "abcxyz") == null);
+        tru("文案 Menu 要放行", SignLogic.obviousNonSignButton("Menu", "click_start") == null);
+        tru("但 data menu:xxx 要挡", SignLogic.obviousNonSignButton("", "menu:settings") != null);
+        tru("claim 不是 hex", SignLogic.obviousNonSignButton("", "claim") == null);
+        // 长度边界：3 字符太短不判随机
+        tru("3 字符不判随机", SignLogic.obviousNonSignButton("", "abc") == null);
+        // 13 字符超出随机区间
+        tru("13 字符不判随机", SignLogic.obviousNonSignButton("", "abcdef0123456") == null);
+
+        // ── 前缀名单本身（清理逻辑复用同一份，必须非空且含实测项）──
+        tru("JUNK_DATA_PREFIXES 非空", SignLogic.JUNK_DATA_PREFIXES.length > 0);
+        boolean hasPay = false, hasMenu = false;
+        for (String p : SignLogic.JUNK_DATA_PREFIXES) {
+            if ("pay:".equals(p)) hasPay = true;
+            if ("ub_menu_".equals(p)) hasMenu = true;
+        }
+        tru("名单含 pay:", hasPay);
+        tru("名单含 ub_menu_:", hasMenu);
     }
 
     private static void v160Regression() {
