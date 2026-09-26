@@ -112,7 +112,7 @@ public final class AccountManager {
             int total = activatedAccounts();
             // 决策核心在 SignLogic（纯逻辑 + 单测覆盖多账号边界）
             int used = SignLogic.clampAccount(c, total);
-            if (SignLogic.accountClamped(c, total)) warn(c, total, used);
+            if (c < 0) warn(c, total, used);
             return used;
         } catch (Throwable t) {
             return 0;

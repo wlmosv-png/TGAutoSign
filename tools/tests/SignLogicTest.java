@@ -347,32 +347,34 @@ public final class SignLogicTest {
         eq("skipLabel 放行 → 空串", SignLogic.skipLabel(SignLogic.SKIP_NONE), "");
     }
 
-    /** 账号索引钳制：多账号串号的根治点，必须有回归。 */
+    /** 账号索引归一化：多账号串号的根治点，必须有回归。 */
     private static void accountClamp() {
         // 正常范围：原样
         eq("3账号 raw=0 -> 0", SignLogic.clampAccount(0, 3), 0);
         eq("3账号 raw=1 -> 1", SignLogic.clampAccount(1, 3), 1);
         eq("3账号 raw=2 -> 2", SignLogic.clampAccount(2, 3), 2);
 
-        // 越界（用户报的场景）：宿主写 3，3 个账号合法索引只到 2
-        eq("3账号 raw=3(越界) -> 2", SignLogic.clampAccount(3, 3), 2);
-        eq("2账号 raw=2(越界) -> 1", SignLogic.clampAccount(2, 2), 1);
-        eq("4账号 raw=9(越界) -> 3", SignLogic.clampAccount(9, 4), 3);
+        // 越界索引一律按原值用（不再钳到 total-1）
+        //
+        // 为什么：selectedAccount 读到的值不等于账号的「第几个」。
+        // 实测 Nagram XF 登录 4 个账号会读到 7、9，那些是合法索引，数据在 acc9_ 里。
+        // 钳到 total-1 会让模块读到另一个账号的分区 —— 表现为「账号1的配置变成账号2的」。
+        eq("3账号 raw=3 -> 3（原值）", SignLogic.clampAccount(3, 3), 3);
+        eq("2账号 raw=2 -> 2（原值）", SignLogic.clampAccount(2, 2), 2);
+        eq("4账号 raw=9 -> 9（原值）", SignLogic.clampAccount(9, 4), 9);
+        eq("1账号 raw=2 -> 2（原值）", SignLogic.clampAccount(2, 1), 2);
 
-        // 负值 -> 0
+        // 负值 -> 0（负值不可能合法；返回负数会拼出 acc-1_ 垃圾分区）
         eq("raw=-1 -> 0", SignLogic.clampAccount(-1, 3), 0);
         eq("raw=-99 -> 0", SignLogic.clampAccount(-99, 3), 0);
 
-        // total 不可信（反射失败回退 1）：正数索引按原值，别丢回账号1
-        eq("total=1 raw=2 -> 2（total 不可信）", SignLogic.clampAccount(2, 1), 2);
-        eq("total=1 raw=0 -> 0", SignLogic.clampAccount(0, 1), 0);
-        eq("total=0 raw=1 -> 1", SignLogic.clampAccount(1, 0), 1);
-
-        // 是否发生钳制（告警用）
-        tru("越界算钳制", SignLogic.accountClamped(3, 3));
-        tru("负值算钳制", SignLogic.accountClamped(-1, 3));
-        tru("正常不算钳制", !SignLogic.accountClamped(1, 3));
-        tru("total=1 raw=2 不算钳制（按原值用）", !SignLogic.accountClamped(2, 1));
+        // 是否越界（raw >= 0 && total > 0 && raw >= total；负值不算越界）
+        tru("raw=3/total=3 越界", SignLogic.accountOutOfRange(3, 3));
+        tru("raw=9/total=4 越界", SignLogic.accountOutOfRange(9, 4));
+        tru("raw=2/total=3 不算越界", !SignLogic.accountOutOfRange(2, 3));
+        tru("正常不算越界", !SignLogic.accountOutOfRange(1, 3));
+        tru("负值不算越界（由 clampAccount 退回 0）", !SignLogic.accountOutOfRange(-1, 3));
+        tru("total=0 不算越界", !SignLogic.accountOutOfRange(5, 0));
     }
 
     /** 确定性失败词：命中即应冻结当天，不再重试。 */

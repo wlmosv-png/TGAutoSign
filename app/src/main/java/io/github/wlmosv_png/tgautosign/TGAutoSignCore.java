@@ -977,6 +977,148 @@ public final class TGAutoSignCore {
         return accountManager.activatedAccounts();
     }
 
+    // ────────────────────────────────────────────────────────────────
+    // 账号槽位（slot）体系
+    //
+    // 背景：selectedAccount 读到的值**不等于**账号的「第几个」。
+    // 实测部分客户端（如 Nagram XF 登录 4 个账号）会读到 7、9，那些是**合法索引**，
+    // 数据就存在 acc9_ 里。以前把「读到值 + 1」当界面序号用，就会显示错账号。
+    //
+    // 现在把两个概念分开：
+    //   真实索引（slot）  —— 存 acc{N}_ 分区用，来自 SharedConfig.activeAccounts
+    //   界面序号（display）—— 给用户看的「账号1/2/3」，来自槽位在数组里的位置
+    // ────────────────────────────────────────────────────────────────
+
+    /**
+     * 扫描真实账号槽位，升序返回。
+     *
+     * 优先级：① SharedConfig.activeAccounts（宿主的权威来源）
+     *         ② UserConfig.isValidAccount(i) 逐个试（0 .. max(activatedAccounts,12)）
+     *         ③ 0 .. max(1, activatedAccounts)-1 兜底
+     */
+    private int[] scanAccountSlots() {
+        try {
+            Class<?> sc = classEx("org.telegram.messenger.SharedConfig");
+            Object v = getFieldVal(null, sc, "activeAccounts");
+            if (v instanceof java.util.Set) {
+                java.util.TreeSet<Integer> set = new java.util.TreeSet<>();
+                for (Object o : (java.util.Set<?>) v) {
+                    if (o instanceof Number) {
+                        int i = ((Number) o).intValue();
+                        if (i >= 0) set.add(i);
+                    }
+                }
+                if (!set.isEmpty()) {
+                    int[] arr = new int[set.size()];
+                    int k = 0;
+                    for (Integer i : set) arr[k++] = i.intValue();
+                    return arr;
+                }
+            }
+        } catch (Throwable t) {
+            noteSwallowed("scanAccountSlots-activeAccounts", t);
+        }
+        try {
+            int n = Math.max(activatedAccounts(), 12);
+            java.util.List<Integer> list = new java.util.ArrayList<>();
+            for (int i = 0; i < n; i++) {
+                try {
+                    Class<?> uc = classEx("org.telegram.messenger.UserConfig");
+                    Object ok = staticInvoke(uc, "isValidAccount",
+                            new Class<?>[]{int.class}, new Object[]{i});
+                    if (Boolean.TRUE.equals(ok)) list.add(i);
+                } catch (Throwable ignored) {}
+            }
+            if (!list.isEmpty()) {
+                int[] arr = new int[list.size()];
+                for (int i = 0; i < list.size(); i++) arr[i] = list.get(i).intValue();
+                return arr;
+            }
+        } catch (Throwable t) {
+            noteSwallowed("scanAccountSlots-isValidAccount", t);
+        }
+        int n = Math.max(1, activatedAccounts());
+        int[] arr = new int[n];
+        for (int i = 0; i < n; i++) arr[i] = i;
+        return arr;
+    }
+
+    /** 账号槽位（带 2 秒缓存）。 */
+    private int[] accountSlots() {
+        long now = System.currentTimeMillis();
+        int[] cached = accountSlotsCache;
+        if (cached != null && now - accountSlotsAt < 2000L) return cached;
+        int[] fresh = scanAccountSlots();
+        accountSlotsCache = fresh;
+        accountSlotsAt = now;
+        return fresh;
+    }
+
+    /** 该真实索引是否是一个合法槽位。 */
+    private boolean slotIsValid(int slot) {
+        if (slot < 0) return false;
+        for (int s : accountSlots()) {
+            if (s == slot) return true;
+        }
+        return false;
+    }
+
+    /** 真实索引 -> 界面序号（1-based）。 */
+    private int displayIndexOf(int slot) {
+        int[] slots = accountSlots();
+        for (int i = 0; i < slots.length; i++) {
+            if (slots[i] == slot) return i + 1;
+        }
+        return slot + 1;
+    }
+
+    /** 界面序号（1-based）-> 真实索引，越界回 -1。 */
+    private int slotOfDisplayIndex(int displayIndex) {
+        int[] slots = accountSlots();
+        int i = displayIndex - 1;
+        if (i >= 0 && i < slots.length) return slots[i];
+        return -1;
+    }
+
+    /** 槽位列表的字符串形式，用于日志。 */
+    private String slotsToString() {
+        StringBuilder sb = new StringBuilder();
+        for (int s : accountSlots()) {
+            if (sb.length() > 0) sb.append(',');
+            sb.append(s);
+        }
+        return sb.length() == 0 ? "-" : sb.toString();
+    }
+
+    /**
+     * 账号显示名。注意入参是**真实索引**（槽位），不是界面序号。
+     * 显示时换算成界面序号，所以 selectedAccount 读到 7/9 时显示的是「账号2/3」而不是「账号8/10」。
+     */
+    private String accountLabel(int acc) {
+        return Lang.tf("账号{0}", displayIndexOf(acc));
+    }
+
+    /** 沿继承链向上查找字段（宿主的字段常声明在父类）。 */
+    private static Object getFieldUp(Object obj, String name) {
+        if (obj == null || name == null) return null;
+        try {
+            Class<?> c = obj.getClass();
+            while (c != null) {
+                try {
+                    java.lang.reflect.Field fd = c.getDeclaredField(name);
+                    fd.setAccessible(true);
+                    return fd.get(obj);
+                } catch (NoSuchFieldException e) {
+                    c = c.getSuperclass();
+                } catch (Throwable t) {
+                    return null;
+                }
+            }
+        } catch (Throwable t) {
+        }
+        return null;
+    }
+
     /** 越界模拟开关（排障用）：打开后 currentAccount() 强制返回越界值。 */
     private boolean DEBUG_OVERFLOW_SIM = false;
 
@@ -1031,6 +1173,11 @@ public final class TGAutoSignCore {
 
     /** 越界告警去重：同一组值只记一次，避免刷屏。 */
     private volatile String lastAccRangeSig = "";
+
+    /** 账号槽位缓存（毫秒时间戳）。真实槽位读取要反射 SharedConfig，故做 2 秒缓存。 */
+    private volatile long accountSlotsAt = 0L;
+    /** 账号槽位缓存：[真实索引]，升序。见 accountSlots()。 */
+    private volatile int[] accountSlotsCache = null;
     private void warnAccountOutOfRange(int raw, int total) {
         try {
             String sig = raw + "/" + total;
@@ -8261,10 +8408,6 @@ public final class TGAutoSignCore {
                 logw("日志导出失败: " + t);
                 toast(Lang.tf("日志导出失败：{0}", t));
             }
-        }
-
-        private static String accountLabel(int acc) {
-            return Lang.tf("账号{0}", acc + 1);
         }
 
     // ---------------- 宿主 Activity 记录（兜底：任何 Activity resume 都记） ----------------

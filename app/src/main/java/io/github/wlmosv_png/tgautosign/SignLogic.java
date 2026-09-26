@@ -380,34 +380,35 @@ public final class SignLogic {
     }
 
     // ────────────────────────────────────────────────────────────────
-    // 账号索引钳制（纯逻辑，可单测）
+    // 账号索引归一化（纯逻辑，可单测）
     //
     // AccountManager.current() 的决策核心抽到这里，便于测试覆盖多账号边界。
-    // 规则（1.6.1 定稿）：
-    //   raw < 0            -> 0            （负值不可能合法；不能返回负数，
-    //                                       否则 prefix() 会拼出 acc-1_ 垃圾分区）
-    //   raw >= total 且 total>1 -> total-1 （越界；宿主写越界值时意图通常是
-    //                                       "刚登录/刚切换的那个"，其索引最大）
-    //   raw >= total 且 total<=1 -> raw    （total 明显不可信：只有 1 个账号却读到
-    //                                       正数索引，多半是反射失败；此时宁可按原值用，
-    //                                       也不能把用户丢回账号1 —— 用户实测过
-    //                                       "账号3 获取不到签到目标"）
-    //   其它               -> raw
+    // 规则：
+    //   raw < 0   -> 0    （负值不可能合法；不能返回负数，
+    //                      否则 prefix() 会拼出 acc-1_ 垃圾分区）
+    //   其它      -> raw  （原值使用，不做上限钳制）
+    //
+    // 为什么不再钳到 total-1：selectedAccount 读到的值**不等于**账号的「第几个」。
+    // 实测部分客户端（如 Nagram XF 登录 4 个账号）会读到 7、9，那些是**合法索引**，
+    // 数据就存在 acc9_ 里。钳到 total-1 会让模块读到**另一个账号**的分区 ——
+    // 表现为「账号1的配置变成了账号2的」。真实槽位由 TGAutoSignCore.accountSlots()
+    // 从 SharedConfig.activeAccounts 读取，界面序号由 displayIndexOf() 换算。
     // ────────────────────────────────────────────────────────────────
 
-    /** 钳制后的账号索引。 */
+    /** 归一化后的账号索引：只把负值退回 0，其余原值返回。 */
     public static int clampAccount(int raw, int total) {
         if (raw < 0) return 0;
-        if (total <= 0) return raw < 0 ? 0 : raw;
-        if (raw >= total) {
-            if (total <= 1) return raw;
-            return total - 1;
-        }
         return raw;
     }
 
-    /** 是否发生了钳制（用于日志/告警）。 */
-    public static boolean accountClamped(int raw, int total) {
-        return raw < 0 || (raw >= total && total > 1);
+    /**
+     * 索引是否越界。
+     *
+     * 语义（与设备实测行为一致）：raw >= 0 && total > 0 && raw >= total。
+     * 注意**负值不算越界** —— 负值由 clampAccount 单独退回 0，
+     * 调用方（AccountManager）按 c < 0 自行告警。
+     */
+    public static boolean accountOutOfRange(int raw, int total) {
+        return raw >= 0 && total > 0 && raw >= total;
     }
 }
