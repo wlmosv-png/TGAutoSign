@@ -4,6 +4,65 @@
 
 > 累积更新：自 1.5.8 以来的全部改动合并发布，含一次账号隔离体系重构。
 
+### 架构更新 · Architecture
+
+> 自 v1.0 以来最大的一次内部重构。**无用户可见行为变化**，但它是本次大量 bug 得以根治的前提。
+> The largest internal refactor since v1.0. **No user-visible behaviour change**, but it is the
+> precondition that made this release's bug fixes possible.
+
+- **账号隔离从「约定」变成「结构」**
+  重构前，代码里有 75 处读「当前账号」、67 处读无参账号前缀 —— 全部读宿主的静态字段。
+  任何一处出现在异步回调或延迟任务里，就会串号。本次引入不可变账号快照（`Ctx`）：
+  **发起任务时锁定账号，执行时只认快照**，从结构上杜绝串号，而不是靠每一处记得判断。
+
+  Account isolation moved from convention to structure.
+  Before the refactor the codebase read the "current account" in 75 places and the no-arg account
+  prefix in 67 — all reading a host static field. Any one of them sitting inside an asynchronous
+  callback or delayed task caused crossover. An immutable account snapshot (Ctx) is now used
+  instead: **the account is pinned when work is started and only the snapshot is honoured when it
+  runs**, preventing crossover structurally rather than relying on every call site remembering to
+  check.
+
+- **核心文件拆出 6 个职责单一的类**
+  `Keys`（存储键唯一真相源）、`AccountManager`（账号解析与快照）、
+  `PrefsStore`（持久化与落盘策略）、`SignStateStore`（签到状态读写与不变式）、
+  `SettingsRefs`（设置面板控件容器）、`SignLogic`（无 Android 依赖的纯逻辑层）。
+  主文件仍承载业务编排，但每类问题都有了明确归属。
+
+  Six single-responsibility classes extracted from the core file.
+  Keys (single source of truth for storage keys), AccountManager (account resolution and snapshot),
+  PrefsStore (persistence and flush policy), SignStateStore (sign-in state I/O and invariants),
+  SettingsRefs (settings panel control container) and SignLogic (pure logic with no Android
+  dependency). The main file still orchestrates the business, but every class of problem now has a
+  clear home.
+
+- **纯逻辑可单测**
+  时间窗、退避、回复判定、签到闸门等逻辑已与 Android API 解耦，可在桌面直接跑断言 ——
+  本版单测从 115 条扩到 174 条，新增用例逐条对应本次修掉的 bug。
+
+  Pure logic is now unit-testable.
+  Time windows, backoff, reply verdicts and the sign gate are decoupled from Android APIs and can
+  be asserted directly on a desktop — assertions grew from 115 to 174 in this release, each new
+  case mapping to a bug fixed here.
+
+- **存储键名收敛到唯一真相源**
+  键生成函数原来散落在核心文件的 4 处，改一个键名要 grep 全文且极易漏。
+  （历史事故：日志名从 `run.log` 改为 `run-YYYYMMDD.log` 时漏改 4 处，静默失效。）
+
+  Storage keys consolidated into a single source of truth.
+  Key-building helpers were scattered across four places in the core file; renaming one key meant
+  grepping the whole file and was easy to miss. A past incident: the log file name change from
+  run.log to run-YYYYMMDD.log missed four call sites and failed silently.
+
+- **落盘策略显式化**
+  原来 244 处直接访问存储，落盘方式（apply / commit）没有任何规则。
+  现在状态变更一律 `commit`，其余 `apply`，并明确哪些变更必须落盘。
+
+  Flush policy made explicit.
+  There were 244 direct storage accesses with no rule for apply versus commit. State changes now
+  always commit, everything else applies, and which changes must persist is explicit.
+
+
 ### 修复 · Fixed
 
 - **账号串号：六条路径全部改为锁定账号（重要）**
@@ -290,57 +349,6 @@
 
   Host friendly names follow the UI language.
   English UI now prints Official / Nagram / ExteraLess instead of Chinese host names.
-
-### 内部重构 · Internal refactor
-
-> 无用户可见行为变化，仅提升可维护性与可测试性。
-
-- **账号上下文快照（`AccountManager.java`）**
-  核心文件里有 75 处 `currentAccount()`、67 处无参 `accountPrefix()`，全部读宿主静态字段。
-  现在统一走不可变 `Ctx`，延迟任务只认快照，从结构上消除串号。
-
-  Account context snapshot (AccountManager.java).
-  The core file had 75 calls to currentAccount() and 67 to the no-arg accountPrefix(), all reading
-  a host static field. They now go through an immutable Ctx, and delayed work only honours the
-  snapshot — removing account crossover structurally.
-
-- **键名收敛到唯一真相源（`Keys.java`）**
-  键生成函数原来散落在核心文件的 4 处，改一个键名要 grep 全文且极易漏。
-  （历史事故：日志名从 `run.log` 改为 `run-YYYYMMDD.log` 时漏改 4 处，静默失效。）
-
-  Storage keys consolidated into a single source of truth (Keys.java).
-  Key-building helpers were scattered across four places in the core file; renaming one key meant
-  grepping the whole file and was easy to miss. A past incident: the log file name change from
-  run.log to run-YYYYMMDD.log missed four call sites and failed silently.
-
-- **持久化访问层（`PrefsStore.java`）**
-  原来有 244 处直接访问 prefs，其中 81 处 `edit`，落盘方式（apply / commit）没有任何规则。
-  现在状态变更一律 `commit`，其余 `apply`，并明确哪些变更必须落盘。
-
-  Persistence access layer (PrefsStore.java).
-  There were 244 direct prefs accesses, 81 of them edit calls, with no rule for apply versus
-  commit. State changes now always commit, everything else applies, and which changes must persist
-  is explicit.
-
-- **签到状态读写集中（`SignStateStore.java`）**
-  相关方法原来散在核心文件 5500 行的跨度里，现已集中并明确不变式。
-
-  Sign-in state I/O centralised (SignStateStore.java).
-  The related methods were spread across a 5,500-line span of the core file. They are now
-  centralised with explicit invariants.
-
-- **设置面板分区（`SettingsRefs.java`）**
-  `showSettings` 从 555 行缩到 123 行，拆成 5 个分区方法。
-
-  Settings panel split into sections (SettingsRefs.java).
-  showSettings shrank from 555 lines to 123, split into five section builders.
-
-- **纯逻辑层扩充（`SignLogic.java`）**
-  时间窗、退避、判定、闸门等无 Android 依赖的逻辑集中到此处，可直接跑单测。
-
-  Pure-logic layer expanded (SignLogic.java).
-  Time windows, backoff, verdicts and the sign gate — logic with no Android dependency — now live
-  here and are unit-testable.
 
 ### 工具 · Tooling
 
