@@ -3677,7 +3677,8 @@ public final class TGAutoSignCore {
         _gate.sentPendingFresh = isSentPendingFresh(_pfx, id);
         // 今日熔断（失败达上限 / 命中确定性失败词）——manual 也拦：
         // 「请先关注」这类再点一百次也是同一句话，不该让用户手动触发时白跑。
-        _gate.disabled = isDailyBlocked(_pfx, id) || isPermanentFailedToday(_pfx, id);
+        _gate.disabled = isDailyBlocked(_pfx, id) || isPermanentFailedToday(_pfx, id)
+                || isFrozen(_pfx, id) || isSnoozed(_pfx, id) || isBotBlocked(dialogId);
         int _skip = SignLogic.decideSign(_gate);
         if (_skip != SignLogic.SKIP_NONE) {
             logd("目标 " + id + " 跳过发送（" + SignLogic.skipLabel(_skip) + "）");
@@ -6432,7 +6433,7 @@ public final class TGAutoSignCore {
         try {
             String until = prefs.getString(kSnooze(prefix, id), "");
             if (until == null || until.length() == 0) return false;
-            if (findEntryById(id) == null) return false;   // 条目已删 → 残留的 snooze_ 不生效
+            if (findEntryById(id, accountOfPrefix(prefix)) == null) return false;   // 条目已删 → 残留的 snooze_ 不生效
             return until.compareTo(todayStr()) > 0;
         } catch (Throwable t) { return false; }
     }
@@ -8765,7 +8766,9 @@ public final class TGAutoSignCore {
             if (!prefs.getBoolean(kFrozen(prefix, id), false)) return false;
             // 双保险：条目已被删除时，残留的 frozen_ 不该让"重新添加的同一 bot"继承冻结。
             // （清空配置走的是白名单删除，正常不会残留；但历史版本留下的脏键还在。）
-            if (findEntryById(id) == null) return false;
+            // 必须按 prefix 反解账号，不能读 currentAccount()：后台多账号遍历时
+            // 当前 UI 账号与 prefix 对应账号不同，会查错账号 → 冻结误判为未冻结。
+            if (findEntryById(id, accountOfPrefix(prefix)) == null) return false;
             return true;
         } catch (Throwable t) { return false; }
     }
