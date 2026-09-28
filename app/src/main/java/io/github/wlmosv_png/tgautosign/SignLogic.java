@@ -330,6 +330,7 @@ public final class SignLogic {
     public static final int SKIP_BACKOFF        = 5;  // 退避中
     public static final int SKIP_DISABLED       = 6;  // 暂停/冻结/被排除
     public static final int SKIP_SEND_FAIL      = 7;  // 过了闸但发送过程失败（会话取不到等）
+    public static final int SKIP_ACCOUNT_DISABLED = 8; // 所在账号被用户停用（账号级，最高优先）
 
     /** 参数打包，避免调用方传一长串布尔。 */
     public static final class SignGate {
@@ -339,7 +340,8 @@ public final class SignLogic {
         public boolean sentPendingFresh;    // opt_ == today 且 sent_at 在时效内
         public boolean retryExhausted;      // 今日重试达上限
         public boolean inBackoff;           // now < retryAt
-        public boolean disabled;            // 暂停/冻结/被排除
+        public boolean disabled;            // 暂停/冻结/被排除（目标级）
+        public boolean accountDisabled;     // 所在账号被停用（账号级，见 SKIP_ACCOUNT_DISABLED）
     }
 
     /**
@@ -352,6 +354,10 @@ public final class SignLogic {
      */
     public static int decideSign(SignGate g) {
         if (g == null) return SKIP_NONE;
+        // 账号停用是**账号级**开关：整个账号不参与任何自动签到。
+        // 放在最前，且 manual 也不放行 —— 否则「停用」形同虚设：
+        // 用户停用后点一下「立即签到」就能绕过，与开关语义矛盾。
+        if (g.accountDisabled) return SKIP_ACCOUNT_DISABLED;
         if (g.inFlight) return SKIP_IN_FLIGHT;                 // 并发保护，manual 也不放行
         if (!g.manual) {
             if (g.signedToday) return SKIP_ALREADY_SIGNED;
@@ -375,6 +381,7 @@ public final class SignLogic {
             case SKIP_BACKOFF:        return "退避中";
             case SKIP_DISABLED:       return "已停用/冻结/排除";
             case SKIP_SEND_FAIL:      return "发送失败（会话数据取不到）";
+            case SKIP_ACCOUNT_DISABLED: return "账号已停用";
             default:                  return "";
         }
     }

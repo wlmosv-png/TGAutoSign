@@ -2812,6 +2812,9 @@ public final class TGAutoSignCore {
                 case SignLogic.SKIP_SEND_FAIL:
                     toast(Lang.tf("「{0}」发送失败：取不到会话数据，先进该会话发一条消息", nm));
                     break;
+                case SignLogic.SKIP_ACCOUNT_DISABLED:
+                    toast(Lang.tf("「{0}」所在账号已停用，未发送；如需签到请先在账号一览里启用", nm));
+                    break;
                 default:
                     toast(Lang.tr("已发起签到，结果见提示/日志"));
                     break;
@@ -3732,6 +3735,11 @@ public final class TGAutoSignCore {
         // 「请先关注」这类再点一百次也是同一句话，不该让用户手动触发时白跑。
         _gate.disabled = isDailyBlocked(_pfx, id) || isPermanentFailedToday(_pfx, id)
                 || isFrozen(_pfx, id) || isSnoozed(_pfx, id) || isBotBlocked(dialogId);
+        // 账号级停用（1.6.1 补）：此前 isAccountEnabled 只在「账号一览界面」「一键签全部
+        // 账号」「心跳的非当前账号分支」三处被检查，**没有进这道统一闸** ——
+        // 于是切到被停用的账号后，任何触发源（进入窗口/打开聊天/事件补签/定时/排队）
+        // 都会照常签到，停用开关形同虚设。判据收敛到这里，所有触发源共用。
+        _gate.accountDisabled = !isAccountEnabled(account);
         int _skip = SignLogic.decideSign(_gate);
         if (_skip != SignLogic.SKIP_NONE) {
             logd("目标 " + id + " 跳过发送（" + SignLogic.skipLabel(_skip) + "）");
@@ -4240,6 +4248,14 @@ public final class TGAutoSignCore {
         ctxAcc = accountLabel(account);
         ctxRound++;
         setCtxTrace("");
+        // 账号停用：整账号不参与签到。放在最前，避免逐个目标走一遍闸再逐条打日志。
+        // 与 sendSign 的 _gate.accountDisabled 同一判据 —— 那里是**唯一**兜底，
+        // 这里是提前收敛（事件补签/定时任务不经过本函数，仍靠 sendSign 兜）。
+        if (!isAccountEnabled(account)) {
+            logd("[" + reason + "] " + accountLabel(account) + " 已停用，整账号跳过");
+            lastRound = accountLabel(account) + "：已停用，跳过";
+            return 0;
+        }
         // 定时模式下，非手动(force=false)的批量触发一律交给时刻表调度，不直接批量发
         if (TIMER_ENABLED && !force) {
             kickSchedule();
@@ -4295,6 +4311,8 @@ public final class TGAutoSignCore {
                 gate.inBackoff = now < prefs.getLong(kRetryAt(prefix, id), 0L);
                 gate.disabled = isBotBlocked(entryDid(m)) || isSnoozed(prefix, id) || isFrozen(prefix, id)
                         || isDailyBlocked(prefix, id) || isPermanentFailedToday(prefix, id);
+                // 账号级停用：与 sendSign 同一判据（见那里的说明）。
+                gate.accountDisabled = !isAccountEnabled(account);
                 int skip = SignLogic.decideSign(gate);
                 if (skip != SignLogic.SKIP_NONE) {
                     if (skip == SignLogic.SKIP_ALREADY_SIGNED) signed++;
@@ -7607,6 +7625,8 @@ public final class TGAutoSignCore {
             if (!inWindow()) return;              // 未到点目标只在窗口内，窗口外交给 sweepDue 补
             if (pendingTimerFire != null) return;
             final int _schedAcc = currentAccount();
+            // 同 sweepDue：停用账号不排精确任务。
+            if (!isAccountEnabled(_schedAcc)) return;
             String prefix = accountPrefix();
             // 先做状态归位：把"已发出但久无结论"的转「待确认」，
             // 否则它们会被 skipScheduling 当作"在途"一直跳过、或过期后被当"没发过"重发。
@@ -7651,6 +7671,9 @@ public final class TGAutoSignCore {
             if (!win && !mb) return;
             if (pendingSweep != null) return;
             final int _schedAcc = currentAccount();
+            // 停用账号不排任务。sendSign 仍会兜住（那里是唯一权威），
+            // 但提前返回可以少一轮「排任务→被拒」的空转与日志噪音。
+            if (!isAccountEnabled(_schedAcc)) return;
             String prefix = accountPrefix();
             ensureTimerPlan(prefix);
             List<Map<String, Object>> plan = timerPlan(prefix);
@@ -7837,6 +7860,8 @@ public final class TGAutoSignCore {
     /** 当前账号是否还有今天没签的目标 */
     private boolean hasUnsignedTarget() {
         try {
+            // 停用账号一律视为「已签完」：心跳据此降到 10 分钟档，不再 45 秒空转。
+            if (!isAccountEnabled(currentAccount())) return false;
             String prefix = accountPrefix();
             String today = todayStr();
             List<Map<String, Object>> l = new ArrayList<>();

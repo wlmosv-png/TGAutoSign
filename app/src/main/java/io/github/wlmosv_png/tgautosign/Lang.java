@@ -579,6 +579,7 @@ public final class Lang {
         EN.put("\n\n{0} 现在有 {1} 个目标。", "\n\n{0} currently has {1} targets.");
         EN.put("▍已排除的 bot（取消勾选可解除）", "BLOCKED BOTS (uncheck to unblock)");
         EN.put("「{0}」已停用 / 暂停 / 冻结", "\"{0}\" is disabled / paused / frozen");
+        EN.put("「{0}」所在账号已停用，未发送；如需签到请先在账号一览里启用", "\"{0}\" is in a disabled account — not sent. Enable it in the account overview first");
         EN.put("已对全部启用账号发起签到，结果见日志", "Sign-in started for all enabled accounts; see the log");
         EN.put("自动识别你在 bot 里发的签到文本", "Detects the sign-in text you type in bots automatically");
         EN.put("错误 {0} · 警告 {1}{2}", "Errors {0} · Warnings {1}{2}");

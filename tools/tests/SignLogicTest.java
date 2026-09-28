@@ -474,6 +474,46 @@ public final class SignLogicTest {
         // 标签不为空（日志要用）
         tru("skipLabel 有文案", SignLogic.skipLabel(SignLogic.SKIP_SENT_PENDING).length() > 0);
         eq("skipLabel 放行 → 空串", SignLogic.skipLabel(SignLogic.SKIP_NONE), "");
+
+        // ── 账号级停用（1.6.1 补）──
+        // 此前 isAccountEnabled 只在界面/一键签全部/心跳非当前账号三处检查，
+        // 没进这道统一闸 → 切到停用账号后所有触发源照签，开关形同虚设。
+        g = new SignLogic.SignGate();
+        g.accountDisabled = true;
+        eq("账号停用 → 跳过", SignLogic.decideSign(g), SignLogic.SKIP_ACCOUNT_DISABLED);
+
+        g = new SignLogic.SignGate();
+        g.manual = true;
+        g.accountDisabled = true;
+        eq("账号停用 + manual → 仍跳过（账号级开关不可被手动绕过）",
+           SignLogic.decideSign(g), SignLogic.SKIP_ACCOUNT_DISABLED);
+
+        // 账号停用优先级最高：即使同时「已签/在途」也报账号停用，
+        // 用户看到的提示才准确（是账号关了，不是今天签过了）。
+        g = new SignLogic.SignGate();
+        g.accountDisabled = true;
+        g.inFlight = true;
+        g.signedToday = true;
+        eq("账号停用优先于在途/已签", SignLogic.decideSign(g), SignLogic.SKIP_ACCOUNT_DISABLED);
+
+        // 未停用不受影响
+        g = new SignLogic.SignGate();
+        eq("账号未停用 → 放行", SignLogic.decideSign(g), SignLogic.SKIP_NONE);
+
+        g = new SignLogic.SignGate();
+        g.accountDisabled = false;
+        g.manual = true;
+        eq("账号未停用 + manual → 放行", SignLogic.decideSign(g), SignLogic.SKIP_NONE);
+
+        // 目标级 disabled 与账号级互不干扰
+        g = new SignLogic.SignGate();
+        g.disabled = true;
+        eq("仅目标级停用 → SKIP_DISABLED（不是账号码）",
+           SignLogic.decideSign(g), SignLogic.SKIP_DISABLED);
+
+        tru("skipLabel 账号停用有文案",
+            SignLogic.skipLabel(SignLogic.SKIP_ACCOUNT_DISABLED).length() > 0);
+        eq("skipLabel 账号停用文案", SignLogic.skipLabel(SignLogic.SKIP_ACCOUNT_DISABLED), "账号已停用");
     }
 
     /** 账号索引归一化：多账号串号的根治点，必须有回归。 */
