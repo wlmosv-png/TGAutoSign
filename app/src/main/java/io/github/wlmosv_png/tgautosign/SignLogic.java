@@ -342,6 +342,23 @@ public final class SignLogic {
         public boolean inBackoff;           // now < retryAt
         public boolean disabled;            // 暂停/冻结/被排除（目标级）
         public boolean accountDisabled;     // 所在账号被停用（账号级，见 SKIP_ACCOUNT_DISABLED）
+        /**
+         * manual 时是否仍跳过「今天已签 / 已发出待结论」。
+         *
+         * 为什么需要它（2026-09-28 用户反馈）：
+         *   manual 的语义是「用户显式操作，绕过今日进度限制」，本意是别拦用户。
+         *   但**批量入口**（「立即签到」的全部、一键签全部账号）也走 manual，
+         *   于是把今天已经签过的目标又重发一遍 —— 用户原话：
+         *   「我签过的又给我重复了一遍」「签过的没人会再二次签的吧」。
+         *   重发既浪费当日动作配额，也可能被 bot 判为异常请求。
+         *
+         * 所以拆成两个维度：
+         *   manual      = 用户点的（豁免节流/重试上限/退避）
+         *   skipSigned  = 批量语义：只要今天有结论（已签 / 已发出）就别再发
+         * 单目标「立即签到」保持 skipSigned=false —— 用户点得这么具体，
+         * 通常是有原因的（怀疑没签上），保留强制重签的能力。
+         */
+        public boolean skipSigned;
     }
 
     /**
@@ -366,6 +383,12 @@ public final class SignLogic {
             if (g.inBackoff) return SKIP_BACKOFF;
             if (g.disabled) return SKIP_DISABLED;
         } else {
+            // 批量语义：用户要求「只签未签的」。已签 / 已发出待结论都算「今天有结论了」，
+            // 跳过它们（后者可能已经签上，重发就是重复）。
+            if (g.skipSigned) {
+                if (g.signedToday) return SKIP_ALREADY_SIGNED;
+                if (g.sentPendingFresh) return SKIP_SENT_PENDING;
+            }
             if (g.disabled) return SKIP_DISABLED;
         }
         return SKIP_NONE;

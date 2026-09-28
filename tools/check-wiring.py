@@ -51,6 +51,32 @@ if re.search(r'menuItem\([^;]*?, ""\);', t):
     bad = 1
     print('WARN 有菜单项说明文字为空')
 
+# 3.5) 账号遍历必须用真实槽位（accountSlots），不能用连续区间
+#
+# 来历（2026-09-28 用户反馈）：部分客户端（Nagram 实测）账号槽位**不连续**，
+# selectedAccount / SharedConfig.activeAccounts 会给出 7、9 这类真实索引。
+# 用 `for (i = 0; i < activatedAccounts(); i++)` 遍历时：
+#   - 槽位 {0,1,7} → 只访问 0,1,2，真账号3（槽位7）压根读不到 → 界面显示「没有目标」
+#   - 更糟的是 sweepOrphanEntryKeys 会把它当「孤儿」删状态键
+# 正确写法：for (int i : accountSlots()) { ... }
+ACC_LOOP = re.compile(
+    r'for\s*\(\s*int\s+\w+\s*=\s*0\s*;\s*\w+\s*<\s*(?:Math\.max\(1,\s*)?activatedAccounts\(\)'
+)
+acc_bad = []
+for m in ACC_LOOP.finditer(t):
+    # 取该循环后 600 字符，看是否真的在按账号取前缀/读目标
+    seg = t[m.start():m.start() + 600]
+    if 'accountPrefix(' in seg or 'loadTargetsInto(' in seg or 'acctTargetCount(' in seg:
+        line = t[:m.start()].count('\n') + 1
+        acc_bad.append(line)
+if acc_bad:
+    bad = 1
+    print('账号遍历用了连续区间（槽位不连续时会漏账号 / 误删状态）:')
+    for ln in acc_bad:
+        print('   - 第 %d 行：应改为 for (int i : accountSlots())' % ln)
+else:
+    print('OK   账号遍历都走 accountSlots（真实槽位）')
+
 # 4) 反射字符串别散落字面量（便于宿主适配统一改）
 lit = len(re.findall(r'"org\.telegram\.[A-Za-z.$]+"', t))
 print('INFO 反射类名字面量 %d 处（新增宿主适配时记得一起查）' % lit)

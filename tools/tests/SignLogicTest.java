@@ -577,6 +577,96 @@ public final class SignLogicTest {
 
         // ── 时间展示（今日计划 / 补签列表，2026-09-28）──
         timeDisplay();
+
+        // ── skipSigned：批量入口只签未签的（2026-09-28 用户反馈）──
+        batchSkipSigned();
+    }
+
+    /**
+     * 批量「立即签到」/「签全部账号」不该重发已签的。
+     *
+     * 用户原话：「立即签到是所有的都签到 我签过的又给我重复了一遍」
+     *          「签过的没人会再二次签的吧」
+     * 根因：批量入口传 force=true（=manual），而 manual 会绕过 signedToday 检查。
+     */
+    private static void batchSkipSigned() {
+        // ① 已签 + skipSigned → 跳过（这是本次修复的核心）
+        SignLogic.SignGate g = new SignLogic.SignGate();
+        g.manual = true;
+        g.skipSigned = true;
+        g.signedToday = true;
+        eq("批量 + 已签 → 跳过", SignLogic.decideSign(g), SignLogic.SKIP_ALREADY_SIGNED);
+
+        // ② 已发出待结论 + skipSigned → 也跳过（可能已经签上，重发就是重复）
+        g = new SignLogic.SignGate();
+        g.manual = true;
+        g.skipSigned = true;
+        g.sentPendingFresh = true;
+        eq("批量 + 已发出待结论 → 跳过", SignLogic.decideSign(g), SignLogic.SKIP_SENT_PENDING);
+
+        // ③ 未签 + skipSigned → 正常放行（批量要签的就是这些）
+        g = new SignLogic.SignGate();
+        g.manual = true;
+        g.skipSigned = true;
+        eq("批量 + 未签 → 放行", SignLogic.decideSign(g), SignLogic.SKIP_NONE);
+
+        // ④ 单目标入口（skipSigned=false）保留强制重签能力 —— 用户点得具体，
+        //    通常怀疑没签上，要允许重发。这是有意保留的行为，不是漏改。
+        g = new SignLogic.SignGate();
+        g.manual = true;
+        g.skipSigned = false;
+        g.signedToday = true;
+        eq("单目标 + 已签 → 仍放行（可强制重签）", SignLogic.decideSign(g), SignLogic.SKIP_NONE);
+
+        g = new SignLogic.SignGate();
+        g.manual = true;
+        g.skipSigned = false;
+        g.sentPendingFresh = true;
+        eq("单目标 + 已发出 → 仍放行", SignLogic.decideSign(g), SignLogic.SKIP_NONE);
+
+        // ⑤ skipSigned 只影响 manual 分支；自动路径本来就会跳已签，不受影响
+        g = new SignLogic.SignGate();
+        g.manual = false;
+        g.skipSigned = true;
+        g.signedToday = true;
+        eq("自动 + 已签 → 跳过（原有行为不变）", SignLogic.decideSign(g), SignLogic.SKIP_ALREADY_SIGNED);
+
+        // ⑥ skipSigned 不豁免停用（停用优先）
+        g = new SignLogic.SignGate();
+        g.manual = true;
+        g.skipSigned = true;
+        g.signedToday = true;
+        g.disabled = true;
+        eq("批量 + 已签 + 目标停用 → 报已签（已签在前，语义更准）",
+           SignLogic.decideSign(g), SignLogic.SKIP_ALREADY_SIGNED);
+
+        g = new SignLogic.SignGate();
+        g.manual = true;
+        g.skipSigned = true;
+        g.disabled = true;
+        eq("批量 + 目标停用 → 报停用", SignLogic.decideSign(g), SignLogic.SKIP_DISABLED);
+
+        // ⑦ 账号停用优先级最高，skipSigned 不能绕过
+        g = new SignLogic.SignGate();
+        g.manual = true;
+        g.skipSigned = true;
+        g.accountDisabled = true;
+        eq("批量 + 账号停用 → 跳过", SignLogic.decideSign(g), SignLogic.SKIP_ACCOUNT_DISABLED);
+
+        // ⑧ 在途保护不受 skipSigned 影响（manual 也不放行）
+        g = new SignLogic.SignGate();
+        g.manual = true;
+        g.skipSigned = true;
+        g.inFlight = true;
+        eq("批量 + 在途 → 跳过", SignLogic.decideSign(g), SignLogic.SKIP_IN_FLIGHT);
+
+        // ⑨ skipSigned 不豁免重试上限/退避（那是自动路径的限制，manual 本来就不受）
+        g = new SignLogic.SignGate();
+        g.manual = true;
+        g.skipSigned = true;
+        g.retryExhausted = true;
+        g.inBackoff = true;
+        eq("批量 + 重试用尽/退避 → 放行（manual 豁免）", SignLogic.decideSign(g), SignLogic.SKIP_NONE);
     }
 
     /** 时间口径：补签判定、HH:MM 格式化、相对时间文案。 */

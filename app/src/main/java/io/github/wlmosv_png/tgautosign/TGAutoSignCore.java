@@ -530,9 +530,10 @@ public final class TGAutoSignCore {
     private String perAccountLine() {
         StringBuilder sb = new StringBuilder();
         try {
-            int n = activatedAccounts();
+            // 真实槽位遍历（见 accountSlots 说明）：连续区间会漏掉非连续槽位
+            int[] slots = accountSlots();
             String today = todayStr();
-            for (int i = 0; i < n; i++) {
+            for (int i : slots) {
                 List<Map<String, Object>> l = new ArrayList<Map<String, Object>>();
                 loadTargetsInto(accountPrefix(i), l);
                 // v1.5.7：分母用活跃目标（排除冻结/排除的 bot）
@@ -580,7 +581,11 @@ public final class TGAutoSignCore {
     private void showAccountOverview(final Activity act) {
         try {
             final int cur = currentAccount();
-            final int count = Math.max(1, activatedAccounts());
+            // 真实槽位（用户反馈「账号3 显示没有目标」的根因：
+            // 用 0..activatedAccounts()-1 遍历时，非连续槽位（如 7）压根访问不到，
+            // 显示的是空分区 acc2_，真数据在 acc7_ 里）
+            final int[] slots = accountSlots();
+            final int count = Math.max(1, slots.length);
             LinearLayout box = new LinearLayout(act);
             box.setOrientation(LinearLayout.VERTICAL);
 
@@ -591,7 +596,7 @@ public final class TGAutoSignCore {
             head.setPadding(dp(4), 0, dp(4), dp(8));
             box.addView(head);
 
-            for (int i = 0; i < count; i++) {
+            for (int i : slots) {
                 final int acc = i;
                 int[] st = accountStats(i);
                 LinearLayout row = new LinearLayout(act);
@@ -678,7 +683,8 @@ public final class TGAutoSignCore {
         final int cur = currentAccount();
         final List<Map<String, Object>> mine = targetsSnapshot();
         if (mine.isEmpty()) { toast("当前账号还没有目标，先学一个再复制"); return; }
-        int n = activatedAccounts();
+        int[] slots = accountSlots();
+        int n = slots.length;
         if (n <= 1) { toast("只有一个登录账号，不用复制"); return; }
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -688,7 +694,7 @@ public final class TGAutoSignCore {
         info.setTextColor(Theme.termTxt(act));
         info.setText(Lang.tf("把 {0} 的 {1} 个目标复制到其它账号。\n只复制目标本身，不带「今天已签」和重试记录。", accountLabel(cur), mine.size()));
         box.addView(info);
-        for (int i = 0; i < n; i++) {
+        for (int i : slots) {
             if (i == cur) continue;
             final int target = i;
             LinearLayout row = new LinearLayout(act);
@@ -2243,9 +2249,11 @@ public final class TGAutoSignCore {
         try {
             Set<String> live = new HashSet<String>();
             for (Map<String, Object> m : targetsSnapshot()) live.add(entryId(m));
-            // 所有账号的条目都要算"存活"，否则会误删别的账号正在用的状态
-            int accN = Math.max(1, activatedAccounts());
-            for (int i = 0; i < accN; i++) {
+            // 所有账号的条目都要算"存活"，否则会误删别的账号正在用的状态。
+            // 必须遍历**真实槽位**：用 0..activatedAccounts()-1 会漏掉非连续槽位，
+            // 那些账号的状态键会被判成"孤儿"删除（用户反馈「停用后目标不显示」的
+            // 相关根因之一 —— 删掉的是 sent_at_/opt_/frozen_ 等状态，不是目标本身）。
+            for (int i : accountSlots()) {
                 List<Map<String, Object>> l = new ArrayList<Map<String, Object>>();
                 try { loadTargetsInto(accountPrefix(i), l); } catch (Throwable ignored) {}
                 for (Map<String, Object> m : l) live.add(entryId(m));
@@ -4253,6 +4261,20 @@ public final class TGAutoSignCore {
 
     /** @return 实际排入发送队列的目标条数（0 = 没有可签的）。调用方据此提示用户。 */
     int trySignAllFor(String reason, boolean force, int account) {
+        return trySignAllFor(reason, force, account, false);
+    }
+
+    /**
+     * @param skipSigned 批量语义：今天已签 / 已发出待结论的目标直接跳过。
+     *
+     * 为什么单独一个参数而不是改 manual（2026-09-28 用户反馈）：
+     *   「立即签到」的批量入口和单目标入口都传 force=true（=manual），
+     *   而 manual 会绕过 signedToday 检查 → 已签的被重发一遍。
+     *   用户原话「我签过的又给我重复了一遍」。
+     *   批量入口该跳（用户要的是"补齐未签的"），单目标入口不该跳
+     *   （用户点得这么具体，通常是怀疑没签上，要允许强制重签）。
+     */
+    int trySignAllFor(String reason, boolean force, int account, boolean skipSigned) {
         ctxAcc = accountLabel(account);
         ctxRound++;
         setCtxTrace("");
@@ -4312,6 +4334,7 @@ public final class TGAutoSignCore {
                 // ── 统一闸（与 sendSign 同一套判据，见 SignLogic.decideSign）──
                 SignLogic.SignGate gate = new SignLogic.SignGate();
                 gate.manual = force;
+                gate.skipSigned = skipSigned;
                 gate.signedToday = today.equals(prefs.getString(kLast(prefix, id), ""));
                 gate.inFlight = isPendingFresh(prefix, id);
                 gate.sentPendingFresh = isSentPendingFresh(prefix, id);
@@ -4381,18 +4404,24 @@ public final class TGAutoSignCore {
 
     /** v1.3.0：一键签全部账号（每个账号独立目标集，各自发各自的） */
     public void signAllAccounts() {
-            int count = activatedAccounts();
+            // 遍历**真实槽位**（accountSlots），不是 0..activatedAccounts()-1：
+            // 部分客户端（Nagram 实测）槽位不连续，用连续区间会漏签/错位。
+            int[] slots = accountSlots();
+            int count = slots.length;
             jlog("=== 全账号签到开始，共 " + count + " 个账号 ===");
             StringBuilder rep = new StringBuilder();
-            for (int i = 0; i < count; i++) {
+            int seq = 0;
+            for (int i : slots) {
+                seq++;
                 try {
                     if (!isAccountEnabled(i)) {
-                        jlog("账号" + (i + 1) + " 已停用，跳过");
+                        jlog(accountLabel(i) + " 已停用，跳过");
                         if (rep.length() > 0) rep.append('\n');
                         rep.append(accountLabel(i) + "：已停用，跳过");
                         continue;
                     }
-                    trySignAllFor("全账号(" + (i + 1) + "/" + count + ")", true, i);
+                    // skipSigned=true：批量只签未签的（用户反馈：已签的被重发了一遍）
+                    trySignAllFor("全账号(" + seq + "/" + count + ")", true, i, true);
                     String one = lastRound;
                     if (one == null) one = accountLabel(i) + "：本轮跳过（60 秒内刚跑过，或没网）";
                     if (rep.length() > 0) rep.append('\n');
@@ -5298,7 +5327,7 @@ public final class TGAutoSignCore {
             _sb.append("账号实况: selectedAccount=").append(lastRawAccount)
                .append("  解析=").append(accountLabel(_acc)).append("(acc").append(_acc).append("_)")
                .append("  已登录=").append(activatedAccounts());
-            for (int i = 0; i < Math.max(1, activatedAccounts()); i++) {
+            for (int i : accountSlots()) {
                 int _c = 0;
                 try {
                     java.util.List<Map<String, Object>> _l = new ArrayList<Map<String, Object>>();
@@ -6132,7 +6161,8 @@ public final class TGAutoSignCore {
         LinearLayout box = new LinearLayout(act); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(Theme.dp(act,10), Theme.dp(act,4), Theme.dp(act,10), Theme.dp(act,4));
         addDiagRow(box, act, Lang.tf("宿主包 {0}", safePkg()), true);
         addDiagRow(box, act, Lang.tf("当前账号：{0}（共登录 {1} 个）", accountLabel(currentAccount()), activatedAccounts()), currentAccount() >= 0);
-        for (int ai = 0; ai < activatedAccounts(); ai++) {
+        // 真实槽位遍历：诊断页要能反映非连续槽位（用户报「账号3无目标」时靠它定位）
+        for (int ai : accountSlots()) {
             int cnt = acctTargetCount(ai);
             addDiagRow(box, act, Lang.tf("{0}：{1}", accountLabel(ai), cnt == 0 ? Lang.tr("还没有签到目标，切过去学一个") : Lang.tf("{0} 个目标", cnt)), cnt > 0);
         }
@@ -7452,11 +7482,12 @@ public final class TGAutoSignCore {
     /** 把当前账号的签到配置（窗口/定时/间隔/补签等）应用到所有账号。 */
     private void applyConfigToAllAccounts() {
         try {
-            int n = Math.max(1, activatedAccounts());
+            int[] slots = accountSlots();
+            int n = slots.length;
             String cur = accountPrefix();
             android.content.SharedPreferences.Editor ed = prefs.edit();
             String[] keys = {"window", "timer", "gap", "missback", "missdead"};
-            for (int i = 0; i < n; i++) {
+            for (int i : slots) {
                 String p = accountPrefix(i);
                 for (String k : keys) {
                     String src = cur + "cfg_" + k;
@@ -7478,10 +7509,11 @@ public final class TGAutoSignCore {
     /** 启动迁移：没有 acc{N}_cfg_* 的账号，从全局 jmb_* 初始化，避免老用户设置丢失。 */
     private void migrateAccountConfigs() {
         try {
-            int n = Math.max(1, activatedAccounts());
+            int[] slots = accountSlots();
+            int n = slots.length;
             String[] keys = {"window", "timer", "gap", "missback", "missdead"};
             android.content.SharedPreferences.Editor ed = null;
-            for (int i = 0; i < n; i++) {
+            for (int i : slots) {
                 String p = accountPrefix(i);
                 for (String k : keys) {
                     String accKey = p + "cfg_" + k;
@@ -8342,7 +8374,8 @@ public final class TGAutoSignCore {
             Button all = mkBtn(act);
             withIconText(act, all, "bolt", Lang.tf("全部签到（{0} 个条目）", targets.size()));
             all.setOnClickListener(v -> {
-                int _fired = trySignAllFor("手动全部", true, currentAccount());
+                // skipSigned=true：批量入口只签未签的，已签/已发出的跳过（用户反馈）
+                int _fired = trySignAllFor("手动全部", true, currentAccount(), true);
                 toast(_fired > 0 ? Lang.tf("已对 {0} 个目标发起签到，结果见运行日志", _fired)
                                  : Lang.tr("没有可签的目标（都签过了 / 暂停 / 冻结）"));
             });
@@ -10089,8 +10122,7 @@ public final class TGAutoSignCore {
             root.put("ts", System.currentTimeMillis());
             try { root.put("pkg", safePkg()); } catch (Throwable _e34) { noteSwallowed("syncPush", _e34); }
             org.json.JSONObject accs = new org.json.JSONObject();
-            int accN = Math.max(1, activatedAccounts());
-            for (int i = 0; i < accN; i++) {
+            for (int i : accountSlots()) {
                 String prefix = accountPrefix(i);
                 org.json.JSONObject a = new org.json.JSONObject();
                 org.json.JSONObject last = new org.json.JSONObject();
