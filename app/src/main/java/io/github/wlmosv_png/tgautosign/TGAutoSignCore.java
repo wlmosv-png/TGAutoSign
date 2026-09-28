@@ -204,6 +204,7 @@ public final class TGAutoSignCore {
     private String SORT_MODE = "unsigned";       // 目标列表排序：unsigned=未签置顶 / name=按名称
     private int TITLE_FX = 0;                    // 标题动画：0呼吸 1波浪 2流光 3敲击，每次打开轮换
     private Object listDialog = null;            // 目标列表对话框（自刷新时替换，避免叠层）
+    private Object pendingDialog = null;         // 「待处理」对话框（同上；处置后替换而非叠层）
     private boolean lastPollInWindow = true;
     private String SIGN = "wlmosv";
     private boolean AUTO_LEARN = true;                        // 按钮/回调学习总开关。默认开：新装用户点一次 bot 按钮就能学会，
@@ -6843,8 +6844,10 @@ public final class TGAutoSignCore {
                         Object od = listDialog;
                         listDialog = null;
                         scheduleDismiss(od);
-                        final Activity a2 = lastActivity;
-                        if (a2 != null) showPendingWork(a2);
+                        // 直接用本次 showList 拿到的 act，不走 lastActivity ——
+                        // 后者会随 Activity 生命周期被清空（onDestroy 里置 null），
+                        // 而这里是同步回调，手上的 act 一定有效。
+                        showPendingWork(act);
                     } catch (Throwable ignored) {}
                 } });
                 nb.addView(nbBtn);
@@ -7130,6 +7133,35 @@ public final class TGAutoSignCore {
         return Lang.tr("结果未知");
     }
 
+
+    /**
+     * 处置完一条后重新打开「待处理」（2026-09-28）。
+     *
+     * 为什么要单独一个方法：处置后要么还剩别的待处理（重开自己），
+     * 要么已经清空（回目标列表）。两条路都**只操作对话框**，
+     * 不碰 Activity —— 见 showPendingWork 里关于 finish() 的说明。
+     *
+     * 用 postDelayed 而不是立即执行：对话框 dismiss 与新建之间有动画，
+     * 立即新建会叠在正在消失的旧框上（既有 scheduleDismiss 也是 160ms）。
+     */
+    private void reopenPendingWork(final Activity act) {
+        final Object old = pendingDialog;
+        pendingDialog = null;
+        dismissOne(old);
+        mainHandler.postDelayed(new Runnable() {
+            @Override public void run() {
+                try {
+                    if (act == null || act.isFinishing()) return;
+                    if (countNeedsAttention(accountPrefix()) > 0) {
+                        showPendingWork(act);
+                    } else {
+                        refreshListFrom(act);
+                    }
+                } catch (Throwable t) { noteSwallowed("reopenPendingWork", t); }
+            }
+        }, 180L);
+    }
+
     /**
      * 集中处置界面：一次列出所有需要处理的目标，每条三个动作。
      *
@@ -7191,9 +7223,12 @@ public final class TGAutoSignCore {
             bOk.setText(Lang.tr("确认已签"));
             bOk.setTextSize(Theme.TS_CAPTION);
             bOk.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                // 处置后只关对话框、重开列表 —— **绝不 finish() Activity**。
+                // 从通知横幅进来时 Activity 在通知栈顶，下面没有可回的页面，
+                // finish() 会直接闪回桌面（实测）。
+                // 这里与长按菜单 showEntryActions 的处置写法保持一致。
                 pendConfirmAsSigned(pfx, eid, edid);
-                act.finish();
-                try { refreshListFrom(act); } catch (Throwable ignored) {}
+                reopenPendingWork(act);
             } });
             acts.addView(bOk);
             acts.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(dp(5), 1));
@@ -7203,8 +7238,7 @@ public final class TGAutoSignCore {
             bRe.setTextSize(Theme.TS_CAPTION);
             bRe.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
                 pendConfirmRetry(pfx, eid, edid);
-                act.finish();
-                try { refreshListFrom(act); } catch (Throwable ignored) {}
+                reopenPendingWork(act);
             } });
             acts.addView(bRe);
             acts.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(dp(5), 1));
@@ -7214,8 +7248,7 @@ public final class TGAutoSignCore {
             bIg.setTextSize(Theme.TS_CAPTION);
             bIg.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
                 pendConfirmIgnoreToday(pfx, eid, edid);
-                act.finish();
-                try { refreshListFrom(act); } catch (Throwable ignored) {}
+                reopenPendingWork(act);
             } });
             acts.addView(bIg);
 
@@ -7237,7 +7270,9 @@ public final class TGAutoSignCore {
 
         android.widget.ScrollView sv = new android.widget.ScrollView(act);
         sv.addView(box);
-        showDialog(act, Lang.tf("待处理（{0}）", shown), sv, "关闭");
+        Object oldP = pendingDialog;
+        pendingDialog = showDialog(act, Lang.tf("待处理（{0}）", shown), sv, "关闭");
+        scheduleDismiss(oldP);
     }
 
     /** 账号级待确认池键。唯一真相源在 Keys，这里只做转发（勿再内联字面量）。 */

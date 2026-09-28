@@ -28,7 +28,7 @@ MEMBERS = ['showCopyTargets', 'copyTargetsTo', 'perAccountLine', 'acctTargetCoun
            'refreshLog', 'copyToClip', 'confirmClearLog', 'clearLogNow', 'appendDisk', 'parseLogLine',
            # 1.6.3：执行结果归类 + 待处理聚合条（新增即须有人调用）
            'markResultCode', 'resultCodeOf', 'countNeedsAttention', 'attentionHint',
-           'attentionLabel', 'showPendingWork',
+           'attentionLabel', 'showPendingWork', 'reopenPendingWork',
            'guessLevel', 'isEntryKey', 'syncAccount', 'targetsSnapshot', 'isPendingFresh', 'numLong', 'strOf']
 orphan = [m for m in MEMBERS if t.count(m) < 2]
 if orphan:
