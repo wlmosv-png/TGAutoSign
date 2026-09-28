@@ -276,7 +276,6 @@ public final class Lang {
         EN.put("合并或覆盖", "Merge or replace");
         EN.put("启用该账号", "Enable this account");
         EN.put("回调调试台", "Callback console");
-        EN.put("处理待确认", "Review pending");
         EN.put("已全部加载", "All loaded");
         EN.put("已忽略今天", "Skipped today");
         EN.put("已重新发送", "Resent");
@@ -364,7 +363,6 @@ public final class Lang {
         EN.put("还没有日志文件", "No log files yet");
         EN.put("还没有签到目标", "No targets yet");
         EN.put("（还没有目标）", "(no targets yet)");
-        EN.put("(无待确认目标)", "(nothing pending)");
         EN.put("UID 格式错误", "Invalid UID");
         EN.put("⑫ 出问题怎么办", "12. Troubleshooting");
         EN.put("▍排除的 bot", "BLOCKED BOTS");
@@ -384,7 +382,6 @@ public final class Lang {
         EN.put("已导出「{0}」", "Exported \"{0}\"");
         EN.put("已添加群签到目标", "Group sign-in target added");
         EN.put("已跳过（{0}）", "Skipped ({0})");
-        EN.put("待确认（{0}）", "Pending ({0})");
         EN.put("待确认：忽略今天", "Pending: skip today");
         EN.put("待确认：确认已签", "Pending: confirm signed");
         EN.put("待确认：重试一次", "Pending: retry once");
@@ -419,7 +416,6 @@ public final class Lang {
         EN.put("已是最新 v{0}", "Up to date (v{0})");
         EN.put("应用失败: {0}", "Apply failed: {0}");
         EN.put("当前账号还没有目标", "This account has no targets yet");
-        EN.put("待确认 {0} 个", "{0} pending");
         EN.put("打开失败: {0}", "Could not open: {0}");
         EN.put("指令 / 捕获按钮", "Command / capture button");
         EN.put("操作失败: {0}", "Action failed: {0}");
@@ -547,7 +543,6 @@ public final class Lang {
         EN.put("已命令全部签到，结果见运行日志", "Signing all targets — see the logs for results");
         EN.put("已导出 {0} 项配置\n{1}", "Exported {0} config entries\n{1}");
         EN.put("当前 v{0}\n正在检查更新…", "Current v{0}\nChecking for updates…");
-        EN.put("待确认 {0} 个（点此处理）", "{0} pending (tap to review)");
         EN.put("机器人 ID（数字，无需 @）", "Bot ID (numbers only, no @)");
         EN.put("请在 TG 界面使用 /jmb", "Use /jmb inside Telegram");
         EN.put("（还没有目标，去该账号学一个）", " (no targets yet — switch over and learn one)");
@@ -721,5 +716,28 @@ public final class Lang {
         EN.put("· 定时签到：开启后只在「签到时间」窗口内动作，窗口外所有自动触发一律不响应。\n· 签到时间：两端可点，例如 08:30-20:30。\n· 错开间隔：0 = 按目标数自动均分；设 N 分钟则相邻目标至少隔 N 分钟再随机，防风控节奏自己定。\n· 错过补签 + 补签截止：当天错过仍可补到该时刻（默认 23:00），避免白白作废。", "· Timer: when on, the module only acts inside your \"signing window\"; nothing triggers outside it.\n· Signing window: tap either end to set, e.g. 08:30-20:30.\n· Spacing interval: 0 = spread evenly by target count; set N minutes to force at least N minutes between targets, then randomize.\n· Missed make-up + deadline: missed targets can still be signed up to the deadline (default 23:00) instead of being skipped for the day.");
         EN.put("· 文本指令：知道 bot 要求的签到文本（如 /checkin）时用，填机器人数字 ID + 指令，到点自动发。\n· 回调按钮（推荐）：这类要“点按钮”。去那个 bot 会话点一次它的签到按钮，模块会自动认出并记住，以后每天替你点。绑定不受关键词限制。\n· 群 / 频道：签到在群里发指令时用，填群 ID（形如 -1001234567890）。\n不确定 bot ID 时，用「从会话列表选群」直接挑。", "· Text command: use this when the bot expects a command such as /checkin. Enter the bot's numeric ID and the command; it is sent automatically at the scheduled time.\n· Callback button (recommended): for bots that need a button tapped. Open that bot's chat and tap its sign-in button once — the module learns it and taps it for you every day. Binding is not limited by keywords.\n· Group / channel: for sign-ins you trigger from a group. Enter the group ID (like -1001234567890).\nIf you don't know the bot ID, use \"Pick a group from chats\".");
         EN.put("①「自诊断」：列出宿主反射锚点是否正常，第三方客户端（Nagram XF / Nagram / ExteraLess）适配先看这里。\n②「回调调试台」：列出面板全部按钮，点任意一个实时发一次看机器人返回，用来确认哪个按钮才对。\n③「运行日志」：点「诊断包」一键复制（错误 + 警告 + 最近 50 条 + 配置摘要），粘贴给作者最省事。\n④ 签到没反应：先看通知开关、是否在签到窗口内、该目标是否被暂停。", "1. \"Self-check\": lists whether the host reflection anchors are healthy. Check here first for third-party clients (Nagram XF / Nagram / ExteraLess).\n2. \"Callback console\": lists every button on the panel; tap one to fire it once and see the bot's reply — use it to confirm which button is correct.\n3. \"Logs\": tap \"Diagnostics bundle\" to copy errors + warnings + the last 50 lines + a config summary in one go, then paste it to the author.\n4. No response when signing: check the notification toggle, whether you're inside the signing window, and whether the target is paused.");
+        EN.put("结果未知", "Result unknown");
+        EN.put("按钮失效", "Button expired");
+        EN.put("回复判不出", "Reply unreadable");
+        EN.put("bot 未回复", "Bot did not reply");
+        EN.put("判定已关", "Judging off");
+        EN.put("待添加 {0} 个", "{0} to add");
+        EN.put("待添加 {0} 个（点此处理）", "{0} to add (tap to handle)");
+        EN.put("待添加（{0}）", "To add ({0})");
+        EN.put("(无待添加目标)", "(no targets to add)");
+        EN.put("处理待添加", "Handle pending adds");
+        EN.put("处理", "Handle");
+        EN.put("{0} 个目标需要处理", "{0} targets need attention");
+        EN.put("待处理（{0}）", "Needs attention ({0})");
+        EN.put("按钮已失效，等 bot 推新面板后可重试", "Button expired; retry after the bot pushes a new panel");
+        EN.put("bot 回复了，但判定词认不出结果", "The bot replied, but no keyword matched the result");
+        EN.put("bot 全程没回复", "The bot never replied");
+        EN.put("自动判定已关闭，未判成败", "Auto judging is off, so success/failure was not decided");
+        EN.put("结果未知，需要你看一眼", "Result unknown, please take a look");
+        EN.put("(待添加列表为空)\\n网络学习命中且「需确认」开启时，这里会出现候选目标。", "(nothing to add)\\nCandidates appear here when network learning matches and \\\"needs confirmation\\\" is on.");
+        EN.put("(没有需要处理的目标)\\n按钮失效、回复判不出、bot 未回复时，这里会出现条目。", "(nothing needs attention)\\nEntries appear here for expired buttons, unreadable replies and bots that never replied.");
+        EN.put("已入待添加：确认后才加入目标", "Added to pending: it joins your targets only after you confirm");
+        EN.put("规则·排除 bot·待添加", "Rules \u00b7 blocked bots \u00b7 pending adds");
+        EN.put("▍待添加", "\u258d TO ADD");
     }
 }

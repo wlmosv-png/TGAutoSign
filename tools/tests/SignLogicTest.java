@@ -38,6 +38,7 @@ public final class SignLogicTest {
         accountClamp();
         permanentFail();
         sentPhaseLifecycle();
+        resultClassification();
         v160Regression();
 
         System.out.println("----------------------------------------");
@@ -680,5 +681,59 @@ public final class SignLogicTest {
         // 说明：V_UNKNOWN 走的是宽松模式分支，不由本函数决定；这里只锁定词表行为。
 
         eq("单日失败上限 = 3", SignLogic.FAILS_PER_DAY_LIMIT, 3);
+    }
+
+    /**
+     * 执行结果归类（2026-09-28）。
+     *
+     * 背景：改前有 5 处散落的 if-else 决定成败，「待确认」一词还被两处
+     * 不同语义共用。现在每次执行必须落到恰好一个归类。
+     * 这里锁定归类的**语义契约** —— 谁需要处置、谁会自动重试、谁算已签。
+     */
+    private static void resultClassification() {
+        eq("R_SIGNED 码", SignLogic.resultCode(SignLogic.R_SIGNED), "signed");
+        eq("R_FAILED 码", SignLogic.resultCode(SignLogic.R_FAILED), "failed");
+        eq("R_BTN_STALE 码", SignLogic.resultCode(SignLogic.R_BTN_STALE), "btn_stale");
+        eq("R_REPLIED_UNK 码", SignLogic.resultCode(SignLogic.R_REPLIED_UNK), "replied_unknown");
+        eq("R_NO_REPLY 码", SignLogic.resultCode(SignLogic.R_NO_REPLY), "no_reply");
+        eq("R_JUDGE_OFF 码", SignLogic.resultCode(SignLogic.R_JUDGE_OFF), "judge_off");
+        eq("码->btn_stale", SignLogic.resultOfCode("btn_stale"), SignLogic.R_BTN_STALE);
+        eq("码->no_reply", SignLogic.resultOfCode("no_reply"), SignLogic.R_NO_REPLY);
+        eq("未知码 -> -1", SignLogic.resultOfCode("nonsense"), -1);
+        eq("null -> -1", SignLogic.resultOfCode(null), -1);
+
+        tru("SIGNED 不需处置", !SignLogic.needsAttention(SignLogic.R_SIGNED));
+        tru("FAILED 不需处置", !SignLogic.needsAttention(SignLogic.R_FAILED));
+        tru("BTN_STALE 需处置", SignLogic.needsAttention(SignLogic.R_BTN_STALE));
+        tru("REPLIED_UNK 需处置", SignLogic.needsAttention(SignLogic.R_REPLIED_UNK));
+        tru("NO_REPLY 需处置", SignLogic.needsAttention(SignLogic.R_NO_REPLY));
+        tru("JUDGE_OFF 需处置", SignLogic.needsAttention(SignLogic.R_JUDGE_OFF));
+
+        tru("FAILED 可重试", SignLogic.autoRetryable(SignLogic.R_FAILED));
+        tru("BTN_STALE 可重试", SignLogic.autoRetryable(SignLogic.R_BTN_STALE));
+        tru("REPLIED_UNK 不重试", !SignLogic.autoRetryable(SignLogic.R_REPLIED_UNK));
+        tru("NO_REPLY 不重试", !SignLogic.autoRetryable(SignLogic.R_NO_REPLY));
+        tru("JUDGE_OFF 不重试", !SignLogic.autoRetryable(SignLogic.R_JUDGE_OFF));
+        tru("SIGNED 不重试", !SignLogic.autoRetryable(SignLogic.R_SIGNED));
+
+        tru("只有 SIGNED 算已签", SignLogic.countsAsSigned(SignLogic.R_SIGNED));
+        tru("NO_REPLY 不算已签", !SignLogic.countsAsSigned(SignLogic.R_NO_REPLY));
+        tru("BTN_STALE 不算已签", !SignLogic.countsAsSigned(SignLogic.R_BTN_STALE));
+        tru("REPLIED_UNK 不算已签", !SignLogic.countsAsSigned(SignLogic.R_REPLIED_UNK));
+        tru("JUDGE_OFF 不算已签", !SignLogic.countsAsSigned(SignLogic.R_JUDGE_OFF));
+
+        tru("「正在签到」是进度", SignLogic.looksLikeProgress("正在签到,请稍后..."));
+        tru("「请稍后」是进度", SignLogic.looksLikeProgress("请稍后"));
+        tru("processing 是进度", SignLogic.looksLikeProgress("Processing..."));
+        tru("「签到成功」不是进度", !SignLogic.looksLikeProgress("签到成功"));
+        tru("null 不是进度", !SignLogic.looksLikeProgress(null));
+
+        tru("「正在签到」不算结果", !SignLogic.looksLikeSignResult("正在签到,请稍后..."));
+        tru("「正在查询」不算结果", !SignLogic.looksLikeSignResult("正在查询,请稍后"));
+        tru("「签到成功」算结果", SignLogic.looksLikeSignResult("签到成功"));
+        tru("checkin 算结果", SignLogic.looksLikeSignResult("checkin done"));
+        tru("无关文本不算结果", !SignLogic.looksLikeSignResult("这是 EmbyPulse 用户自助服务机器人"));
+        tru("空串不算结果", !SignLogic.looksLikeSignResult(""));
+        tru("null 不算结果", !SignLogic.looksLikeSignResult(null));
     }
 }

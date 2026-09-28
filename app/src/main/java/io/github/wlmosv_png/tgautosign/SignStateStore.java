@@ -19,6 +19,8 @@ package io.github.wlmosv_png.tgautosign;
  *   I3. 写 last_ 必须同时清 opt_ / pendcfm_ / panelstale_ / silent_ / retry_，
  *       并清 fail_streak_（否则"连续失败天数"会跨过成功的日子继续累加）。
  *   I4. 所有状态键用 commit()：闸门依赖紧随其后的读。
+ *   I5. pendcfm_ = "需要人看一眼"，pendcfm_note_ = 为什么（resultCode）。
+ *       一次执行必须落到恰好一个归类；有结论时两者都清（见 markResult）。
  */
 public final class SignStateStore {
 
@@ -129,6 +131,47 @@ public final class SignStateStore {
         } catch (Throwable t) { return false; }
     }
 
+    // ───────────── 执行结果归类（2026-09-28）─────────────
+
+    /**
+     * 记录本次执行的归类。
+     *
+     * 与 pendcfm_ 的分工：
+     *   · pendcfm_        = "这个目标现在需要人看一眼"（布尔闸门，界面据此显示处置入口）
+     *   · pendcfm_note_   = **为什么**（resultCode 串，界面据此选文案与动作）
+     *
+     * 只对需要处置的归类写 pendcfm_；成功/失败这类自解释的不写
+     * （失败有 retry_ 与 fail_streak_ 表达，成功有 last_）。
+     */
+    public void markResult(String prefix, String id, int result) {
+        try {
+            if (SignLogic.needsAttention(result)) {
+                store.tx(ed -> ed.putBoolean(Keys.pendingCfm(prefix, id), true)
+                                 .putString(Keys.pendingNote(prefix, id), SignLogic.resultCode(result)));
+            } else {
+                // 有结论了 —— 清掉"需要人看"的状态
+                store.tx(ed -> ed.remove(Keys.pendingCfm(prefix, id))
+                                 .remove(Keys.pendingNote(prefix, id)));
+            }
+        } catch (Throwable t) { swallow("markResult", t); }
+    }
+
+    /** 读取归类码；无归类返回 -1。 */
+    public int resultOf(String prefix, String id) {
+        try {
+            if (!store.b(Keys.pendingCfm(prefix, id), false)) return -1;
+            return SignLogic.resultOfCode(store.s(Keys.pendingNote(prefix, id), ""));
+        } catch (Throwable t) { return -1; }
+    }
+
+    /** 清除归类（用户处置完 / 签成功后）。 */
+    public void clearResult(String prefix, String id) {
+        try {
+            store.tx(ed -> ed.remove(Keys.pendingCfm(prefix, id))
+                             .remove(Keys.pendingNote(prefix, id)));
+        } catch (Throwable t) { swallow("clearResult", t); }
+    }
+
     // ───────────── 写 ─────────────
 
     /**
@@ -189,6 +232,7 @@ public final class SignStateStore {
             store.tx(ed -> ed
                     .remove(Keys.opt(prefix, id))
                     .remove(Keys.pendingCfm(prefix, id))
+                    .remove(Keys.pendingNote(prefix, id))
                     .remove(Keys.panelStale(prefix, id))
                     .remove(Keys.panelStaleDay(prefix, id))
                     .remove(Keys.silent(prefix, id))

@@ -1,5 +1,126 @@
 # 更新日志
 
+## 1.6.3 (126) — 2026-09-28
+
+> 本版把散落在 5 处的成败判定收敛为**单一执行结果归类**，
+> 并移除三处把「请求发出」误当「签到成功」的逻辑。
+> 界面侧去掉目标行的内联处置按钮，改为顶部聚合条。
+> 改动源自用户实测：按钮点不动却显示「已签」、bot 回复了却显示「等待」。
+
+### 修复 · Fixed
+
+- **「请求发出」被当成「签到成功」**
+  现象：按钮点不动、bot 只回一句欢迎语的目标，最终仍显示「已签」。
+  根因：超时分支以 `optimisticSigned()` 为判据，而该函数读的是 `opt_` 标记 ——
+  其语义仅为「今天发出过请求」，不含任何成败结论。代码据此执行
+  `keepSignedClearBackoff` 与 `noteResult(true)`，等于把「发出去了」当作「签上了」。
+  实测 `8439387373`（hope 社工库）按钮全程点不动，当天仍被标记已签。
+  修复：发出但无结论时不再判成功，归类为「bot 未回复」，等待用户处置。
+  归类的语义契约由 `SignLogic.countsAsSigned` 承载，只有 `R_SIGNED` 会写已签状态。
+
+  "Request sent" was treated as "signed in".
+  Symptom: targets whose button could not be tapped, and where the bot only replied with a
+  greeting, were still shown as signed. Root cause: the timeout branch used
+  `optimisticSigned()`, which reads the `opt_` marker — that marker only means "a request was
+  sent today" and carries no verdict. The code then ran `keepSignedClearBackoff` and
+  `noteResult(true)`, treating "sent" as "signed". In one measurement the button for
+  8439387373 (hope) could never be tapped, yet the target was marked signed that day.
+  Fix: a sent request without a verdict is no longer counted as success; it is classified as
+  "bot did not reply" and left for the user. The semantic contract lives in
+  `SignLogic.countsAsSigned` — only `R_SIGNED` writes signed state.
+
+- **按钮失效的错误归因导致永久放弃重试**
+  现象：按钮报 `MESSAGE_ID_INVALID` 后，模块提示「该 bot 拒绝程序代点按钮，
+  请改成文本指令目标」，并从此不再重试。
+  根因：熔断条件为 `staleBefore >= 1`，注释称「该 bot 的失败是确定性的」。
+  该断言不成立 —— `MESSAGE_ID_INVALID` 的含义是「所使用的 msg_id 已过期」，
+  而面板的最新 msg_id 本就可用；首次失败通常只是面板尚未推送（时序问题）。
+  实测被熔断的目标当天稍后仍可签上，证明并非确定性拒绝。
+  修复：改为按面板新鲜度三分类 —— 面板新鲜则以最新按钮重发一次；
+  面板未就绪则不发必然失败的请求，等待新消息；两者皆否才归类「按钮失效」。
+  同时删除「该 bot 拒绝程序代点」这一错误提示。
+
+  Wrong attribution of expired buttons caused permanent retry abandonment.
+  Symptom: after a button returned `MESSAGE_ID_INVALID` the module advised "this bot refuses
+  programmatic taps, switch to a text-command target" and never retried. Root cause: the
+  circuit breaker used `staleBefore >= 1`, with a comment claiming the failure was
+  deterministic. That claim does not hold — `MESSAGE_ID_INVALID` means the msg_id in use has
+  expired, while the panel's newest msg_id is available; a first failure is usually just the
+  panel not having arrived yet (a timing issue). A target that tripped the breaker was still
+  signed later the same day. Fix: classify by panel freshness — if the panel is fresh, resend
+  once using the newest button; if it is not ready, do not send a request bound to fail and
+  wait for the new message; only when neither applies is it classified as "button expired".
+  The misleading "this bot refuses programmatic taps" message was removed.
+
+- **进度提示被误判为「像是签到结果」**
+  现象：日志反复出现「这条回复像是签到结果，但没匹配上内置词（可在设置里补一条）」，
+  而对应内容只是「正在签到,请稍后...」。
+  根因：判据为 `contains("签到")`，进度提示必然含该词，于是被当作待补词的结果。
+  这类提示的下一句才是结果，补词并无意义；全量日志中出现 8 次，均属噪音。
+  修复：新增 `SignLogic.looksLikeProgress` 并让 `looksLikeSignResult` 先行排除；
+  进度提示降为调试级日志，不再告警、不再进入诊断包。
+
+  Progress messages were mistaken for sign-in results.
+  Symptom: the log repeatedly showed "this reply looks like a sign-in result but matched no
+  built-in keyword (you can add one in settings)", while the content was merely
+  "signing in, please wait...". Root cause: the test was `contains("sign-in")`, which a
+  progress message necessarily contains, so it was treated as a result awaiting a keyword.
+  The actual result is the next message, making the advice meaningless; the pattern appeared
+  8 times and was pure noise. Fix: `SignLogic.looksLikeProgress` was added and
+  `looksLikeSignResult` now excludes it first; progress messages log at debug level and no
+  longer raise warnings or enter the diagnostics package.
+
+- **自动判定关闭时界面无从体现**
+  现象：关闭「自动判定成功 / 失败」后，bot 回复了内容，界面却只显示「等待」，
+  用户无法得知失败原因是判定被关闭。
+  根因：该分支仅写日志后返回，未在状态中留下任何痕迹。
+  修复：新增归类 `judge_off`，界面显式显示「判定已关」。
+
+  Closing auto-judging left no trace in the UI.
+  Symptom: with "auto judge success / failure" off, a reply from the bot left the UI showing
+  only "waiting", giving no hint that judging was disabled. Root cause: the branch logged and
+  returned without recording any state. Fix: a `judge_off` classification was added and the UI
+  now shows "judging off" explicitly.
+
+### 变更 · Changed
+
+- **执行结果归类取代散落的成败判定**
+  改前由 5 处独立分支决定成败，没有一处能回答「这个目标今天到底怎么了」；
+  「待确认」一词还被签到状态与网络学习候选池共用，含义冲突。
+  现在每次执行落到恰好一个归类：已签 / 失败 / 按钮失效 / 回复判不出 / bot 未回复 / 判定已关。
+  归类为唯一真相源，界面文案、处置入口与重试策略均由它派生。
+  「不知道」被确立为一等状态，模块不再用模糊措辞掩盖不确定。
+
+  Execution-result classification replaces scattered verdict branches.
+  Previously five independent branches decided success or failure, and none could answer
+  "what actually happened to this target today"; the phrase "needs confirmation" was shared by
+  the signed state and the network-learning candidate pool, with conflicting meanings. Now
+  every execution lands on exactly one classification: signed / failed / button expired /
+  reply unreadable / bot did not reply / judging off. The classification is the single source
+  of truth, and the UI wording, action entries and retry policy all derive from it.
+  "Unknown" is now a first-class state; the module no longer hides uncertainty behind vague wording.
+
+- **待处理处置改为顶部聚合条**
+  改前每个待处理目标在行内横排三个按钮（确认已签 / 重试 / 忽略今天），
+  与其他行的结构不一致，且默认用户此刻就要处理它。
+  现在目标行保持统一的两行结构，需要处置的目标由顶部聚合条汇总，
+  点「处理」进入集中界面逐条处置，动作与原来一致。
+
+  Pending actions moved to a top summary bar.
+  Previously each pending target showed three inline buttons (confirm signed / retry / ignore
+  today), inconsistent with other rows and assuming the user wanted to act right away. Target
+  rows now keep the uniform two-line structure, a top bar summarises what needs attention, and
+  tapping "Handle" opens a screen for dealing with them one by one, with the same actions as before.
+
+- **「待确认」重命名以消除歧义**
+  签到状态「待确认」改为按归类显示明确文案（按钮失效 / 回复判不出 / bot 未回复 / 判定已关 /
+  结果未知）；网络学习候选池「待确认」改为「待添加」。
+
+  "Needs confirmation" renamed to remove ambiguity.
+  The signed state now shows explicit wording per classification (button expired / reply
+  unreadable / bot did not reply / judging off / result unknown), and the network-learning
+  candidate pool was renamed to "to add".
+
 ## 1.6.2 (125) — 2026-09-28
 
 > 本版移除按钮学习路径上的全部启发式准入判断。改动源自用户实测反馈：

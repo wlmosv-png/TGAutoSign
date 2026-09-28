@@ -159,19 +159,17 @@ You installed a debug build. Uninstall it, then install the official APK from th
 
 ## 📜 更新日志 · Changelog
 
+### v1.6.3 (126) — 2026-09-28
+
+**Fixed**: Symptom: targets whose button could not be tapped, and where the bot only replied with a greeting… · Wrong attribution of expired buttons caused permanent retry abandonment. · Progress messages were mistaken for sign-in results. · Closing auto-judging left no trace in the UI.
+
+**变更**: Execution-result classification replaces scattered verdict branches. · Pending actions moved to a top summary bar. · The signed state now shows explicit wording per classification (button expired / reply unreadable / bot did not reply /…
+
 ### v1.6.2 (125) — 2026-09-28
 
 **Fixed**: Button learning blocked valid sign-in entries. · Removed the keyword-filter switch. · Removed the automatic target cleanup at startup.
 
 **变更**: Learning settings adjusted.
-
-### v1.6.1 (124) — 2026-09-28
-
-**Fixed**: Targets multiplied automatically: the module's own callbacks were misread as user learning. · Sent-state rollback caused duplicate sign-ins. · Non-check-in buttons entered the learning scope. · Incorrect account attribution in network-layer learning. · Account index clamping was too broad. · Disabled accounts still performed sign-ins. · Batch sign-in re-sent targets already signed. · The account overview omitted accounts on non-contiguous slots. · Buttons clearly labelled as check-ins were blocked (regression introduced in the previous build).
-
-**New**: Two more supported clients, and a corrected default scope. · Cleanup logging for mislearned entries.
-
-**Tooling**: README changelog generator supports block-style bilingual entries. · New build gate: README changelog must stay in sync. · Pure-logic unit tests grew from 174 to 297.
 
 [Full changelog →](https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md)
 

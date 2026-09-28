@@ -517,6 +517,115 @@ public final class SignLogic {
     //   · 排除规则   —— 用户自己写的关键词 / 正则
     // 另加一个精确机制（不是猜测）：模块自身发出的请求不学习
     // （consumeSelfCbRequest，这才是"目标自己冒出来"的正解）。
+    // ════════════════════════════════════════════════════════════════
+    // 执行结果归类（2026-09-28）
+    //
+    // 问题：改前有 5 处散落的 if-else 决定成败，没有一处能回答
+    //   「这个目标今天到底怎么了」——「待确认」「已签」「已发出」
+    //   混在一起，而且「待确认」这个名字还被网络学习候选池占用。
+    //
+    // 现在：每次执行必须落到**恰好一个**归类。归类是唯一真相源，
+    //   界面文案、处置入口、是否重试全部由它派生。
+    //
+    // 关键设计：**「不知道」是一等公民**。
+    //   改前模块总想给个答案（判不出→待确认、没回复→保留已签），
+    //   用模糊掩盖不确定。现在明确说「我不知道，原因是这个」。
+    // ════════════════════════════════════════════════════════════════
+
+    /** 结果码。全流程只有这 6 种，互斥。 */
+    public static final int R_SIGNED        = 0;  // 确认签到成功（命中成功词 / bot 说已签过）
+    public static final int R_FAILED        = 1;  // 明确失败（命中失败词 / 永久错误）
+    public static final int R_BTN_STALE     = 2;  // 按钮失效：面板消息过期或未就绪
+    public static final int R_REPLIED_UNK   = 3;  // bot 回复了，但判不出结果（词表没覆盖）
+    public static final int R_NO_REPLY      = 4;  // bot 全程没回复
+    public static final int R_JUDGE_OFF     = 5;  // 用户关闭了自动判定，模块不替 bot 下结论
+
+    /** 归类的稳定标识串（存进 pendcfm_note_，跨版本可读）。 */
+    public static String resultCode(int r) {
+        switch (r) {
+            case R_SIGNED:      return "signed";
+            case R_FAILED:      return "failed";
+            case R_BTN_STALE:   return "btn_stale";
+            case R_REPLIED_UNK: return "replied_unknown";
+            case R_NO_REPLY:    return "no_reply";
+            case R_JUDGE_OFF:   return "judge_off";
+            default:            return "unknown";
+        }
+    }
+
+    /** 标识串 → 结果码；无法识别返回 -1（调用方按"无归类"处理）。 */
+    public static int resultOfCode(String code) {
+        if (code == null) return -1;
+        switch (code.trim()) {
+            case "signed":          return R_SIGNED;
+            case "failed":          return R_FAILED;
+            case "btn_stale":       return R_BTN_STALE;
+            case "replied_unknown": return R_REPLIED_UNK;
+            case "no_reply":        return R_NO_REPLY;
+            case "judge_off":       return R_JUDGE_OFF;
+            default:                return -1;
+        }
+    }
+
+    /** 该归类是否需要用户处置（界面据此决定是否进「待处理」聚合条）。 */
+    public static boolean needsAttention(int r) {
+        return r == R_BTN_STALE || r == R_REPLIED_UNK || r == R_NO_REPLY || r == R_JUDGE_OFF;
+    }
+
+    /** 该归类是否允许自动重试（false = 停止重试，等人）。 */
+    public static boolean autoRetryable(int r) {
+        switch (r) {
+            case R_FAILED:    return true;    // 失败按退避重试
+            case R_BTN_STALE: return true;    // 等新面板后可重试
+            default:          return false;   // 其余一律停手
+        }
+    }
+
+    /** 是否会写「今日已签」。只有 R_SIGNED 会。 */
+    public static boolean countsAsSigned(int r) {
+        return r == R_SIGNED;
+    }
+
+    /**
+     * 进度提示词 —— 这些是「正在做」，**不是结果**。
+     *
+     * 2026-09-28：实测 `✅ 正在签到,请稍后...` 含「签到」二字，被
+     * looksLikeResult 误判为「像是签到结果但没匹配上内置词」，
+     * 于是刷警告日志 + 进诊断包 + 提示用户去补词。但它是进度提示，
+     * 补词毫无意义（下一句才是结果）。全日志刷了 8 次，纯噪音。
+     */
+    public static final String[] PROGRESS_WORDS = {
+            "正在签到", "正在查询", "正在处理", "正在加载", "正在执行", "正在获取",
+            "请稍后", "请稍候", "稍等", "处理中", "加载中", "查询中",
+            "processing", "please wait", "loading", "just a moment"
+    };
+
+    /** 这条回复是不是「进度提示」而非结果。 */
+    public static boolean looksLikeProgress(String reply) {
+        if (reply == null) return false;
+        String lr = reply.toLowerCase(java.util.Locale.US);
+        for (String w : PROGRESS_WORDS) {
+            if (lr.contains(w)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 这条回复是否**可能**是签到结果（含签到类字眼）。
+     * 用于区分「菜单/查询类回复（正常，不该烦用户）」与
+     * 「看起来是结果但词表没覆盖（值得提示补词）」。
+     *
+     * 2026-09-28：进度提示词先行排除 —— 它们必然含「签到」，否则会全被误判。
+     */
+    public static boolean looksLikeSignResult(String reply) {
+        if (reply == null || reply.length() == 0) return false;
+        if (looksLikeProgress(reply)) return false;      // 进度 ≠ 结果
+        String lr = reply.toLowerCase(java.util.Locale.US);
+        return lr.contains("签到") || lr.contains("打卡") || lr.contains("领取")
+                || lr.contains("签") || lr.contains("check") || lr.contains("sign")
+                || lr.contains("claim") || lr.contains("daily");
+    }
+
     // ────────────────────────────────────────────────────────────────
     // 时间展示（今日计划 / 补签列表）
     // ────────────────────────────────────────────────────────────────

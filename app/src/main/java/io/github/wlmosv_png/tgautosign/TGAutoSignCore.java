@@ -3368,7 +3368,7 @@ public final class TGAutoSignCore {
             // 需确认：进入待确认池，不直接添加（防验证码类 bot 误加）
             if (pendingConfirmAdd(account, did, t)) {
                 jlog("【网络层学习·待确认】" + did + " -> " + t + "（已入待确认池）");
-                toast("已入待确认：确认后才加入目标");
+                toast("已入待添加：确认后才加入目标");
             }
             return;
         }
@@ -3404,6 +3404,22 @@ public final class TGAutoSignCore {
         // 重构 1.6.1：实现搬到 SignStateStore（那里集中维护"写 last_ 必须连带清理"
         // 等不变式）。此处保留薄封装，既有 6 个调用点不变。
         stateStore.markSigned(prefix, id);
+    }
+
+    /**
+     * 记录本次执行的**归类**（2026-09-28）。
+     *
+     * 取代改前散落的"待确认"布尔标记：现在每次执行必须落到恰好一个归类，
+     * 界面文案、处置入口、是否重试全部由它派生（见 SignLogic.R_* 与 resultCode）。
+     * 这是**唯一入口** —— 别再直接写 pendcfm_，否则界面拿不到原因。
+     */
+    private void markResultCode(String prefix, String id, int result) {
+        try { stateStore.markResult(prefix, id, result); } catch (Throwable ignored) {}
+    }
+
+    /** 读取归类码；无归类返回 -1。 */
+    private int resultCodeOf(String prefix, String id) {
+        try { return stateStore.resultOf(prefix, id); } catch (Throwable t) { return -1; }
     }
 
     /**
@@ -3865,56 +3881,52 @@ public final class TGAutoSignCore {
                                     // → 面板事件又点按钮 → 又过期……对该 bot（服务端拒绝代点）
                                     // 重试多少次都是同一个结果，只是刷日志、烧请求额度。
                                     int staleBefore = panelStaleCount(fPrefix, fId);
-                                    // 阈值 1：该 bot 的失败是确定性的（实测换消息、换时间结果一致），
-                                    // 不是偶发抖动 —— 第一次失败就足以判定"拒绝代点"。
-                                    if (staleBefore >= 1) {
+                                    // ── 归类修正（2026-09-28）──
+                                    // 旧逻辑：staleBefore >= 1 就熔断，理由是"该 bot 的失败是确定性的"。
+                                    // 该断言被实测证伪：
+                                    //   · MESSAGE_ID_INVALID 的真实含义是"你用的 msg_id 过期了"，
+                                    //     而 resolveLiveButton 本来就能给出面板最新的 msg_id；
+                                    //   · 第一次失败往往只是**面板还没推过来**（时序问题），
+                                    //     不是"bot 拒绝代点"；
+                                    //   · 实测 8439387373 在 10:42 被熔断，当天 12:09 仍签上了 ——
+                                    //     证明它并非"确定性拒绝"。
+                                    // 正确做法：看**面板新鲜度**，三分类处置。
+                                    boolean triedPres = wakeFired.contains(fId);
+                                    boolean _pFresh = isPanelFresh(fDialogId, 90L * 1000L);
+                                    if (_pFresh) {
+                                        // 面板是新的 → 用最新 msg_id 重发一次（这才是 MESSAGE_ID_INVALID 的解法）
+                                        int _rt = panelStaleCount(fPrefix, fId) + 1;
+                                        prefs.edit().putInt(fPrefix + "panelstale_" + fId, _rt)
+                                             .putString(fPrefix + "panelstale_day_" + fId, todayStr()).apply();
+                                        if (_rt <= 2) {
+                                            logw("按钮已过期(" + errText + ")：面板是新的，用最新按钮重发一次（" + fId + "）");
+                                            mainHandler.postDelayed(new Runnable(){ @Override public void run(){
+                                                try { sendSign(fEntry, fAccount, true); } catch (Throwable _eRS) { noteSwallowed("sendSign(resend)", _eRS); }
+                                            } }, 1200L);
+                                            return null;
+                                        }
+                                        // 重发 2 次仍失效 → 真有问题的按钮
                                         prefs.edit().putInt(kRetry(fPrefix, fId), RETRY_LIMIT)
                                              .putString(kRetryDay(fPrefix, fId), todayStr()).apply();
-                                        prefs.edit().putInt(fPrefix + "panelstale_" + fId, staleBefore + 1)
-                                             .putString(fPrefix + "panelstale_day_" + fId, todayStr()).apply();
-                                        loge("回调按钮反复点不动（第 " + (staleBefore + 1) + " 次，" + errText + "）：已停止重试 "
-                                             + fId + "。该 bot 拒绝程序代点按钮 —— "
-                                             + "请在「目标列表」把这条改成「文本指令」目标（直接发指令，不点按钮）");
-                                        noteFailStreak(fAccount, fPrefix, fId, fDialogId, "按钮拒绝代点");
+                                        loge("按钮反复失效（第 " + _rt + " 次，" + errText + "）：已停止重试 " + fId);
+                                        noteFailStreak(fAccount, fPrefix, fId, fDialogId, "按钮失效");
+                                        markResultCode(fPrefix, fId, SignLogic.R_BTN_STALE);
                                         noteResult(fAccount, false);
                                         return null;
                                     }
-                                    boolean triedPres = wakeFired.contains(fId);
+                                    // 面板没就绪 → **不发必然失败的请求**，等新消息推过来
+                                    // （3788 行注释已说明这个做法，这里保持一致）
                                     if (!triedPres && fPres != null && !fPres.isEmpty()) {
                                         wakeFired.add(fId);
-                                        // 延后到 5 秒：面板推送本来就慢，800ms 等于立刻又打一次。
                                         mainHandler.postDelayed(new Runnable(){ @Override public void run(){
                                             try { sendPreAndResign(fEntry, fAccount, fPeer, fPres, 0); } catch (Throwable _e14) { noteSwallowed("sendSign", _e14); }
                                         } }, 5000L);
-                                        logw("回调按钮过期(" + errText + ")：拉新面板后重试（" + fId + "）");
-                                    } else {
-                                        // ── 关键判定（v1.6.0）──
-                                        // MESSAGE_ID_INVALID 是 TG 在**回调应答阶段**返回的，含义是
-                                        // "你点的按钮所属消息已过期"，**不是签到失败**。
-                                        // 而前置命令（/start 之类）可能已经把签到做完了：
-                                        // 实测社工 bot —— 21:13:57 前置命令返回成功并标了已签，
-                                        // 21:13:59 按钮过期就把已签抹掉 → 界面显示"退避中"，
-                                        // 10 分钟后又重发一次，一天白刷十几次。
-                                        //
-                                        // 原注释的前提「面板过期 = 签到没发出去」只在**没有前置命令**时成立。
-                                        // 有前置命令、且本步已乐观标记为已签 → 按钮过期不影响签到结果。
-                                        // 判定修正（1.6.1）：MESSAGE_ID_INVALID 含义是"这个按钮点不动"，
-                                        // **不是**签到成功。旧逻辑"有前置命令 + 今天已标已签就保留已签"
-                                        // 被实测证伪（hope 社工库：/start 只是打开菜单，按钮服务端拒绝代点）。
-                                        // 按钮模式点不动 = 没签上，一律按失败处理。
-                                        // 面板过期且前置命令没签成 = 确实没签上，撤销 + 退避
-                                        int rtry = prefs.getInt(kRetry(fPrefix, fId), 0) + 1;
-                                        prefs.edit().remove(kLast(fPrefix, fId))
-                                             .putInt(kRetry(fPrefix, fId), Math.min(rtry, RETRY_LIMIT))
-                                             .putLong(kRetryAt(fPrefix, fId), System.currentTimeMillis() + 10L * 60 * 1000)
-                                             .putString(kRetryDay(fPrefix, fId), todayStr()).apply();
-                                        // 熔断已在上层统一处理（阈值 1，进入本分支时即判定），
-                                        // 这里的重复块已删除 —— 保留会让人以为还有第二个阈值。
-                                        loge("回调面板已变化(" + errText + ")：本次未签成功，将在补签时段自动重试"
-                                                + (rtry >= RETRY_LIMIT ? "（已重试 " + rtry + " 次）" : "")
-                                                + "；也可去 bot 会话手动点一次签到按钮立即修复（" + fId + "）");
-                                        noteFailStreak(fAccount, fPrefix, fId, fDialogId, "回调面板已变化 " + errText);
+                                        logw("按钮已过期(" + errText + ")：面板未就绪，拉新面板后重试（" + fId + "）");
+                                        return null;
                                     }
+                                    // 面板未就绪且没有前置命令可发 → 归类「按钮失效」，等人处置
+                                    markResultCode(fPrefix, fId, SignLogic.R_BTN_STALE);
+                                    logw("按钮失效且面板未就绪（" + errText + "）：标记「按钮已失效」，等 bot 推新面板（" + fId + "）");
                                     noteResult(fAccount, false);
                                     return null;
                                 }
@@ -3958,6 +3970,21 @@ public final class TGAutoSignCore {
                                     logw("[" + fId + "] 收到 " + errText + " —— 本轮请求 kind=" + fKind
                                          + (fPres != null && !fPres.isEmpty() ? "(有前置命令)" : "(无前置命令)")
                                          + (_sentAt > 0 ? " 发出于 " + ((System.currentTimeMillis() - _sentAt) / 1000L) + " 秒前" : ""));
+                                    // 2026-09-28：超时后按"有没有收到过回复"归类 ——
+                                    // 收到过 → 回复了但判不出（replied_unknown）
+                                    // 完全没收到 → bot 未回复（no_reply）
+                                    // 改前一律等 10 分钟转"待确认"，但 bot 要么已经回了、
+                                    // 要么就是不会回，这 10 分钟没有信息增量。
+                                    if (!optimisticSigned(fPrefix, fId)) {
+                                        boolean answered = todayStr().equals(prefs.getString(Keys.answered(fPrefix, fId), ""));
+                                        int rc = answered ? SignLogic.R_REPLIED_UNK : SignLogic.R_NO_REPLY;
+                                        markResultCode(fPrefix, fId, rc);
+                                        logw("超时且无结论（" + errText + "）：标记为「"
+                                             + (answered ? "已回复但判不出" : "bot 未回复") + "」，"
+                                             + "已停止自动重试（" + fId + "）");
+                                        noteResult(fAccount, false);
+                                        return null;
+                                    }
                                     int tOut = prefs.getInt(kRetry(fPrefix, fId), 0);
                                     if (tOut >= 2) {
                                         // 未回复 ≠ 成功。绝不能替 bot 判定结果 ——
@@ -3974,23 +4001,24 @@ public final class TGAutoSignCore {
                                              + " 标记为「待确认」（不计成功也不计失败，已停止自动重试；"
                                              + "想再试可手动点一次）");
                                     } else if (optimisticSigned(fPrefix, fId)) {
-                                        // 请求已经成功发出并标了已签，只是 bot 没回结果。
-                                        // 有些 bot（查询类、菜单类）本来就不回复签到结论 ——
-                                        // 这不代表签到失败，绝不能撤销已签。
+                                        // ── 归类修正（2026-09-28）──
+                                        // 旧逻辑：optimisticSigned 读的是 opt_（只表示"请求发出过"），
+                                        // 却直接 keepSignedClearBackoff + noteResult(true) —— 把
+                                        // **"发出去了"当成了"签成功了"**。
                                         //
-                                        // 注（1.6.1 二次修正）：这里曾排除"按钮模式 + 有前置命令"，
-                                        // 理由是"面板还没推、按钮还没点，不该算已签"。
-                                        // 但实测（2026-09-25 08:39 ExteraLess）证明：该 bot 在宽松模式下
-                                        // 已经判过成功（回复判定 → markSigned），随后超时又把它推翻，
-                                        // 造成同一轮"成功 + 失败"两条相反日志。
-                                        // 现在统一按"今天有没有成功结论"处理，不再看模式与前置命令。
-                                        keepSignedClearBackoff(fPrefix, fId);
+                                        // 实测代价（8428906628 个人中心 / 8439387373 hope社工库）：
+                                        //   按钮点不动、bot 只回欢迎语，最终仍被标"今日已签"。
+                                        //   用户看到绿色以为签上了，实际什么都没发生。
+                                        //
+                                        // 现在：发出过但无结论 → 不判成功也不判失败，
+                                        // 归类为「bot 未回复」，由用户一键处置。
                                         int sil = silentCount(fPrefix, fId) + 1;
                                         prefs.edit().putInt(fPrefix + "silent_" + fId, sil)
                                              .putString(fPrefix + "silent_day_" + fId, todayStr()).apply();
-                                        logw("bot 未回结果(" + errText + ")：但已成功发出，保留已签（" + fId
-                                             + "）；该 bot 可能本来就不回复结论");
-                                        noteResult(fAccount, true);
+                                        markResultCode(fPrefix, fId, SignLogic.R_NO_REPLY);
+                                        logw("已发出但 bot 未回结果(" + errText + ")：标记「bot 未回复」，"
+                                             + "不计成功也不计失败，可在目标列表一键忽略（" + fId + "）");
+                                        noteResult(fAccount, false);
                                         return null;
                                     } else {
                                         prefs.edit().putInt(kRetry(fPrefix, fId), tOut + 1)
@@ -4626,9 +4654,16 @@ public final class TGAutoSignCore {
     private String statusOf(String prefix, String id, String today) {
         String lastSign = prefs.getString(kLast(prefix, id), "");
         if (today.equals(lastSign)) return Lang.tr("已签");
-        // 待确认：发过、没回复、已停止重试 —— 不能显示成"未签"（像没做），
-        // 也不能显示成"已签"（骗人）。单独一个状态让用户自己判断。
-        if (isPendingConfirm(prefix, id)) return Lang.tr("待确认");
+        // ── 归类驱动（2026-09-28）──
+        // 改前这里只有一个含糊的「待确认」，不区分"按钮失效 / 回复判不出 / bot 没回"，
+        // 用户看到「待确认」只知道有事，不知道该干嘛；而且这个词还被网络学习候选池占用。
+        // 现在按归类给出**明确文案**，用户一眼知道发生了什么。
+        int _rc = resultCodeOf(prefix, id);
+        if (_rc == SignLogic.R_BTN_STALE)   return Lang.tr("按钮失效");
+        if (_rc == SignLogic.R_REPLIED_UNK) return Lang.tr("回复判不出");
+        if (_rc == SignLogic.R_NO_REPLY)    return Lang.tr("bot 未回复");
+        if (_rc == SignLogic.R_JUDGE_OFF)   return Lang.tr("判定已关");
+        if (isPendingConfirm(prefix, id)) return Lang.tr("结果未知");
         int retries = prefs.getInt(kRetry(prefix, id), 0);
         if (retries >= RETRY_LIMIT) return Lang.tr("已放弃");
         long retryAt = prefs.getLong(kRetryAt(prefix, id), 0);
@@ -4641,7 +4676,7 @@ public final class TGAutoSignCore {
         // 若命中这条，就地转成「待确认」并如实显示，让用户有处置入口。
         if (sentButStale(prefix, id)) {
             promoteSilentToPending(prefix, id, "ui-refresh");
-            return Lang.tr("待确认");
+            return Lang.tr("结果未知");
         }
         if (retries > 0) return Lang.tr("重试中");
         return Lang.tr("待签");
@@ -5049,16 +5084,18 @@ public final class TGAutoSignCore {
         TextView st = new TextView(c); st.setTextSize(Theme.TS_CAPTION); st.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
         int stCol = Theme.termTxt(c);
         if (status != null && status.contains("已签")) stCol = Theme.termGreen(c);
-        else if (status != null && status.contains("待确认")) stCol = Theme.termAmber(c);
-        else if (status != null && (status.contains("退避") || status.contains("重试"))) stCol = Theme.termAmber(c);
-        else if (status != null && status.contains("放弃")) stCol = Theme.termMuted(c);
+        else if (status != null && (status.contains("按钮失效") || status.contains("回复判不出"))) stCol = Theme.termAmber(c);
+        else if (status != null && (status.contains("结果未知") || status.contains("退避") || status.contains("重试"))) stCol = Theme.termAmber(c);
+        else if (status != null && (status.contains("bot 未回复") || status.contains("判定已关") || status.contains("放弃"))) stCol = Theme.termMuted(c);
         st.setTextColor(stCol);
         st.setText(Lang.tr(status));
         // 状态前导图标：已签=勾、待签=钟、退避/重试=警告
         String stIcon = null;
         if (status != null) {
             if (status.contains("已签")) stIcon = "check";
-            else if (status.contains("待确认")) stIcon = "warn";
+            else if (status.contains("按钮失效") || status.contains("回复判不出")
+                     || status.contains("结果未知")) stIcon = "warn";
+            else if (status.contains("bot 未回复") || status.contains("判定已关")) stIcon = "info";
             else if (status.contains("待签")) stIcon = "clock";
             else if (status.contains("退避") || status.contains("重试")) stIcon = "warn";
         }
@@ -5083,51 +5120,13 @@ public final class TGAutoSignCore {
             t2r.addView(lt, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         }
         col.addView(t2r);
-        // 「待确认」处置条（v1.6.0）：以前这个状态只写不读，用户看到「待确认」却无处可点 ——
-        // 点进菜单也只有编辑/重绑/暂停/冻结/排除/删除，没有一个能处理它。
-        // 现在状态行下方直接给三个动作，看到就能当场决定。
-        try {
-            final String pfx = accountPrefix();
-            if (isPendingConfirm(pfx, id)) {
-                LinearLayout pr = new LinearLayout(c);
-                pr.setOrientation(LinearLayout.HORIZONTAL);
-                pr.setGravity(Gravity.CENTER_VERTICAL);
-                pr.setPadding(0, Theme.dp(c, 5), 0, 0);
-                final long fDid = did;
-                final String fId = id;
-                TextView tip = new TextView(c);
-                tip.setTextSize(Theme.TS_CAPTION);
-                tip.setTextColor(Theme.termAmber(c));
-                tip.setTypeface(Theme.text());
-                tip.setText(Lang.tr("没等到 bot 回复："));
-                pr.addView(tip);
-                pr.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,4), 1));
-                Button bOk = mkBtn(c);
-                bOk.setText(Lang.tr("确认已签"));
-                bOk.setTextSize(Theme.TS_CAPTION);
-                bOk.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
-                    pendConfirmAsSigned(pfx, fId, fDid); refreshListFrom(v.getContext());
-                } });
-                pr.addView(bOk);
-                pr.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,4), 1));
-                Button bRe = mkBtn(c);
-                bRe.setText(Lang.tr("重试"));
-                bRe.setTextSize(Theme.TS_CAPTION);
-                bRe.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
-                    pendConfirmRetry(pfx, fId, fDid); refreshListFrom(v.getContext());
-                } });
-                pr.addView(bRe);
-                pr.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,4), 1));
-                Button bIg = mkBtn(c);
-                bIg.setText(Lang.tr("忽略今天"));
-                bIg.setTextSize(Theme.TS_CAPTION);
-                bIg.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
-                    pendConfirmIgnoreToday(pfx, fId, fDid); refreshListFrom(v.getContext());
-                } });
-                pr.addView(bIg);
-                col.addView(pr);
-            }
-        } catch (Throwable _eP) { noteSwallowed("targetRow(pendcfm)", _eP); }
+        // ── 内联处置条已移除（2026-09-28）──
+        // 原来这里在每行下方横排三个按钮（确认已签/重试/忽略今天）。
+        // 两个问题：
+        //   ① 破坏一致性 —— 其他所有操作都在「点击行 → 菜单」里，只有它例外；
+        //   ② 假设用户此刻要处理它，但用户可能只是路过看一眼列表。
+        // 现在改为：列表保持干净的两行结构 → 顶部聚合条 → 点进去集中处理。
+        // 处置逻辑见 showPendingWork()。
         row.addView(col, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         TextView ar = new TextView(c); ar.setTextSize(18); ar.setText("\u203a"); ar.setTextColor(accent); row.addView(ar);
         wrap.addView(row);
@@ -5626,7 +5625,7 @@ public final class TGAutoSignCore {
         addTile(g1, act, "bolt", "立即签到", "当前账号", "sign");
         addTile(g1, act, "doc", "运行日志", "搜索·筛选·清空", "log");
         addTile(g1, act, "sliders", "设置", "定时·窗口·间隔", "settings");
-        addTile(g1, act, "trash", "排除管理", "规则·排除 bot·待确认", "exclude");
+        addTile(g1, act, "trash", "排除管理", "规则·排除 bot·待添加", "exclude");
         addTile(g1, act, "globe", "账号一览", Lang.tf("{0} 个账号", activatedAccounts()), "accounts");
         addTile(g1, act, "book", "使用教程", "上手·排障", "tutorial");
 
@@ -6720,14 +6719,14 @@ public final class TGAutoSignCore {
             } });
             box.addView(blBtn);
 
-            sectionHeader(box, act, "▍待确认");
+            sectionHeader(box, act, "▍待添加");
             final int pendingAcc = currentAccount();
             final java.util.List<Long> pd = pendingConfirmDids(pendingAcc);
             TextView pcLab = new TextView(act); pcLab.setTextSize(Theme.TS_CAPTION); pcLab.setTextColor(Theme.termFaint(act)); pcLab.setTypeface(Theme.text());
-            pcLab.setText(pd.isEmpty() ? Lang.tr("(无待确认目标)") : Lang.tf("待确认 {0} 个", pd.size()));
+            pcLab.setText(pd.isEmpty() ? Lang.tr("(无待添加目标)") : Lang.tf("待添加 {0} 个", pd.size()));
             pcLab.setPadding(dp(4), dp(2), dp(4), dp(4));
             box.addView(pcLab);
-            Button pcBtn = mkBtn(act); withIconText(act, pcBtn, "check", "处理待确认");
+            Button pcBtn = mkBtn(act); withIconText(act, pcBtn, "check", "处理待添加");
             pcBtn.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ showPendingConfirm(act); } });
             box.addView(pcBtn);
 
@@ -6753,7 +6752,7 @@ public final class TGAutoSignCore {
             final java.util.List<String> texts = pendingConfirmTexts(pendingAcc);
             if (dids.isEmpty()) {
                 TextView e = new TextView(act); e.setTextSize(Theme.TS_BODY); e.setTextColor(Theme.termMuted(act)); e.setTypeface(Theme.text());
-                e.setText(Lang.tr("(待确认列表为空)\n网络学习命中且「需确认」开启时，这里会出现候选目标。"));
+                e.setText(Lang.tr("(待添加列表为空)\n网络学习命中且「需确认」开启时，这里会出现候选目标。"));
                 e.setPadding(dp(8), dp(12), dp(8), dp(12));
                 box.addView(e);
             } else {
@@ -6788,7 +6787,7 @@ public final class TGAutoSignCore {
                     box.addView(row);
                 }
             }
-            curDlg[0] = showDialog(act, Lang.tf("待确认（{0}）", dids.size()), box, "关闭");
+            curDlg[0] = showDialog(act, Lang.tf("待添加（{0}）", dids.size()), box, "关闭");
         } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
     }
 
@@ -6805,7 +6804,7 @@ public final class TGAutoSignCore {
             pclp.setMargins(0, dp(2), 0, dp(8));
             pc.setLayoutParams(pclp);
             TextView pct = new TextView(act); pct.setTextSize(Theme.TS_BODY); pct.setTextColor(Theme.termAmber(act)); pct.setTypeface(Theme.monoBold());
-            pct.setText(Lang.tf("待确认 {0} 个（点此处理）", pd.size()));
+            pct.setText(Lang.tf("待添加 {0} 个（点此处理）", pd.size()));
             pc.addView(pct, new LinearLayout.LayoutParams(0, -2, 1f));
             pc.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ showPendingConfirm(act); } });
             box.addView(pc);
@@ -6813,6 +6812,46 @@ public final class TGAutoSignCore {
         if (targets.size() == 0) {
             emptyView(box, "(暂无目标，点「添加目标」，或直接点 bot 的签到按钮自动学习)");
         }
+        // ── 待处理聚合条（2026-09-28）──
+        // 取代原来内联在每个目标行里的三个按钮：列表保持干净的两行结构，
+        // 需要处置的集中在顶部一个入口（像通知，不打扰，想处理时点进去）。
+        try {
+            final int needN = countNeedsAttention(accountPrefix());
+            if (needN > 0) {
+                LinearLayout nb = new LinearLayout(act);
+                nb.setOrientation(LinearLayout.HORIZONTAL);
+                nb.setGravity(Gravity.CENTER_VERTICAL);
+                nb.setPadding(dp(12), dp(10), dp(10), dp(10));
+                nb.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termAmber(act), 0x40)));
+                LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(-1, -2);
+                nlp.setMargins(0, dp(2), 0, dp(8));
+                nb.setLayoutParams(nlp);
+
+                TextView nt = new TextView(act);
+                nt.setTextSize(Theme.TS_SECOND);
+                nt.setTextColor(Theme.termAmber(act));
+                nt.setTypeface(Theme.text());
+                nt.setText(Lang.tf("{0} 个目标需要处理", needN));
+                nb.addView(nt);
+                nb.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(0, 1, 1f));
+
+                Button nbBtn = mkBtn(act);
+                nbBtn.setText(Lang.tr("处理"));
+                nbBtn.setTextSize(Theme.TS_CAPTION);
+                nbBtn.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                    try {
+                        Object od = listDialog;
+                        listDialog = null;
+                        scheduleDismiss(od);
+                        final Activity a2 = lastActivity;
+                        if (a2 != null) showPendingWork(a2);
+                    } catch (Throwable ignored) {}
+                } });
+                nb.addView(nbBtn);
+                box.addView(nb);
+            }
+        } catch (Throwable _eNB) { noteSwallowed("showList(pendingBar)", _eNB); }
+
         // 排序切换
         if (targets.size() > 0) {
             LinearLayout bar = new LinearLayout(act); bar.setOrientation(LinearLayout.HORIZONTAL); bar.setGravity(Gravity.CENTER_VERTICAL); bar.setPadding(dp(2), dp(2), dp(2), dp(6));
@@ -7050,6 +7089,157 @@ public final class TGAutoSignCore {
     private static String kExclude() { return "jmb_exclude"; }
     private static String kBlockedDids() { return "jmb_blocked_dids"; }
     private static String kPendingConfirm() { return "jmb_pending_confirm"; }
+    /**
+     * 顶部「待处理」聚合条（2026-09-28）。
+     *
+     * 为什么改成聚合条：内联按钮假设用户此刻要处理它，但用户可能只是路过。
+     * 而且它让目标行和别的行长得不一样。聚合条遵循一个更自然的模式 ——
+     * 像系统通知：平时不打扰，想处理时点进去，一次看完所有待办。
+     *
+     * @return 需要处置的目标数；0 表示不显示这条
+     */
+    private int countNeedsAttention(String prefix) {
+        int n = 0;
+        try {
+            List<Map<String, Object>> list = new ArrayList<Map<String, Object>>();
+            loadTargetsInto(prefix, list);
+            for (Map<String, Object> m : list) {
+                if (isPendingConfirm(prefix, entryId(m))) n++;
+            }
+        } catch (Throwable t) { noteSwallowed("countNeedsAttention", t); }
+        return n;
+    }
+
+    /** 归类 → 用户可读的处置说明（聚合条里逐条显示）。 */
+    private String attentionHint(String prefix, String id) {
+        int rc = resultCodeOf(prefix, id);
+        if (rc == SignLogic.R_BTN_STALE)    return Lang.tr("按钮已失效，等 bot 推新面板后可重试");
+        if (rc == SignLogic.R_REPLIED_UNK)  return Lang.tr("bot 回复了，但判定词认不出结果");
+        if (rc == SignLogic.R_NO_REPLY)     return Lang.tr("bot 全程没回复");
+        if (rc == SignLogic.R_JUDGE_OFF)    return Lang.tr("自动判定已关闭，未判成败");
+        return Lang.tr("结果未知，需要你看一眼");
+    }
+
+    /** 归类的显示名（聚合条左侧标签）。 */
+    private String attentionLabel(String prefix, String id) {
+        int rc = resultCodeOf(prefix, id);
+        if (rc == SignLogic.R_BTN_STALE)    return Lang.tr("按钮失效");
+        if (rc == SignLogic.R_REPLIED_UNK)  return Lang.tr("回复判不出");
+        if (rc == SignLogic.R_NO_REPLY)     return Lang.tr("bot 未回复");
+        if (rc == SignLogic.R_JUDGE_OFF)    return Lang.tr("判定已关");
+        return Lang.tr("结果未知");
+    }
+
+    /**
+     * 集中处置界面：一次列出所有需要处理的目标，每条三个动作。
+     *
+     * 动作与旧的内联按钮完全一致（确认已签 / 重试 / 忽略今天），
+     * 只是从"每行都塞"改成"想看时才展开"。
+     */
+    private void showPendingWork(final Activity act) {
+        final String pfx = accountPrefix();
+        final LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(2), dp(2), dp(2), dp(2));
+
+        final List<Map<String, Object>> list = new ArrayList<Map<String, Object>>();
+        try { loadTargetsInto(pfx, list); } catch (Throwable ignored) {}
+
+        int shown = 0;
+        for (final Map<String, Object> m : list) {
+            final String eid = entryId(m);
+            if (!isPendingConfirm(pfx, eid)) continue;
+            shown++;
+            final long edid = entryDid(m);
+
+            LinearLayout card = new LinearLayout(act);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setPadding(dp(10), dp(8), dp(10), dp(8));
+            card.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termAmber(act), 0x33)));
+
+            LinearLayout head = new LinearLayout(act);
+            head.setOrientation(LinearLayout.HORIZONTAL);
+            head.setGravity(Gravity.CENTER_VERTICAL);
+            TextView nm = new TextView(act);
+            nm.setTextSize(Theme.TS_SECOND);
+            nm.setTextColor(Theme.termTxt(act));
+            nm.setText(targetTitle(edid));
+            nm.setTypeface(Theme.text());
+            head.addView(nm);
+            head.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(0, 1, 1f));
+            TextView tag = new TextView(act);
+            tag.setTextSize(Theme.TS_CAPTION);
+            tag.setTextColor(Theme.termAmber(act));
+            tag.setText(attentionLabel(pfx, eid));
+            tag.setTypeface(Theme.text());
+            head.addView(tag);
+            card.addView(head);
+
+            TextView hint = new TextView(act);
+            hint.setTextSize(Theme.TS_CAPTION);
+            hint.setTextColor(Theme.termFaint(act));
+            hint.setText(attentionHint(pfx, eid));
+            hint.setTypeface(Theme.text());
+            hint.setPadding(0, dp(3), 0, dp(6));
+            card.addView(hint);
+
+            LinearLayout acts = new LinearLayout(act);
+            acts.setOrientation(LinearLayout.HORIZONTAL);
+            acts.setGravity(Gravity.CENTER_VERTICAL);
+
+            Button bOk = mkBtn(act);
+            bOk.setText(Lang.tr("确认已签"));
+            bOk.setTextSize(Theme.TS_CAPTION);
+            bOk.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                pendConfirmAsSigned(pfx, eid, edid);
+                act.finish();
+                try { refreshListFrom(act); } catch (Throwable ignored) {}
+            } });
+            acts.addView(bOk);
+            acts.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(dp(5), 1));
+
+            Button bRe = mkBtn(act);
+            bRe.setText(Lang.tr("重试"));
+            bRe.setTextSize(Theme.TS_CAPTION);
+            bRe.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                pendConfirmRetry(pfx, eid, edid);
+                act.finish();
+                try { refreshListFrom(act); } catch (Throwable ignored) {}
+            } });
+            acts.addView(bRe);
+            acts.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(dp(5), 1));
+
+            Button bIg = mkBtn(act);
+            bIg.setText(Lang.tr("忽略今天"));
+            bIg.setTextSize(Theme.TS_CAPTION);
+            bIg.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                pendConfirmIgnoreToday(pfx, eid, edid);
+                act.finish();
+                try { refreshListFrom(act); } catch (Throwable ignored) {}
+            } });
+            acts.addView(bIg);
+
+            card.addView(acts);
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
+            clp.setMargins(0, dp(4), 0, dp(4));
+            card.setLayoutParams(clp);
+            box.addView(card);
+        }
+
+        if (shown == 0) {
+            TextView e = new TextView(act);
+            e.setTextSize(Theme.TS_SECOND);
+            e.setTextColor(Theme.termFaint(act));
+            e.setText(Lang.tr("(没有需要处理的目标)\n按钮失效、回复判不出、bot 未回复时，这里会出现条目。"));
+            e.setPadding(dp(6), dp(12), dp(6), dp(12));
+            box.addView(e);
+        }
+
+        android.widget.ScrollView sv = new android.widget.ScrollView(act);
+        sv.addView(box);
+        showDialog(act, Lang.tf("待处理（{0}）", shown), sv, "关闭");
+    }
+
     /** 账号级待确认池键。唯一真相源在 Keys，这里只做转发（勿再内联字面量）。 */
     private static String kPendingConfirm(int account) { return Keys.pendingConfirm(account); }
     private static String kFrozen(String prefix, String id) { return prefix + "frozen_" + id; }
@@ -9745,8 +9935,15 @@ public final class TGAutoSignCore {
                     if (!JUDGE_ENABLED) {
                         // 关掉判定是用户的显式选择，但**不能让它悄悄生效**：
                         // 否则用户会看到"bot 明明回签到成功、目标却没变绿"，无从下手。
+                        //
+                        // 2026-09-28：原来只写日志，界面上毫无体现 —— 用户只看到"等待"，
+                        // 看不出是这个原因。现在落到归类 judge_off，界面显式标注。
                         logw("【回复判定】自动判定已关闭，本次回复只记录不判定: " + clip(replyText, 50)
                              + "（如需自动判成败，去 设置 → 判定机器人回复 → 打开「自动判定成功 / 失败」）");
+                        for (Map<String, Object> m : judgeTargets) {
+                            if (entryDid(m) != did) continue;
+                            markResultCode(prefix, entryId(m), SignLogic.R_JUDGE_OFF);
+                        }
                         noteJudgeOffOnce();
                         return;
                     }
@@ -9862,14 +10059,22 @@ public final class TGAutoSignCore {
                     //      这是正常情况，只记调试日志（默认不显示），不打扰用户。
                     //   ② 回复**看起来像签到结果**（含签到/打卡/领取等字样）但词表没覆盖 →
                     //      这才值得提示用户「可以去加词」，并留进诊断包。
-                    String lr = replyText.toLowerCase();
-                    boolean looksLikeResult = lr.contains("签到") || lr.contains("打卡") || lr.contains("领取")
-                            || lr.contains("签") || lr.contains("check") || lr.contains("sign")
-                            || lr.contains("claim") || lr.contains("daily");
-                    if (looksLikeResult) {
+                    // 2026-09-28：改用 SignLogic.looksLikeSignResult —— 它会先排除进度提示词。
+                    // 改前这里直接判 contains("签到")，于是「✅ 正在签到,请稍后...」被误报为
+                    // "像是签到结果但没匹配上内置词"，刷警告 + 进诊断包 + 提示补词。
+                    // 但它是进度提示，下一句才是结果，补词毫无意义（全日志刷了 8 次纯噪音）。
+                    boolean progress = SignLogic.looksLikeProgress(replyText);
+                    boolean looksLikeResult = SignLogic.looksLikeSignResult(replyText);
+                    if (progress) {
+                        logd("【回复判定】" + did + " 这是进度提示（继续等真正的结果）: " + clip(replyText, 40));
+                    } else if (looksLikeResult) {
                         logw("【回复判定】" + did + " 这条回复像是签到结果，但没匹配上内置词: "
                              + clip(replyText, 60) + "（可在 设置 → 回复判定词 里补一条）");
                         noteUnknownReply(prefix, did, replyText);
+                        for (Map<String, Object> m : judgeTargets) {
+                            if (entryDid(m) != did) continue;
+                            markResultCode(prefix, entryId(m), SignLogic.R_REPLIED_UNK);
+                        }
                     } else {
                         // 措辞要准确：bot 一次交互常发多条消息（先菜单/广告、后结果），
                         // 这条只是"不是签到结果"，**不是最终结论** —— 后续回复仍可能命中。
