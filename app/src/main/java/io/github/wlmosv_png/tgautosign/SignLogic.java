@@ -496,6 +496,7 @@ public final class SignLogic {
             "pay:", "pay_", "pay-",           // 支付：pay:alipay / pay:wxpay / pay:menu
             "ub_menu_",                       // 用户面板菜单：ub_menu_bind / ub_menu_register / ub_menu_library
             "menu:", "menu_", "help:", "help_",   // 菜单与帮助
+            "mp_help", "mp_", "miniapp_",        // 实测漏网：mp_help（帮助按钮被学成目标）
             "lang:", "language_",             // 语言切换
             "invite:", "share:", "promo:",    // 邀请 / 分享 / 推广
             "cancel", "close", "back",        // 取消 / 关闭 / 返回

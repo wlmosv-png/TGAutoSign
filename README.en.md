@@ -119,7 +119,7 @@ You installed a debug build. Uninstall it, then install the official APK from th
 
 ### v1.6.1 (124) — 2026-09-27
 
-**Fixed**: Sent state silently fell back to "pending" and re-sent (important). · Payment / menu buttons were learned as check-in targets (important). · Account crossover in network-layer learning. · Account index clamping now only normalises negatives.
+**Fixed**: Targets appeared on their own: the module learned its own button taps. · Sent state silently fell back to "pending" and re-sent (important). · Payment / menu buttons were learned as check-in targets (important). · Account crossover in network-layer learning. · Account index clamping now only normalises negatives.
 
 **New**: Two more supported clients. · Cleanup logging for mislearned entries.
 

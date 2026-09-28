@@ -7,6 +7,25 @@
 
 ### 修复 · Fixed
 
+- **目标会自己冒出来：模块点的按钮被学成了新目标（重要）**
+  回调按钮类的 data 常每次推送都不同。模块点的是「面板里的最新按钮」，
+  它的 data 与目标里存的旧 data 不一致，于是请求发出后网络层 hook 查不到对应目标
+  （`findCbEntry` 按 data 精确匹配），就把它当成**用户新点的按钮学成了新目标**。
+  结果是「我什么都没发，目标自己多了一条」，而且每签一次可能多一条。
+  现在：发出请求前登记指纹，hook 精确匹配到「这是模块自己发的」即跳过学习。
+  同时补齐实测漏网的黑名单项（`mp_help` 等：UI 层按文案「帮助」拦住了，
+  网络层拿到的是 data 解码串 `mp_help`，此前不在名单里）。
+
+  Targets appeared on their own: the module learned its own button taps.
+  Callback-button data usually differs on every push. The module taps the freshest button on
+  the panel, whose data does not match the stored one, so after the request went out the
+  network hook could not find a matching target (`findCbEntry` compares data exactly) and
+  learned the tap as a **new target**. Users saw targets appear without doing anything, and
+  every sign-in could add another. Now the module registers a fingerprint before sending and
+  the hook skips learning when it matches. Also added observed misses (`mp_help` etc.) to the
+  deny list: the UI layer blocked the button by its label ("Help") while the network layer saw
+  the decoded data string.
+
 - **「已发出」会悄悄退回「待签」，导致重复签到（重要）**
   1.6.0 新增了「已发出」状态，但它的生命周期有缺口：回调按钮目标发出后只写 `sent_at_`
    （乐观标记），「已签」要等回复判定才写。若该 bot 把结论放在 callback answer 里、

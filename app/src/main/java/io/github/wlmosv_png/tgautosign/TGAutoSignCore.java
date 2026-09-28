@@ -91,6 +91,20 @@ public final class TGAutoSignCore {
     private long lastTryTime = 0L;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Set<String> pendingSigns = cs();
+    /**
+     * 模块自身即将发出的回调请求指纹（"did|base64(data)" -> 时间戳）。
+     *
+     * 为什么需要（2026-09-28 修「目标自己冒出来」）：
+     *   sendSign 点击的是**面板里的最新按钮**（resolveLiveButton），它的 data 可能
+     *   与目标里存的旧 data 不同。请求发出后网络层 hook 捕获到它，
+     *   findCbEntry(u, d) 按 data 精确匹配 → 查不到 → 被 learnCallback 学成**新目标**。
+     *   于是「模块自己签一次」就多一条目标，且会自我繁殖。
+     *   用户视角就是「我没发指令，它自己突然加了目标」。
+     *
+     * 修法：发出前登记指纹，hook 精确匹配后跳过学习（TTL 兜底清理）。
+     */
+    private final Map<String, Long> selfCbPending = new HashMap<String, Long>();
+    private static final long SELF_REQ_TTL_MS = 60L * 1000L;
     // 调用环熔断用（见 sendSign 里的递归硬闸）
     private final Map<String, Long> signEnterAt = new HashMap<String, Long>();
     private final Map<String, Integer> signEnterCount = new HashMap<String, Integer>();
@@ -1821,6 +1835,45 @@ public final class TGAutoSignCore {
         try {
             if (isPendingFresh(prefix, id)) return true;
             return stateStore.isSentPendingFresh(prefix, id, PENDING_TTL_MS);
+        } catch (Throwable t) { return false; }
+    }
+
+    // ── 模块自身回调请求指纹（2026-09-28 修「目标自己冒出来」）──
+
+    private static String selfCbKey(long did, byte[] data) {
+        if (data == null || data.length == 0) return null;
+        return did + "|" + Base64.getEncoder().encodeToString(data);
+    }
+
+    /** 发请求前登记：告诉网络层 hook「这条是我发的」，别把它学成新目标。 */
+    private void markSelfCbRequest(long did, byte[] data) {
+        try {
+            String k = selfCbKey(did, data);
+            if (k == null) return;
+            long now = System.currentTimeMillis();
+            // 顺手清理过期项，避免无限增长
+            java.util.Iterator<Map.Entry<String, Long>> it = selfCbPending.entrySet().iterator();
+            while (it.hasNext()) {
+                Map.Entry<String, Long> e = it.next();
+                if (now - (e.getValue() == null ? 0L : e.getValue().longValue()) > SELF_REQ_TTL_MS) it.remove();
+            }
+            selfCbPending.put(k, now);
+        } catch (Throwable t) { noteSwallowed("markSelfCbRequest", t); }
+    }
+
+    /** 该回调请求是否是模块自己发出的（是则**不学习**）。命中即消费掉，避免重复占用。 */
+    private boolean consumeSelfCbRequest(long did, byte[] data) {
+        try {
+            String k = selfCbKey(did, data);
+            if (k == null) return false;
+            Long ts = selfCbPending.get(k);
+            if (ts == null) return false;
+            if (System.currentTimeMillis() - ts.longValue() > SELF_REQ_TTL_MS) {
+                selfCbPending.remove(k);
+                return false;
+            }
+            selfCbPending.remove(k);
+            return true;
         } catch (Throwable t) { return false; }
     }
 
@@ -3813,6 +3866,14 @@ public final class TGAutoSignCore {
                 setFieldVal(req, "random_id", random.nextLong());
             }
             pendingSigns.add(prefix + id);
+            // 登记「这条请求是模块自己发的」：网络层 hook 命中后跳过学习，
+            // 否则面板按钮 data 与目标旧 data 不同时会被学成新目标（实测目标自己冒出来）。
+            if (KIND_CB.equals(kind)) {
+                byte[] _sentData = null;
+                try { Object _d = getFieldValSafe(req, "data"); if (_d instanceof byte[]) _sentData = (byte[]) _d; } catch (Throwable ignored) {}
+                if (_sentData == null) { try { _sentData = entryData(entry); } catch (Throwable ignored) {} }
+                markSelfCbRequest(dialogId, _sentData);
+            }
             try { prefs.edit().putLong(prefix + "sent_at_" + id, System.currentTimeMillis()).commit(); } catch (Throwable _e11) { noteSwallowed("sendSign", _e11); }
             Object cm = staticInvoke(classEx("org.telegram.tgnet.ConnectionsManager"), "getInstance", new Class<?>[]{int.class}, new Object[]{account});
             final String fId = id;
@@ -9364,9 +9425,14 @@ public final class TGAutoSignCore {
                                 // ⓪ 硬闸门：明显非签到的按钮（支付/菜单/随机 token），任何模式都不学。
                                 //    宽松模式只该放宽"判定词对不上"，不该放宽"这压根不是签到按钮"。
                                 String _obv = SignLogic.obviousNonSignButton(disp, new String(d, "UTF-8"));
-                                String deny = !AUTO_LEARN ? "按钮学习已关闭（设置→学习行为→按钮学习）"
-                                            : (_obv != null ? _obv
-                                              : learnDenyReason(u, disp, new String(d, "UTF-8"), panelContext(u)));
+                                // ⓪' 模块自身发出的请求：**绝不学习**。
+                                //     面板按钮 data 常与目标旧 data 不同（bot 每次推送都换），
+                                //     findCbEntry 查不到就会被学成新目标 → 用户看到「目标自己冒出来」。
+                                boolean _selfReq = consumeSelfCbRequest(u, d);
+                                String deny = _selfReq ? "模块自身发出的请求（不学习）"
+                                            : (!AUTO_LEARN ? "按钮学习已关闭（设置→学习行为→按钮学习）"
+                                              : (_obv != null ? _obv
+                                                : learnDenyReason(u, disp, new String(d, "UTF-8"), panelContext(u))));
                                 if (captureArmed) {
                                     // 捕获兜底：UI 层按钮 hook 不命中时（Nagram 实测），网络层是唯一入口。
                                     captureArmed = false;

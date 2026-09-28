@@ -326,6 +326,13 @@ public final class SignLogicTest {
         tru("ub_menu_bind 要挡", SignLogic.obviousNonSignButton("绑定", "ub_menu_bind") != null);
         tru("ub_menu_register 要挡", SignLogic.obviousNonSignButton("注册", "ub_menu_register") != null);
         tru("ub_menu_library 要挡", SignLogic.obviousNonSignButton("资源库", "ub_menu_library") != null);
+        // 实测漏网（2026-09-27 日志）：UI 层按文案「🆘 帮助」拦住了，
+        // 网络层拿到的是 data 解码后的 mp_help，黑名单没有它 → 被学成目标。
+        tru("mp_help 要挡", SignLogic.obviousNonSignButton("帮助", "mp_help") != null);
+        tru("mp_ 前缀要挡", SignLogic.obviousNonSignButton("", "mp_settings") != null);
+        // 反向：真签到按钮仍必须放行
+        tru("sign 仍放行", SignLogic.obviousNonSignButton("签到", "sign") == null);
+        tru("checkin 仍放行", SignLogic.obviousNonSignButton("", "checkin_daily") == null);
 
         // ── 文案黑名单（data 干净、但文案明显不是签到）──
         tru("文案「立即支付」要挡", SignLogic.obviousNonSignButton("立即支付", "abc123def") != null);
