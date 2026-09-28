@@ -2197,6 +2197,14 @@ public final class TGAutoSignCore {
                 if (!(dataObj instanceof byte[])) continue;
                 String data = "";
                 try { data = new String((byte[]) dataObj, "UTF-8"); } catch (Throwable ignored) { continue; }
+                // 与学习拦截同一原则（2026-09-28）：**文案优先于 data**。
+                // 清理是"删条目"这种不可逆动作，比拦学习更该保守 ——
+                // 万一某个真签到按钮的 data 恰好以 menu_/pay_ 开头，
+                // 只看 data 会在每次启动时把它静默删掉（用户会觉得"目标自己没了"）。
+                // 所以文案明确是签到的，一律不删。
+                String entryLabel = entryText(m);
+                if (SignLogic.labelLooksLikeSign(entryLabel)) continue;
+
                 String low = data.trim().toLowerCase();
                 boolean junk = false;
                 for (String p : SignLogic.JUNK_DATA_PREFIXES) {
