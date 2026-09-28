@@ -248,7 +248,14 @@ public final class SignLogic {
     public static final String[] FAIL_WORDS_DEFAULT = {
             "签到失败", "打卡失败", "未签到成功", "未成功", "活动已结束", "已过期",
             "未关注", "没有资格", "请先关注", "请先开始", "请重新签到",
-            "failed", "invalid", "rejected", "not allowed", "try again", "not signed"
+            "failed", "invalid", "rejected", "not allowed", "try again", "not signed",
+            // ── 前置条件未满足（2026-09-28 补）──
+            // 实测：宽松模式下「⚠️ 请先加入以下1个频道才能使用功能」被判成功 ——
+            // 那是明确的拒绝，用户压根没签到。同类还有「请先绑定或注册账号」。
+            // 这类措辞的共同点是**要求用户先做某事**，属于功能性拒绝而非业务结果。
+            "请先加入", "加入频道", "请先绑定", "请先注册", "未绑定", "未注册",
+            "请先验证", "无权限", "没有权限", "暂无权限", "不可用", "暂未开放",
+            "please join", "not linked", "not registered", "no permission"
     };
 
     /**

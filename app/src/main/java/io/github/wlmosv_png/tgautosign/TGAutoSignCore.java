@@ -4654,7 +4654,19 @@ public final class TGAutoSignCore {
 
     private String statusOf(String prefix, String id, String today) {
         String lastSign = prefs.getString(kLast(prefix, id), "");
-        if (today.equals(lastSign)) return Lang.tr("已签");
+        if (today.equals(lastSign)) {
+            // ── 诚实标注（2026-09-28）──
+            // 文本指令目标（如 /checkin）的「已签」来自"发出即已签"：
+            // sendText 没有回执通道，永远等不到结论，不这样处理就会每轮巡检重发
+            //（实测曾 5~15 秒一发）。但它与按钮目标的"判定成功"性质不同，
+            // 混在一起显示绿色会让用户分不清哪个真签上了、哪个只是指令发出去了。
+            // 所以文本目标单独用「已发指令」，颜色走中性色。
+            try {
+                Map<String, Object> _em = findEntryById(id, accountOfPrefix(prefix));
+                if (_em != null && KIND_TEXT.equals(entryKind(_em))) return Lang.tr("已发指令");
+            } catch (Throwable ignored) {}
+            return Lang.tr("已签");
+        }
         // ── 归类驱动（2026-09-28）──
         // 改前这里只有一个含糊的「待确认」，不区分"按钮失效 / 回复判不出 / bot 没回"，
         // 用户看到「待确认」只知道有事，不知道该干嘛；而且这个词还被网络学习候选池占用。
@@ -4687,7 +4699,8 @@ public final class TGAutoSignCore {
     private int statusRank(String status) {
         if (status == null) return 0;
         if (status.contains("已签") || status.contains("放弃")) return 2;
-        if (status.contains("待确认")) return 1;   // 需要人看一眼，但不算"待办"
+        if (status.contains("结果未知") || status.contains("待确认")) return 1;
+        if (status.contains("已发指令")) return 9;   // 需要人看一眼，但不算"待办"
         if (status.contains("已发出")) return 0;   // 进行中，与"重试中"同属待办区
         return 0;
     }
@@ -5084,7 +5097,8 @@ public final class TGAutoSignCore {
         LinearLayout t2r = new LinearLayout(c); t2r.setOrientation(LinearLayout.HORIZONTAL); t2r.setGravity(Gravity.CENTER_VERTICAL);
         TextView st = new TextView(c); st.setTextSize(Theme.TS_CAPTION); st.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
         int stCol = Theme.termTxt(c);
-        if (status != null && status.contains("已签")) stCol = Theme.termGreen(c);
+        if (status != null && status.contains("已发指令")) stCol = Theme.termMuted(c);
+        else if (status != null && status.contains("已签")) stCol = Theme.termGreen(c);
         else if (status != null && (status.contains("按钮失效") || status.contains("回复判不出"))) stCol = Theme.termAmber(c);
         else if (status != null && (status.contains("结果未知") || status.contains("退避") || status.contains("重试"))) stCol = Theme.termAmber(c);
         else if (status != null && (status.contains("bot 未回复") || status.contains("判定已关") || status.contains("放弃"))) stCol = Theme.termMuted(c);
@@ -5093,7 +5107,8 @@ public final class TGAutoSignCore {
         // 状态前导图标：已签=勾、待签=钟、退避/重试=警告
         String stIcon = null;
         if (status != null) {
-            if (status.contains("已签")) stIcon = "check";
+            if (status.contains("已发指令")) stIcon = "rocket";
+            else if (status.contains("已签")) stIcon = "check";
             else if (status.contains("按钮失效") || status.contains("回复判不出")
                      || status.contains("结果未知")) stIcon = "warn";
             else if (status.contains("bot 未回复") || status.contains("判定已关")) stIcon = "info";
@@ -7356,8 +7371,12 @@ public final class TGAutoSignCore {
                  .remove(prefix + "sent_at_" + id)
                  .commit();
             boolean answered = todayStr().equals(prefs.getString(Keys.answered(prefix, id), ""));
+            // 补写归类（2026-09-28 修）：上轮只改主路径，漏了这条兜底 ——
+            // 结果界面读不到归类、落回兜底文案，日志也还写着旧词「待确认」。
+            // 归类是界面文案与处置入口的唯一真相源，这条路径同样必须写。
+            markResultCode(prefix, id, answered ? SignLogic.R_REPLIED_UNK : SignLogic.R_NO_REPLY);
             logw("已发出 " + (age / 60000L) + " 分钟仍无签到结论：" + id
-                 + " 标记为「待确认」（" + why + (answered ? " · bot 有响应但未识别出结果" : " · bot 未响应") + "）"
+                 + " 标记为「" + (answered ? "回复判不出" : "bot 未回复") + "」（" + why + "）"
                  + "。不计成功也不计失败，已停止自动重试；"
                  + "请在目标列表点「确认已签 / 重试 / 忽略今天」处置");
             return true;
@@ -7411,6 +7430,12 @@ public final class TGAutoSignCore {
                  .putInt(kRetry(prefix, id), 0)
                  .remove(kRetryAt(prefix, id))
                  .remove(kRetryDay(prefix, id))
+                 // 手动重试 = 用户明确要求"再试一次"，历史失效计数必须清零。
+                 // 否则每点一次计数 +1，很快撞上"重发 2 次仍失效"的闸
+                 // （实测 4 秒内从第 4 次涨到第 6 次，用户以为重试没生效）。
+                 .remove(prefix + "panelstale_" + id)
+                 .remove(prefix + "panelstale_day_" + id)
+                 .remove(Keys.pendingResult(prefix, id))
                  .putString(prefix + "pendcfm_note_" + id, todayStr() + "|用户点了重试")
                  .apply();
             Map<String, Object> m = findEntryById(id, accountOfPrefix(prefix));

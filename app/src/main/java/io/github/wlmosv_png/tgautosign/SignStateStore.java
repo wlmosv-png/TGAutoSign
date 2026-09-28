@@ -147,11 +147,11 @@ public final class SignStateStore {
         try {
             if (SignLogic.needsAttention(result)) {
                 store.tx(ed -> ed.putBoolean(Keys.pendingCfm(prefix, id), true)
-                                 .putString(Keys.pendingNote(prefix, id), SignLogic.resultCode(result)));
+                                 .putString(Keys.pendingResult(prefix, id), SignLogic.resultCode(result)));
             } else {
                 // 有结论了 —— 清掉"需要人看"的状态
                 store.tx(ed -> ed.remove(Keys.pendingCfm(prefix, id))
-                                 .remove(Keys.pendingNote(prefix, id)));
+                                 .remove(Keys.pendingResult(prefix, id)));
             }
         } catch (Throwable t) { swallow("markResult", t); }
     }
@@ -160,7 +160,7 @@ public final class SignStateStore {
     public int resultOf(String prefix, String id) {
         try {
             if (!store.b(Keys.pendingCfm(prefix, id), false)) return -1;
-            return SignLogic.resultOfCode(store.s(Keys.pendingNote(prefix, id), ""));
+            return SignLogic.resultOfCode(store.s(Keys.pendingResult(prefix, id), ""));
         } catch (Throwable t) { return -1; }
     }
 
@@ -168,7 +168,7 @@ public final class SignStateStore {
     public void clearResult(String prefix, String id) {
         try {
             store.tx(ed -> ed.remove(Keys.pendingCfm(prefix, id))
-                             .remove(Keys.pendingNote(prefix, id)));
+                             .remove(Keys.pendingResult(prefix, id)));
         } catch (Throwable t) { swallow("clearResult", t); }
     }
 
@@ -233,6 +233,7 @@ public final class SignStateStore {
                     .remove(Keys.opt(prefix, id))
                     .remove(Keys.pendingCfm(prefix, id))
                     .remove(Keys.pendingNote(prefix, id))
+                    .remove(Keys.pendingResult(prefix, id))
                     .remove(Keys.panelStale(prefix, id))
                     .remove(Keys.panelStaleDay(prefix, id))
                     .remove(Keys.silent(prefix, id))

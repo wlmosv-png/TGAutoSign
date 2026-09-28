@@ -159,17 +159,17 @@ You installed a debug build. Uninstall it, then install the official APK from th
 
 ## 📜 更新日志 · Changelog
 
+### v1.6.4 (127) — 2026-09-28
+
+**Fixed**: Classification code collided with an existing field, losing the classification. · Manual retry did not clear the button-expiry counter, so retries were quickly consumed. · The fallback path did not record a classification, leaving the UI and log on the old state. · Text-command targets now label their state honestly instead of showing "signed". · Lenient mode counted functional refusals as success.
+
+**变更**: Regression cases for the classification semantics.
+
 ### v1.6.3 (126) — 2026-09-28
 
 **Fixed**: Symptom: targets whose button could not be tapped, and where the bot only replied with a greeting… · Wrong attribution of expired buttons caused permanent retry abandonment. · Progress messages were mistaken for sign-in results. · Closing auto-judging left no trace in the UI.
 
 **变更**: Execution-result classification replaces scattered verdict branches. · Pending actions moved to a top summary bar. · The signed state now shows explicit wording per classification (button expired / reply unreadable / bot did not reply /…
-
-### v1.6.2 (125) — 2026-09-28
-
-**Fixed**: Button learning blocked valid sign-in entries. · Removed the keyword-filter switch. · Removed the automatic target cleanup at startup.
-
-**变更**: Learning settings adjusted.
 
 [Full changelog →](https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md)
 

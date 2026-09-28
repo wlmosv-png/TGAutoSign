@@ -39,6 +39,7 @@ public final class SignLogicTest {
         permanentFail();
         sentPhaseLifecycle();
         resultClassification();
+        looseModeFailWords();
         v160Regression();
 
         System.out.println("----------------------------------------");
@@ -735,5 +736,45 @@ public final class SignLogicTest {
         tru("无关文本不算结果", !SignLogic.looksLikeSignResult("这是 EmbyPulse 用户自助服务机器人"));
         tru("空串不算结果", !SignLogic.looksLikeSignResult(""));
         tru("null 不算结果", !SignLogic.looksLikeSignResult(null));
+    }
+
+    /**
+     * 宽松模式的「功能性拒绝」词（2026-09-28）。
+     *
+     * 实测事故：宽松模式下「⚠️ 请先加入以下1个频道才能使用功能」被判成签到成功 ——
+     * 那是明确的拒绝，用户压根没签到。同类还有「🔒 请先绑定或注册账号」。
+     *
+     * 这类措辞的共同点：**要求用户先做某事**，属于前置条件未满足，
+     * 而不是业务结果。它们必须先于"有回复即成功"被判失败。
+     */
+    private static void looseModeFailWords() {
+        // 必须判失败：功能性拒绝
+        tru("请先加入频道 → 失败",
+            SignLogic.verdictOf("⚠️ 请先加入以下1个频道才能使用功能：", null, new String[0], SignLogic.FAIL_WORDS_DEFAULT)
+                == SignLogic.V_FAILED);
+        tru("请先绑定账号 → 失败",
+            SignLogic.verdictOf("🔒 请先绑定或注册账号后才能使用此功能", null, new String[0], SignLogic.FAIL_WORDS_DEFAULT)
+                == SignLogic.V_FAILED);
+        tru("未绑定 → 失败",
+            SignLogic.verdictOf("你还没有绑定账号，请先绑定", null, new String[0], SignLogic.FAIL_WORDS_DEFAULT)
+                == SignLogic.V_FAILED);
+        tru("无权限 → 失败",
+            SignLogic.verdictOf("无权限操作", null, new String[0], SignLogic.FAIL_WORDS_DEFAULT)
+                == SignLogic.V_FAILED);
+        tru("not linked → 失败",
+            SignLogic.verdictOf("Account not linked", null, new String[0], SignLogic.FAIL_WORDS_DEFAULT)
+                == SignLogic.V_FAILED);
+
+        // 不能误伤：正常成功回复仍判成功
+        tru("签到成功 → 成功",
+            SignLogic.verdictOf("🎉 签到成功", null, SignLogic.OK_WORDS_DEFAULT, SignLogic.FAIL_WORDS_DEFAULT)
+                == SignLogic.V_SIGNED);
+        tru("已签到 → 成功（重复词）",
+            SignLogic.verdictOf("你今天已经签到过了", null, null, SignLogic.FAIL_WORDS_DEFAULT)
+                == SignLogic.V_SIGNED);
+        // 「请先」类词不能撞到正常回复
+        tru("欢迎语不判失败",
+            SignLogic.verdictOf("🎉 欢迎使用本机器人", null, new String[0], SignLogic.FAIL_WORDS_DEFAULT)
+                == SignLogic.V_UNKNOWN);
     }
 }

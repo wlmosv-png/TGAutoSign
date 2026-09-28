@@ -64,6 +64,14 @@ public final class Keys {
     public static String learned(String p, String id)   { return p + "learned_" + id; }
     public static String pendingCfm(String p, String id){ return p + "pendcfm_" + id; }
     public static String pendingNote(String p, String id){ return p + "pendcfm_note_" + id; }
+    /**
+     * **执行结果归类码**（resultCode 串）。
+     *
+     * 为什么不复用 pendingNote：那个键的既有语义是「日期|处置动作」，
+     * pendConfirmedToday 靠它判断"今天是否已被用户处置过"。
+     * 两者混用会让归类被覆盖成"2026-09-28|用户点了重试"，解析失败 → 归类丢失。
+     */
+    public static String pendingResult(String p, String id){ return p + "pendcfm_result_" + id; }
     public static String sentAt(String p, String id)    { return p + "sent_at_" + id; }
     /** 实际签到成功的时刻（毫秒）。只在 markSigned 首次写入时落库，天然按天覆盖。 */
     public static String signedAt(String p, String id)  { return p + "signed_at_" + id; }
@@ -113,7 +121,7 @@ public final class Keys {
             "learned_", "kind_", "did_", "data_", "hash_", "msg_id_",
             "pre_", "loc_", "last_", "opt_", "retry_", "retry_at_", "retry_day_", "sent_at_", "answered_",
             "signed_at_", "miss_at_",
-            "frozen_", "snooze_", "pendcfm_", "pendcfm_note_", "title_",
+            "frozen_", "snooze_", "pendcfm_", "pendcfm_note_", "pendcfm_result_", "pendcfm_result_", "title_",
             "fail_streak_", "fail_laststamp_", "fail_alert_", "fail_date_",
             "panelstale_", "panelstale_day_", "silent_", "silent_day_", "peerkind_"
     };

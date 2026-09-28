@@ -1,5 +1,99 @@
 # 更新日志
 
+## 1.6.4 (127) — 2026-09-28
+
+> 本版修复 1.6.3 归类改造遗留的三处问题，并把文本指令目标的「已签」
+> 改为诚实标注。另补齐宽松模式漏掉的「功能性拒绝」词。
+
+### 修复 · Fixed
+
+- **归类码与既有字段冲突，导致归类丢失**
+  现象：用户处置过（确认/重试/忽略）的目标，状态不再显示具体归类，
+  退回含糊的通用文案。
+  根因：归类码被写入 `pendcfm_note_`，而该键的既有语义是「日期|处置动作」，
+  用于判断"今天是否已被用户处置过"。用户一点处置，归类就被覆盖成
+  `2026-09-28|用户点了重试`，解析失败返回 -1。
+  修复：归类码改用独立键 `pendcfm_result_`，两个字段各司其职。
+
+  Classification code collided with an existing field, losing the classification.
+  Symptom: after a user handled a target (confirm / retry / ignore), the status no longer
+  showed its specific classification and fell back to generic wording. Root cause: the code
+  was written to `pendcfm_note_`, whose existing meaning is "date|action" and which is used to
+  tell whether the user already handled it today. As soon as the user acted, the
+  classification was overwritten with `2026-09-28|user tapped retry`, which failed to parse and
+  returned -1. Fix: the classification now uses its own key `pendcfm_result_`, so the two
+  fields no longer overlap.
+
+- **手动重试不清按钮失效计数，重试很快被历史计数吃掉**
+  现象：在待处理里连续点「重试」，日志里的失效次数持续累加（实测 4 秒内从第 4 次到第 6 次），
+  重试形同无效。
+  根因：重试只重置了重试计数，未清 `panelstale_`；而每次重试又会触发一次按钮失效，
+  计数继续上涨，很快撞上「重发 2 次仍失效」的判定。
+  修复：手动重试同时清零按钮失效计数 —— 用户点重试即明确要求"再试一次"，
+  历史计数不应继续累计。
+
+  Manual retry did not clear the button-expiry counter, so retries were quickly consumed.
+  Symptom: tapping "retry" repeatedly raised the expiry count (from 4 to 6 within four
+  seconds in one measurement), making retries ineffective. Root cause: retry reset the retry
+  counter but not `panelstale_`; each retry triggered another expiry, so the count kept
+  climbing until it hit the "still failing after two resends" rule. Fix: manual retry now
+  also clears the expiry count — tapping retry is an explicit request to try again, and
+  earlier failures should not keep accumulating.
+
+- **兜底路径未写归类，界面与日志仍停留在旧状态**
+  现象：目标状态显示含糊文案，日志也仍写着旧词「待确认」。
+  根因：转待确认的兜底路径只写了旧的布尔标记，未记录归类；
+  而界面文案与处置入口都以归类为唯一真相源。
+  修复：该路径补写归类（有回复则记「回复判不出」，无回复则记「bot 未回复」），
+  日志文案同步改为归类名。
+
+  The fallback path did not record a classification, leaving the UI and log on the old state.
+  Symptom: targets showed vague status text and the log still used the old word. Root cause:
+  the fallback that promotes a target recorded only the legacy boolean marker and no
+  classification, while the UI wording and action entries derive from the classification.
+  Fix: that path now records one ("reply unreadable" when the bot replied, "bot did not
+  reply" otherwise), and the log message now names the classification.
+
+- **文本指令目标的「已签」改为诚实标注**
+  现象：文本类目标（如发送 `/checkin`）显示为「已签」，与真正判定成功的目标无法区分。
+  根因：文本指令走 `sendText`，没有回执通道，永远等不到结论；若不计入已签，
+  每轮巡检都会重发（实测曾 5~15 秒一发）。因此「发出即已签」是有意设计，
+  但它与按钮目标的「判定成功」性质不同，混在一起显示绿色会误导。
+  修复：文本目标单独显示「已发指令」，颜色走中性色，与「已签」区分。
+
+  Text-command targets now label their state honestly instead of showing "signed".
+  Symptom: text targets (such as sending `/checkin`) appeared as "signed",
+  indistinguishable from targets that genuinely passed judging. Root cause: text commands go
+  through `sendText`, which has no reply channel and never yields a verdict; if they were not
+  counted as signed, every sweep would resend them (observed at 5-15 second intervals).
+  "Sent counts as signed" is therefore deliberate, but it differs in nature from a judged
+  success, and showing both in green is misleading. Fix: text targets now show
+  "command sent" in a neutral colour, distinct from "signed".
+
+- **宽松模式把功能性拒绝判成成功**
+  现象：宽松模式下「⚠️ 请先加入以下1个频道才能使用功能」被记为已签，
+  同类还有「🔒 请先绑定或注册账号」。
+  根因：失败词表只覆盖了业务失败（签到失败、活动已结束等），
+  未覆盖「前置条件未满足」这类拒绝 —— 而它们都要求用户先做某事。
+  修复：补齐该类词（请先加入 / 加入频道 / 请先绑定 / 未绑定 / 无权限 等）。
+
+  Lenient mode counted functional refusals as success.
+  Symptom: with lenient mode on, "please join the following channel before using this
+  feature" was recorded as signed, as was "please bind or register an account first".
+  Root cause: the failure word list covered only business failures (sign-in failed, event
+  ended) and not refusals caused by unmet preconditions, all of which ask the user to do
+  something first. Fix: such wording was added (please join / join the channel / please bind /
+  not bound / no permission, and similar).
+
+### 变更 · Changed
+
+- **归类语义补入回归用例**
+  新增宽松模式失败词的单测，锁定「功能性拒绝必须判失败」及「不误伤正常成功回复」。
+
+  Regression cases for the classification semantics.
+  Tests were added for the lenient-mode failure words, pinning down both "a functional
+  refusal must be judged as failure" and "a normal success reply must not be harmed".
+
 ## 1.6.3 (126) — 2026-09-28
 
 > 本版把散落在 5 处的成败判定收敛为**单一执行结果归类**，
