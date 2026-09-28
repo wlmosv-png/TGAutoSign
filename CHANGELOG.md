@@ -1,299 +1,210 @@
 # 更新日志
 
-## 1.6.4 (127) — 2026-09-28
+## 1.6.2 (128) — 2026-09-29
 
-> 本版修复 1.6.3 归类改造遗留的三处问题，并把文本指令目标的「已签」
-> 改为诚实标注。另补齐宽松模式漏掉的「功能性拒绝」词。
+> 本版把签到语义统一到用户视角：**发出**与**成功**严格分开，
+> 「不知道」成为一等状态，界面与日志都能看出「这一条到底是什么、现在怎么了」。
+> 全部改动依据可复现的代码事实与实测日志，不含推测。
 
 ### 修复 · Fixed
 
+- **「请求发出」被当作「签到成功」**
+  现象：按钮点不动、bot 只回一句欢迎语的目标，最终仍显示为已签。
+  根因：超时分支以「今天发出过请求」为判据并计入成功。
+  实测某目标按钮全程点不动，当天仍被标记已签。
+  修复：新增执行结果归类，「已签到」只由「命中成功词」产生；
+  发出而未获结论的目标归入「bot 未回复」，等待用户处置。
+  该契约由 `SignLogic.countsAsSigned` 承载并有回归用例锁定。
+
+  "Request sent" was treated as "signed in".
+  Symptom: targets whose button could not be tapped, and where the bot merely replied with a
+  greeting, still showed as signed. Root cause: the timeout branch treated "a request was sent
+  today" as success. One target whose button never responded was marked signed that day. Fix:
+  an execution-result classification was added; "signed" now comes only from matching a success
+  keyword, and a target that was sent but produced no verdict is classified as "bot did not
+  reply" for the user to handle. The contract lives in `SignLogic.countsAsSigned` with
+  regression coverage.
+
+- **文本指令被直接记为已签，此后 bot 的拒绝再无人处理**
+  现象：添加一条文本目标（如随意输入的「付费查询」）后立即显示已签、界面变绿；
+  bot 随后回复「请先绑定账号」这类拒绝时，状态不再变化。
+  根因：文本分支无条件计入已签，理由是「sendText 没有回执通道，不这样会每轮重发」。
+  该前提与实测不符：日志显示文本目标确实收到回复判定
+  （`【就地对答】… 返回未命中词表，留给回复判定`、`【回复判定】…`）。
+  修复：改用「已发出」标记防重发（它本就是巡检闸门，同样能阻止重发），
+  随后与按钮目标走同一套判定 —— 命中成功词则已签、命中失败词则失败、
+  认不出则「回复判不出」、超时则「bot 未回复」。
+
+  Text commands were recorded as signed immediately, after which the bot's refusals were ignored.
+  Symptom: adding a text target (for example an arbitrary query string) turned it green at once,
+  and a later refusal such as "please link your account" never changed the state. Root cause: the
+  text branch counted a send as signed, reasoning that `sendText` has no reply channel and would
+  otherwise resend on every sweep. The evidence contradicts that: the log shows text targets do
+  receive reply verdicts. Fix: a "sent" marker (already the sweep gate) prevents duplicate
+  sends, after which the target follows the same judging as button targets — a success keyword
+  means signed, a failure keyword means failed, an unrecognised reply is "reply unreadable", and
+  a timeout is "bot did not reply".
+
+- **按钮失效的错误归因导致永久放弃重试**
+  现象：按钮报失效后，模块提示「该 bot 拒绝程序代点，请改成文本指令目标」并停止重试。
+  根因：熔断条件为「第一次失败即判定」，注释称失败是确定性的。
+  实测不成立：按钮失效的常见含义是所用消息 ID 已过期，而面板的最新 ID 可用；
+  首次失败多因面板尚未推送。被熔断的目标当天稍后仍可签上。
+  修复：按面板新鲜度分三种情况 —— 面板新鲜则以最新按钮重发一次；
+  面板未就绪则不发必然失败的请求、等待新消息；两者皆否才归类「按钮失效」。
+  同时删除上述错误提示。
+
+  Wrong attribution of expired buttons caused permanent retry abandonment.
+  Symptom: after a button reported an error the module advised "this bot refuses programmatic
+  taps, switch to a text-command target" and stopped retrying. Root cause: the breaker tripped
+  on the first failure, on the claim that the failure was deterministic. The evidence does not
+  support it: expired buttons usually mean the message ID in use is stale while the panel's
+  newest ID is available, and a first failure often just means the panel has not arrived. A
+  tripped target was still signed later that day. Fix: classify by panel freshness — resend
+  once with the newest button when the panel is fresh; send nothing when it is not ready and
+  wait for the new message; only otherwise classify as "button expired". The misleading advice
+  was removed.
+
+- **手动重试不清失效计数，重试很快被历史计数吃掉**
+  现象：连续点「重试」时失效次数持续累加（实测四秒内从第 4 次到第 6 次），重试如同无效。
+  根因：重试未清按钮失效计数，而每次重试又会触发一次失效。
+  修复：手动重试视为明确要求「再试一次」，同时清零该计数。
+
+  Manual retry did not clear the expiry counter, so retries were quickly consumed.
+  Symptom: tapping retry repeatedly raised the expiry count (from 4 to 6 within four seconds in
+  one measurement), making retries ineffective. Root cause: retry reset the retry counter but
+  not the expiry count, and each retry triggered another expiry. Fix: a manual retry counts as
+  an explicit "try again" and now clears that counter too.
+
 - **归类码与既有字段冲突，导致归类丢失**
-  现象：用户处置过（确认/重试/忽略）的目标，状态不再显示具体归类，
-  退回含糊的通用文案。
-  根因：归类码被写入 `pendcfm_note_`，而该键的既有语义是「日期|处置动作」，
-  用于判断"今天是否已被用户处置过"。用户一点处置，归类就被覆盖成
-  `2026-09-28|用户点了重试`，解析失败返回 -1。
-  修复：归类码改用独立键 `pendcfm_result_`，两个字段各司其职。
+  现象：用户处置过（确认/重试/忽略）的目标，状态退回含糊文案。
+  根因：归类码写入了一个既有语义为「日期|处置动作」的字段，用户一处置即被覆盖，解析失败。
+  修复：归类码改用独立字段，两个字段各司其职。
 
-  Classification code collided with an existing field, losing the classification.
-  Symptom: after a user handled a target (confirm / retry / ignore), the status no longer
-  showed its specific classification and fell back to generic wording. Root cause: the code
-  was written to `pendcfm_note_`, whose existing meaning is "date|action" and which is used to
-  tell whether the user already handled it today. As soon as the user acted, the
-  classification was overwritten with `2026-09-28|user tapped retry`, which failed to parse and
-  returned -1. Fix: the classification now uses its own key `pendcfm_result_`, so the two
-  fields no longer overlap.
+  The classification code collided with an existing field, losing the classification.
+  Symptom: after a user handled a target (confirm / retry / ignore) the status fell back to
+  generic wording. Root cause: the code was written to a field whose existing meaning is
+  "date|action"; handling the target overwrote it and parsing failed. Fix: the classification
+  now has its own field, so the two no longer overlap.
 
-- **手动重试不清按钮失效计数，重试很快被历史计数吃掉**
-  现象：在待处理里连续点「重试」，日志里的失效次数持续累加（实测 4 秒内从第 4 次到第 6 次），
-  重试形同无效。
-  根因：重试只重置了重试计数，未清 `panelstale_`；而每次重试又会触发一次按钮失效，
-  计数继续上涨，很快撞上「重发 2 次仍失效」的判定。
-  修复：手动重试同时清零按钮失效计数 —— 用户点重试即明确要求"再试一次"，
-  历史计数不应继续累计。
-
-  Manual retry did not clear the button-expiry counter, so retries were quickly consumed.
-  Symptom: tapping "retry" repeatedly raised the expiry count (from 4 to 6 within four
-  seconds in one measurement), making retries ineffective. Root cause: retry reset the retry
-  counter but not `panelstale_`; each retry triggered another expiry, so the count kept
-  climbing until it hit the "still failing after two resends" rule. Fix: manual retry now
-  also clears the expiry count — tapping retry is an explicit request to try again, and
-  earlier failures should not keep accumulating.
-
-- **兜底路径未写归类，界面与日志仍停留在旧状态**
-  现象：目标状态显示含糊文案，日志也仍写着旧词「待确认」。
-  根因：转待确认的兜底路径只写了旧的布尔标记，未记录归类；
-  而界面文案与处置入口都以归类为唯一真相源。
-  修复：该路径补写归类（有回复则记「回复判不出」，无回复则记「bot 未回复」），
-  日志文案同步改为归类名。
+- **兜底路径未写归类，界面与日志停在旧状态**
+  现象：目标状态显示含糊文案，日志仍写着旧状态名。
+  根因：转待处理的兜底路径只写旧标记，未记录归类，而界面与日志都以归类为依据。
+  修复：补写归类（有回复则「回复判不出」，无回复则「bot 未回复」），日志同步改为归类名。
 
   The fallback path did not record a classification, leaving the UI and log on the old state.
-  Symptom: targets showed vague status text and the log still used the old word. Root cause:
-  the fallback that promotes a target recorded only the legacy boolean marker and no
-  classification, while the UI wording and action entries derive from the classification.
-  Fix: that path now records one ("reply unreadable" when the bot replied, "bot did not
-  reply" otherwise), and the log message now names the classification.
+  Symptom: targets showed vague status text and the log kept the old state name. Root cause: the
+  fallback that promotes a target wrote only the legacy marker, while the UI and log both derive
+  from the classification. Fix: it now records one ("reply unreadable" when the bot replied,
+  "bot did not reply" otherwise), and the log names it.
 
-- **文本指令目标的「已签」改为诚实标注**
-  现象：文本类目标（如发送 `/checkin`）显示为「已签」，与真正判定成功的目标无法区分。
-  根因：文本指令走 `sendText`，没有回执通道，永远等不到结论；若不计入已签，
-  每轮巡检都会重发（实测曾 5~15 秒一发）。因此「发出即已签」是有意设计，
-  但它与按钮目标的「判定成功」性质不同，混在一起显示绿色会误导。
-  修复：文本目标单独显示「已发指令」，颜色走中性色，与「已签」区分。
+- **未命中词表的回复不留归类，界面停在「已发出」**
+  现象：bot 明确回复、只是判定词没认出时，条目一直停在「已发出」，
+  既不提示需要处理，也看不出原因。
+  根因：就地判定分支在未命中词表时只记录「bot 回过内容」，未写归类。
+  修复：该分支补写归类「回复判不出」。
 
-  Text-command targets now label their state honestly instead of showing "signed".
-  Symptom: text targets (such as sending `/checkin`) appeared as "signed",
-  indistinguishable from targets that genuinely passed judging. Root cause: text commands go
-  through `sendText`, which has no reply channel and never yields a verdict; if they were not
-  counted as signed, every sweep would resend them (observed at 5-15 second intervals).
-  "Sent counts as signed" is therefore deliberate, but it differs in nature from a judged
-  success, and showing both in green is misleading. Fix: text targets now show
-  "command sent" in a neutral colour, distinct from "signed".
+  Replies matching no keyword left no classification, so the row stayed at "sent".
+  Symptom: when the bot clearly replied but no keyword matched, the entry stayed at "sent" —
+  neither flagged nor explained. Root cause: the inline judging branch recorded only that the
+  bot had replied. Fix: it now records the classification "reply unreadable".
+
+- **进度提示被误判为签到结果**
+  现象：日志反复提示「这条回复像是签到结果，但没匹配上内置词」，
+  而对应内容只是「正在签到,请稍后...」。
+  根因：判据为包含「签到」二字，而进度提示必然包含该词；该类提示的下一句才是结果。
+  修复：进度词先行排除并降为调试级日志，不再告警、不进入诊断包。
+
+  Progress messages were mistaken for sign-in results.
+  Symptom: the log kept saying a reply looked like a result but matched no keyword, while the
+  content was merely "signing in, please wait". Root cause: the test was containment of the word
+  for signing in, which a progress message necessarily contains; the real result is the next
+  message. Fix: progress wording is excluded first and logged at debug level, with no warning
+  and no entry in the diagnostics package.
+
+- **从通知横幅进入「处理」后闪回桌面**
+  现象：从通知横幅打开面板、进入待处理并点击任一动作后，直接退回桌面。
+  根因：该界面在动作回调里结束了宿主 Activity。从面板进入时其下仍压着聊天页，
+  结束动作表现为返回上一层；而从横幅进入时该页面位于栈顶，下面是空的，于是退回桌面。
+  修复：动作后只关闭对话框并按剩余数量重开或返回列表，全程不结束 Activity。
+
+  Returning to the home screen after using "Handle" from the notification banner.
+  Symptom: opening the panel from the banner, entering the pending list and tapping any action
+  dropped straight to the home screen. Root cause: the screen finished the host activity in its
+  action callbacks. Entering from the panel leaves a chat page underneath, so finishing looked
+  like going back; entering from the banner puts the screen at the top of the stack with nothing
+  below, hence the home screen. Fix: actions now close the dialog only and either reopen the
+  list or return to targets, never finishing the activity.
 
 - **宽松模式把功能性拒绝判成成功**
-  现象：宽松模式下「⚠️ 请先加入以下1个频道才能使用功能」被记为已签，
-  同类还有「🔒 请先绑定或注册账号」。
-  根因：失败词表只覆盖了业务失败（签到失败、活动已结束等），
-  未覆盖「前置条件未满足」这类拒绝 —— 而它们都要求用户先做某事。
+  现象：宽松模式下「请先加入以下频道才能使用功能」被记为已签，
+  同类还有「请先绑定或注册账号」。
+  根因：失败词表只覆盖业务失败，未覆盖「前置条件未满足」这类拒绝。
   修复：补齐该类词（请先加入 / 加入频道 / 请先绑定 / 未绑定 / 无权限 等）。
 
   Lenient mode counted functional refusals as success.
-  Symptom: with lenient mode on, "please join the following channel before using this
-  feature" was recorded as signed, as was "please bind or register an account first".
-  Root cause: the failure word list covered only business failures (sign-in failed, event
-  ended) and not refusals caused by unmet preconditions, all of which ask the user to do
-  something first. Fix: such wording was added (please join / join the channel / please bind /
-  not bound / no permission, and similar).
-
-### 变更 · Changed
-
-- **归类语义补入回归用例**
-  新增宽松模式失败词的单测，锁定「功能性拒绝必须判失败」及「不误伤正常成功回复」。
-
-  Regression cases for the classification semantics.
-  Tests were added for the lenient-mode failure words, pinning down both "a functional
-  refusal must be judged as failure" and "a normal success reply must not be harmed".
-
-## 1.6.3 (126) — 2026-09-28
-
-> 本版把散落在 5 处的成败判定收敛为**单一执行结果归类**，
-> 并移除三处把「请求发出」误当「签到成功」的逻辑。
-> 界面侧去掉目标行的内联处置按钮，改为顶部聚合条。
-> 改动源自用户实测：按钮点不动却显示「已签」、bot 回复了却显示「等待」。
-
-### 修复 · Fixed
-
-- **「请求发出」被当成「签到成功」**
-  现象：按钮点不动、bot 只回一句欢迎语的目标，最终仍显示「已签」。
-  根因：超时分支以 `optimisticSigned()` 为判据，而该函数读的是 `opt_` 标记 ——
-  其语义仅为「今天发出过请求」，不含任何成败结论。代码据此执行
-  `keepSignedClearBackoff` 与 `noteResult(true)`，等于把「发出去了」当作「签上了」。
-  实测 `8439387373`（hope 社工库）按钮全程点不动，当天仍被标记已签。
-  修复：发出但无结论时不再判成功，归类为「bot 未回复」，等待用户处置。
-  归类的语义契约由 `SignLogic.countsAsSigned` 承载，只有 `R_SIGNED` 会写已签状态。
-
-  "Request sent" was treated as "signed in".
-  Symptom: targets whose button could not be tapped, and where the bot only replied with a
-  greeting, were still shown as signed. Root cause: the timeout branch used
-  `optimisticSigned()`, which reads the `opt_` marker — that marker only means "a request was
-  sent today" and carries no verdict. The code then ran `keepSignedClearBackoff` and
-  `noteResult(true)`, treating "sent" as "signed". In one measurement the button for
-  8439387373 (hope) could never be tapped, yet the target was marked signed that day.
-  Fix: a sent request without a verdict is no longer counted as success; it is classified as
-  "bot did not reply" and left for the user. The semantic contract lives in
-  `SignLogic.countsAsSigned` — only `R_SIGNED` writes signed state.
-
-- **按钮失效的错误归因导致永久放弃重试**
-  现象：按钮报 `MESSAGE_ID_INVALID` 后，模块提示「该 bot 拒绝程序代点按钮，
-  请改成文本指令目标」，并从此不再重试。
-  根因：熔断条件为 `staleBefore >= 1`，注释称「该 bot 的失败是确定性的」。
-  该断言不成立 —— `MESSAGE_ID_INVALID` 的含义是「所使用的 msg_id 已过期」，
-  而面板的最新 msg_id 本就可用；首次失败通常只是面板尚未推送（时序问题）。
-  实测被熔断的目标当天稍后仍可签上，证明并非确定性拒绝。
-  修复：改为按面板新鲜度三分类 —— 面板新鲜则以最新按钮重发一次；
-  面板未就绪则不发必然失败的请求，等待新消息；两者皆否才归类「按钮失效」。
-  同时删除「该 bot 拒绝程序代点」这一错误提示。
-
-  Wrong attribution of expired buttons caused permanent retry abandonment.
-  Symptom: after a button returned `MESSAGE_ID_INVALID` the module advised "this bot refuses
-  programmatic taps, switch to a text-command target" and never retried. Root cause: the
-  circuit breaker used `staleBefore >= 1`, with a comment claiming the failure was
-  deterministic. That claim does not hold — `MESSAGE_ID_INVALID` means the msg_id in use has
-  expired, while the panel's newest msg_id is available; a first failure is usually just the
-  panel not having arrived yet (a timing issue). A target that tripped the breaker was still
-  signed later the same day. Fix: classify by panel freshness — if the panel is fresh, resend
-  once using the newest button; if it is not ready, do not send a request bound to fail and
-  wait for the new message; only when neither applies is it classified as "button expired".
-  The misleading "this bot refuses programmatic taps" message was removed.
-
-- **进度提示被误判为「像是签到结果」**
-  现象：日志反复出现「这条回复像是签到结果，但没匹配上内置词（可在设置里补一条）」，
-  而对应内容只是「正在签到,请稍后...」。
-  根因：判据为 `contains("签到")`，进度提示必然含该词，于是被当作待补词的结果。
-  这类提示的下一句才是结果，补词并无意义；全量日志中出现 8 次，均属噪音。
-  修复：新增 `SignLogic.looksLikeProgress` 并让 `looksLikeSignResult` 先行排除；
-  进度提示降为调试级日志，不再告警、不再进入诊断包。
-
-  Progress messages were mistaken for sign-in results.
-  Symptom: the log repeatedly showed "this reply looks like a sign-in result but matched no
-  built-in keyword (you can add one in settings)", while the content was merely
-  "signing in, please wait...". Root cause: the test was `contains("sign-in")`, which a
-  progress message necessarily contains, so it was treated as a result awaiting a keyword.
-  The actual result is the next message, making the advice meaningless; the pattern appeared
-  8 times and was pure noise. Fix: `SignLogic.looksLikeProgress` was added and
-  `looksLikeSignResult` now excludes it first; progress messages log at debug level and no
-  longer raise warnings or enter the diagnostics package.
-
-- **自动判定关闭时界面无从体现**
-  现象：关闭「自动判定成功 / 失败」后，bot 回复了内容，界面却只显示「等待」，
-  用户无法得知失败原因是判定被关闭。
-  根因：该分支仅写日志后返回，未在状态中留下任何痕迹。
-  修复：新增归类 `judge_off`，界面显式显示「判定已关」。
-
-  Closing auto-judging left no trace in the UI.
-  Symptom: with "auto judge success / failure" off, a reply from the bot left the UI showing
-  only "waiting", giving no hint that judging was disabled. Root cause: the branch logged and
-  returned without recording any state. Fix: a `judge_off` classification was added and the UI
-  now shows "judging off" explicitly.
+  Symptom: with lenient mode on, "please join the following channel first" was recorded as
+  signed, as was "please bind or register an account first". Root cause: the failure word list
+  covered only business failures, not refusals caused by unmet preconditions. Fix: such wording
+  was added (please join / join the channel / please bind / not bound / no permission).
 
 ### 变更 · Changed
 
 - **执行结果归类取代散落的成败判定**
-  改前由 5 处独立分支决定成败，没有一处能回答「这个目标今天到底怎么了」；
+  改前由多处独立分支决定成败，没有一处能回答「这个目标今天到底怎么了」；
   「待确认」一词还被签到状态与网络学习候选池共用，含义冲突。
   现在每次执行落到恰好一个归类：已签 / 失败 / 按钮失效 / 回复判不出 / bot 未回复 / 判定已关。
   归类为唯一真相源，界面文案、处置入口与重试策略均由它派生。
-  「不知道」被确立为一等状态，模块不再用模糊措辞掩盖不确定。
 
   Execution-result classification replaces scattered verdict branches.
-  Previously five independent branches decided success or failure, and none could answer
-  "what actually happened to this target today"; the phrase "needs confirmation" was shared by
-  the signed state and the network-learning candidate pool, with conflicting meanings. Now
-  every execution lands on exactly one classification: signed / failed / button expired /
-  reply unreadable / bot did not reply / judging off. The classification is the single source
-  of truth, and the UI wording, action entries and retry policy all derive from it.
-  "Unknown" is now a first-class state; the module no longer hides uncertainty behind vague wording.
+  Previously several independent branches decided success or failure and none could answer "what
+  actually happened to this target today"; the phrase "needs confirmation" was shared by the
+  signed state and the network-learning candidate pool with conflicting meanings. Now every
+  execution lands on exactly one classification: signed / failed / button expired / reply
+  unreadable / bot did not reply / judging off. It is the single source of truth from which the
+  status wording, action entries and retry policy all derive.
 
 - **待处理处置改为顶部聚合条**
-  改前每个待处理目标在行内横排三个按钮（确认已签 / 重试 / 忽略今天），
-  与其他行的结构不一致，且默认用户此刻就要处理它。
-  现在目标行保持统一的两行结构，需要处置的目标由顶部聚合条汇总，
-  点「处理」进入集中界面逐条处置，动作与原来一致。
+  改前每个待处理目标在行内横排三个按钮，与其他行的结构不一致，且默认用户此刻就要处理它。
+  现在目标行保持统一结构，待处理项由顶部一条汇总，点「处理」进入集中界面逐条处置。
 
   Pending actions moved to a top summary bar.
-  Previously each pending target showed three inline buttons (confirm signed / retry / ignore
-  today), inconsistent with other rows and assuming the user wanted to act right away. Target
-  rows now keep the uniform two-line structure, a top bar summarises what needs attention, and
-  tapping "Handle" opens a screen for dealing with them one by one, with the same actions as before.
+  Previously each pending target showed three inline buttons, inconsistent with other rows and
+  assuming the user wanted to act immediately. Rows now keep a uniform structure, a top bar
+  summarises what needs attention, and "Handle" opens a screen for dealing with them one by one.
 
-- **「待确认」重命名以消除歧义**
-  签到状态「待确认」改为按归类显示明确文案（按钮失效 / 回复判不出 / bot 未回复 / 判定已关 /
-  结果未知）；网络学习候选池「待确认」改为「待添加」。
+- **同一条目在列表与日志中可辨识**
+  目标行第二行标注条目内容并加类型前导（🔘 按钮 / ⌨ 指令）；
+  处置日志打印条目 ID 与内容（如 `8756683068_cb1（🔙 返回）`）。
+  改前同一 bot 下多个目标显示相同的 bot 名、日志只打印 bot ID，用户无法分辨，
+  点其中一个看到两条日志会误以为「点一个返回两个」。
 
-  "Needs confirmation" renamed to remove ambiguity.
-  The signed state now shows explicit wording per classification (button expired / reply
-  unreadable / bot did not reply / judging off / result unknown), and the network-learning
-  candidate pool was renamed to "to add".
+  Entries can be told apart in the list and the log.
+  The second row now labels the entry content with a type prefix (🔘 button / ⌨ command), and
+  action logs print the entry ID with its content (e.g. `8756683068_cb1（🔙 返回）`). Previously
+  several targets under one bot showed identical names and the log printed only the bot ID, so
+  tapping one and seeing two log lines read as "one tap returns two".
 
-## 1.6.2 (125) — 2026-09-28
+- **按钮性质过滤整体移除，改为「点什么学什么」**
+  改前用 data 前缀与文案黑名单推测按钮性质，导致签到入口被误拦：
+  实测某 bot 的签到入口撞前缀、按钮文案撞「菜单」二字，用户点了毫无反应。
+  该做法与「用户点按钮即是意图」相悖，且黑名单永远列不全。
+  现在学习准入只保留用户自定项：排除的 bot 与排除规则。
 
-> 本版移除按钮学习路径上的全部启发式准入判断。改动源自用户实测反馈：
-> 某些 bot 的签到入口被过滤规则误拦，用户点按钮后无任何反应，界面上也没有提示。
-> 过滤规则改为只保留用户自定义项，模块不再推测按钮性质。
+  Button-nature filtering removed in favour of "learn whatever you tap".
+  Prefix and label deny lists were used to guess a button's nature, which blocked genuine sign-in
+  entries: in one measured bot the sign-in entry matched a prefix and its label matched a word in
+  the list, so tapping it did nothing. The approach contradicted the principle that tapping a
+  button is the user's intent, and a deny list can never be complete. Learning admission now
+  keeps only user-defined rules: blocked bots and exclusion rules.
 
-### 修复 · Fixed
+- **状态文案回到用户能直接理解的说法**
+  「已发指令」改为「已发送」；目标行第二行加类型前导，让「这一条到底是什么」一眼可见。
 
-- **按钮学习误拦：签到入口被启发式过滤规则挡住**
-  现象：在部分 bot 中点击签到按钮后，目标列表没有任何变化，界面无提示，用户误以为无法添加；
-  同一按钮在「捕获」路径下却能添加成功。
-  根因：`SignLogic.obviousNonSignButton` 以三条启发式判据推测按钮性质 —— data 前缀黑名单
-  （`pay:` / `ub_menu_` / `menu:` 等）、文案黑名单（支付 / 充值 / 绑定 / 菜单 等）、
-  随机 hex token。该设计无法区分「菜单项」与「签到入口」：实测某 bot 的签到入口
-  data 为 `ub_back_menu`，命中 `ub_menu_` 前缀；按钮文案为「🔙 主菜单」，又命中「菜单」二字。
-  同时该过滤只在日志中留痕，界面上没有任何反馈，用户无法得知按钮被拦。
-  修复：移除 `obviousNonSignButton` 及其全部词表（`JUNK_DATA_PREFIXES`、`BAD_LABELS`、
-  `SIGN_LABELS`、`SIGN_NEGATIONS`、`looksLikeRandomHex`、`labelLooksLikeSign`）。
-  学习准入只保留两项由用户显式配置的判断：排除的 bot 与排除规则。
-  模块自身发起的请求仍由请求指纹机制排除，该机制是精确匹配而非推测，不受本次改动影响。
+  Status wording returned to plain language.
+  "Command sent" became "Sent", and the second row carries a type prefix so it is immediately
+  clear what each entry is.
 
-  Button learning blocked valid sign-in entries.
-  Symptom: after tapping a sign-in button in some bots, the target list did not change and the UI
-  showed nothing, so users concluded the target could not be added — while the same button added
-  fine through the capture path. Root cause: `SignLogic.obviousNonSignButton` inferred button
-  nature from three heuristics — a data prefix deny list (`pay:` / `ub_menu_` / `menu:` and
-  others), a label deny list (pay / recharge / bind / menu and others), and random hex tokens.
-  The design could not distinguish a menu item from a sign-in entry: in one measured bot the
-  sign-in entry had data `ub_back_menu`, matching the `ub_menu_` prefix, and its label was
-  "🔙 主菜单", matching the word "菜单". The filter also only recorded a log line, giving no UI
-  feedback that a button had been blocked. Fix: `obviousNonSignButton` and all of its word lists
-  were removed (`JUNK_DATA_PREFIXES`, `BAD_LABELS`, `SIGN_LABELS`, `SIGN_NEGATIONS`,
-  `looksLikeRandomHex`, `labelLooksLikeSign`). Learning admission now keeps only two judgements
-  the user configures explicitly: blocked bots and exclusion rules. Requests the module itself
-  sends are still excluded by the request-fingerprint mechanism, which matches exactly rather
-  than guessing, and is unaffected by this change.
-
-- **移除「关键词过滤」开关**
-  现象：设置 → 学习行为中的「关键词过滤」开启后，只有文案命中学习关键词的按钮才会被学习，
-  未命中的按钮点击后无反应。
-  根因：该开关的判据是按钮文案，与上一条属同类推测；且同一开关同时承担「识别签到文本」
-  与「过滤按钮」两种语义，用户难以判断关闭后会影响哪一部分。
-  修复：移除该开关及其字段、界面控件与字典项。学习关键词保留，仅用于网络层识别签到文本，
-  设置页标签已注明用途。
-
-  Removed the keyword-filter switch.
-  Symptom: with "Keyword filter" enabled under Settings → Learning, only buttons whose label
-  matched a learning keyword were learned; taps on other buttons did nothing. Root cause: the
-  switch judged by button label, the same kind of inference as the entry above, and it carried
-  two meanings at once — recognising sign-in texts and filtering buttons — making it unclear
-  which part a user would affect by turning it off. Fix: the switch, its field, its UI control
-  and its dictionary entries were removed. Learning keywords remain, now used only by the network
-  layer to recognise sign-in texts; the settings label states this purpose.
-
-- **移除启动时的目标自动清理**
-  现象：升级或重启后，目标列表中的条目在用户未操作的情况下消失。
-  根因：`sweepLearnedJunkEntries` 在每次启动时遍历全部账号，删除 data 命中前缀黑名单的回调目标。
-  该清理复用同一份前缀名单，因此继承同一误判：前缀匹配到的真签到目标会在启动时被静默删除。
-  修复：移除该清理逻辑。由于前缀黑名单本身已删除，已无误删来源；
-  历史上被误删的目标需重新点击一次按钮添加。
-
-  Removed the automatic target cleanup at startup.
-  Symptom: after an upgrade or restart, entries disappeared from the target list without user
-  action. Root cause: `sweepLearnedJunkEntries` walked every account on each start and deleted
-  callback targets whose data matched the prefix deny list. It reused the same list, inheriting
-  the same misjudgement: a genuine sign-in target matched by prefix was deleted silently at
-  startup. Fix: the cleanup was removed. Since the prefix list itself is gone there is no longer
-  a source of false deletion; targets removed in the past need one more button tap to re-add.
-
-### 变更 · Changed
-
-- **学习行为设置项调整**
-  设置 → 学习行为中原有的「关键词过滤」已移除，该分区现在包含「按钮学习」「网络学习」
-  「网络学习需确认」三项。帮助页面对应说明已同步更新。
-
-  Learning settings adjusted.
-  "Keyword filter" has been removed from Settings → Learning, which now holds "Button learning",
-  "Network learning" and "Network learning needs confirmation". The matching help text was
-  updated as well.
 
 ## 1.6.1 (124) — 2026-09-28
 

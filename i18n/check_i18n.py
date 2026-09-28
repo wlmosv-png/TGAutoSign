@@ -469,7 +469,7 @@ def main():
         'entryId', 'hhmm', 'cbDataLabel', 'hostPkg', 'tgFlag',
         # 日志\/诊断用：返回值只进 jlog\/诊断包，不进 UI
         'hostLabel', 'injectHow',
-        'ensureTimerPlan', 'windowRange', 'timerPlan',
+        'ensureTimerPlan', 'windowRange', 'timerPlan', 'entryLabel',
         # 纯逻辑判定：体内中文用于 contains\/equals 比较，改了会坏功能
         'statusRank', 'statusColorCol', 'peerKindCn', 'sortWeight',
     }

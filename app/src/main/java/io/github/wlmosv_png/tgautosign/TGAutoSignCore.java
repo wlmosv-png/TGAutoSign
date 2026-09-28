@@ -4097,22 +4097,34 @@ public final class TGAutoSignCore {
                                     noteResult(fAccount, false);
                                 }
                             } else if (!KIND_CB.equals(fKind)) {
-                                // ── 文本指令 / 群签到：发出即算成功 ──
-                                // 理由：sendText 的 delegate 是空实现，**没有回执通道** ——
-                                // 它永远等不到 BOT_RESPONSE_TIMEOUT 或任何结论，kLast 也就永远不写。
-                                // 后果：sweepDue 每轮巡检都判定"该签没签" → 无限重发
-                                //（实测 2026-09-25 09:54:29~09:55:09 连发 5+ 次，5~15 秒一发）。
-                                // 对文本指令而言，"已成功发出"就是可达的最强结论，据此计入已签。
-                                markSigned(fPrefix, fId);
+                                // ── 文本指令：与按钮目标同构，不预先标成功 ──
+                                //
+                                // 历史（2026-09-25 起）：这里曾无条件 markSigned，
+                                // 理由是"sendText 的 delegate 是空实现，没有回执通道，
+                                // 不标已签就会每轮巡检重发（实测 5~15 秒一发）"。
+                                //
+                                // 该前提已被实测证伪：文本目标**有**回复判定通道 ——
+                                //   23:47:41 【回复判定】...: 🦹🏻暗影社工库 >> 🗂 AYData | 数据查询
+                                //   00:24:23 【就地对答】... 返回未命中词表，留给回复判定
+                                // 真正的后果是：先标了已签，此后 bot 回的
+                                // "你还没绑定账号 / 请先加入频道" 这类拒绝就再没人管，
+                                // 用户看到绿色、实际没签上 —— 与本次系列修复是同一类问题。
+                                //
+                                // 现在改为：用 opt_（已发出）防重发，而不是用 last_（已签）假装成功。
+                                // opt_ 本就是巡检闸门（见 isSentPendingFresh / skipScheduling），
+                                // 标了它同样不会重复发，但不会把"发出去了"说成"签上了"。
+                                //
+                                // 之后的分支与按钮目标完全一致：
+                                //   收到回复 → 回复判定；超时无回复 → 「bot 未回复」。
+                                markOptimistic(fPrefix, fId);
                                 String _ans0 = "";
                                 try {
                                     Object _am = getFieldValSafe(response, "message");
                                     if (_am == null) _am = getFieldValSafe(response, "alert");
                                     if (_am != null) _ans0 = String.valueOf(_am);
                                 } catch (Throwable ignored) {}
-                                logs("文本指令已发出并计入已签 " + dialogId
+                                logs("文本指令已发出，等待 bot 回复后判定 " + dialogId
                                      + " text=" + fText + (_ans0.length() > 0 ? " · 返回: " + _ans0 : ""));
-                                noteResult(fAccount, true);
                             } else {
                                 // 只记"请求已发出"（乐观），**不写 kLast**。
                                 // 理由：请求成功只代表 TG 服务器收下了这条指令，bot 完全可能回
@@ -4172,6 +4184,10 @@ public final class TGAutoSignCore {
                                         try {
                                             if (ans != null && ans.trim().length() > 0) {
                                                 prefs.edit().putString(Keys.answered(fPrefix, fId), todayStr()).apply();
+                                                // 补写归类（2026-09-28 修）：原来只写 answered 不写归类，
+                                                // 界面读不到原因、状态停在「已发出」，用户不知道到底怎么了。
+                                                // bot 已经明确回了内容、只是词表没认出 —— 这就是「回复判不出」。
+                                                markResultCode(fPrefix, fId, SignLogic.R_REPLIED_UNK);
                                             }
                                         } catch (Throwable ignored) {}
                                     }
@@ -4663,7 +4679,7 @@ public final class TGAutoSignCore {
             // 所以文本目标单独用「已发指令」，颜色走中性色。
             try {
                 Map<String, Object> _em = findEntryById(id, accountOfPrefix(prefix));
-                if (_em != null && KIND_TEXT.equals(entryKind(_em))) return Lang.tr("已发指令");
+                if (_em != null && KIND_TEXT.equals(entryKind(_em))) return Lang.tr("已发送");
             } catch (Throwable ignored) {}
             return Lang.tr("已签");
         }
@@ -4700,7 +4716,7 @@ public final class TGAutoSignCore {
         if (status == null) return 0;
         if (status.contains("已签") || status.contains("放弃")) return 2;
         if (status.contains("结果未知") || status.contains("待确认")) return 1;
-        if (status.contains("已发指令")) return 9;   // 需要人看一眼，但不算"待办"
+        if (status.contains("已发送")) return 9;   // 与"已签"同级（今天已做过）
         if (status.contains("已发出")) return 0;   // 进行中，与"重试中"同属待办区
         return 0;
     }
@@ -5097,7 +5113,7 @@ public final class TGAutoSignCore {
         LinearLayout t2r = new LinearLayout(c); t2r.setOrientation(LinearLayout.HORIZONTAL); t2r.setGravity(Gravity.CENTER_VERTICAL);
         TextView st = new TextView(c); st.setTextSize(Theme.TS_CAPTION); st.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
         int stCol = Theme.termTxt(c);
-        if (status != null && status.contains("已发指令")) stCol = Theme.termMuted(c);
+        if (status != null && status.contains("已发送")) stCol = Theme.termMuted(c);
         else if (status != null && status.contains("已签")) stCol = Theme.termGreen(c);
         else if (status != null && (status.contains("按钮失效") || status.contains("回复判不出"))) stCol = Theme.termAmber(c);
         else if (status != null && (status.contains("结果未知") || status.contains("退避") || status.contains("重试"))) stCol = Theme.termAmber(c);
@@ -5107,7 +5123,7 @@ public final class TGAutoSignCore {
         // 状态前导图标：已签=勾、待签=钟、退避/重试=警告
         String stIcon = null;
         if (status != null) {
-            if (status.contains("已发指令")) stIcon = "rocket";
+            if (status.contains("已发送")) stIcon = "rocket";
             else if (status.contains("已签")) stIcon = "check";
             else if (status.contains("按钮失效") || status.contains("回复判不出")
                      || status.contains("结果未知")) stIcon = "warn";
@@ -5126,8 +5142,14 @@ public final class TGAutoSignCore {
         }
         t2r.addView(st, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         t2r.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,8), 1));
+        // ── 目标行第二行：状态 + **本条目是哪一条**（2026-09-28）──
+        // 事实：同一个 bot 下可以挂多个目标（如 🔙返回 / 📊媒体库统计 / 付费查询），
+        // 而第一行标题取的是 targetTitle(did)，全都显示同一个 bot 名 ——
+        // 用户看到几行长得一样，点一个"像"是点了两个，无从分辨。
+        // 这里把条目自身的内容（按钮文案 / 指令原文）显式标出来，让每行可辨识。
         TextView tx = new TextView(c); tx.setTextSize(Theme.TS_CAPTION); tx.setTextColor(Theme.termMuted(c)); tx.setTypeface(android.graphics.Typeface.MONOSPACE);
-        tx.setSingleLine(true); tx.setEllipsize(android.text.TextUtils.TruncateAt.END); tx.setText(text);
+        tx.setSingleLine(true); tx.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        tx.setText((cb ? "🔘 " : "⌨ ") + text);
         t2r.addView(tx, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         String lastT = prefs.getString(kLast(accountPrefix(), id), "");
         if (lastT.length() > 0) {
@@ -7417,10 +7439,31 @@ public final class TGAutoSignCore {
                  .apply();
             // 日志要在清理之后打，并复述真实状态 —— 以前无论 markSigned 是否早退都报"计入今日已签"，
             // 用户看到"成功"提示却发现按钮还在，就是这条假日志造成的认知错位。
-            logs("【待确认】" + did + " 用户确认已签 → 已记为今日已签并停止今日重试（" + id + "）");
+            logs("用户确认已签 → 已记为今日已签并停止今日重试（" + entryLabel(prefix, id) + "）");
             toast(Lang.tr("已记为今日已签"));
             try { refreshListFrom(lastActivity); } catch (Throwable ignored) {}
         } catch (Throwable t) { noteSwallowed("pendConfirmAsSigned", t); }
+    }
+
+    /**
+     * 条目的可读标识（日志与界面共用）。
+     *
+     * 动机（2026-09-28）：同一个 bot 下可以挂多个目标（🔙返回 / 📊统计 / 付费查询），
+     * 而日志原来只打 did、界面标题只显示 bot 名 —— 两处都无法区分是哪一条。
+     * 实测用户看到「点一个出了两条日志」，其实那是两个不同目标各触发一次。
+     *
+     * @return 形如 "8756683068_cb1（🔙 返回）"；取不到内容时退化为纯 id
+     */
+    private String entryLabel(String prefix, String id) {
+        try {
+            Map<String, Object> m = findEntryById(id, accountOfPrefix(prefix));
+            if (m == null) return id;
+            String t = entryText(m);
+            if (t == null || t.trim().length() == 0) return id;
+            t = t.replace("\n", " ").trim();
+            if (t.length() > 18) t = t.substring(0, 18) + "…";
+            return id + "（" + t + "）";
+        } catch (Throwable e) { return id; }
     }
 
     /** 用户选择重试：清掉待确认与重试计数，立刻再发一次。 */
@@ -7440,7 +7483,7 @@ public final class TGAutoSignCore {
                  .apply();
             Map<String, Object> m = findEntryById(id, accountOfPrefix(prefix));
             if (m == null) { toast(Lang.tr("目标已不存在")); return; }
-            logs("【待确认】" + did + " 用户点了重试 → 重新发送");
+            logs("用户点了重试 → 重新发送（" + entryLabel(prefix, id) + "）");
             toast(Lang.tr("已重新发送"));
             // 账号必须从 prefix 反解，**不能读 currentAccount()**：
             // 界面渲染时的账号与点击时的"当前账号"可能不同（用户切过号），
@@ -7458,7 +7501,7 @@ public final class TGAutoSignCore {
                  .putString(kRetryDay(prefix, id), todayStr())
                  .putString(prefix + "pendcfm_note_" + id, todayStr() + "|用户忽略今天")
                  .apply();
-            logs("【待确认】" + did + " 用户忽略今天（今日不再自动重试）");
+            logs("用户忽略今天（今日不再自动重试）：" + entryLabel(prefix, id));
             toast(Lang.tr("已忽略今天"));
         } catch (Throwable t) { noteSwallowed("pendConfirmIgnoreToday", t); }
     }
