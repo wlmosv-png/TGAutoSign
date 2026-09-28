@@ -1,9 +1,11 @@
 # 更新日志
 
-## 1.6.1 (124) — 2026-09-27
+## 1.6.1 (124) — 2026-09-28
 
-> 承接 1.6.0 的账号隔离重构，修掉三个会在日常使用中反复咬人的问题，
-> 并把「用户报的现象」逐条落到可验证的状态机上。
+> 承接 1.6.0 的账号隔离重构。这一版几乎全部来自**用户实际反馈**：
+> 目标会自己冒出来、已发出却退回待签、支付按钮被学成签到、停用账号照样签到、
+> 批量签到重发已签的、账号一览显示不出目标……
+> 每条现象都落到了可验证的状态机上，并固化成回归用例。
 
 ### 修复 · Fixed
 
@@ -104,15 +106,122 @@
   `SharedConfig.activeAccounts`, and display ordinals are decoupled from real indexes
   (`displayIndexOf` / `slotOfDisplayIndex`). The heartbeat and make-up sweep iterate real slots.
 
+- **停用账号仍然会被签到（重要）**
+  「停用该账号（不参与自动签到）」此前只在三处被检查：账号一览的徽章显示、
+  「签全部账号」的循环、心跳遍历**非当前账号**时。而唯一的统一签到闸
+  （`sendSign` 的 `_gate.disabled`）里**没有它**。
+  于是切到被停用的账号后，任何触发源（进入签到窗口、打开聊天、面板事件补签、
+  定时巡检、排队）都会照常签到 —— 开关形同虚设。
+  现在把「账号是否停用」并入统一闸，并置于判定最前、**手动操作也不放行**
+  （否则停用后点一下「立即签到」就能绕过，与开关语义矛盾）。
+  顺带修两处副作用：停用账号不再让心跳每 45 秒空转（降为 10 分钟档），
+  定时巡检也不再为空账号排任务。
+
+  Disabled accounts were still being signed in (important).
+  The "disable this account" switch was only honoured in three places (the overview badge,
+  the sign-all loop, and the heartbeat when iterating non-current accounts) — but not in the
+  single unified sign-in gate (`sendSign`'s `_gate.disabled`). After switching to a disabled
+  account, every trigger (window entry, opening a chat, panel-event make-up, scheduled sweep,
+  queueing) signed in as usual, making the switch meaningless. The account-level flag now
+  feeds the unified gate and is evaluated first, and manual actions do not bypass it (otherwise
+  tapping "sign now" once would defeat the switch). Two side effects fixed as well: a disabled
+  account no longer keeps the heartbeat awake every 45 seconds (dropped to the 10-minute tier),
+  and the scheduled sweep no longer arms tasks for it.
+
+- **「立即签到」把已签过的目标又签了一遍（重要）**
+  「全部签到」与「签全部账号」都传 `force=true`，而 `manual` 的语义是
+  「用户显式操作，绕过今日进度限制」—— 它连「今天已签」也一并绕过了。
+  于是批量入口把已经签过的目标重新发了一遍；若还开着定时，全天计划会被一次性全发。
+  用户原话：「立即签到是所有的都签到，我签过的又给我重复了一遍」「签过的没人会再二次签的吧」。
+  现在把 `manual` 拆成两个维度：`manual`（豁免节流／重试上限／退避）保持不变，
+  新增 `skipSigned`（批量语义：今天已有结论 —— 已签或已发出待确认 —— 就跳过）。
+  两个批量入口传 `skipSigned=true`；**单目标**「立即签到」保持可强制重签 ——
+  用户点得这么具体通常是有原因的（怀疑没签上）。
+
+  "Sign all" re-sent targets that were already signed (important).
+  Both batch entry points passed `force=true`, and `manual` means "the user acted explicitly,
+  bypass today's progress limits" — which also bypassed the already-signed check. So the batch
+  path re-sent targets that were already signed; with the timer on, the whole day's plan went
+  out at once. In the user's words: "sign all signs everything, and it repeated the ones I'd
+  already signed." `manual` is now split into two dimensions: `manual` (exempt from throttling /
+  retry cap / backoff) is unchanged, and a new `skipSigned` (batch semantics: skip anything that
+  already has a verdict today — signed, or sent-and-awaiting) was added. The two batch entry
+  points pass `skipSigned=true`, while the single-target "sign now" can still force a re-send —
+  users tap it for a reason, usually suspecting the sign-in did not go through.
+
+- **账号一览显示「没有目标」，而该账号其实有目标（重要）**
+  账号遍历用的是连续区间 `0..已登录数-1`，而不是**真实槽位**。
+  真实槽位来自宿主 `SharedConfig.activeAccounts`，部分客户端（Nagram 实测）会给出
+  7、9 这类真实索引。以槽位 `{0,1,7}` 为例：界面上的「账号3」读的是空分区 `acc2_`，
+  于是显示「还没有目标」，而真数据在 `acc7_` 里，**压根没被遍历到**。
+  有用户反馈「账号3、4 其实都有目标，但这里显示没有目标」，
+  另一位补充「账号3 本来显示的，我停用账号之后好像就不显示了」—— 都是这个错位。
+  更麻烦的是启动时的孤儿清理也用连续区间：槽位 7 的状态键会被判成「孤儿」删除
+  （删的是 `sent_at_` / `opt_` / `frozen_` 等中间状态，不是目标本身）。
+  现在 **11 处**账号遍历全部改为真实槽位。槽位连续时（绝大多数用户）
+  返回值与原来完全相同 —— 行为不变，只在非连续槽位时体现修复。
+  同时新增构建门禁：源码里再出现连续区间遍历账号，构建直接失败。
+
+  The account overview showed "no targets" for an account that had them (important).
+  Account iteration used the contiguous range `0..signed-in-count-1` instead of real slots.
+  Real slots come from the host's `SharedConfig.activeAccounts`, and some clients (Nagram
+  observed) report indexes like 7 or 9. With slots `{0,1,7}`, the UI's "account 3" reads the
+  empty partition `acc2_` and reports "no targets yet", while the real data lives under `acc7_`
+  and is never visited at all. One user reported "accounts 3 and 4 do have targets, but this
+  shows none", and another added "account 3 used to show up, but after I disabled the account
+  it stopped" — both are this same misalignment. Worse, the startup orphan sweep used the same
+  contiguous range, so slot 7's state keys were classified as orphans and deleted (intermediate
+  state such as `sent_at_` / `opt_` / `frozen_`, not the targets themselves). All 11 account
+  iterations now use real slots. When slots are contiguous (the vast majority of users) the
+  values are identical — behaviour is unchanged; the fix only shows on non-contiguous slots.
+  A build gate now fails the build if contiguous-range account iteration reappears.
+
+- **文案明确是签到的按钮被误挡（上一版引入的回归）**
+  上一版为挡住支付／菜单／随机 token 按钮加了一道过滤，但判据全压在 `data` 上。
+  `data` 是 bot 自己定的串，用户可见的是**文案**。有用户反馈两个真签到按钮
+  「🎯 签到」点一下能学到、「✅ 每日签到」不行，必须去「添加目标」手动捕获才行，
+  而手动捕获路径恰好不经过这道过滤 —— 差异只在 data，文案都是明确签到。
+  现在判据改成**文案优先**：文案命中签到白名单（签到／打卡／checkin／signin／claim／领取…）
+  即无条件放行，不查 data。配套的否定词（签到记录／历史／说明／规则／教程／统计／排行榜）
+  让「签到记录」这类含签到词但明显不是按钮的条目不生效。
+  网络层学习也会先从面板快照按 data 反查**真实按钮文案**，让两条学习路径判据一致。
+  启动清理同样改为文案优先，避免误删真签到条目。
+
+  Buttons whose label clearly says "check in" were wrongly blocked (regression from the previous build).
+  The previous build added a filter to block payment / menu / random-token buttons, but every
+  criterion was based on `data`. `data` is a string the bot chooses; what the user sees is the
+  **label**. A user reported that of two real check-in buttons, "🎯 签到" was learned on tap while
+  "✅ 每日签到" was not and required manual capture via "add target" — and manual capture happens
+  to bypass that filter. The difference was only in `data`; both labels clearly say "check in".
+  The criteria are now **label-first**: if the label matches the check-in allowlist
+  (签到 / 打卡 / checkin / signin / claim / 领取 …) it passes unconditionally, without inspecting
+  `data`. Companion negation words (records / history / help / rules / tutorial / stats / ranking)
+  keep entries like "签到记录" (check-in records) from qualifying. Network-layer learning also
+  looks the **real button label** up from the panel snapshot by `data`, so both learning paths
+  apply identical criteria. Startup cleanup is label-first too, to avoid deleting real check-in
+  entries.
+
 ### 新增 · New
 
-- **适配客户端新增两个**
+- **适配客户端新增两个，并修好默认作用域**
   `tw.nekomimi.nekogram`（Nekogram）与 `it.belloworld.mercurygram`（Mercurygram）加入
   白名单与作用域清单，真机实测注入成功。
+  同时修了一处**从 1.6.0 起就存在的问题**：`module.prop` 的 `scope=` 只列了 3 个包，
+  而 `scope.list` 有 8 个。`staticScope=true` 时 LSPosed 以 `module.prop` 的 `scope=`
+  作为**默认作用域**，所以新装用户只会勾上那 3 个 —— Nagram XF、NagramX 等
+  用户「装了模块却在作用域里找不到自己的客户端」。
+  现在 `module.prop` / `scope.list` / `Hosts.KNOWN` 三处都是同样的 10 个包，
+  新装用户拿到的默认作用域与本机实测环境完全一致。
 
-  Two more supported clients.
+  Two more supported clients, and a fix for the default scope.
   `tw.nekomimi.nekogram` (Nekogram) and `it.belloworld.mercurygram` (Mercurygram) joined the
-  whitelist and the scope list; injection verified on real devices.
+  whitelist and the scope list; injection verified on real devices. A problem that had existed
+  since 1.6.0 was also fixed: `module.prop`'s `scope=` listed only 3 packages while `scope.list`
+  had 8. With `staticScope=true`, LSPosed treats `module.prop`'s `scope=` as the **default
+  scope**, so new installs only had those 3 ticked — users of Nagram XF, NagramX and others
+  "installed the module but could not find their client in the scope list". Now `module.prop`,
+  `scope.list` and `Hosts.KNOWN` all carry the same 10 packages, so a fresh install gets the
+  same default scope as the environment this was tested on.
 
 - **误学条目的清理日志**
   启动时清理已误学的目标会记一条日志，列出被删的条目与原因，用户可核对。
@@ -143,15 +252,23 @@
   a mismatch fails the build. "Remember to run the generator at release time" is now something
   the build catches, not something a human must remember.
 
-- **纯逻辑单测 174 → 222 条**
-  新增两组：`sentPhaseLifecycle`（状态三态、时钟回拨、无时间戳的保守处理、升级条件互斥）
-  与 `nonSignButtonFilter`（实测支付/菜单/随机 token 必须拦，真签到按钮必须放行，含边界）。
+- **纯逻辑单测 174 → 297 条**
+  新增五组：`sentPhaseLifecycle`（状态三态、时钟回拨、无时间戳的保守处理、升级条件互斥）、
+  `nonSignButtonFilter`（实测支付/菜单/随机 token 必须拦，真签到按钮必须放行，含边界）、
+  `accountDisabled`（账号级停用不可被手动绕过、优先级高于在途与已签）、
+  `batchSkipSigned`（批量只签未签的、单目标仍可强制重签、停用优先于跳过）、
+  以及时间展示（补签判定阈值、HH:MM 格式化、相对时间文案、老数据回退）。
+  用户报过的每个现象都固化成了回归用例。
 
-  Pure-logic unit tests grew from 174 to 222.
-  Two new groups: `sentPhaseLifecycle` (three-state lifecycle, clock rollback, conservative
-  handling of missing timestamps, mutually exclusive promotion conditions) and
+  Pure-logic unit tests grew from 174 to 297.
+  Five new groups: `sentPhaseLifecycle` (three-state lifecycle, clock rollback, conservative
+  handling of missing timestamps, mutually exclusive promotion conditions),
   `nonSignButtonFilter` (observed payment/menu/random-token buttons must be blocked; real
-  check-in buttons must pass; boundary cases included).
+  check-in buttons must pass; boundary cases included), `accountDisabled` (the account-level
+  switch cannot be bypassed manually and outranks in-flight/already-signed),
+  `batchSkipSigned` (batch skips already-signed targets, single-target can still force a re-send,
+  disabled outranks skipping), and time display (make-up threshold, HH:MM formatting, relative
+  time wording, fallback for legacy data). Every reported symptom became a regression case.
 
 ## 1.6.0 (123) — 2026-09-26
 

@@ -117,13 +117,13 @@ You installed a debug build. Uninstall it, then install the official APK from th
 
 ## 📜 更新日志 · Changelog
 
-### v1.6.1 (124) — 2026-09-27
+### v1.6.1 (124) — 2026-09-28
 
-**Fixed**: Targets appeared on their own: the module learned its own button taps. · Sent state silently fell back to "pending" and re-sent (important). · Payment / menu buttons were learned as check-in targets (important). · Account crossover in network-layer learning. · Account index clamping now only normalises negatives.
+**Fixed**: Targets appeared on their own: the module learned its own button taps. · Sent state silently fell back to "pending" and re-sent (important). · Payment / menu buttons were learned as check-in targets (important). · Account crossover in network-layer learning. · Account index clamping now only normalises negatives. · Disabled accounts were still being signed in (important). · Both batch entry points passed `force=true`, and `manual` means "the user acted explicitly… · The account overview showed "no targets" for an account that had them (important). · Buttons whose label clearly says "check in" were wrongly blocked (regression from the previous build).
 
-**New**: Two more supported clients. · Cleanup logging for mislearned entries.
+**New**: Two more supported clients, and a fix for the default scope. · Cleanup logging for mislearned entries.
 
-**Tooling**: README changelog generator now understands block-style bilingual entries. · New build gate: README changelog must stay in sync. · Pure-logic unit tests grew from 174 to 222.
+**Tooling**: README changelog generator now understands block-style bilingual entries. · New build gate: README changelog must stay in sync. · Pure-logic unit tests grew from 174 to 297.
 
 ### v1.6.0 (123) — 2026-09-26
 
