@@ -159,6 +159,12 @@ You installed a debug build. Uninstall it, then install the official APK from th
 
 ## 📜 更新日志 · Changelog
 
+### v1.6.2 (125) — 2026-09-28
+
+**Fixed**: Button learning blocked valid sign-in entries. · Removed the keyword-filter switch. · Removed the automatic target cleanup at startup.
+
+**变更**: Learning settings adjusted.
+
 ### v1.6.1 (124) — 2026-09-28
 
 **Fixed**: Targets multiplied automatically: the module's own callbacks were misread as user learning. · Sent-state rollback caused duplicate sign-ins. · Non-check-in buttons entered the learning scope. · Incorrect account attribution in network-layer learning. · Account index clamping was too broad. · Disabled accounts still performed sign-ins. · Batch sign-in re-sent targets already signed. · The account overview omitted accounts on non-contiguous slots. · Buttons clearly labelled as check-ins were blocked (regression introduced in the previous build).
@@ -166,16 +172,6 @@ You installed a debug build. Uninstall it, then install the official APK from th
 **New**: Two more supported clients, and a corrected default scope. · Cleanup logging for mislearned entries.
 
 **Tooling**: README changelog generator supports block-style bilingual entries. · New build gate: README changelog must stay in sync. · Pure-logic unit tests grew from 174 to 297.
-
-### v1.6.0 (123) — 2026-09-26
-
-**Architecture**: Account isolation moved from convention to structure. · Six single-responsibility classes extracted from the core file. · Pure logic is now unit-testable. · Storage keys consolidated into a single source of truth. · Flush policy made explicit.
-
-**Fixed**: Account crossover — all six paths now pin the account. · Out-of-range guard read another account's partition (important). · Failed targets were signed over and over (important). · Duplicate scheduling within one account (important). · A successful check-in was revoked and shown as "backoff" (important). · Panel waiting always timed out into the fallback (important). · Same class of bug, full sweep: three more places treated success as failure. · The "pending" pool is now per-account, with automatic migration. · The state used to be write-only: once set there was no way to clear it apart from a manual test… · Reply verdict could land on the wrong account (important). · A full-account round reported one account's tally as another's. · Clearing config left state behind, resurrecting it on re-add (important). · Clearing config wrongly deleted the per-account pending pool. · Stale buttons caused an endless retry loop. · Silent robots made the module wait out a timeout every day. · Crash when saving in the settings screen. · Opening "Logs" stuttered. · Only the first startup line reached the log file. · Tapping a bot button within 30 s of a cold start did nothing. · The make-up window became all day when it crossed midnight. · Configs synced from another client did not apply locally. · Only the first of several bot buttons was learned. · Chain ids in the log could repeat across accounts. · Two instances ran in parallel after a hot reload. · Numeric headings rendered as wrong glyphs in the startup log. · Decorative text showed tofu boxes. · The "pending" retry button used the wrong account.
-
-**New**: Detailed version info in logs and the diagnostics bundle. · Host friendly names follow the UI language.
-
-**Tooling**: The in-repo build.sh was missing three gates. · Unit assertions grew from 115 to 174. · The wiring checker listed a method that no longer existed.
 
 [Full changelog →](https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md)
 

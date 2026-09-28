@@ -113,12 +113,11 @@ public final class TGAutoSignCore {
     private BroadcastReceiver netReceiver = null;
     private int lastAccount = -1;
     // v1.4.0：回调捕获/绑定/调试台 + 每条目前置命令 + 关键词解耦
-    private boolean AUTO_LEARN_FILTER = true;
     /** 是否自动判定机器人回复的成败（开=按内置/自定义词表判；关=只记录不判）。 */
     private boolean JUDGE_ENABLED = true;
     /**
      * 宽松模式（用户要求）。
-     *   学习：**点什么学什么** —— 跳过排除规则 / 关键词过滤 / 排除的 bot 以外的所有准入判断。
+     *   学习：**点什么学什么** —— 除「排除的 bot」「排除规则」外不做任何准入判断。
      *   判定：**只要 bot 回了内容就算成功** —— 不再依赖判定词，专治措辞千奇百怪的机器人。
      * 关掉则按原逻辑走（默认关）。
      */
@@ -845,7 +844,6 @@ public final class TGAutoSignCore {
             DEBUG_OVERFLOW_SIM = prefs.getBoolean("jmb_dbg_overflow", false);
             try { accountManager.setOverflowSim(DEBUG_OVERFLOW_SIM); } catch (Throwable ignored) {}
             AUTO_LEARN = prefs.getBoolean("jmb_autolearn", AUTO_LEARN);
-            AUTO_LEARN_FILTER = prefs.getBoolean("jmb_alfilter", AUTO_LEARN_FILTER);
             // jmb_judge 是 v1.5.8 新键，默认开。**尊重用户显式关闭**：
             // 只有键存在时才用存储值，读不到（老用户/未设置）用默认 true。
             JUDGE_ENABLED = prefs.getBoolean("jmb_judge", true);
@@ -857,12 +855,6 @@ public final class TGAutoSignCore {
         try { lastAccount = currentAccount(); } catch (Throwable ignored) {}
         try { migrateAccountConfigs(); } catch (Throwable ignored) {}   // 全局默认 → 各账号（老用户不丢设置）
         try { sweepOrphanEntryKeys(); } catch (Throwable ignored) {}    // 清掉历史遗留的孤儿状态键
-        // 清掉历史误学的非签到目标（支付/菜单按钮）。遍历全部槽位，不读 currentAccount。
-        try {
-            int _junk = 0;
-            for (int _ja : accountSlots()) _junk += sweepLearnedJunkEntries(accountPrefix(_ja));
-            if (_junk > 0) jlogForce("已清理 " + _junk + " 个误学目标（支付/菜单类按钮，不是签到目标）");
-        } catch (Throwable t) { noteSwallowed("start-sweep-junk", t); }
         try { sweepStalePendingConfirm(); } catch (Throwable ignored) {} // 清掉跨天残留的「待确认」
         registerNetworkReceiver();
         registerActivityListener();
@@ -2175,75 +2167,6 @@ public final class TGAutoSignCore {
      *
      * @return 清掉的键数
      */
-    /**
-     * 清理**已学到的明显非签到目标**（2026-09-27）。
-     *
-     * 背景：修复前，模块会把支付/菜单按钮学成签到目标并真的去点 ——
-     * 实测 8439387373 学出了 pay:alipay / pay:wxpay，且会自我繁殖
-     * （每点一次多一条，09-23 出现 2 次 → 09-27 涨到 15 次）。
-     * 光在入口拦新学习不够，已经躺在目标列表里的这些条目还得清掉。
-     *
-     * 保守策略：**只删 data 命中确定性前缀黑名单的条目**。
-     *   · 前缀（pay: / ub_menu_ / ...）是确定的，不可能是真签到按钮
-     *   · 不用"随机 hex"规则删 —— 那条只是启发式，有误伤风险，只用于拦新学习
-     *   · 同时清掉这些条目的关联状态键（last_/opt_/retry_/... ），不留孤儿
-     *
-     * @return 删除的条目数
-     */
-    private int sweepLearnedJunkEntries(String prefix) {
-        int removed = 0;
-        try {
-            List<Map<String, Object>> list = new ArrayList<Map<String, Object>>();
-            loadTargetsInto(prefix, list);
-            for (Map<String, Object> m : list) {
-                String id = entryId(m);
-                if (id == null || id.length() == 0) continue;
-                if (!KIND_CB.equals(entryKind(m))) continue;          // 只查回调类（文本指令不涉及）
-                Object dataObj = m.get("data");
-                if (!(dataObj instanceof byte[])) continue;
-                String data = "";
-                try { data = new String((byte[]) dataObj, "UTF-8"); } catch (Throwable ignored) { continue; }
-                // 与学习拦截同一原则（2026-09-28）：**文案优先于 data**。
-                // 清理是"删条目"这种不可逆动作，比拦学习更该保守 ——
-                // 万一某个真签到按钮的 data 恰好以 menu_/pay_ 开头，
-                // 只看 data 会在每次启动时把它静默删掉（用户会觉得"目标自己没了"）。
-                // 所以文案明确是签到的，一律不删。
-                String entryLabel = entryText(m);
-                if (SignLogic.labelLooksLikeSign(entryLabel)) continue;
-
-                String low = data.trim().toLowerCase();
-                boolean junk = false;
-                for (String p : SignLogic.JUNK_DATA_PREFIXES) {
-                    if (low.startsWith(p)) { junk = true; break; }
-                }
-                if (!junk) continue;
-
-                // 删条目 + 关联状态键
-                prefs.edit()
-                     .remove(prefix + "kind_" + id)
-                     .remove(prefix + "text_" + id)
-                     .remove(prefix + "data_" + id)
-                     .remove(prefix + "hash_" + id)
-                     .remove(prefix + "msg_id_" + id)
-                     .remove(prefix + "title_" + id)
-                     .remove(prefix + "peerkind_" + id)
-                     .remove(prefix + "pre_" + id)
-                     .remove(prefix + "loc_" + id)
-                     .remove(kLast(prefix, id))
-                     .remove(kRetry(prefix, id))
-                     .remove(kRetryAt(prefix, id))
-                     .remove(kRetryDay(prefix, id))
-                     .remove(Keys.opt(prefix, id))
-                     .remove(Keys.answered(prefix, id))
-                     .remove(kPendingConfirm(prefix, id))
-                     .commit();
-                removed++;
-                jlogForce("清理误学目标：" + entryText(m) + "（" + id + " · data=" + data + " 不是签到按钮）");
-            }
-        } catch (Throwable t) { noteSwallowed("sweepLearnedJunkEntries", t); }
-        return removed;
-    }
-
     private int sweepOrphanEntryKeys() {
         int removed = 0;
         try {
@@ -5620,7 +5543,6 @@ public final class TGAutoSignCore {
         chips1.addView(badge(act, "网络学习", AUTO_LEARN_NET));
         statCard.addView(chips1);
         LinearLayout chips2 = new LinearLayout(act); chips2.setOrientation(LinearLayout.HORIZONTAL); chips2.setPadding(0, dp(6), 0, 0);
-        chips2.addView(badge(act, "过滤", AUTO_LEARN_FILTER));
         chips2.addView(badge(act, "唤醒", WAKE_CMD != null && !WAKE_CMD.isEmpty()));
         statCard.addView(chips2);
         String plc = perAccountLine();
@@ -6127,7 +6049,7 @@ public final class TGAutoSignCore {
         tcard(box, act, "复制目标到其它账号", "多账号用户的省事入口：把当前账号的目标整体复制给其它账号，不用一条条重新添加。入口在「全部功能 → 目标」里。");
         tcard(box, act, "⑨ 换手机 / 备份", "「导出配置」生成 json 到下载目录，新设备用「导入配置」还原（导入是合并，不是覆盖）。配置里不含任何登录凭据。\n「导出日志」把运行日志导出到下载目录，方便留档或发给作者。\n删不干净时用「清空配置」，会跨全部账号彻底清。");
         tcard(box, act, "⑩ 外观与主题", "设置里可选主题：自动（跟随 Telegram 主题，推荐）/ 始终日间 / 始终夜间。界面配色由 TG 当前主题决定，切换 TG 主题面板会跟着变。");
-        tcard(box, act, "⑪ 关键词与自动学习", "设置 → 学习行为：「按钮学习」开启后，你在 bot 里点过的按钮会自动加进目标；「网络学习」自动识别你发的签到文本。\n「关键词过滤」默认关闭（点过的都能绑）；开启后只有文案命中「学习关键词」的按钮才自动加，防误加。");
+        tcard(box, act, "⑪ 关键词与自动学习", "设置 → 学习行为：「按钮学习」开启后，你在 bot 里点过的按钮会自动加进目标（点什么都学，不做过滤）；「网络学习」自动识别你发的签到文本。");
         tcard(box, act, "⑫ 出问题怎么办", "①「自诊断」：列出宿主反射锚点是否正常，第三方客户端（Nagram XF / Nagram / ExteraLess）适配先看这里。\n②「回调调试台」：列出面板全部按钮，点任意一个实时发一次看机器人返回，用来确认哪个按钮才对。\n③「运行日志」：点「诊断包」一键复制（错误 + 警告 + 最近 50 条 + 配置摘要），粘贴给作者最省事。\n④ 签到没反应：先看通知开关、是否在签到窗口内、该目标是否被暂停。");
         tcard(box, act, "⑬ 日志怎么读", "运行日志固定「最新在最上」，打开即定位到最新那条；往下滑看更早的，「加载更多」每次多取 300 条。\n顶部芯片可按级别（全部 / 只看重要 / 只看错误）和目标过滤；「回到最新」一键回顶。\n颜色：红 = 错误，黄 = 警告，绿 = 成功，灰 = 普通，暗灰 = 调试。长按某行可复制。");
         tcard(box, act, "⑭ 更新与反馈", "「检查更新」走官方 GitHub 发布，检测到新版本可直接下载安装包。遇到问题或想提需求，用「加入群组」反馈。");
@@ -7537,7 +7459,6 @@ public final class TGAutoSignCore {
     private static String kFx() { return "jmb_fx"; }
     private static String kAutoLearn() { return "jmb_autolearn"; }
     private static String kAutoLearnNet() { return "jmb_autolearn_net"; }
-    private static String kAutoLearnFilter() { return "jmb_alfilter"; }
     private static String kLastRound() { return "jmb_last_round"; }
     private static String kTimerPlanOf(String prefix) { return prefix + "timer_plan_" + todayStrStatic(); }
     private static String todayStrStatic() { try { return new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(new java.util.Date()); } catch (Throwable t) { return ""; } }
@@ -8466,7 +8387,6 @@ public final class TGAutoSignCore {
                 AUTO_LEARN = R.autoLearnSw.isChecked();
                 AUTO_LEARN_NET = R.autoLearnNetSw.isChecked();
                 AUTO_LEARN_NET_CONFIRM = R.autoLearnNetCfmSw.isChecked();
-                AUTO_LEARN_FILTER = R.autoLearnFilterSw.isChecked();
                 JUDGE_ENABLED = R.judgeSw.isChecked();
                 LOOSE_MODE = R.looseSw.isChecked();
                 JUDGE_USE_CUSTOM = R.judgeCustomSw.isChecked();
@@ -8477,7 +8397,6 @@ public final class TGAutoSignCore {
                       .putInt("jmb_retry", RETRY_LIMIT)
                       .putString("jmb_wake_cmd", WAKE_CMD)
                       .putInt("jmb_theme", THEME_MODE)
-                      .putBoolean("jmb_alfilter", AUTO_LEARN_FILTER)
                       .putBoolean("jmb_autolearn", AUTO_LEARN)
                       .putBoolean("jmb_autolearn_net", AUTO_LEARN_NET)
                       .putBoolean("jmb_autolearn_net_confirm", AUTO_LEARN_NET_CONFIRM)
@@ -8653,7 +8572,6 @@ public final class TGAutoSignCore {
             sb.append("静默异常: ").append(swallowedCount.get()).append(" 次\n");
             sb.append("学习开关: 按钮=").append(AUTO_LEARN ? "开" : "关")
               .append("  网络=").append(AUTO_LEARN_NET ? "开" : "关")
-              .append("  关键词过滤=").append(AUTO_LEARN_FILTER ? "开" : "关")
               .append("  关键词=").append(LEARN_KEYWORDS == null || LEARN_KEYWORDS.trim().isEmpty() ? "(空=全收)" : LEARN_KEYWORDS)
               .append("\n");
             // 判定模式全貌 —— 排障必看。缺了这几项就只能靠猜
@@ -9003,7 +8921,7 @@ public final class TGAutoSignCore {
 
     /**
      * 学习准入统一判定。三个学习入口都必须先过这里。
-     * 优先级：bot 黑名单 > 排除规则 > 白名单（关键词过滤开启时）> 放行。
+     * 优先级：bot 黑名单 > 排除规则 > 放行。
      * 返回 null 表示允许学习；返回非 null 是拒绝原因（用于日志）。
      */
     private String learnDenyReason(long did, String text, String context) {
@@ -9015,16 +8933,16 @@ public final class TGAutoSignCore {
      *
      * @param data 回调按钮的 data 原文；文本类目标传 null。
      *
-     * 2026-09-27 加固：新增一道**独立于宽松模式**的硬闸门 ——
-     * 宽松模式的本意是「判定词对不上也学」，不该扩到「支付/菜单按钮也学」。
-     * 实测模块把 8439387373 的 pay:alipay / pay:wxpay 学成签到目标并真的去点。
+     * 2026-09-28 改：**只保留用户自己定的准入判断**。
+     *   · 排除的 bot —— 用户明确拉黑的整只 bot
+     *   · 排除规则   —— 用户自己写的关键词 / 正则
+     *
+     * 曾经那套"猜这个按钮像不像签到"的启发式（data 前缀黑名单、文案黑名单、
+     * 随机 hex、关键词过滤）已整体移除。理由见 SignLogic 顶部说明：
+     * 用户点按钮这个动作本身就是意图，猜必然误伤，而且误伤时界面上毫无提示。
      */
     private String learnDenyReason(long did, String text, String data, String context) {
         try {
-            // ⓪ 硬闸门：明显不是签到的按钮，任何模式都不学（含宽松模式）
-            String obvious = SignLogic.obviousNonSignButton(text, data == null ? null : data);
-            if (obvious != null) return obvious;
-
             // 宽松模式：来者不拒 —— 点什么学什么（仍然尊重「排除的 bot」，
             // 因为那是用户明确拉黑的整只 bot，不属于"判定词对不上"的范畴）。
             if (LOOSE_MODE) {
@@ -9039,7 +8957,6 @@ public final class TGAutoSignCore {
             String hay = (context == null ? "" : context) + " \n " + (text == null ? "" : text);
             String hit = excludeHit(hay);
             if (hit != null) return Lang.tf("命中排除规则「{0}」", hit);
-            if (AUTO_LEARN_FILTER && !keywordMatched(text)) return Lang.tr("不含学习关键词");
         } catch (Throwable ignored) {}
         return null;
     }
@@ -9064,11 +8981,12 @@ public final class TGAutoSignCore {
     /**
      * 按 data 反查该按钮的**真实文案**（从最近一次面板快照里找）。
      *
-     * 为什么需要（2026-09-28 回归）：网络层学习时手上只有 data 解码串，
-     * 于是把它当 label 传给 obviousNonSignButton —— 但那是 data 不是文案，
-     * 导致「文案明确是签到、data 恰好像随机串」的真按钮被误挡。
-     * UI 层 hook 能拿到文案，网络层拿不到；这里从 panelLive 补齐，
-     * 让两条学习路径的判据完全一致（都以「用户可见文案」为准）。
+     * 用途：网络层学习时手上只有 data 解码串，直接拿它当目标名会显示成
+     * 「ub_back_menu」这种机器串；UI 层 hook 能拿到文案，网络层拿不到，
+     * 这里从 panelLive 补齐，让加进来的目标显示成用户看得懂的按钮文案。
+     *
+     * 注：这**只影响显示名**，不参与任何准入判断 —— 过滤那套已整体移除，
+     * 用户点什么就学什么（见 learnDenyReason 与 SignLogic 顶部说明）。
      *
      * @return 找到的按钮文案；找不到返回 null（调用方应回退到 data 解码串）
      */
@@ -9309,17 +9227,6 @@ public final class TGAutoSignCore {
             learnTarget(did, text);
             return true;
         } catch (Throwable t) { return false; }
-    }
-
-    /** 关键词过滤：与网络层学习保持同一规则 */
-    private boolean keywordMatched(String text) {
-        String t = String.valueOf(text).trim();
-        if (LEARN_KEYWORDS == null || LEARN_KEYWORDS.trim().length() == 0) return true;
-        String[] kws = LEARN_KEYWORDS.split(",");
-        for (String kw : kws) {
-            if (kw.trim().length() > 0 && t.toLowerCase().contains(kw.trim().toLowerCase())) return true;
-        }
-        return false;
     }
 
     /**
@@ -9571,8 +9478,8 @@ public final class TGAutoSignCore {
                             // 用户手动点过但按钮 hook 未捕获时，网络层兜底学习。
                             // 改革：官方版 TG 用 R8 混淆，UI 层 didPressedBotButton 匹配 0 个方法（hook 失效），
                             // 因此网络层这条兜底就是官方版唯一的回调学习入口。
-                            // 判断与 UI 层保持一致：尊重「排除的 bot」「排除规则」「关键词过滤」开关，
-                            // 且不拿 callback data 解码串当关键词（它是 data 不是用户可见文案）。
+                            // 判断与 UI 层保持一致：只尊重「排除的 bot」与「排除规则」，
+                            // 这两者都是用户自己定的；不再对按钮性质做任何猜测（2026-09-28）。
                             if (findCbEntry(u, d) == null && d.length > 0) {
                                 // 优先用面板快照里的**真实按钮文案**（用户可见）；
                                 // 取不到才回退到 data 解码串。判据以文案为准，
@@ -9584,17 +9491,14 @@ public final class TGAutoSignCore {
                                 try { Object m2 = getFieldValSafe(req, "msg_id"); if (m2 instanceof Number) mid0 = ((Number) m2).intValue(); } catch (Throwable ignored) {}
                                 // 先算清拒绝原因，别再把它吞掉：旧版这句谎报「被排除规则或关键词过滤」，
                                 // 实际最常见的原因是「按钮学习已关闭」（AUTO_LEARN 默认 false）。
-                                // ⓪ 硬闸门：明显非签到的按钮（支付/菜单/随机 token），任何模式都不学。
-                                //    宽松模式只该放宽"判定词对不上"，不该放宽"这压根不是签到按钮"。
-                                String _obv = SignLogic.obviousNonSignButton(disp, new String(d, "UTF-8"));
-                                // ⓪' 模块自身发出的请求：**绝不学习**。
+                                // 注：按钮性质过滤已移除，现在只剩用户自定的两条 + 自身请求防护。
+                                // ⓪ 模块自身发出的请求：**绝不学习**。
                                 //     面板按钮 data 常与目标旧 data 不同（bot 每次推送都换），
                                 //     findCbEntry 查不到就会被学成新目标 → 用户看到「目标自己冒出来」。
                                 boolean _selfReq = consumeSelfCbRequest(u, d);
                                 String deny = _selfReq ? "模块自身发出的请求（不学习）"
                                             : (!AUTO_LEARN ? "按钮学习已关闭（设置→学习行为→按钮学习）"
-                                              : (_obv != null ? _obv
-                                                : learnDenyReason(u, disp, new String(d, "UTF-8"), panelContext(u))));
+                                              : learnDenyReason(u, disp, new String(d, "UTF-8"), panelContext(u)));
                                 if (captureArmed) {
                                     // 捕获兜底：UI 层按钮 hook 不命中时（Nagram 实测），网络层是唯一入口。
                                     captureArmed = false;
@@ -10864,12 +10768,6 @@ public final class TGAutoSignCore {
         anCfgSub.setText(Lang.tr("命中后先进「待确认」列表，你手动确认才加入（防验证码类 bot 误加）"));
         anCfgSub.setPadding(dp(4), 0, dp(4), dp(4));
         card2.addView(anCfgSub);
-        R.autoLearnFilterSw = swRow(act, "关键词过滤", AUTO_LEARN_FILTER);
-        card2.addView(R.autoLearnFilterSw);
-        TextView afSub = new TextView(act); afSub.setTextSize(Theme.TS_CAPTION); afSub.setTextColor(Theme.termFaint(act)); afSub.setTypeface(Theme.text());
-        afSub.setText(Lang.tr("只收文案命中关键词的按钮，防误加"));
-        afSub.setPadding(dp(4), 0, dp(4), dp(2));
-        card2.addView(afSub);
         box.addView(card2);
 
     }
@@ -10886,7 +10784,7 @@ public final class TGAutoSignCore {
         LinearLayout.LayoutParams c3lp = new LinearLayout.LayoutParams(-1, -2);
         c3lp.setMargins(0, dp(2), 0, dp(6));
         card3.setLayoutParams(c3lp);
-        TextView kwLab = new TextView(act); kwLab.setText(Lang.tr("学习关键词（逗号分隔）")); leadIcon(act, kwLab, "key", Theme.termMuted(act)); kwLab.setTextSize(Theme.TS_SECOND); kwLab.setTextColor(Theme.termMuted(act));
+        TextView kwLab = new TextView(act); kwLab.setText(Lang.tr("学习关键词（逗号分隔，用于识别签到文本）")); leadIcon(act, kwLab, "key", Theme.termMuted(act)); kwLab.setTextSize(Theme.TS_SECOND); kwLab.setTextColor(Theme.termMuted(act));
         kwLab.setTypeface(android.graphics.Typeface.MONOSPACE); kwLab.setPadding(dp(2), dp(2), dp(2), dp(4));
         card3.addView(kwLab);
         R.keywordsEd = adInput(act, "如: 签到,打卡,checkin", 0);
@@ -10926,7 +10824,7 @@ public final class TGAutoSignCore {
         card3.addView(R.looseSw);
         TextView loTip = new TextView(act); loTip.setTextSize(Theme.TS_CAPTION);
         loTip.setTextColor(Theme.termFaint(act)); loTip.setTypeface(Theme.text());
-        loTip.setText(Lang.tr("开：点什么学什么（不再按关键词过滤）；判定时**只要机器人有回复就算成功**，\n但命中明确失败词（活动已结束 / 请先关注 / 未绑定 等）仍判失败。\n适合判定词千奇百怪的机器人。关：完全按下面的规则判定。"));
+        loTip.setText(Lang.tr("开：点什么学什么；判定时**只要机器人有回复就算成功**，\n但命中明确失败词（活动已结束 / 请先关注 / 未绑定 等）仍判失败。\n适合判定词千奇百怪的机器人。关：完全按下面的规则判定。"));
         loTip.setPadding(dp(4), dp(2), dp(4), dp(6));
         card3.addView(loTip);
 

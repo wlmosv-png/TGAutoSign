@@ -35,7 +35,6 @@ public final class Keys {
     public static String autoLearn()         { return "jmb_autolearn"; }
     public static String autoLearnNet()      { return "jmb_autolearn_net"; }
     public static String autoLearnNetConfirm() { return "jmb_autolearn_net_confirm"; }
-    public static String autoLearnFilter()   { return "jmb_alfilter"; }
     public static String judge()             { return "jmb_judge"; }
     public static String judgeCustom()       { return "jmb_judge_custom"; }
     public static String loose()             { return "jmb_loose"; }

@@ -1,5 +1,85 @@
 # 更新日志
 
+## 1.6.2 (125) — 2026-09-28
+
+> 本版移除按钮学习路径上的全部启发式准入判断。改动源自用户实测反馈：
+> 某些 bot 的签到入口被过滤规则误拦，用户点按钮后无任何反应，界面上也没有提示。
+> 过滤规则改为只保留用户自定义项，模块不再推测按钮性质。
+
+### 修复 · Fixed
+
+- **按钮学习误拦：签到入口被启发式过滤规则挡住**
+  现象：在部分 bot 中点击签到按钮后，目标列表没有任何变化，界面无提示，用户误以为无法添加；
+  同一按钮在「捕获」路径下却能添加成功。
+  根因：`SignLogic.obviousNonSignButton` 以三条启发式判据推测按钮性质 —— data 前缀黑名单
+  （`pay:` / `ub_menu_` / `menu:` 等）、文案黑名单（支付 / 充值 / 绑定 / 菜单 等）、
+  随机 hex token。该设计无法区分「菜单项」与「签到入口」：实测某 bot 的签到入口
+  data 为 `ub_back_menu`，命中 `ub_menu_` 前缀；按钮文案为「🔙 主菜单」，又命中「菜单」二字。
+  同时该过滤只在日志中留痕，界面上没有任何反馈，用户无法得知按钮被拦。
+  修复：移除 `obviousNonSignButton` 及其全部词表（`JUNK_DATA_PREFIXES`、`BAD_LABELS`、
+  `SIGN_LABELS`、`SIGN_NEGATIONS`、`looksLikeRandomHex`、`labelLooksLikeSign`）。
+  学习准入只保留两项由用户显式配置的判断：排除的 bot 与排除规则。
+  模块自身发起的请求仍由请求指纹机制排除，该机制是精确匹配而非推测，不受本次改动影响。
+
+  Button learning blocked valid sign-in entries.
+  Symptom: after tapping a sign-in button in some bots, the target list did not change and the UI
+  showed nothing, so users concluded the target could not be added — while the same button added
+  fine through the capture path. Root cause: `SignLogic.obviousNonSignButton` inferred button
+  nature from three heuristics — a data prefix deny list (`pay:` / `ub_menu_` / `menu:` and
+  others), a label deny list (pay / recharge / bind / menu and others), and random hex tokens.
+  The design could not distinguish a menu item from a sign-in entry: in one measured bot the
+  sign-in entry had data `ub_back_menu`, matching the `ub_menu_` prefix, and its label was
+  "🔙 主菜单", matching the word "菜单". The filter also only recorded a log line, giving no UI
+  feedback that a button had been blocked. Fix: `obviousNonSignButton` and all of its word lists
+  were removed (`JUNK_DATA_PREFIXES`, `BAD_LABELS`, `SIGN_LABELS`, `SIGN_NEGATIONS`,
+  `looksLikeRandomHex`, `labelLooksLikeSign`). Learning admission now keeps only two judgements
+  the user configures explicitly: blocked bots and exclusion rules. Requests the module itself
+  sends are still excluded by the request-fingerprint mechanism, which matches exactly rather
+  than guessing, and is unaffected by this change.
+
+- **移除「关键词过滤」开关**
+  现象：设置 → 学习行为中的「关键词过滤」开启后，只有文案命中学习关键词的按钮才会被学习，
+  未命中的按钮点击后无反应。
+  根因：该开关的判据是按钮文案，与上一条属同类推测；且同一开关同时承担「识别签到文本」
+  与「过滤按钮」两种语义，用户难以判断关闭后会影响哪一部分。
+  修复：移除该开关及其字段、界面控件与字典项。学习关键词保留，仅用于网络层识别签到文本，
+  设置页标签已注明用途。
+
+  Removed the keyword-filter switch.
+  Symptom: with "Keyword filter" enabled under Settings → Learning, only buttons whose label
+  matched a learning keyword were learned; taps on other buttons did nothing. Root cause: the
+  switch judged by button label, the same kind of inference as the entry above, and it carried
+  two meanings at once — recognising sign-in texts and filtering buttons — making it unclear
+  which part a user would affect by turning it off. Fix: the switch, its field, its UI control
+  and its dictionary entries were removed. Learning keywords remain, now used only by the network
+  layer to recognise sign-in texts; the settings label states this purpose.
+
+- **移除启动时的目标自动清理**
+  现象：升级或重启后，目标列表中的条目在用户未操作的情况下消失。
+  根因：`sweepLearnedJunkEntries` 在每次启动时遍历全部账号，删除 data 命中前缀黑名单的回调目标。
+  该清理复用同一份前缀名单，因此继承同一误判：前缀匹配到的真签到目标会在启动时被静默删除。
+  修复：移除该清理逻辑。由于前缀黑名单本身已删除，已无误删来源；
+  历史上被误删的目标需重新点击一次按钮添加。
+
+  Removed the automatic target cleanup at startup.
+  Symptom: after an upgrade or restart, entries disappeared from the target list without user
+  action. Root cause: `sweepLearnedJunkEntries` walked every account on each start and deleted
+  callback targets whose data matched the prefix deny list. It reused the same list, inheriting
+  the same misjudgement: a genuine sign-in target matched by prefix was deleted silently at
+  startup. Fix: the cleanup was removed. Since the prefix list itself is gone there is no longer
+  a source of false deletion; targets removed in the past need one more button tap to re-add.
+
+### 变更 · Changed
+
+- **学习行为设置项调整**
+  设置 → 学习行为中原有的「关键词过滤」已移除，该分区现在包含「按钮学习」「网络学习」
+  「网络学习需确认」三项。帮助页面对应说明已同步更新。
+
+  Learning settings adjusted.
+  "Keyword filter" has been removed from Settings → Learning, which now holds "Button learning",
+  "Network learning" and "Network learning needs confirmation". The matching help text was
+  updated as well.
+
 ## 1.6.1 (124) — 2026-09-28
 
 > 本版承接 1.6.0 的账号隔离重构，改动全部源自用户实际反馈与线上日志复盘，

@@ -270,7 +270,6 @@ public final class Lang {
         EN.put("▍签到核心", "CORE");
         EN.put("上手·排障", "Getting started · fixes");
         EN.put("全部签到（", "Sign all (");
-        EN.put("关键词过滤", "Keyword filter");
         EN.put("分享本模块", "Share module");
         EN.put("到下载目录", "To Downloads");
         EN.put("只通知失败", "Failures only");
@@ -338,7 +337,6 @@ public final class Lang {
         EN.put("⑬ 日志怎么读", "13. Reading logs");
         EN.put("⑭ 更新与反馈", "14. Updates & feedback");
         EN.put("▍关键词与策略", "KEYWORDS & STRATEGY");
-        EN.put("不含学习关键词", "no learning keyword");
         EN.put("判定机器人回复", "Judging bot replies");
         EN.put("原计划 {0}", "Planned {0}");
         EN.put("宿主包 {0}", "Host package {0}");
@@ -461,6 +459,7 @@ public final class Lang {
         EN.put("复制日志失败: {0}", "Copying logs failed: {0}");
         EN.put("复制本账号目标到该账号", "Copy my targets here");
         EN.put("学习关键词（逗号分隔）", "Learning keywords (comma-separated)");
+        EN.put("学习关键词（逗号分隔，用于识别签到文本）", "Learning keywords (comma-separated; used to recognise sign-in texts)");
         EN.put("导出失败：打不开写入流", "Export failed: cannot open the output stream");
         EN.put("已清空 {0} 项配置", "Cleared {0} config entries");
         EN.put("无法打开分享: {0}", "Could not open the share sheet: {0}");
@@ -554,7 +553,6 @@ public final class Lang {
         EN.put("（还没有目标，去该账号学一个）", " (no targets yet — switch over and learn one)");
         EN.put("Telegram 标志类：{0}", "Telegram flag classes: {0}");
         EN.put("✅ 已添加回调签到目标: {0}", "✅ Callback sign-in target added: {0}");
-        EN.put("只收文案命中关键词的按钮，防误加", "Only buttons whose text matches your keywords are accepted, to avoid false adds");
         EN.put("命中「排除的 bot」({0})", "Blocked bot ({0})");
         EN.put("如: 签到,打卡,checkin", "e.g. sign-in, checkin, daily");
         EN.put("已暂停一周（至 {0}）：{1}", "Paused for a week (until {0}): {1}");
@@ -701,8 +699,8 @@ public final class Lang {
         EN.put("回调调试台 · uid={0} msg={1} 按钮 {2} 个\n点任意按钮=实时发一次该回调并看返回；不放心先「重新采样」", "Callback console · uid={0} msg={1} · {2} buttons\nTap any button to fire that callback once and see the reply; if unsure, tap \"Re-sample\" first.");
         EN.put("将删除【所有账号】的全部签到目标与已签/重试状态，仅保留关键词/重试上限/唤醒命令设置。此操作不可撤销，建议先导出配置备份。", "This deletes every signing target and all signed/retry state on ALL accounts, keeping only keyword, retry-limit and wake-command settings. It cannot be undone — export a config backup first.");
         EN.put("判断 bot 回复成功/失败用的词。内置了一批常见词；认不出来的回复会记进诊断包，\n见到「未识别回复」就在这加上对应措辞即可。", "Words used to tell whether the bot reply means success or failure. Common ones are built in; unrecognized replies are recorded in the diagnostics package — when you see one, add its wording here.");
-        EN.put("开：点什么学什么（不再按关键词过滤），且**只要机器人有回复就算成功**。\n适合判定词千奇百怪的机器人。关：按下面的规则判定。", "On: learn whatever you tap (no keyword filter) and treat **any reply as success**.\\nFor bots with unpredictable wording. Off: judge using the rules below.");
-        EN.put("开：点什么学什么（不再按关键词过滤），且**只要机器人有回复就算成功**。\\n适合判定词千奇百怪的机器人。关：按下面的规则判定。", "On: learn whatever you tap (no keyword filter) and treat **any reply as success**.\\nFor bots with unpredictable wording. Off: judge using the rules below.");
+        EN.put("开：点什么学什么，且**只要机器人有回复就算成功**。\n适合判定词千奇百怪的机器人。关：按下面的规则判定。", "On: learn whatever you tap (no keyword filter) and treat **any reply as success**.\\nFor bots with unpredictable wording. Off: judge using the rules below.");
+        EN.put("开：点什么学什么，且**只要机器人有回复就算成功**。\\n适合判定词千奇百怪的机器人。关：按下面的规则判定。", "On: learn whatever you tap (no keyword filter) and treat **any reply as success**.\\nFor bots with unpredictable wording. Off: judge using the rules below.");
         EN.put("提示：同一 bot 可添加多条指令（多指令自动签到）；\n回调按钮型签到无需手动添加——直接点一次 bot 的签到按钮即可自动学习。", "Tip: one bot can have several commands (all signed automatically);\ncallback-style sign-ins need no manual setup — just tap the bot's sign-in button once and it is learned.");
         EN.put("匹配 bot 回复正文 + 按钮文案。普通关键词按子串（不分大小写）；\n用 / 包裹当正则，如 /^每日.*点击/ 。# 开头为注释。", "Matches the bot's reply text and button labels. Plain keywords match as substrings (case-insensitive);\nwrap in / for a regex, e.g. /^daily.*tap/ . Lines starting with # are comments.");
         EN.put("条目操作里有「暂停一周 / 恢复」：暂停后该目标一周内不动作，到期自动恢复。适合出差、bot 维护、或暂时不想被签的场合，不用删掉再加回来。", "Under \"Entry actions\" there is \"Pause 1 week / Resume\": a paused target does nothing for a week and resumes automatically. Useful when travelling, when a bot is under maintenance, or when you simply don't want it signed for now — no need to delete and re-add it.");
@@ -713,8 +711,8 @@ public final class Lang {
         EN.put("没有找到备份文件。\n\n备份放在这里：\nAndroid/data/{0}/files/tgautosign/\n（在 /jmb → 📤 导出配置 里生成，也可以手动把 json 拷进去）", "No backup files found.\n\nBackups live here:\nAndroid/data/{0}/files/tgautosign/\n(created via /jmb → 📤 Export config; you can also copy a JSON file in manually)");
         EN.put("任意聊天（含收藏夹）输入框发 /jmb 即可。面板顶部是今日进度与最近日志，中间 6 个高频入口，最下一行「全部功能」是分类直达：目标 / 数据 / 系统 / 帮助 / 维护，横滑点一下直接进对应分组。", "Type /jmb in any chat (Saved Messages works too). The top shows today's progress and recent logs, the middle row holds 6 frequently used entries, and the bottom \"All features\" row jumps straight to each category: Targets / Data / System / Help / Maintenance. Swipe sideways and tap to open a group.");
         EN.put("① 任意聊天输入框发 /jmb 打开面板 → ② 点「添加目标」加一个你要签的 bot → ③ 剩下的它自己办：每天在设定时段内自动签，失败自动重试，结果发到你自己的收藏夹。不需要开着 Telegram。", "1. Type /jmb in any chat to open the panel. 2. Tap \"Add target\" to add a bot you want to sign in for. 3. The module handles the rest: it signs automatically during your chosen window, retries on failure, and sends the result to your own Saved Messages. Telegram does not need to stay open.");
-        EN.put("开：点什么学什么（不再按关键词过滤）；判定时**只要机器人有回复就算成功**，\n但命中明确失败词（活动已结束 / 请先关注 / 未绑定 等）仍判失败。\n适合判定词千奇百怪的机器人。关：完全按下面的规则判定。", "On: learn whatever you tap (no keyword filter), and **treat any reply as success** when judging — except replies that clearly mean failure (event ended / follow first / not linked, etc.), which still fail.\nFor bots with unpredictable wording. Off: judge purely by the rules below.");
-        EN.put("设置 → 学习行为：「按钮学习」开启后，你在 bot 里点过的按钮会自动加进目标；「网络学习」自动识别你发的签到文本。\n「关键词过滤」默认关闭（点过的都能绑）；开启后只有文案命中「学习关键词」的按钮才自动加，防误加。", "Settings → Learning: with \"Button learning\" on, buttons you tap in a bot are added to targets automatically; \"Network learning\" detects sign-in texts you send.\n\"Keyword filter\" is off by default (anything you tap gets bound); when on, only buttons whose text matches your learning keywords are added, to avoid false positives.");
+        EN.put("开：点什么学什么；判定时**只要机器人有回复就算成功**，\n但命中明确失败词（活动已结束 / 请先关注 / 未绑定 等）仍判失败。\n适合判定词千奇百怪的机器人。关：完全按下面的规则判定。", "On: learn whatever you tap (no keyword filter), and **treat any reply as success** when judging — except replies that clearly mean failure (event ended / follow first / not linked, etc.), which still fail.\nFor bots with unpredictable wording. Off: judge purely by the rules below.");
+        EN.put("设置 → 学习行为：「按钮学习」开启后，你在 bot 里点过的按钮会自动加进目标（点什么都学，不做过滤）；「网络学习」自动识别你发的签到文本。", "Settings → Learning: with \"Button learning\" on, buttons you tap in a bot are added to targets automatically (whatever you tap gets learned, no filtering); \"Network learning\" detects sign-in texts you send.");
         EN.put("设置 →「签到结果通知」开启后，每天的签到摘要会静默发到你自己的 Telegram 收藏夹（不弹系统通知、不需要通知权限）。只想出问题时被打扰，就打开「只通知失败」。\n连续 3 天签到失败会额外告警一次，不会天天刷屏。", "With Settings → \"Sign-in result notification\" on, a daily summary is quietly sent to your own Saved Messages (no system notification, no permission needed). Turn on \"Failures only\" if you only want to hear about problems.\nA target failing 3 days in a row triggers one extra alert — it won't spam you daily.");
         EN.put("「导出配置」生成 json 到下载目录，新设备用「导入配置」还原（导入是合并，不是覆盖）。配置里不含任何登录凭据。\n「导出日志」把运行日志导出到下载目录，方便留档或发给作者。\n删不干净时用「清空配置」，会跨全部账号彻底清。", "\"Export config\" writes a JSON file to Downloads; on a new device use \"Import config\" to restore it (import merges, it does not overwrite). The file contains no credentials.\n\"Export logs\" writes the run log to Downloads for archiving or sending to the author.\nIf removal isn't clean, \"Clear config\" wipes everything across all accounts.");
         EN.put("用于在「群 / 频道」里发签到指令（不是私聊 bot）。\n\n群 ID 怎么拿？三种办法：\n① 点下面「从会话列表选群」→ 自动填 ID（推荐）\n② 直接去那个群点一次签到按钮 → 自动识别添加\n③ 群里长按任意消息转发给 @userinfobot 也可查（备用）", "For sending a sign-in command in a group / channel (not a private bot chat).\n\nHow to get the group ID — three ways:\n1. Tap \"Pick a group from chats\" below → the ID is filled in for you (recommended)\n2. Just go to that group and tap its sign-in button once → added automatically\n3. Long-press any message there and forward it to @userinfobot (fallback)");
