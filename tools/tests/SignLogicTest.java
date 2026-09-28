@@ -369,6 +369,66 @@ public final class SignLogicTest {
         // 13 字符超出随机区间
         tru("13 字符不判随机", SignLogic.obviousNonSignButton("", "abcdef0123456") == null);
 
+        // ── 回归（2026-09-28，Sarah 反馈）：文案明确是签到的按钮，data 再可疑也要放行 ──
+        // 现象：同两个真签到按钮，「🎯 签到」能学到，「✅ 每日签到」学不到，
+        //      必须去「添加目标」手动捕获才行（手动路径不经过本过滤）。
+        // 根因：上一版把 data 当权威判据，data 撞上黑名单/随机 hex 就拦，
+        //      没看用户可见文案。同面板两个按钮文案都是明确签到，差异只在 data。
+        tru("文案「✅ 每日签到」要放行（即便 data 是随机 hex）",
+            SignLogic.obviousNonSignButton("✅ 每日签到", "a3f9c1") == null);
+        tru("文案「每日签到」要放行",
+            SignLogic.obviousNonSignButton("每日签到", "b7e2d4") == null);
+        tru("文案「签到」要放行（即便 data 像 pay:）",
+            SignLogic.obviousNonSignButton("签到", "pay:alipay") == null);
+        tru("文案「🎯 签到」要放行",
+            SignLogic.obviousNonSignButton("🎯 签到", "9f8e7d") == null);
+        tru("文案「📅 签到」要放行",
+            SignLogic.obviousNonSignButton("📅 签到", "1a2b3c") == null);
+        tru("文案「每日打卡」要放行",
+            SignLogic.obviousNonSignButton("每日打卡", "dead") == null);
+        tru("文案「领取奖励」要放行",
+            SignLogic.obviousNonSignButton("领取奖励", "cafe") == null);
+        tru("文案「Check in」要放行",
+            SignLogic.obviousNonSignButton("Check in", "8d9e2a") == null);
+        tru("文案「Daily Check-in」要放行",
+            SignLogic.obviousNonSignButton("Daily Check-in", "4b780f") == null);
+        // 大写下划线变体
+        tru("文案「CHECK_IN」要放行",
+            SignLogic.obviousNonSignButton("CHECK_IN", "f9f106") == null);
+        // 带空格/装饰的签到文案
+        tru("文案「签 到」要放行",
+            SignLogic.obviousNonSignButton("签 到", "x9y8z7") == null);
+
+        // labelLooksLikeSign 本身
+        tru("labelLooksLikeSign 签到", SignLogic.labelLooksLikeSign("签到"));
+        tru("labelLooksLikeSign 每日签到", SignLogic.labelLooksLikeSign("✅ 每日签到"));
+        tru("labelLooksLikeSign checkin", SignLogic.labelLooksLikeSign("checkin"));
+        tru("labelLooksLikeSign 空 → false", !SignLogic.labelLooksLikeSign(""));
+        tru("labelLooksLikeSign null → false", !SignLogic.labelLooksLikeSign(null));
+        // 否定词优先：「签到记录」不是签到按钮
+        tru("「签到记录」不算签到", !SignLogic.labelLooksLikeSign("签到记录"));
+        tru("「签到历史」不算签到", !SignLogic.labelLooksLikeSign("签到历史"));
+        tru("「签到说明」不算签到", !SignLogic.labelLooksLikeSign("签到说明"));
+        tru("「签到统计」不算签到", !SignLogic.labelLooksLikeSign("签到统计"));
+        tru("「签到规则」不算签到", !SignLogic.labelLooksLikeSign("签到规则"));
+        tru("「签到教程」不算签到", !SignLogic.labelLooksLikeSign("签到教程"));
+        tru("「签到排行榜」不算签到", !SignLogic.labelLooksLikeSign("签到排行榜"));
+        // 「qd」刻意不进白名单：网络层会拿 data 串当 label，"aqdb1" 这类会误命中
+        tru("labelLooksLikeSign 不含裸 qd", !SignLogic.labelLooksLikeSign("qd"));
+        tru("qd 文案仍由关键词过滤兜（不靠白名单）",
+            SignLogic.obviousNonSignButton("qd", "a3f9c1") != null);
+        // 但否定词只在「看起来像签到」时才该生效；普通菜单文案不受影响
+        tru("「用户中心」不受否定词影响",
+            SignLogic.obviousNonSignButton("用户中心", "abcxyz") == null);
+
+        // 真非签到按钮在文案不明确时，仍要被 data 判据拦住（不能因为放宽而漏挡）
+        tru("data pay: 仍要挡（文案无签到词）",
+            SignLogic.obviousNonSignButton("支付", "pay:wxpay") != null);
+        tru("data mp_help 仍要挡",
+            SignLogic.obviousNonSignButton("帮助", "mp_help") != null);
+        tru("随机 hex 仍要挡（文案无签到词）",
+            SignLogic.obviousNonSignButton("", "4b780f") != null);
+
         // ── 前缀名单本身（清理逻辑复用同一份，必须非空且含实测项）──
         tru("JUNK_DATA_PREFIXES 非空", SignLogic.JUNK_DATA_PREFIXES.length > 0);
         boolean hasPay = false, hasMenu = false;
@@ -514,6 +574,73 @@ public final class SignLogicTest {
         tru("skipLabel 账号停用有文案",
             SignLogic.skipLabel(SignLogic.SKIP_ACCOUNT_DISABLED).length() > 0);
         eq("skipLabel 账号停用文案", SignLogic.skipLabel(SignLogic.SKIP_ACCOUNT_DISABLED), "账号已停用");
+
+        // ── 时间展示（今日计划 / 补签列表，2026-09-28）──
+        timeDisplay();
+    }
+
+    /** 时间口径：补签判定、HH:MM 格式化、相对时间文案。 */
+    private static void timeDisplay() {
+        // hhmmOf：<=0 视为未知，返回空串（调用方据此回退到 ✔）
+        eq("hhmmOf(0) → 空串", SignLogic.hhmmOf(0L), "");
+        eq("hhmmOf(-1) → 空串", SignLogic.hhmmOf(-1L), "");
+        // 用固定时刻验证格式化（避免依赖当前时区/时刻）
+        java.util.Calendar c = java.util.Calendar.getInstance();
+        c.set(java.util.Calendar.HOUR_OF_DAY, 9);
+        c.set(java.util.Calendar.MINUTE, 5);
+        c.set(java.util.Calendar.SECOND, 0);
+        c.set(java.util.Calendar.MILLISECOND, 0);
+        eq("hhmmOf 09:05", SignLogic.hhmmOf(c.getTimeInMillis()), "09:05");
+        c.set(java.util.Calendar.HOUR_OF_DAY, 23);
+        c.set(java.util.Calendar.MINUTE, 59);
+        eq("hhmmOf 23:59", SignLogic.hhmmOf(c.getTimeInMillis()), "23:59");
+
+        long day0 = 0L;
+        java.util.Calendar d = java.util.Calendar.getInstance();
+        d.set(java.util.Calendar.HOUR_OF_DAY, 0);
+        d.set(java.util.Calendar.MINUTE, 0);
+        d.set(java.util.Calendar.SECOND, 0);
+        d.set(java.util.Calendar.MILLISECOND, 0);
+        day0 = d.getTimeInMillis();
+
+        // isMissBack：① 有 miss 记录 → 一律算补签（最可信）
+        tru("有补签记录 → 补签",
+            SignLogic.isMissBack(true, day0 + 8 * 3600000L, 8 * 60, day0, 5));
+        // 有记录时即使实签比计划早也算（记录优先）
+        tru("有补签记录(实签早于计划) → 仍补签",
+            SignLogic.isMissBack(true, day0 + 7 * 3600000L, 8 * 60, day0, 5));
+
+        // ② 无记录 → 按时间差兜底
+        // 计划 08:30，实签 08:31（晚 1 分）→ 在 5 分宽限内，不算补签
+        tru("准点(晚1分) → 非补签",
+            !SignLogic.isMissBack(false, day0 + 8 * 3600000L + 30 * 60000L + 60000L, 8 * 60 + 30, day0, 5));
+        // 计划 08:30，实签 08:36（晚 6 分）→ 超宽限，算补签
+        tru("晚6分(超5分宽限) → 补签",
+            SignLogic.isMissBack(false, day0 + 8 * 3600000L + 30 * 60000L + 6 * 60000L, 8 * 60 + 30, day0, 5));
+        // 边界：正好 5 分 → 不算（要求「大于」阈值）
+        tru("正好晚5分 → 非补签",
+            !SignLogic.isMissBack(false, day0 + 8 * 3600000L + 30 * 60000L + 5 * 60000L, 8 * 60 + 30, day0, 5));
+        // 实签早于计划 → 不算补签
+        tru("提前签 → 非补签",
+            !SignLogic.isMissBack(false, day0 + 8 * 3600000L, 8 * 60 + 30, day0, 5));
+        // 缺数据 → 不算（宁可不标，也不误标）
+        tru("无实签时刻 → 非补签", !SignLogic.isMissBack(false, 0L, 8 * 60, day0, 5));
+        tru("无计划 → 非补签", !SignLogic.isMissBack(false, day0 + 9 * 3600000L, -1, day0, 5));
+        tru("无当天零点 → 非补签", !SignLogic.isMissBack(false, day0 + 9 * 3600000L, 8 * 60, 0L, 5));
+
+        // minutesSince：向下取整，未来/未知 → 0
+        eq("minutesSince 未来 → 0", SignLogic.minutesSince(1000L, 500L), 0);
+        eq("minutesSince 未知 → 0", SignLogic.minutesSince(0L, 99999L), 0);
+        eq("minutesSince 42 分", SignLogic.minutesSince(1000L, 1000L + 42L * 60000L), 42);
+        eq("minutesSince 不足1分 → 0", SignLogic.minutesSince(1000L, 1000L + 59L * 1000L), 0);
+
+        // humanMinutes：0/分/小时/时分
+        eq("humanMinutes 0", SignLogic.humanMinutes(0), "0 分");
+        eq("humanMinutes 负数", SignLogic.humanMinutes(-5), "0 分");
+        eq("humanMinutes 42", SignLogic.humanMinutes(42), "42 分");
+        eq("humanMinutes 60", SignLogic.humanMinutes(60), "1 小时");
+        eq("humanMinutes 72", SignLogic.humanMinutes(72), "1 小时 12 分");
+        eq("humanMinutes 119", SignLogic.humanMinutes(119), "1 小时 59 分");
     }
 
     /** 账号索引归一化：多账号串号的根治点，必须有回归。 */

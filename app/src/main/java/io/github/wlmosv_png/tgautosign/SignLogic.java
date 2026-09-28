@@ -503,7 +503,9 @@ public final class SignLogic {
             "pay:", "pay_", "pay-",           // 支付：pay:alipay / pay:wxpay / pay:menu
             "ub_menu_",                       // 用户面板菜单：ub_menu_bind / ub_menu_register / ub_menu_library
             "menu:", "menu_", "help:", "help_",   // 菜单与帮助
-            "mp_help", "mp_", "miniapp_",        // 实测漏网：mp_help（帮助按钮被学成目标）
+            "mp_help", "miniapp_",              // 实测漏网：mp_help（帮助按钮被学成目标）
+            // 注：曾用裸 "mp_" 做前缀，过宽 —— 任何以 mp_ 开头的 data 都被挡，
+            // 有误伤真签到按钮的风险（同 menu_ / help_ 的教训）。已收窄为具体项。
             "lang:", "language_",             // 语言切换
             "invite:", "share:", "promo:",    // 邀请 / 分享 / 推广
             "cancel", "close", "back",        // 取消 / 关闭 / 返回
@@ -526,6 +528,50 @@ public final class SignLogic {
             // 有些 bot 的签到入口就叫 "Menu"，子串匹配会误伤真签到按钮。
             // 它们仍由 data 前缀名单拦截（menu: / help: / cancel 等，带分隔符才判）。
     };
+
+    /**
+     * 文案里出现这些词 → **确定**是签到按钮。
+     *
+     * 为什么以文案为准（2026-09-28 回归教训）：
+     *   上一版把 data 当权威判据（前缀黑名单 / 随机 hex），结果误伤了真签到按钮 ——
+     *   用户实测「EmbyPulse」这类面板，「✅ 每日签到」点一下学不到，
+     *   必须去「添加目标」手动捕获才行（手动捕获路径不经过本过滤，所以能过）。
+     *   同一面板里「🎯 签到」却正常 —— 差异只在 data，文案都是明确签到。
+     *   文案是**用户可见**的，写着「每日签到」就是签到按钮，data 长什么样都不该拦。
+     *
+     * 注意：这里刻意**不含 "qd"** —— 它在网络层会拿到 data 解码串当 label，
+     * 而 "qd" 可能出现在随机 hex 里（如 "aqdb1"），会重新引入误学。
+     * 其余词要么含非 hex 字母（checkin / claim / signin），要么是中文，hex 撞不上。
+     */
+    private static final String[] SIGN_LABELS = {
+            "签到", "打卡", "每日签", "签 到",
+            "checkin", "check-in", "check in", "check_in",
+            "signin", "sign in", "sign-in",
+            "claim", "领取", "qiandao", "daily check"
+    };
+
+    /** 出现这些词时，即使含签到词也判为「不是签到按钮」（说明 / 记录类）。 */
+    private static final String[] SIGN_NEGATIONS = {
+            "记录", "历史", "说明", "规则", "教程", "帮助", "统计", "查询",
+            "列表", "日历", "公告", "协议", "隐私", "排行"
+    };
+
+    /**
+     * 文案是否**明确**表示签到按钮。
+     * 命中即无条件放行（不查 data）—— 见 SIGN_LABELS 的说明。
+     */
+    public static boolean labelLooksLikeSign(String label) {
+        if (label == null) return false;
+        String lb = label.trim().toLowerCase(java.util.Locale.US);
+        if (lb.length() == 0) return false;
+        for (String n : SIGN_NEGATIONS) {
+            if (lb.contains(n)) return false;
+        }
+        for (String s : SIGN_LABELS) {
+            if (lb.contains(s)) return true;
+        }
+        return false;
+    }
 
     /** 纯 hex 且长度在此区间、且无分隔符 → 视为随机 token（学了也没意义）。 */
     private static boolean looksLikeRandomHex(String s) {
@@ -557,6 +603,12 @@ public final class SignLogic {
         String d = data == null ? "" : data.trim().toLowerCase();
         String lb = label == null ? "" : label.trim().toLowerCase();
 
+        // ⓪ 文案明确是签到 → 直接放行，不看 data。
+        //    这是**最高优先级**判据：文案是用户可见的，比 data 可信。
+        //    2026-09-28 回归：此前 data 启发式跑在前面，把「✅ 每日签到」这类
+        //    真签到按钮误挡了（同面板「🎯 签到」却正常，差异只在 data）。
+        if (labelLooksLikeSign(label)) return null;
+
         // ① data 前缀黑名单
         if (d.length() > 0) {
             for (String p : JUNK_DATA_PREFIXES) {
@@ -575,5 +627,64 @@ public final class SignLogic {
             return "按钮标识像随机 token（长度 " + d.length() + " 的纯 hex）";
         }
         return null;
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // 时间展示（今日计划 / 补签列表）
+    // ────────────────────────────────────────────────────────────────
+
+    /** 判定"这次算不算补签"的默认阈值：实际比计划晚这么多就按补签展示。 */
+    public static final int MISS_JUDGE_GRACE_MIN = 5;
+
+    /** 毫秒时间戳 → HH:MM（本地时区）。<=0 返回空串（调用方据此决定显示什么）。 */
+    public static String hhmmOf(long ms) {
+        if (ms <= 0L) return "";
+        java.util.Calendar c = java.util.Calendar.getInstance();
+        c.setTimeInMillis(ms);
+        return String.format("%02d:%02d",
+                c.get(java.util.Calendar.HOUR_OF_DAY), c.get(java.util.Calendar.MINUTE));
+    }
+
+    /**
+     * 这次签到是否属于"补签"。
+     *
+     * 两个判据，任一成立即算（宁可能标就标，标错只是多一个提示、不影响状态）：
+     *   ① missAtMs > 0          —— 走过 sweepDue 的错过补签路径，**最准确**
+     *   ② 实签时刻 − 计划时刻 > 阈值 —— 兜底：非定时路径（事件补签/手动）也会晚点
+     *
+     * @param missAtMs   补签触发时刻（0 = 无记录）
+     * @param signedAtMs 实际签到时刻（0 = 未知）
+     * @param planMin    计划分钟数（0..1439，<0 = 无计划）
+     * @param signedDayStartMs 实签当天 00:00 的毫秒（把 planMin 换算成绝对时刻用）
+     * @param graceMin   阈值分钟
+     */
+    public static boolean isMissBack(boolean hasMissRecord,
+                                     long signedAtMs,
+                                     int planMin,
+                                     long signedDayStartMs,
+                                     int graceMin) {
+        if (hasMissRecord) return true;                       // ① 显式记录，最可信
+        if (signedAtMs <= 0L || planMin < 0 || signedDayStartMs <= 0L) return false;
+        long planMs = signedDayStartMs + (long) planMin * 60000L;
+        long lateMs = signedAtMs - planMs;
+        if (lateMs <= 0L) return false;                        // 提前签不算补签
+        return lateMs > (long) graceMin * 60000L;
+    }
+
+    /**
+     * 距今多少分钟（向下取整，最小 0）。nowMs <= atMs 时返回 0。
+     * 用于「已过点 42 分」「晚了 42 分」这类相对时间。
+     */
+    public static int minutesSince(long atMs, long nowMs) {
+        if (atMs <= 0L || nowMs <= atMs) return 0;
+        return (int) ((nowMs - atMs) / 60000L);
+    }
+
+    /** 把分钟数说成「1 小时 12 分」/「42 分」。 */
+    public static String humanMinutes(int min) {
+        if (min <= 0) return "0 分";
+        if (min < 60) return min + " 分";
+        int h = min / 60, m = min % 60;
+        return m == 0 ? (h + " 小时") : (h + " 小时 " + m + " 分");
     }
 }

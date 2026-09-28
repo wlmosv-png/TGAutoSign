@@ -66,6 +66,14 @@ public final class Keys {
     public static String pendingCfm(String p, String id){ return p + "pendcfm_" + id; }
     public static String pendingNote(String p, String id){ return p + "pendcfm_note_" + id; }
     public static String sentAt(String p, String id)    { return p + "sent_at_" + id; }
+    /** 实际签到成功的时刻（毫秒）。只在 markSigned 首次写入时落库，天然按天覆盖。 */
+    public static String signedAt(String p, String id)  { return p + "signed_at_" + id; }
+    /**
+     * 补签触发时刻（毫秒）。只有走 sweepDue 的「错过补签」路径才写。
+     * 注意：**不按天清理**（签到成功后仍要显示「补签于 HH:MM」），
+     * 所以读取方必须自行判断该时间戳是否落在今天，否则昨天的补签会污染今天。
+     */
+    public static String missAt(String p, String id)    { return p + "miss_at_" + id; }
     /** bot 在 callback answer 里回过内容（但词表没识别出结果）。用于区分"有响应/无响应"。 */
     public static String answered(String p, String id)  { return p + "answered_" + id; }
     public static String title(String p, String id)     { return p + "title_" + id; }
@@ -105,6 +113,7 @@ public final class Keys {
     public static final String[] ENTRY_HEADS = {
             "learned_", "kind_", "did_", "data_", "hash_", "msg_id_",
             "pre_", "loc_", "last_", "opt_", "retry_", "retry_at_", "retry_day_", "sent_at_", "answered_",
+            "signed_at_", "miss_at_",
             "frozen_", "snooze_", "pendcfm_", "pendcfm_note_", "title_",
             "fail_streak_", "fail_laststamp_", "fail_alert_", "fail_date_",
             "panelstale_", "panelstale_day_", "silent_", "silent_day_", "peerkind_"
@@ -116,6 +125,6 @@ public final class Keys {
     public static final String[] ORPHAN_HEADS = {
             "frozen_", "snooze_", "pendcfm_", "pendcfm_note_",
             "title_", "fail_streak_", "fail_laststamp_", "fail_alert_", "fail_date_",
-            "sent_at_", "opt_", "answered_", "panelstale_", "panelstale_day_", "silent_", "silent_day_"
+            "sent_at_", "signed_at_", "miss_at_", "opt_", "answered_", "panelstale_", "panelstale_day_", "silent_", "silent_day_"
     };
 }

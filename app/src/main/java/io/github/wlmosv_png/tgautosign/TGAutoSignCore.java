@@ -6914,6 +6914,16 @@ public final class TGAutoSignCore {
         return String.format("%02d:%02d", c.get(java.util.Calendar.HOUR_OF_DAY), c.get(java.util.Calendar.MINUTE));
     }
 
+    /** 今天 00:00 的毫秒时间戳。把「计划分钟数」换算成绝对时刻时用。 */
+    private long startOfTodayMs() {
+        java.util.Calendar c = java.util.Calendar.getInstance();
+        c.set(java.util.Calendar.HOUR_OF_DAY, 0);
+        c.set(java.util.Calendar.MINUTE, 0);
+        c.set(java.util.Calendar.SECOND, 0);
+        c.set(java.util.Calendar.MILLISECOND, 0);
+        return c.getTimeInMillis();
+    }
+
     private boolean isYesterday(String d) {
         try {
             java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
@@ -7701,6 +7711,12 @@ public final class TGAutoSignCore {
                     if (prefs.getInt(kRetry(prefix, id), 0) >= RETRY_LIMIT) continue;
                     delayMs = 60000L + (long) (random.nextInt(240000));    // 窗口后：1~5 分钟随机补
                     tag = "[定时] 错过补签 " + m.get("text") + "（原计划 " + hhmm(fireMin) + "）约 " + (delayMs / 60000L) + " 分钟后触发";
+                    // 记「这次是补签」：只在这一条路径写（另一条 win 分支是准点到点）。
+                    // 落库时刻 = 排任务的时刻，也就是"决定补签"的时刻 —— 比实际发出早
+                    // 几秒到几分钟（随机延迟），但对用户"什么时候开始补的"这个问题足够准，
+                    // 且不受执行时任务被取消的影响。
+                    try { stateStore.markMissTriggered(prefix, id, System.currentTimeMillis()); }
+                    catch (Throwable _eMT) { noteSwallowed("sweepDue-missmark", _eMT); }
                 }
                 armTask(m, delayMs, true, tag, _schedAcc);
                 return;
@@ -7909,6 +7925,14 @@ public final class TGAutoSignCore {
             head.setText(hb.toString());
             head.setPadding(dp(4), 0, dp(4), dp(8));
             box.addView(head);
+            // 时间口径说明：这一版新增了「实签时刻」和「补签时刻」，给用户一句话解释
+            TextView legend = new TextView(act);
+            legend.setTextSize(Theme.TS_CAPTION);
+            legend.setTextColor(Theme.termFaint(act));
+            legend.setTypeface(Theme.text());
+            legend.setText(Lang.tr("时间 = 计划 → 实际签上；补签会额外标出补签时刻"));
+            legend.setPadding(dp(4), 0, dp(4), dp(8));
+            box.addView(legend);
 
             int missN = 0, doneN = 0, waitN = 0, skipN = 0;
             for (Map<String, Object> m : all) {
@@ -7921,32 +7945,71 @@ public final class TGAutoSignCore {
                 int fireMin = mn != null ? mn.intValue() : -1;
 
                 // 状态归类
+                // 时间口径（用户要求「直接看啥时候签的、啥时候补的」）：
+                //   planHM  计划时刻（来自当日时刻表）
+                //   signHM  实际签上时刻（signed_at_，回退 sent_at_）
+                //   missHM  补签触发时刻（miss_at_，只有走补签路径才有）
                 String badge, sub;
                 int col;
+                String planHM = fireMin >= 0 ? String.format("%02d:%02d", fireMin / 60, fireMin % 60) : "";
+                long todayStart = startOfTodayMs();
                 if (done) {
-                    badge = Lang.tr("已补"); col = Theme.termGreen(act);
-                    sub = fireMin >= 0 ? Lang.tf("原计划 {0} · 已完成", String.format("%02d:%02d", fireMin / 60, fireMin % 60)) : Lang.tr("今日已签");
+                    long signAt = stateStore.signedAtMs(fPrefix, id);
+                    String signHM = SignLogic.hhmmOf(signAt);
+                    long missAt = stateStore.missAtMsToday(fPrefix, id);
+                    boolean wasMiss = SignLogic.isMissBack(missAt > 0L, signAt, fireMin,
+                            todayStart, SignLogic.MISS_JUDGE_GRACE_MIN);
+                    badge = Lang.tr(wasMiss ? "补签" : "准点"); col = Theme.termGreen(act);
+                    if (fireMin < 0) {
+                        sub = signHM.length() > 0 ? Lang.tf("实签 {0}", signHM) : Lang.tr("今日已签");
+                    } else if (signHM.length() == 0) {
+                        sub = Lang.tf("计划 {0} · 已完成", planHM);
+                    } else if (wasMiss) {
+                        StringBuilder sb = new StringBuilder(Lang.tf("计划 {0} → 实签 {1}", planHM, signHM));
+                        if (missAt > 0L) {
+                            String missHM = SignLogic.hhmmOf(missAt);
+                            int lateMin = SignLogic.minutesSince(todayStart + (long) fireMin * 60000L, signAt);
+                            sb.append(" · ").append(Lang.tf("补签 {0}", missHM));
+                            if (lateMin > 0) sb.append(Lang.tf("（晚 {0}）", SignLogic.humanMinutes(lateMin)));
+                        }
+                        sub = sb.toString();
+                    } else {
+                        sub = Lang.tf("计划 {0} → 实签 {1}", planHM, signHM);
+                    }
                     doneN++;
                 } else if (fireMin < 0) {
                     badge = Lang.tr("无计划"); col = Theme.termMuted(act);
                     sub = Lang.tr("未排进今日时刻表"); skipN++;
                 } else if (fireMin <= nowMin) {
+                    int overMin = SignLogic.minutesSince(todayStart + (long) fireMin * 60000L,
+                            System.currentTimeMillis());
                     if (!TIMER_ENABLED || !MISS_BACK) {
                         badge = Lang.tr("已跳过"); col = Theme.termMuted(act);
-                        sub = Lang.tf("原计划 {0} · {1}", String.format("%02d:%02d", fireMin / 60, fireMin % 60), Lang.tr(!TIMER_ENABLED ? "定时未开" : "补签未开"));
+                        sub = Lang.tf("计划 {0} · 已过 {1} · {2}", planHM, SignLogic.humanMinutes(overMin),
+                                Lang.tr(!TIMER_ENABLED ? "定时未开" : "补签未开"));
                         skipN++;
                     } else if (nowMin > MISS_DEADLINE) {
                         badge = Lang.tr("已过期"); col = Theme.termMuted(act);
-                        sub = Lang.tf("原计划 {0} · 已过补签截止 {1}", String.format("%02d:%02d", fireMin / 60, fireMin % 60), String.format("%02d:%02d", MISS_DEADLINE / 60, MISS_DEADLINE % 60));
+                        sub = Lang.tf("计划 {0} · 已过补签截止 {1}", planHM,
+                                String.format("%02d:%02d", MISS_DEADLINE / 60, MISS_DEADLINE % 60));
                         skipN++;
                     } else {
                         badge = Lang.tr("待补"); col = Theme.termAmber(act);
-                        sub = Lang.tf("原计划 {0} · 后台 1~5 分钟随机补", String.format("%02d:%02d", fireMin / 60, fireMin % 60));
+                        long missAt = stateStore.missAtMsToday(fPrefix, id);
+                        if (missAt > 0L) {
+                            sub = Lang.tf("计划 {0} · 已过 {1} · 补签已于 {2} 排队",
+                                    planHM, SignLogic.humanMinutes(overMin), SignLogic.hhmmOf(missAt));
+                        } else {
+                            sub = Lang.tf("计划 {0} · 已过 {1} · 后台 1~5 分钟内补（截止 {2}）",
+                                    planHM, SignLogic.humanMinutes(overMin),
+                                    String.format("%02d:%02d", MISS_DEADLINE / 60, MISS_DEADLINE % 60));
+                        }
                         waitN++; missN++;
                     }
                 } else {
                     badge = Lang.tr("未到点"); col = Theme.termCyan(act);
-                    sub = Lang.tf("计划 {0} · 到时自动签", String.format("%02d:%02d", fireMin / 60, fireMin % 60));
+                    int leftMin = fireMin - nowMin;
+                    sub = Lang.tf("计划 {0} · 还有 {1}", planHM, SignLogic.humanMinutes(leftMin));
                     waitN++;
                 }
 
@@ -8053,7 +8116,7 @@ public final class TGAutoSignCore {
             foot.setTextColor(Theme.termFaint(act));
             foot.setTypeface(android.graphics.Typeface.MONOSPACE);
             foot.setPadding(dp(4), dp(6), dp(4), 0);
-            foot.setText(Lang.tf("已补 {0} · 待补 {1} · 已跳过 {2}", doneN, waitN, skipN) + (missN > 0 ? Lang.tf(" · 错过 {0}", missN) : ""));
+            foot.setText(Lang.tf("已签 {0} · 待补 {1} · 已跳过 {2}", doneN, waitN, skipN) + (missN > 0 ? Lang.tf(" · 错过 {0}", missN) : ""));
             box.addView(foot);
             showDialog(act, "补签列表", box, "关闭");
         } catch (Throwable t) {
@@ -8957,6 +9020,34 @@ public final class TGAutoSignCore {
         } catch (Throwable t) { return ""; }
     }
 
+    /**
+     * 按 data 反查该按钮的**真实文案**（从最近一次面板快照里找）。
+     *
+     * 为什么需要（2026-09-28 回归）：网络层学习时手上只有 data 解码串，
+     * 于是把它当 label 传给 obviousNonSignButton —— 但那是 data 不是文案，
+     * 导致「文案明确是签到、data 恰好像随机串」的真按钮被误挡。
+     * UI 层 hook 能拿到文案，网络层拿不到；这里从 panelLive 补齐，
+     * 让两条学习路径的判据完全一致（都以「用户可见文案」为准）。
+     *
+     * @return 找到的按钮文案；找不到返回 null（调用方应回退到 data 解码串）
+     */
+    private String buttonTextForData(long did, byte[] data) {
+        if (data == null || data.length == 0) return null;
+        try {
+            PanelLive pl;
+            synchronized (panelLive) { pl = panelLive.get(did); }
+            if (pl == null) return null;
+            synchronized (pl) {
+                for (CbButton b : pl.buttons) {
+                    if (b.data != null && java.util.Arrays.equals(b.data, data)) {
+                        return b.text;
+                    }
+                }
+            }
+        } catch (Throwable t) { noteSwallowed("buttonTextForData", t); }
+        return null;
+    }
+
     /** 排除的 bot 集合 → 存储串（逗号分隔） */
     private String blockedDidsToStr() {
         try {
@@ -9442,7 +9533,12 @@ public final class TGAutoSignCore {
                             // 判断与 UI 层保持一致：尊重「排除的 bot」「排除规则」「关键词过滤」开关，
                             // 且不拿 callback data 解码串当关键词（它是 data 不是用户可见文案）。
                             if (findCbEntry(u, d) == null && d.length > 0) {
-                                String disp = cbDataLabel(d);
+                                // 优先用面板快照里的**真实按钮文案**（用户可见）；
+                                // 取不到才回退到 data 解码串。判据以文案为准，
+                                // 避免「文案是签到、data 像随机串」的真按钮被误挡。
+                                String realText = buttonTextForData(u, d);
+                                String disp = (realText != null && realText.trim().length() > 0)
+                                        ? realText : cbDataLabel(d);
                                 int mid0 = 0;
                                 try { Object m2 = getFieldValSafe(req, "msg_id"); if (m2 instanceof Number) mid0 = ((Number) m2).intValue(); } catch (Throwable ignored) {}
                                 // 先算清拒绝原因，别再把它吞掉：旧版这句谎报「被排除规则或关键词过滤」，
@@ -10665,12 +10761,13 @@ public final class TGAutoSignCore {
                     TextView time = new TextView(act);
                     time.setTextSize(Theme.TS_BODY); time.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
                     if (done) {
-                        long sentAt = 0L;
-                        try { sentAt = prefs.getLong(fPrefix + "sent_at_" + id, 0L); } catch (Throwable ignored) {}
-                        if (sentAt > 0) {
-                            java.util.Calendar cc = java.util.Calendar.getInstance();
-                            cc.setTimeInMillis(sentAt);
-                            time.setText(String.format("%02d:%02d", cc.get(java.util.Calendar.HOUR_OF_DAY), cc.get(java.util.Calendar.MINUTE)));
+                        // 优先「实际签上时刻」(signed_at_)，回退到「发起时刻」(sent_at_)、
+                        // 再回退到 ✔。以前只读 sent_at_ —— 那是请求发出的时刻，
+                        // bot 隔几分钟才回复时会显示成"签得比实际早"。
+                        long at = stateStore.signedAtMs(fPrefix, id);
+                        String hhmm = SignLogic.hhmmOf(at);
+                        if (hhmm.length() > 0) {
+                            time.setText(hhmm);
                             time.setTextColor(Theme.termGreen(act));
                         } else {
                             time.setText("✔"); time.setTextColor(Theme.termGreen(act));
@@ -10687,7 +10784,7 @@ public final class TGAutoSignCore {
                 }
                 TextView foot = new TextView(act);
                 foot.setTextSize(Theme.TS_CAPTION); foot.setTextColor(Theme.termFaint(act)); foot.setTypeface(Theme.text());
-                foot.setText(Lang.tf("已签 {0} / {1} · 时间=已签时刻 / 待签计划时刻", doneN, all.size()));
+                foot.setText(Lang.tf("已签 {0} / {1} · 已签=实际签上时刻 / 待签=计划时刻", doneN, all.size()));
                 foot.setPadding(dp(4), dp(6), dp(4), 0);
                 pl.addView(foot);
                 showDialog(act, "今日计划", pl, "关闭");

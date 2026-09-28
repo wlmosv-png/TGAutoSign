@@ -63,6 +63,48 @@ public final class SignStateStore {
         return isSignedToday(prefix, id) || isOptimisticToday(prefix, id);
     }
 
+    /**
+     * 实际签到成功时刻（毫秒）；今天没签或老数据无该字段时返回 0。
+     *
+     * 为什么需要回退：signed_at_ 是 1.6.1 新增键，此前签过的记录只有 last_（日期）。
+     * 界面读不到时刻时应回退到 sent_at_（发起时刻），再没有就显示 ✔ —— 不能因为
+     * 新增字段就让老记录看起来"没时间"。
+     */
+    public long signedAtMs(String prefix, String id) {
+        try {
+            long t = store.l(Keys.signedAt(prefix, id), 0L);
+            if (t > 0L && isTodayMs(t)) return t;
+            long sent = store.l(Keys.sentAt(prefix, id), 0L);
+            if (sent > 0L && isTodayMs(sent)) return sent;
+            return 0L;
+        } catch (Throwable t) { return 0L; }
+    }
+
+    /**
+     * 补签触发时刻（毫秒）；今天没走过补签路径时返回 0。
+     * 必须判"是否今天"：miss_at_ 不按天清理（签到成功后仍要显示），
+     * 昨天的值不能污染今天的展示。
+     */
+    public long missAtMsToday(String prefix, String id) {
+        try {
+            long t = store.l(Keys.missAt(prefix, id), 0L);
+            return (t > 0L && isTodayMs(t)) ? t : 0L;
+        } catch (Throwable t) { return 0L; }
+    }
+
+    /** 时间戳是否落在今天（本地时区）。 */
+    private boolean isTodayMs(long ms) {
+        try {
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
+            return f.format(new java.util.Date(ms)).equals(today());
+        } catch (Throwable t) { return false; }
+    }
+
+    /** 标记"本次是补签触发"。只有 sweepDue 的错过补签路径会调。 */
+    public void markMissTriggered(String prefix, String id, long atMs) {
+        try { store.set(Keys.missAt(prefix, id), atMs); } catch (Throwable t) { swallow("markMissTriggered", t); }
+    }
+
     /** 今天是否"已发出、且还在等结论的时效内"。 */
     public boolean isSentPendingFresh(String prefix, String id, long ttlMs) {
         if (!isOptimisticToday(prefix, id)) return false;
@@ -98,7 +140,12 @@ public final class SignStateStore {
         try {
             boolean first = !isSignedToday(prefix, id);
             if (first) {
-                store.set(Keys.last(prefix, id), today());
+                // signed_at_ 与 last_ 必须**同一次 tx** 写入：分开写会出现
+                // 「有日期没时刻」的中间态（界面那一刻拿不到时刻、只能显示 ✔）。
+                // 语义 = 判定成功的时刻，不是发起时刻（那个是 sent_at_）。
+                final long nowMs = System.currentTimeMillis();
+                store.tx(ed -> ed.putString(Keys.last(prefix, id), today())
+                                 .putLong(Keys.signedAt(prefix, id), nowMs));
             }
             // 无论首次还是重复，清理都要做（清 opt_/pendcfm_/退避/熔断/失败计数）
             clearPostSignState(prefix, id);
