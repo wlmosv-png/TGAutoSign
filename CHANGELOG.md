@@ -1,5 +1,35 @@
 # 更新日志
 
+## 1.6.3 (129) — 2026-09-30
+
+> 本版给模块加了一个自带的界面图导出：把面板页面直接渲染成 PNG，
+> 用于 README 的界面截图。截图从此跟着代码走，不用再靠手工截屏。
+
+### 新增 · Added
+
+- **`/jmb shots` 导出界面图**
+  把「主面板 / 目标列表 / 设置」三页各渲染一张深浅色 PNG，默认 3 倍密度，
+  落在模块私有目录 `files/tgautosign/shots/` 下。倍率可指定：`/jmb shots 2`。
+
+  A built-in exporter renders the main panel, target list and settings to PNG in both
+  themes, three times density by default, saved under the module's private files
+  directory. Pass a factor such as `/jmb shots 2` to change the density.
+
+- **渲染而非截屏**
+  页面按普通 View 离屏绘制，没有状态栏与导航栏，输出尺寸只由倍率决定，
+  不受设备屏幕、DPI 或系统缩放影响，因此同一份图在任何机器上都可复现。
+
+  The pages are drawn off-screen as ordinary views instead of being captured from the
+  screen, so there is no status bar or navigation bar and the output size depends only on
+  the density factor, making the result reproducible on any device.
+
+### 说明 · Notes
+
+- 导出通过拦截 `showDialog` 取得页面内容，各页面的构建代码无需改动。
+
+  The exporter intercepts `showDialog` to obtain each page, so no page-building code had
+  to change.
+
 ## 1.6.2 (128) — 2026-09-29
 
 > 本版把签到语义统一到用户视角：**发出**与**成功**严格分开，

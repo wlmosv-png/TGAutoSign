@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.graphics.Bitmap;
 import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
@@ -209,6 +210,16 @@ public final class TGAutoSignCore {
     private int TITLE_FX = 0;                    // 标题动画：0呼吸 1波浪 2流光 3敲击，每次打开轮换
     private Object listDialog = null;            // 目标列表对话框（自刷新时替换，避免叠层）
     private Object pendingDialog = null;         // 「待处理」对话框（同上；处置后替换而非叠层）
+
+    // ── 界面图导出（2026-09-30）：把页面 View 渲染成 PNG，不截屏 ──
+    // 用途：README 截图随 UI 自动更新，不受屏幕尺寸/系统栏影响。
+    // 实现：showDialog 在被要求导出时只记录页面 View、不弹窗，随后离屏渲染。
+    // 每张图只渲染一次（shot 模式期间该页可能被触发两次，第一次记录后即结束）。
+    private volatile boolean SHOT_MODE = false;      // 导出模式：拦截 showDialog
+    private volatile boolean SHOT_DARK = true;       // 本次导出的深浅色
+    private volatile boolean SHOT_DONE = false;      // 本轮是否已用掉
+    private String SHOT_TITLE = null;                // 本次要导出的页面标题
+    private View SHOT_VIEW = null;                   // 拦截到的页面 View
     private boolean lastPollInWindow = true;
     private String SIGN = "wlmosv";
     private boolean AUTO_LEARN = true;                        // 按钮/回调学习总开关。默认开：新装用户点一次 bot 按钮就能学会，
@@ -6683,6 +6694,13 @@ public final class TGAutoSignCore {
         title = Lang.tr(title);
         negLabel = Lang.tr(negLabel);
 
+        // 导出模式：只记录页面 View 并让调用方尽快收手，不真正弹窗
+        if (SHOT_MODE && !SHOT_DONE && title != null && title.equals(SHOT_TITLE)) {
+            SHOT_DONE = true;
+            SHOT_VIEW = view;
+            return null;
+        }
+
         if (act == null || act.isFinishing()) { toast(act == null ? Lang.tr("请在 Telegram 界面内使用 /jmb") : Lang.tr("页面已关闭，请重新打开")); return null; }
 
         try {
@@ -6778,6 +6796,167 @@ public final class TGAutoSignCore {
             jlog("对话框显示失败: " + t2);
         }
         return null;
+    }
+
+    // ==================== 界面图导出（不截屏） ====================
+    // 把面板页面当作普通 View 离屏渲染成 PNG：没有状态栏/导航栏，
+    // 分辨率只由这里决定，不受设备屏幕与缩放影响。
+    // 页面内容靠「拦截 showDialog」拿到 —— 各 show* 方法的构建逻辑一行都不用改。
+
+    /** 导出目录：模块私有外部目录，走 root 取，不进相册。 */
+    private java.io.File shotDir() {
+        try {
+            java.io.File d = appContext.getExternalFilesDir("tgautosign");
+            if (d == null) return null;
+            java.io.File o = new java.io.File(d, "shots");
+            if (!o.isDirectory() && !o.mkdirs()) return null;
+            return o;
+        } catch (Throwable t) { return null; }
+    }
+
+    /** 退出导出模式并恢复主题。必须放在 finally，否则界面会卡在强制深浅色。 */
+    private void shotEnd(int savedTheme) {
+        SHOT_MODE = false;
+        SHOT_TITLE = null;
+        SHOT_VIEW = null;
+        try { Theme.mode = savedTheme; } catch (Throwable ignored) {}
+    }
+
+    /** 允许 /jmb shots 3 指定密度倍率，默认 3（1080 宽的内容 → 3240px）。 */
+    private float parseScale(String arg) {
+        try {
+            if (arg != null) {
+                float v = Float.parseFloat(arg.trim());
+                if (v >= 1f && v <= 4f) return v;
+            }
+        } catch (Throwable ignored) {}
+        return 3f;
+    }
+
+    private String shotBaseName(String pageTitle) {
+        if ("设置".equals(pageTitle)) return "settings";
+        if ("目标列表".equals(pageTitle)) return "targets";
+        return "main";
+    }
+
+    /**
+     * 导出全部界面图：3 页 × {深色, 浅色}。
+     * 构建发生在主线程的 show* 方法里，其入场动画都还没机会跑，渲染出来是稳定态；
+     * 渲染与存盘在后台线程做，避免卡住界面。
+     */
+    private void exportShots(final Activity act, String scaleArg) {
+        if (act == null) { toast(Lang.tr("请在 Telegram 界面内使用 /jmb")); return; }
+        final float scale = parseScale(scaleArg);
+        final int savedTheme = THEME_MODE;
+        final String[] PAGES = { "TGAutoSign · 管理", "目标列表", "设置" };
+        jlog("[导出] 开始：3 页 × 深浅色，密度 " + scale + "x");
+        toast(Lang.tr("正在导出界面图…"));
+
+        new Thread(new Runnable() { @Override public void run() {
+            int ok = 0, fail = 0;
+            try {
+                for (int di = 0; di < 2; di++) {
+                    final boolean dk = (di == 0);
+                    for (int pi = 0; pi < PAGES.length; pi++) {
+                        final String pt = PAGES[pi];
+                        try {
+                            final java.util.concurrent.atomic.AtomicReference<View> holder =
+                                    new java.util.concurrent.atomic.AtomicReference<View>();
+                            final java.util.concurrent.atomic.AtomicBoolean fired =
+                                    new java.util.concurrent.atomic.AtomicBoolean(false);
+                            mainHandler.post(new Runnable() { @Override public void run() {
+                                shotOnePage(act, pt, dk, holder, fired);
+                            } });
+                            long deadline = System.currentTimeMillis() + 8000L;
+                            while (!fired.get() && System.currentTimeMillis() < deadline) Thread.sleep(30L);
+                            if (!fired.get()) { jlog("[导出] 超时未拿到页面: " + pt); fail++; continue; }
+                            View v = holder.get();
+                            if (v == null) { jlog("[导出] 页面未构建: " + pt); fail++; continue; }
+                            java.io.File dir = shotDir();
+                            if (dir == null) { jlog("[导出] 目录不可用"); fail++; continue; }
+                            String fn = "shot-" + shotBaseName(pt) + (dk ? "-dark" : "-light") + ".png";
+                            java.io.File f = new java.io.File(dir, fn);
+                            if (renderViewToPng(v, scale, f)) {
+                                ok++; jlog("[导出] OK " + fn + " " + f.length() + "B");
+                            } else { fail++; jlog("[导出] 渲染失败: " + fn); }
+                        } catch (Throwable t) { fail++; jlog("[导出] 异常 " + pt + ": " + t); }
+                    }
+                }
+            } catch (Throwable t) {
+                jlog("[导出] 整体失败: " + t);
+            } finally {
+                final int fOk = ok, fFail = fail;
+                mainHandler.post(new Runnable() { @Override public void run() {
+                    try { shotEnd(savedTheme); } catch (Throwable ignored) {}
+                    toast(Lang.tf("界面图导出完成：成功 {0} 张，失败 {1} 张", fOk, fFail));
+                } });
+            }
+        } }).start();
+    }
+
+    /** 在主线程构建某一页并交出它的 View（不渲染、不保存）。 */
+    private void shotOnePage(Activity act, String pageTitle, boolean dark,
+                             java.util.concurrent.atomic.AtomicReference<View> holder,
+                             java.util.concurrent.atomic.AtomicBoolean fired) {
+        int savedTheme = THEME_MODE;
+        try {
+            SHOT_MODE = true;
+            SHOT_TITLE = pageTitle;
+            SHOT_VIEW = null;
+            Theme.mode = dark ? 2 : 1;   // 1=始终日间 2=始终夜间；dark() 直接采信，绕过缓存
+            buildPageByTitle(act, pageTitle);
+            holder.set(SHOT_VIEW);
+        } catch (Throwable t) {
+            jlog("[导出] buildPage 失败 " + pageTitle + ": " + t);
+            holder.set(null);
+        } finally {
+            SHOT_MODE = false;
+            SHOT_VIEW = null;
+            SHOT_TITLE = null;
+            try { Theme.mode = savedTheme; } catch (Throwable ignored) {}
+            fired.set(true);
+        }
+    }
+
+    /** 按标题打开对应页面 —— 复用 runAction 那一套，不另写构建代码。 */
+    private void buildPageByTitle(Activity act, String title) {
+        if ("设置".equals(title)) { showSettings(act); return; }
+        if ("目标列表".equals(title)) { showList(act); return; }
+        showMainMenu(act);
+    }
+
+    /**
+     * 离屏渲染：测量 → 布局 → 绘制到 Bitmap。
+     * 不经过窗口系统，也不使用任何截屏 API。
+     * 宽度按真实对话框的卡片宽度算（屏宽 92%，上限 400dp），
+     * 所以导出的图和用户实际看到的面板一样宽。
+     */
+    private boolean renderViewToPng(View root, float scale, java.io.File out) {
+        Bitmap bmp = null;
+        try {
+            Context c = root.getContext();
+            android.util.DisplayMetrics dm = root.getResources().getDisplayMetrics();
+            int cardW = Math.min((int) (dm.widthPixels * 0.92f), Theme.dp(c, 400));
+            root.measure(View.MeasureSpec.makeMeasureSpec(cardW, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+            int h = root.getMeasuredHeight();
+            if (cardW < 32 || h < 32) { jlog("[导出] 尺寸异常 " + cardW + "x" + h); return false; }
+            bmp = Bitmap.createBitmap((int) (cardW * scale), (int) (h * scale), Bitmap.Config.ARGB_8888);
+            android.graphics.Canvas cv = new android.graphics.Canvas(bmp);
+            cv.scale(scale, scale);
+            cv.drawColor(Theme.termCardDeep(c));
+            root.layout(0, 0, cardW, h);
+            root.draw(cv);
+            java.io.FileOutputStream fos = new java.io.FileOutputStream(out);
+            bmp.compress(Bitmap.CompressFormat.PNG, 100, fos);
+            fos.flush(); fos.close();
+            return true;
+        } catch (Throwable t) {
+            jlog("[导出] render 失败: " + t);
+            return false;
+        } finally {
+            try { if (bmp != null) bmp.recycle(); } catch (Throwable ignored) {}
+        }
     }
 
     private void runAction(Context ctx, String action) {
@@ -6901,6 +7080,12 @@ public final class TGAutoSignCore {
         }
         if ("update".equals(sub) || "检查更新".equals(sub)) {
             forceCheckUpdate();
+            return true;
+        }
+        // /jmb shots [倍率] —— 导出 README 用界面图（不透屏、不受屏幕尺寸影响）
+        if (sub.equals("shots") || sub.startsWith("shots ") || sub.equals("导出界面图")) {
+            String arg = sub.length() > 5 ? sub.substring(5).trim() : null;
+            exportShots(lastActivity, arg);
             return true;
         }
         return false;

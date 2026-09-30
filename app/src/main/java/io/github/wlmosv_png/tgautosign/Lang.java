@@ -815,5 +815,7 @@ public final class Lang {
         EN.put("已入待添加：确认后才加入目标", "Added to pending: it joins your targets only after you confirm");
         EN.put("规则·排除 bot·待添加", "Rules \u00b7 blocked bots \u00b7 pending adds");
         EN.put("▍待添加", "\u258d TO ADD");
+        EN.put("正在导出界面图…", "Exporting UI screenshots…");
+        EN.put("界面图导出完成：成功 {0} 张，失败 {1} 张", "Screenshot export done: {0} ok, {1} failed");
     }
 }
