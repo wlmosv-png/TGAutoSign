@@ -75,25 +75,37 @@ sha256sum TGAutoSign-*.apk                     # 比对 Release 里的 sha256sum
 
 ## 📱 界面一览 · Screenshots
 
-**英文界面 · English UI** — 内置，无需设置 · *built in, no setup required*
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/hero-light.png">
+    <img src="docs/hero-light.png" alt="TGAutoSign 界面一览" width="100%">
+  </picture>
+</p>
 
-| Main panel | Main menu |
+**主面板** · **目标列表** — 截图由模块自带的 `/jmb shots` 导出，非手工截屏；目标名已替换为占位文本。
+
+**英文界面 · English UI** — 内置，无需设置，英文设备装上即是英文
+
+### 暗色 · Dark
+
+| 主面板 | 目标列表 |
 | --- | --- |
-| ![Main panel](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/main-en-dark.jpg) | ![Main menu](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/menu-en-dark.jpg) |
-| Targets | Settings |
-| ![Targets](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/targets-en-dark.jpg) | ![Settings](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/settings-en-dark.jpg) |
+| ![主面板](docs/screenshots/shot-main-dark.png) | ![目标列表](docs/screenshots/shot-targets-dark.png) |
 
-
-**中文界面 · Chinese UI**
-
-| 暗色 · 主面板 | 暗色 · 主菜单 |
-| --- | --- |
-| ![主面板·暗色](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/main-dark.jpg) | ![主菜单·暗色](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/menu-dark.jpg) |
 | 设置 | |
-| ![设置](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/settings-light.jpg) | |
+| --- | --- |
+| ![设置](docs/screenshots/shot-settings-dark.png) | |
 
+### 亮色 · Light
 
----
+| 主面板 | 目标列表 |
+| --- | --- |
+| ![主面板](docs/screenshots/shot-main-light.png) | ![目标列表](docs/screenshots/shot-targets-light.png) |
+
+| 设置 | |
+| --- | --- |
+| ![设置](docs/screenshots/shot-settings-light.png) | |
 
 ## ✨ 它能做什么 · What it does
 

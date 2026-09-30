@@ -73,15 +73,37 @@ The fingerprint corresponds to the release key in use since September 2026; any 
 
 ## 📱 Screenshots
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/hero-light.png">
+    <img src="docs/hero-light.png" alt="TGAutoSign UI overview" width="100%">
+  </picture>
+</p>
+
+**Main panel** · **Targets** — exported by the module's own `/jmb shots`, not captured by hand; target names are replaced with placeholders.
+
 **English UI** — built in on English devices, no setup required
 
-| Main panel | Main menu |
-| --- | --- |
-| ![Main panel](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/main-en-dark.jpg) | ![Main menu](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/menu-en-dark.jpg) |
-| Targets | Settings |
-| ![Targets](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/targets-en-dark.jpg) | ![Settings](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/settings-en-dark.jpg) |
+### Dark
 
----
+| Main panel | Targets |
+| --- | --- |
+| ![Main panel](docs/screenshots/shot-main-dark.png) | ![Targets](docs/screenshots/shot-targets-dark.png) |
+
+| Settings | |
+| --- | --- |
+| ![Settings](docs/screenshots/shot-settings-dark.png) | |
+
+### Light
+
+| Main panel | Targets |
+| --- | --- |
+| ![Main panel](docs/screenshots/shot-main-light.png) | ![Targets](docs/screenshots/shot-targets-light.png) |
+
+| Settings | |
+| --- | --- |
+| ![Settings](docs/screenshots/shot-settings-light.png) | |
 
 ## ✨ What it does
 
