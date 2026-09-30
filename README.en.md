@@ -8,7 +8,13 @@
   </picture>
 </p>
 
-# TGAutoSign
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/title-animated-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/title-animated-light.svg">
+    <img src="docs/title-animated-light.svg" alt="TGAutoSign" width="480">
+  </picture>
+</p>
 
 <p align="center"><a href="https://github.com/wlmosv-png/TGAutoSign/blob/master/README.md">中文</a> · <b>English</b></p>
 
