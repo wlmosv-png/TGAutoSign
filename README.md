@@ -27,6 +27,61 @@
 
 ---
 
+## 🔐 信任与风控 · Trust & Risk
+
+<sub>一个能操作你 Telegram 账号的模块，理应把话说清楚。本节所有内容都可自行验证。</sub>
+
+| | 关注点 · Concern | 我们的做法 · What we do |
+| --- | --- | --- |
+| 🔌 | **权限** · *Permissions* | 模块不申请存储、通知、安装权限。唯一声明的 `INTERNET` 仅用于内置更新检查，可在设置中关闭 |
+| 🏠 | **数据存在哪** · *Where data lives* | 签到目标、已签状态、账号槽位全部存在 Telegram 进程的本地存储，不离开设备 |
+| 🌐 | **唯一的联网行为** · *The only network call* | 每 12 小时访问一次 GitHub 公开 API 查询新版本，不携带任何账号或签到数据 |
+| 🛡️ | **风控处理** · *Rate-limit handling* | 签到时刻在窗口内随机、目标间自动错开；失败退避 5m → 15m → 45m → 2h → 4h；`FLOOD_WAIT` 按服务器要求等待 |
+| 📦 | **防投毒** · *Anti-tampering* | Release 附 `sha256sum.txt`，内置更新器逐字节校验，不一致即放弃并记录日志 |
+
+### ✅ 自己验证 · Verify it yourself
+
+| 验证项 · What | 怎么做 · How |
+| --- | --- |
+| **网络请求范围** | 全仓库只有 `app/src/main/java/.../update/UpdateChecker.java` 一个类发起连接，可直接审计 |
+| **APK 完整性** | 比对 Release 里的 `sha256sum.txt`：`sha256sum TGAutoSign-*.apk` |
+| **签名未被替换** | 比对下面的证书指纹，或 `keytool -printcert -jarfile TGAutoSign-*.apk` |
+
+**官方签名证书指纹 · Official signing certificate**
+
+```
+SHA-256  AF:55:24:CD:55:4A:E6:ED:E3:EC:27:47:C7:BE:D1:59:
+         B0:9B:C4:F6:A4:32:44:A6:8B:46:22:E9:46:32:25:C8
+SHA-1    58:A2:B4:D3:F2:83:9A:92:7A:D4:0C:23:51:FE:43:AB:6F:D3:FB:C3
+Subject  CN=wlmosv, OU=TGAutoSign, O=wlmosv, C=CN
+Valid    2026-09-07 → 2054-01-23
+```
+
+> <sub>本指纹对应 2026-09 起使用的 release key，长期有效；若将来更换签名密钥，会在 Release 说明中公告。</sub>
+> **只从下面两个地址下载。** 第三方站点转载的包我们不做背书 —— 请用上面的指纹自行比对。
+> *Download only from the two sources below. We do not vouch for repacked builds on third-party sites — compare the fingerprint above.*
+
+- [LSPosed 模块仓库 · LSPosed Module Repo](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases/latest)
+- [源码仓库 Releases · Source repo Releases](https://github.com/wlmosv-png/TGAutoSign/releases)
+
+### ⚙️ 环境要求 · Requirements
+
+| | 要求 · Requirement | 说明 · Notes |
+| --- | --- | --- |
+| ✅ | **root + LSPosed** | libxposed **API 102** 及以上，即较新版 LSPosed。<br>在哪看：LSPosed Manager → 设置 → 关于 → API 版本 |
+| ⛔ | **未 root 设备** | 不支持，模块无免 root 方案 |
+| ⛔ | **Telegram X** | 不支持，核心类结构不同，模块不会注入 |
+| ⛔ | **独立服务器部署** | 不支持，这是纯客户端方案 |
+
+<sub>**支持矩阵的读法**：✅ **实测** = 真机运行验证过；**静态核对** = 仅比对类结构，未运行；**白名单** = 已知包名，未验证。三者分开标注，不混着说。</sub>
+
+> ⚠️ **风险提示** · *Risk notice*
+> 任何 Telegram 自动化都存在账号被限制的可能。本模块采用客户端侧签到、随机时窗与退避策略，已尽可能平滑，但**不承诺零风险**，请自行判断是否使用。
+> *Any automation carries some risk of account restriction. This module is deliberately gentle — randomised slots, client-side only, with backoff — but makes no zero-risk claim.*
+
+
+---
+
 ## 📱 界面一览 · Screenshots
 
 **英文界面 · English UI** — 内置，无需设置 · *built in, no setup required*
@@ -62,7 +117,7 @@
 | 👤 | **多账号互不干扰** · **Multi-account, isolated** | 目标与已签状态按账号隔离；可一键把目标复制到其它账号<br>*Targets and signed-state are per account; copy targets across accounts.* |
 | 🔔 | **每天一条摘要** · **Daily summary** | 发到自己的收藏夹，不弹系统通知；连续失败 3 天额外告警<br>*One message to your Saved Messages; alert after 3 failing days.* |
 | 🌍 | **中英双语界面** · **Bilingual UI** | 英文设备装上即英文；设置里可手动切换<br>*English out of the box on English devices; switchable in Settings.* |
-| 🔒 | **数据全在本地** · **100% local** | 无服务器、无遥测、无上报<br>*No server, no telemetry.* |
+| 🔒 | **数据全在本地** · **Local by design** | 仅更新检查联网 · 无服务器 · 无遥测<br>*Local by design — the updater is the only outbound call.* |
 
 ---
 
@@ -86,9 +141,6 @@
 
 > ⚠️ **作用域 · Scope**：LSPosed 里默认只勾了官方版。用第三方客户端，请把**对应客户端**也勾进模块作用域。
 > *LSPosed enables only the official client by default. Using a third-party client? Tick **that** client in scope too.*
-
----
-
 
 ---
 
@@ -178,7 +230,9 @@
 
 > 同一版本两个仓库的 APK 逐字节一致（`sha256sum.txt` 附在 Release 里），
 > 签名始终是同一把 release key，覆盖安装不丢数据。
+> 指纹与校验方式见上方 **信任与风控** 一节。
 > *Both repos ship byte-identical APKs (with `sha256sum.txt`), signed by the same release key — installing over keeps your data.*
+> *Fingerprint and verification steps: see **Trust & Risk** above.*
 
 ---
 
