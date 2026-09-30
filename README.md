@@ -8,8 +8,6 @@
   </picture>
 </p>
 
-# TGAutoSign
-
 <p align="center"><b>中文</b> · <a href="https://github.com/wlmosv-png/TGAutoSign/blob/master/README.en.md">English</a></p>
 
 **点一次，签一年。**  ·  *Tap once. Signed every day.*
