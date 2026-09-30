@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" font-family="'PingFang SC','Microsoft YaHei','Noto Sans CJK SC','Noto Sans SC','Segoe UI',Roboto,sans-serif">
+  <defs>
+    <radialGradient id="glow" cx="1000" cy="230" r="520" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2AABEE" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#2AABEE" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1280" height="640" fill="#0B1626"/>
+  <rect width="1280" height="640" fill="url(#glow)"/>
+
+  <!-- 左侧：标识与文案 -->
+  <circle cx="114" cy="134" r="34" fill="#2AABEE"/>
+  <path d="M97 135 L109 147 L133 121" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <text x="80" y="300" font-size="112" font-weight="800" fill="#F2F6FA" letter-spacing="-2">TGAutoSign</text>
+  <text x="80" y="392" font-size="60" font-weight="700" fill="#2AABEE">点一次，签一年</text>
+  <text x="80" y="470" font-size="36" fill="#8FA3B8">Telegram 每日自动签到</text>
+  <text x="80" y="520" font-size="36" fill="#8FA3B8">LSPosed 模块，面板就在聊天里</text>
+
+  <!-- 右侧：/jmb 面板手机示意 -->
+  <rect x="790" y="60" width="400" height="720" rx="48" fill="#132238" stroke="#24374F" stroke-width="4"/>
+  <rect x="806" y="76" width="368" height="720" rx="36" fill="#0F1D31"/>
+
+  <rect x="1040" y="130" width="120" height="54" rx="20" fill="#2AABEE"/>
+  <text x="1100" y="168" font-size="28" font-weight="600" fill="#FFFFFF" text-anchor="middle">/jmb</text>
+
+  <rect x="826" y="212" width="328" height="460" rx="24" fill="#1B3050"/>
+  <text x="852" y="266" font-size="32" font-weight="700" fill="#F2F6FA">TGAutoSign</text>
+  <text x="852" y="312" font-size="26" fill="#3DDC97">今日已签 24/24</text>
+  <rect x="852" y="332" width="276" height="14" rx="7" fill="#2B4567"/>
+  <rect x="852" y="332" width="276" height="14" rx="7" fill="#3DDC97"/>
+
+  <rect x="852" y="376" width="276" height="52" rx="14" fill="#243D61"/>
+  <text x="876" y="411" font-size="26" fill="#DCE8F5">目标列表</text>
+  <rect x="852" y="440" width="276" height="52" rx="14" fill="#243D61"/>
+  <text x="876" y="475" font-size="26" fill="#DCE8F5">立即签到</text>
+  <rect x="852" y="504" width="276" height="52" rx="14" fill="#243D61"/>
+  <text x="876" y="539" font-size="26" fill="#DCE8F5">运行日志</text>
+  <rect x="852" y="568" width="276" height="52" rx="14" fill="#243D61"/>
+  <text x="876" y="603" font-size="26" fill="#DCE8F5">设置</text>
+</svg>
