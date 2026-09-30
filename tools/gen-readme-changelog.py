@@ -13,7 +13,7 @@
   python3 gen-readme-changelog.py --versions 2
 
 输出格式（与现有 README 一致）：
-  ## 📜 更新日志 · Changelog
+  ## 更新日志 · Changelog
 
   ### v1.5.8 (121) — 2026-09-23
 
@@ -148,7 +148,7 @@ def main():
         print('FATAL: CHANGELOG.md 里没找到版本段', file=sys.stderr)
         return 1
 
-    buf = ['## 📜 更新日志 · Changelog', '']
+    buf = ['## 更新日志 · Changelog', '']
     for ver, code, date, sections in vers:
         block = []
         for name, items in sections:
