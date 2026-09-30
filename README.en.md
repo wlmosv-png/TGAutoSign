@@ -1,10 +1,12 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="assets/banner-light.svg">
-  <img alt="TGAutoSign" src="assets/banner-dark.svg" width="100%">
-</picture>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/banner-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/banner-light.svg">
+    <img src="docs/banner-light.svg" alt="TGAutoSign" width="100%">
+  </picture>
+</p>
 
 # TGAutoSign
 
