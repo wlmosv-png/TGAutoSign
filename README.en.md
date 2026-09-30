@@ -17,7 +17,9 @@ The control panel lives inside Telegram: send `/jmb` in any chat.
 [![License](https://img.shields.io/badge/license-GPLv3-green)](LICENSE)
 [![Telegram Group](https://img.shields.io/badge/Telegram-Join%20Group-26A5E4?logo=telegram&logoColor=white)](https://t.me/+V2Oyu8pSubs4ZjE0)
 
-**⬇️ [Download the latest APK](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases/latest)** · [Source repo](https://github.com/wlmosv-png/TGAutoSign) · [Changelog](https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md)
+**⬇️ [Download the latest APK](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases/latest)** · [Source repo](https://github.com/wlmosv-png/TGAutoSign)
+
+<sub>Download only from these two sources. For repacked builds elsewhere, compare the fingerprint below.</sub> · [Changelog](https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md)
 
 by **wlmosv** · if it's useful, [star the source repo ⭐](https://github.com/wlmosv-png/TGAutoSign)
 
@@ -25,56 +27,41 @@ by **wlmosv** · if it's useful, [star the source repo ⭐](https://github.com/w
 
 ---
 
-## 🔐 Trust & Risk
+### 🔐 Local by design
 
-<sub>A module that can act on your Telegram account owes you a straight answer. Everything here can be verified independently.</sub>
+<sub>No account credentials, no official API, no data leaving your device.</sub>
 
-| | Concern | What we do |
-| --- | --- | --- |
-| 🔌 | **Permissions** | No storage, notification or install permissions are requested. The single `INTERNET` permission is used only by the built-in update check, which can be turned off |
-| 🏠 | **Where data lives** | Targets, signed-state and account slots stay in Telegram's local storage on your device — they never leave it |
-| 🌐 | **The only network call** | One GitHub public API request every 12 hours to check for a new version. It carries no account or sign-in data |
-| 🛡️ | **Rate-limit handling** | Sign-in slots are randomised within a window and spaced across targets; backoff 5m → 15m → 45m → 2h → 4h; `FLOOD_WAIT` is obeyed literally |
-| 📦 | **Anti-tampering** | Each release ships `sha256sum.txt`; the built-in updater verifies byte-for-byte and aborts on mismatch |
+- The **only outbound call** is an update check every 12 hours — it can be disabled, and it carries no sign-in data
+- Targets and signed-state live in Telegram's local storage; they **never leave the device**
+- The module requests **no** storage, notification or install permissions; all automation happens on-device, with no relay server
 
-### ✅ Verify it yourself
 
-| What | How |
-| --- | --- |
-| **Network reach** | Exactly one class opens a connection: `app/src/main/java/.../update/UpdateChecker.java`. Read it |
-| **APK integrity** | Compare against the release's `sha256sum.txt`: `sha256sum TGAutoSign-*.apk` |
-| **Signing key not swapped** | Compare the fingerprint below, or run `keytool -printcert -jarfile TGAutoSign-*.apk` |
+<details>
+<summary><b>Verify the build</b></summary>
 
-**Official signing certificate**
+<br>
+
+Official signing certificate
 
 ```
-SHA-256  AF:55:24:CD:55:4A:E6:ED:E3:EC:27:47:C7:BE:D1:59:
+SHA-256  AF:55:24:CD:55:4A:E6:ED:E3:EC:27:47:C7:BE:D1:59
          B0:9B:C4:F6:A4:32:44:A6:8B:46:22:E9:46:32:25:C8
 SHA-1    58:A2:B4:D3:F2:83:9A:92:7A:D4:0C:23:51:FE:43:AB:6F:D3:FB:C3
-Subject  CN=wlmosv, OU=TGAutoSign, O=wlmosv, C=CN
-Valid    2026-09-07 → 2054-01-23
 ```
 
-> <sub>This fingerprint corresponds to the release key in use since September 2026 and is long-lived. Any future key rotation will be announced in the release notes.</sub>
-> **Download only from the two sources below.** We do not vouch for repacked builds on third-party sites — compare the fingerprint above.
+Check it yourself
 
-- [LSPosed Module Repo](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases/latest)
-- [Source repo Releases](https://github.com/wlmosv-png/TGAutoSign/releases)
+```sh
+keytool -printcert -jarfile TGAutoSign-*.apk   # compare against the fingerprint above
+sha256sum TGAutoSign-*.apk                     # compare against sha256sum.txt in the release
+```
 
-### ⚙️ Requirements
+Exactly one class opens a connection — `update/UpdateChecker.java` — so you can audit it.
+The fingerprint corresponds to the release key in use since September 2026; any key rotation will be announced in the release notes.
 
-| | Requirement | Notes |
-| --- | --- | --- |
-| ✅ | **root + LSPosed** | libxposed **API 102** or newer, i.e. a recent LSPosed.<br>Where to look: LSPosed Manager → Settings → About → API version |
-| ⛔ | **Non-root devices** | Not supported — there is no root-free variant |
-| ⛔ | **Telegram X** | Not supported — different core classes, the module will not inject |
-| ⛔ | **Standalone server deployment** | Not supported — this is a client-side design |
+> ⚠️ **Risk notice** — any Telegram automation carries some risk of account restriction. This module uses client-side check-ins, randomised slots and backoff, and is deliberately gentle, but **makes no zero-risk claim**.
 
-<sub>**Reading the support matrix**: ✅ **tested** = verified on a real device; **statically verified** = class structures compared, not run; **whitelisted** = package name known, unverified. Kept separate on purpose.</sub>
-
-> ⚠️ **Risk notice**
-> Any Telegram automation carries some risk of account restriction. This module uses client-side check-ins, randomised slots and backoff, and is deliberately gentle — but it makes **no zero-risk claim**.
-
+</details>
 
 ---
 
@@ -102,13 +89,15 @@ Valid    2026-09-07 → 2054-01-23
 - **Daily summary** — one message a day to your own Saved Messages (no system notifications); an extra alert after 3 consecutive failing days.
 - **Cross-client sync** — the official client and third-party clients share targets and signed state.
 - **Bilingual UI** — English out of the box on English devices; switchable in Settings.
-- **Local by design** — no server, no telemetry, nothing reported.
+- **Local by design** — no server, no telemetry; the update check is the only outbound call and can be disabled.
 
 ---
 
 ## 🖥️ Supported clients
 
 The module matches by host package first, then falls back to flag-class capability — it only injects on a match.
+
+<sub>**Requires** root + LSPosed (libxposed **API 102** or newer — see LSPosed Manager → Settings → About). **Not supported**: non-root devices, Telegram X, standalone server deployment.</sub>
 
 | Client | Package | Status |
 | --- | --- | --- |
@@ -189,20 +178,6 @@ You installed a debug build. Uninstall it, then install the official APK from th
 **Tooling**: The in-repo build.sh was missing three gates. · Unit assertions grew from 115 to 174. · The wiring checker listed a method that no longer existed.
 
 [Full changelog →](https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md)
-
-## 🔗 Download
-
-| Channel | Where |
-| --- | --- |
-| **This repo's Releases** (*recommended*) | [releases/latest](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases/latest) |
-| Source repo Releases | [wlmosv-png/TGAutoSign](https://github.com/wlmosv-png/TGAutoSign/releases) |
-| In-app | Send ` /jmb ` in Telegram → Check for updates |
-
-> Both repos ship byte-identical APKs (with `sha256sum.txt`), signed by the same
-> release key — installing over keeps your data.
-> Fingerprint and verification steps: see **Trust & Risk** above.
-
----
 
 ## ⚖️ License
 
