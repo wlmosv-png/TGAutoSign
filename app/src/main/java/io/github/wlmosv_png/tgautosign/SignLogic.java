@@ -338,6 +338,8 @@ public final class SignLogic {
     public static final int SKIP_DISABLED       = 6;  // 暂停/冻结/被排除
     public static final int SKIP_SEND_FAIL      = 7;  // 过了闸但发送过程失败（会话取不到等）
     public static final int SKIP_ACCOUNT_DISABLED = 8; // 所在账号被用户停用（账号级，最高优先）
+    /** 结果未知、等用户处置（「待确认」）—— 不得再自动重发。 */
+    public static final int SKIP_PENDING_CONFIRM = 9;
 
     /** 参数打包，避免调用方传一长串布尔。 */
     public static final class SignGate {
@@ -366,6 +368,15 @@ public final class SignLogic {
          * 通常是有原因的（怀疑没签上），保留强制重签的能力。
          */
         public boolean skipSigned;
+        /**
+         * 结果未知、等用户处置（「待确认」）。
+         *
+         * （2026-09-30 用户实测）：转「待确认」时会清空 sent_at_/retry，
+         * 而闸从不看该标记 → 每轮心跳都判定"可以发" → 又超时 → 又转待确认，无限刷。
+         * 现象：每次打开 TG 就在群里重发一次签到文本（那个群没有 bot）。
+         * manual（用户点重试/测试）仍放行。
+         */
+        public boolean pendingUnconfirmed;
     }
 
     /**
@@ -386,6 +397,7 @@ public final class SignLogic {
         if (!g.manual) {
             if (g.signedToday) return SKIP_ALREADY_SIGNED;
             if (g.sentPendingFresh) return SKIP_SENT_PENDING;
+            if (g.pendingUnconfirmed) return SKIP_PENDING_CONFIRM;
             if (g.retryExhausted) return SKIP_RETRY_EXHAUST;
             if (g.inBackoff) return SKIP_BACKOFF;
             if (g.disabled) return SKIP_DISABLED;
@@ -412,6 +424,7 @@ public final class SignLogic {
             case SKIP_DISABLED:       return "已停用/冻结/排除";
             case SKIP_SEND_FAIL:      return "发送失败（会话数据取不到）";
             case SKIP_ACCOUNT_DISABLED: return "账号已停用";
+            case SKIP_PENDING_CONFIRM: return "待确认（等用户处置）";
             default:                  return "";
         }
     }

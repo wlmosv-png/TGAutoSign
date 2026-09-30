@@ -8,6 +8,21 @@
 
 ### 修复 · Fixed
 
+- **markSignedFromCallback 只写 opt_ 不写 last_（回调按钮签成功但没记录）**
+  *markSignedFromCallback wrote only `opt_`, never `last_` — callback sign-ins succeeded but were not recorded.*
+- **markFailed 清 sent_at_（防 sweep 误判为「bot 未回复」）**
+  *markFailed cleared `sent_at_`, so the sweep no longer misreads a sent entry as "bot did not reply".*
+- **ensureTimerPlan 冻结目标不排计划**
+  *ensureTimerPlan no longer schedules a plan for frozen targets.*
+- **手动签到先清 opt_/pendingSigns，不再被「已发出」拦住**
+  *A manual sign-in now clears `opt_`/`pendingSigns` first, so it is no longer blocked by a "sent" marker.*
+- **跨天 retry 计数重置，凌晨不再凭空冒「已放弃」**
+  *The retry counter resets across day boundaries, so "gave up" no longer appears out of nowhere after midnight.*
+- **statusOf 已签判断逻辑被误删导致全显示「已签」**
+  *The signed-state branch in `statusOf` had been deleted by accident, making everything show as signed.*
+- **typeChip 文字恢复（14dp 图标+文字）**
+  *The type chip label is back — a 14dp icon plus text.*
+
 - **「请求发出」被当作「签到成功」**
   现象：按钮点不动、bot 只回一句欢迎语的目标，最终仍显示为已签。
   根因：超时分支以「今天发出过请求」为判据并计入成功。
@@ -204,6 +219,20 @@
   Status wording returned to plain language.
   "Command sent" became "Sent", and the second row carries a type prefix so it is immediately
   clear what each entry is.
+
+
+### 新增 · Added
+
+- **已签目标绿色呼吸闪烁动画**
+  *Signed targets now breathe with a green pulse.*
+- **「指令已发」状态与「已签」同绿色**
+  *"Command sent" uses the same green as "signed".*
+- **待处理面板显示时间戳 + 条目内容**
+  *The pending panel shows a timestamp along with the entry itself.*
+- **待添加候选面板卡片化**
+  *Candidates waiting to be added are now shown as cards.*
+- **typeChip 矢量图标（回调箭头/终端符）**
+  *The type chip uses vector icons — a callback arrow and a terminal glyph.*
 
 
 ## 1.6.1 (124) — 2026-09-28
@@ -948,7 +977,6 @@
   **但命中明确失败词（活动已结束 / 请先关注 / 未绑定 等）仍判失败** —— 避免 bot 挂了也显示绿色。
   **关**（默认）= 完全按原有规则判定。开关在「设置 → 判定机器人回复」里。
   *For bots whose wording never matches the built-in keywords. **On**: learn whatever you tap (no keyword filter) and **treat any reply as success**. **Off** (default): judge by the existing rules. The switch lives under Settings → Judging bot replies.*
-
 
 
 ### 可靠性 · Reliability

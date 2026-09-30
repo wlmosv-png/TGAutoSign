@@ -145,14 +145,21 @@ public final class SignStateStore {
      */
     public void markResult(String prefix, String id, int result) {
         try {
-            if (SignLogic.needsAttention(result)) {
-                store.tx(ed -> ed.putBoolean(Keys.pendingCfm(prefix, id), true)
-                                 .putString(Keys.pendingResult(prefix, id), SignLogic.resultCode(result)));
-            } else {
-                // 有结论了 —— 清掉"需要人看"的状态
-                store.tx(ed -> ed.remove(Keys.pendingCfm(prefix, id))
-                                 .remove(Keys.pendingResult(prefix, id)));
-            }
+            /* 无论什么归类 —— bot 已经结束了这一轮，opt_ 和 sent_at_ 必须清掉。
+               2026-09-29 线上事故：markResult 只写 pendcfm_ 不清 opt_ →
+               模块重启后 promoteSilentToPending 读到残留 opt_，
+               把「判定失败」的目标又标成「bot 未回复」（日志实锤）。 */
+            store.tx(ed -> {
+                ed.remove(Keys.opt(prefix, id));
+                ed.remove(Keys.sentAt(prefix, id));
+                if (SignLogic.needsAttention(result)) {
+                    ed.putBoolean(Keys.pendingCfm(prefix, id), true);
+                    ed.putString(Keys.pendingResult(prefix, id), SignLogic.resultCode(result));
+                } else {
+                    ed.remove(Keys.pendingCfm(prefix, id));
+                    ed.remove(Keys.pendingResult(prefix, id));
+                }
+            });
         } catch (Throwable t) { swallow("markResult", t); }
     }
 
@@ -165,6 +172,20 @@ public final class SignStateStore {
     }
 
     /** 清除归类（用户处置完 / 签成功后）。 */
+
+    /**
+     * 只清 opt_ + sent_at_（手动签到前用，不碰 pendcfm_ 等归类状态）。
+     *
+     * 场景：用户点了「立即签到」，之前 opt_ 残留会拦住发送——
+     * 先清掉乐观标记，让本次发送能正常走。
+     */
+    public void clearOptimistic(String prefix, String id) {
+        try {
+            store.tx(ed -> ed.remove(Keys.opt(prefix, id))
+                             .remove(Keys.sentAt(prefix, id)));
+        } catch (Throwable t) { swallow("clearOptimistic", t); }
+    }
+
     public void clearResult(String prefix, String id) {
         try {
             store.tx(ed -> ed.remove(Keys.pendingCfm(prefix, id))
@@ -211,6 +232,7 @@ public final class SignStateStore {
             store.tx(ed -> {
                 ed.remove(Keys.last(prefix, id))
                   .remove(Keys.opt(prefix, id))
+                  .remove(Keys.sentAt(prefix, id))  /* 2026-09-30: 失败也清 sent_at_，防 sweep 误判 */
                   .putInt(Keys.retry(prefix, id), Math.min(cur + 1, retryLimit))
                   .putLong(Keys.retryAt(prefix, id), System.currentTimeMillis() + backoffMs)
                   .putString(Keys.retryDay(prefix, id), today());

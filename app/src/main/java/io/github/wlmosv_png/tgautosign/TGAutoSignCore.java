@@ -1276,6 +1276,7 @@ public final class TGAutoSignCore {
                     String id = entryId(m);
                     if (today.equals(prefs.getString(kLast(prefix, id), ""))) continue;   // 已签
                     if (prefs.getInt(kRetry(prefix, id), 0) >= RETRY_LIMIT) continue;      // 今日已放弃
+                    if (isPendingConfirm(prefix, id)) continue;                              // 待确认：已有归类
                     if (isSnoozed(prefix, id)) continue;                                   // 已顺延
                     pending = true;
                     break;
@@ -3439,7 +3440,7 @@ public final class TGAutoSignCore {
             loadTargetsInto(accountPrefix(account), list);
             for (Map<String,Object> m : list) {
                 if (entryDid(m) == did && KIND_TEXT.equals(entryKind(m)) && entryText(m).equals(String.valueOf(text))) {
-                    markOptimistic(accountPrefix(account), entryId(m));
+                    markSigned(accountPrefix(account), entryId(m));
                     return;
                 }
             }
@@ -3453,7 +3454,7 @@ public final class TGAutoSignCore {
             loadTargetsInto(accountPrefix(account), list);
             for (Map<String,Object> m : list) {
                 if (entryDid(m) == did && KIND_CB.equals(entryKind(m)) && Arrays.equals(entryData(m), data)) {
-                    markOptimistic(accountPrefix(account), entryId(m));
+                    markSigned(accountPrefix(account), entryId(m));
                     return;
                 }
             }
@@ -3665,6 +3666,8 @@ public final class TGAutoSignCore {
      *         调用方应据此提示用户，不要无条件 toast"已发起"。
      */
     private int sendSign(Map<String, Object> entry, AccountManager.Ctx ctx, boolean manual) {
+        /* 手动签到：先清掉所有"已发出/在途"状态，确保不被闸拦（2026-09-29） */
+        /* manual 清障移到 decideSign 通过后：避免无意义的写操作（2026-09-30）*/
         final int account = ctx.account;
         pace();
         // 每条目标一个链路 id：解析 → 发出 → 响应 → 判定 可串联。
@@ -3691,6 +3694,10 @@ public final class TGAutoSignCore {
         // 「请先关注」这类再点一百次也是同一句话，不该让用户手动触发时白跑。
         _gate.disabled = isDailyBlocked(_pfx, id) || isPermanentFailedToday(_pfx, id)
                 || isFrozen(_pfx, id) || isSnoozed(_pfx, id) || isBotBlocked(dialogId);
+        // 待确认不得再自动重发（2026-09-30）：转待确认时清了 sent_at_/retry，
+        // 闸若不看这个标记，每轮心跳都会再发一次 —— 群聊里没有 bot 就一直刷。
+        // manual（用户点重试/测试）仍放行。
+        _gate.pendingUnconfirmed = isPendingConfirm(_pfx, id);
         // 账号级停用（1.6.1 补）：此前 isAccountEnabled 只在「账号一览界面」「一键签全部
         // 账号」「心跳的非当前账号分支」三处被检查，**没有进这道统一闸** ——
         // 于是切到被停用的账号后，任何触发源（进入窗口/打开聊天/事件补签/定时/排队）
@@ -4310,6 +4317,8 @@ public final class TGAutoSignCore {
                 gate.inBackoff = now < prefs.getLong(kRetryAt(prefix, id), 0L);
                 gate.disabled = isBotBlocked(entryDid(m)) || isSnoozed(prefix, id) || isFrozen(prefix, id)
                         || isDailyBlocked(prefix, id) || isPermanentFailedToday(prefix, id);
+                // 待确认（bot 未回复 / 判不出）不再自动重发，等用户处置（与 sendSign 同一判据）
+                gate.pendingUnconfirmed = isPendingConfirm(prefix, id);
                 // 账号级停用：与 sendSign 同一判据（见那里的说明）。
                 gate.accountDisabled = !isAccountEnabled(account);
                 int skip = SignLogic.decideSign(gate);
@@ -4679,7 +4688,7 @@ public final class TGAutoSignCore {
             // 所以文本目标单独用「已发指令」，颜色走中性色。
             try {
                 Map<String, Object> _em = findEntryById(id, accountOfPrefix(prefix));
-                if (_em != null && KIND_TEXT.equals(entryKind(_em))) return Lang.tr("已发送");
+                if (_em != null && KIND_TEXT.equals(entryKind(_em))) return Lang.tr("指令已发 \u2713");
             } catch (Throwable ignored) {}
             return Lang.tr("已签");
         }
@@ -4693,7 +4702,9 @@ public final class TGAutoSignCore {
         if (_rc == SignLogic.R_NO_REPLY)    return Lang.tr("bot 未回复");
         if (_rc == SignLogic.R_JUDGE_OFF)   return Lang.tr("判定已关");
         if (isPendingConfirm(prefix, id)) return Lang.tr("结果未知");
-        int retries = prefs.getInt(kRetry(prefix, id), 0);
+        /* 跨天重置（2026-09-30）：昨天撞上限的，今天不算"已放弃" */
+        String _rd = prefs.getString(kRetryDay(prefix, id), "");
+        int retries = today.equals(_rd) ? prefs.getInt(kRetry(prefix, id), 0) : 0;
         if (retries >= RETRY_LIMIT) return Lang.tr("已放弃");
         long retryAt = prefs.getLong(kRetryAt(prefix, id), 0);
         if (System.currentTimeMillis() < retryAt) return Lang.tr("退避中");
@@ -4716,7 +4727,7 @@ public final class TGAutoSignCore {
         if (status == null) return 0;
         if (status.contains("已签") || status.contains("放弃")) return 2;
         if (status.contains("结果未知") || status.contains("待确认")) return 1;
-        if (status.contains("已发送")) return 9;   // 与"已签"同级（今天已做过）
+        if (status.contains("已发送") || status.contains("指令已发")) return 2;   // 与"已签"同级（今天已做过）
         if (status.contains("已发出")) return 0;   // 进行中，与"重试中"同属待办区
         return 0;
     }
@@ -5009,16 +5020,93 @@ public final class TGAutoSignCore {
         return chip;
     }
 
+    /** 条目类型图标：用 Canvas 绘制矢量回调箭头/文本图标，替代之前的圆形文字（2026-09-29） */
     private TextView typeChip(Context c, boolean cb) {
         TextView chip = new TextView(c);
         chip.setTextSize(Theme.TS_CAPTION);
-        chip.setText(cb ? Lang.tr("[回调]") : Lang.tr("[指令]"));
+        chip.setText(cb ? Lang.tr("回调") : Lang.tr("指令"));
         chip.setGravity(android.view.Gravity.CENTER);
-        chip.setPadding(Theme.dp(c,8), Theme.dp(c,2), Theme.dp(c,8), Theme.dp(c,2));
-        chip.setTextColor(cb ? Theme.termCyan(c) : Theme.termMuted(c));
+        chip.setPadding(Theme.dp(c, 6), Theme.dp(c, 2), Theme.dp(c, 6), Theme.dp(c, 2));
+        int tcol = cb ? Theme.termCyan(c) : Theme.termMuted(c);
+        chip.setTextColor(tcol);
         chip.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-        chip.setBackground(termBorder(c, cb ? Theme.withAlpha(Theme.termCyan(c), 0x12) : Theme.withAlpha(Theme.termMuted(c), 0x0D), cb ? Theme.withAlpha(Theme.termCyan(c), 0x59) : Theme.withAlpha(Theme.termMuted(c), 0x33)));
+        /* 左侧矢量图标 */
+        android.graphics.drawable.Drawable ic = cb
+            ? callbackVectorIcon(c, tcol, Theme.dp(c, 11))
+            : textCmdVectorIcon(c, tcol, Theme.dp(c, 14));
+        if (ic != null) {
+            int sz = Theme.dp(c, 11);
+            ic.setBounds(0, 0, sz, sz);
+            chip.setCompoundDrawables(ic, null, null, null);
+            chip.setCompoundDrawablePadding(Theme.dp(c, 3));
+        }
+        chip.setBackground(termBorder(c,
+            Theme.withAlpha(tcol, 0x12),
+            Theme.withAlpha(tcol, 0x59)));
         return chip;
+    }
+
+    /** 回调按钮矢量图标：圆角矩形内折返箭头 */
+    private android.graphics.drawable.Drawable callbackVectorIcon(Context c, int col, int szPx) {
+        try {
+            float s = szPx;
+            float r = s * 0.22f;
+            float sw = s * 0.12f;
+            android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            p.setStyle(android.graphics.Paint.Style.STROKE);
+            p.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+            p.setStrokeJoin(android.graphics.Paint.Join.ROUND);
+            p.setStrokeWidth(sw);
+            p.setColor(col);
+            android.graphics.Bitmap bm = android.graphics.Bitmap.createBitmap((int) s, (int) s, android.graphics.Bitmap.Config.ARGB_8888);
+            android.graphics.Canvas cv = new android.graphics.Canvas(bm);
+            /* 回旋箭头：左下 → 左上 → 右上 */
+            android.graphics.Path path = new android.graphics.Path();
+            float cx = s * 0.5f, cy = s * 0.5f;
+            float a = s * 0.25f;
+            path.moveTo(cx - a, cy + a * 0.6f);
+            path.lineTo(cx - a, cy - a * 0.4f);
+            path.lineTo(cx + a, cy - a);
+            cv.drawPath(path, p);
+            /* 箭头尖 */
+            float aw = sw * 1.6f;
+            p.setStrokeWidth(aw);
+            path.reset();
+            path.moveTo(cx + a, cy - a);
+            path.lineTo(cx + a - aw, cy - a + aw);
+            path.moveTo(cx + a, cy - a);
+            path.lineTo(cx + a - aw * 0.3f, cy - a + aw * 1.4f);
+            cv.drawPath(path, p);
+            return new android.graphics.drawable.BitmapDrawable(c.getResources(), bm);
+        } catch (Throwable t) { return null; }
+    }
+
+    /** 文本指令矢量图标：终端提示符 >_ */
+    private android.graphics.drawable.Drawable textCmdVectorIcon(Context c, int col, int szPx) {
+        try {
+            float s = szPx;
+            float sw = s * 0.12f;
+            android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            p.setStyle(android.graphics.Paint.Style.STROKE);
+            p.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+            p.setStrokeWidth(sw);
+            p.setColor(col);
+            android.graphics.Bitmap bm = android.graphics.Bitmap.createBitmap((int) s, (int) s, android.graphics.Bitmap.Config.ARGB_8888);
+            android.graphics.Canvas cv = new android.graphics.Canvas(bm);
+            float ox = s * 0.18f, oy = s * 0.5f;
+            /* > */
+            android.graphics.Path path = new android.graphics.Path();
+            path.moveTo(ox, oy - s * 0.15f);
+            path.lineTo(ox + s * 0.18f, oy);
+            path.lineTo(ox, oy + s * 0.15f);
+            cv.drawPath(path, p);
+            /* _ */
+            path.reset();
+            path.moveTo(ox + s * 0.25f, oy + s * 0.12f);
+            path.lineTo(ox + s * 0.55f, oy + s * 0.12f);
+            cv.drawPath(path, p);
+            return new android.graphics.drawable.BitmapDrawable(c.getResources(), bm);
+        } catch (Throwable t) { return null; }
     }
 
     private View targetRow(LinearLayout parent, Map<String, Object> entry, String status, String action) {
@@ -5031,6 +5119,9 @@ public final class TGAutoSignCore {
         String[] etype = entryTypeOf(entry);
         boolean isChat = !"bot".equals(etype[0]);
         int accent = isChat ? Theme.termPink(c) : Theme.termCyan(c);
+        /* 已签目标：色条变绿（2026-09-29 增强视觉区分） */
+        final boolean _isSignedRow = todayStr().equals(prefs.getString(kLast(accountPrefix(), id), ""));
+        if (_isSignedRow) accent = Theme.termGreen(c);
         final boolean blocked = isBotBlocked(did);
         LinearLayout wrap = new LinearLayout(c);
         wrap.setOrientation(LinearLayout.HORIZONTAL);
@@ -5050,7 +5141,7 @@ public final class TGAutoSignCore {
         LinearLayout row = new LinearLayout(c);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackground(termBorder(c, Theme.termCard(c), Theme.withAlpha(accent, 0x2E)));
+        row.setBackground(termBorder(c, Theme.termCard(c), Theme.withAlpha(_isSignedRow ? Theme.termGreen(c) : accent, 0x2E)));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f);
         row.setLayoutParams(lp);
         row.setPadding(Theme.dp(c,11), Theme.dp(c,11), Theme.dp(c,12), Theme.dp(c,11));
@@ -5113,7 +5204,7 @@ public final class TGAutoSignCore {
         LinearLayout t2r = new LinearLayout(c); t2r.setOrientation(LinearLayout.HORIZONTAL); t2r.setGravity(Gravity.CENTER_VERTICAL);
         TextView st = new TextView(c); st.setTextSize(Theme.TS_CAPTION); st.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
         int stCol = Theme.termTxt(c);
-        if (status != null && status.contains("已发送")) stCol = Theme.termMuted(c);
+        if (status != null && status.contains("已发送")) stCol = Theme.termGreen(c);  // 2026-09-29：文本指令发出即等效签到，绿色与「已签」一致
         else if (status != null && status.contains("已签")) stCol = Theme.termGreen(c);
         else if (status != null && (status.contains("按钮失效") || status.contains("回复判不出"))) stCol = Theme.termAmber(c);
         else if (status != null && (status.contains("结果未知") || status.contains("退避") || status.contains("重试"))) stCol = Theme.termAmber(c);
@@ -5123,8 +5214,8 @@ public final class TGAutoSignCore {
         // 状态前导图标：已签=勾、待签=钟、退避/重试=警告
         String stIcon = null;
         if (status != null) {
-            if (status.contains("已发送")) stIcon = "rocket";
-            else if (status.contains("已签")) stIcon = "check";
+            if (status.contains("已发送")) stIcon = "rocket";  // 绿色已在 stCol 设好
+            else if (status.contains("已签") || status.contains("指令已发")) stIcon = "check";
             else if (status.contains("按钮失效") || status.contains("回复判不出")
                      || status.contains("结果未知")) stIcon = "warn";
             else if (status.contains("bot 未回复") || status.contains("判定已关")) stIcon = "info";
@@ -5139,6 +5230,22 @@ public final class TGAutoSignCore {
                 st.setCompoundDrawables(sd, null, null, null);
                 st.setCompoundDrawablePadding(Theme.dp(c, 4));
             }
+        }
+        /* 已签图标呼吸闪烁（2026-09-29）：冻结/排除行跳过（已双重虚化）*/
+        boolean _frozenRow = false;
+        try { _frozenRow = isFrozen(accountPrefix(), id) || isBotBlocked(did); } catch (Throwable _eFr) {}
+        if (!_frozenRow && status != null && (status.contains("已签") || status.contains("已发送") || status.contains("指令已发"))) {
+            st.setAlpha(1.0f);
+            android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(0.55f, 1.0f);
+            va.setDuration(1100);
+            va.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+            va.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+            va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                    st.setAlpha((Float) a.getAnimatedValue());
+                }
+            });
+            va.start();
         }
         t2r.addView(st, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         t2r.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,8), 1));
@@ -6622,7 +6729,7 @@ public final class TGAutoSignCore {
             Map<String, Object> m = findEntryById(id);
             if (m == null) { toast("目标不存在"); return; }
             jlog("[界面] 手动签到 " + entryDid(m) + " (id=" + id + ")");
-            toastAfterSign(sendSign(m, currentAccount()), m);
+            toastAfterSign(sendSign(m, currentAccount(), true), m);  // 2026-09-30: manual=true 绕过闸门
             return;
         }
         if ("test".equals(action)) { testEntry(id); return; }
@@ -6794,35 +6901,77 @@ public final class TGAutoSignCore {
                 e.setPadding(dp(8), dp(12), dp(8), dp(12));
                 box.addView(e);
             } else {
+                /* top hint (2026-09-29 enhanced) */
                 TextView hint = new TextView(act); hint.setTextSize(Theme.TS_CAPTION); hint.setTextColor(Theme.termFaint(act)); hint.setTypeface(Theme.text());
-                hint.setText(Lang.tr("以下目标来自「网络学习」，确认后才会加入自动签到。点「加入」确认，点「忽略」丢弃。"));
+                hint.setText(Lang.tr("以下目标来自网络学习，确认后加入自动签到。点「加入」确认，点「忽略」丢弃。"));
                 hint.setPadding(dp(4), dp(4), dp(4), dp(8));
                 box.addView(hint);
                 for (int i = 0; i < dids.size(); i++) {
                     final long did = dids.get(i);
                     final String text = i < texts.size() ? texts.get(i) : "";
-                    LinearLayout row = new LinearLayout(act); row.setOrientation(LinearLayout.HORIZONTAL); row.setGravity(Gravity.CENTER_VERTICAL);
-                    row.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x26)));
-                    row.setPadding(dp(12), dp(10), dp(12), dp(10));
-                    LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
-                    rlp.setMargins(0, dp(3), 0, dp(3));
-                    row.setLayoutParams(rlp);
-                    String title = targetTitle(did);
-                    TextView tt = new TextView(act); tt.setTextSize(Theme.TS_SUBTITLE); tt.setTextColor(Theme.termTxt(act)); tt.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-                    tt.setText(title + "\n" + text);
-                    row.addView(tt, new LinearLayout.LayoutParams(0, -2, 1f));
+
+                    /* card layout matching the rest of the UI */
+                    LinearLayout card = new LinearLayout(act);
+                    card.setOrientation(LinearLayout.VERTICAL);
+                    card.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x22)));
+                    card.setPadding(dp(12), dp(10), dp(12), dp(10));
+
+                    /* row 1: bot name */
+                    TextView nm = new TextView(act);
+                    nm.setTextSize(Theme.TS_SUBTITLE);
+                    nm.setTextColor(Theme.termTxt(act));
+                    nm.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+                    nm.setText(targetTitle(did));
+                    nm.setSingleLine(true);
+                    nm.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                    card.addView(nm);
+
+                    /* row 2: button/command text */
+                    if (text.length() > 0) {
+                        TextView tx = new TextView(act);
+                        tx.setTextSize(Theme.TS_CAPTION);
+                        tx.setTextColor(Theme.termMuted(act));
+                        tx.setTypeface(android.graphics.Typeface.MONOSPACE);
+                        tx.setSingleLine(true);
+                        tx.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                        tx.setText(text.trim().replace("\n", " "));
+                        tx.setPadding(0, dp(2), 0, 0);
+                        card.addView(tx);
+                    }
+
+                    /* row 3: id (small, dim) */
+                    TextView didLabel = new TextView(act);
+                    didLabel.setTextSize(Theme.TS_CAPTION);
+                    didLabel.setTextColor(Theme.termFaint(act));
+                    didLabel.setTypeface(android.graphics.Typeface.MONOSPACE);
+                    didLabel.setText("ID: " + did);
+                    didLabel.setPadding(0, dp(2), 0, dp(6));
+                    card.addView(didLabel);
+
+                    /* row 4: two action buttons */
+                    LinearLayout acts = new LinearLayout(act);
+                    acts.setOrientation(LinearLayout.HORIZONTAL);
+                    acts.setGravity(Gravity.CENTER_VERTICAL);
+
                     Button acc = mkBtn(act); withIconText(act, acc, "check", "加入");
                     acc.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
                         if (pendingConfirmAccept(pendingAcc, did, text)) { toast("已加入"); dismissOne(curDlg[0]); showPendingConfirm(act); }
                         else toast("加入失败");
                     } });
-                    row.addView(acc);
+                    acts.addView(acc);
+                    acts.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(dp(8), 1));
+
                     Button ign = mkBtn(act); withIconText(act, ign, "x", "忽略");
                     ign.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
                         pendingConfirmRemove(pendingAcc, did); toast("已忽略"); dismissOne(curDlg[0]); showPendingConfirm(act);
                     } });
-                    row.addView(ign);
-                    box.addView(row);
+                    acts.addView(ign);
+
+                    card.addView(acts);
+                    LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
+                    clp.setMargins(0, dp(3), 0, dp(3));
+                    card.setLayoutParams(clp);
+                    box.addView(card);
                 }
             }
             curDlg[0] = showDialog(act, Lang.tf("待添加（{0}）", dids.size()), box, "关闭");
@@ -6972,6 +7121,8 @@ public final class TGAutoSignCore {
             return f.format(dt).equals(f.format(y.getTime()));
         } catch (Throwable t) { return false; }
     }
+
+    /** 判断日期字符串是否昨天（2026-09-30） */
 
     private void updateStreak(String prefix) {
         try {
@@ -7211,6 +7362,15 @@ public final class TGAutoSignCore {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(2), dp(2), dp(2), dp(2));
 
+        /* top hint (2026-09-29) */
+        TextView topHint = new TextView(act);
+        topHint.setTextSize(Theme.TS_CAPTION);
+        topHint.setTextColor(Theme.termFaint(act));
+        topHint.setTypeface(Theme.text());
+        topHint.setText(Lang.tr("以下目标发出后未得到明确结论，需要你判断。"));
+        topHint.setPadding(dp(4), dp(2), dp(4), dp(4));
+        box.addView(topHint);
+
         final List<Map<String, Object>> list = new ArrayList<Map<String, Object>>();
         try { loadTargetsInto(pfx, list); } catch (Throwable ignored) {}
 
@@ -7220,38 +7380,72 @@ public final class TGAutoSignCore {
             if (!isPendingConfirm(pfx, eid)) continue;
             shown++;
             final long edid = entryDid(m);
+            final String itemText = entryText(m);
 
+            /* card: 4-row layout */
             LinearLayout card = new LinearLayout(act);
             card.setOrientation(LinearLayout.VERTICAL);
-            card.setPadding(dp(10), dp(8), dp(10), dp(8));
+            card.setPadding(dp(12), dp(10), dp(12), dp(10));
             card.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termAmber(act), 0x33)));
 
+            /* row 1: name + tag + time */
             LinearLayout head = new LinearLayout(act);
             head.setOrientation(LinearLayout.HORIZONTAL);
             head.setGravity(Gravity.CENTER_VERTICAL);
             TextView nm = new TextView(act);
-            nm.setTextSize(Theme.TS_SECOND);
+            nm.setTextSize(Theme.TS_SUBTITLE);
             nm.setTextColor(Theme.termTxt(act));
             nm.setText(targetTitle(edid));
             nm.setTypeface(Theme.text());
-            head.addView(nm);
-            head.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(0, 1, 1f));
-            TextView tag = new TextView(act);
-            tag.setTextSize(Theme.TS_CAPTION);
-            tag.setTextColor(Theme.termAmber(act));
-            tag.setText(attentionLabel(pfx, eid));
-            tag.setTypeface(Theme.text());
+            nm.setSingleLine(true);
+            nm.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            head.addView(nm, new LinearLayout.LayoutParams(0, -2, 1f));
+
+            TextView tag = badgeChip(act, attentionLabel(pfx, eid), Theme.termAmber(act), false);
             head.addView(tag);
+            head.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(dp(6), 1));
+
+            long issueAt = prefs.getLong(pfx + "sent_at_" + eid, 0L);
+            if (issueAt > 0L) {
+                TextView ts = new TextView(act);
+                ts.setTextSize(Theme.TS_CAPTION);
+                ts.setTextColor(Theme.termFaint(act));
+                ts.setTypeface(Theme.text());
+                ts.setText(new java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(new java.util.Date(issueAt)));
+                head.addView(ts);
+            }
             card.addView(head);
 
+            /* row 2: entry text */
+            if (itemText != null && itemText.trim().length() > 0) {
+                TextView tx = new TextView(act);
+                tx.setTextSize(Theme.TS_CAPTION);
+                tx.setTextColor(Theme.termMuted(act));
+                tx.setTypeface(android.graphics.Typeface.MONOSPACE);
+                tx.setSingleLine(true);
+                tx.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                tx.setText("\u25b8 " + itemText.trim().replace("\n", " "));
+                tx.setPadding(0, dp(2), 0, 0);
+                card.addView(tx);
+            }
+
+            /* row 3: hint */
             TextView hint = new TextView(act);
             hint.setTextSize(Theme.TS_CAPTION);
             hint.setTextColor(Theme.termFaint(act));
             hint.setText(attentionHint(pfx, eid));
             hint.setTypeface(Theme.text());
-            hint.setPadding(0, dp(3), 0, dp(6));
+            hint.setPadding(0, dp(4), 0, dp(8));
             card.addView(hint);
 
+            /* separator */
+            View sep = new View(act);
+            sep.setBackgroundColor(Theme.withAlpha(Theme.termAmber(act), 0x18));
+            LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, 1);
+            slp.setMargins(0, 0, 0, dp(8));
+            card.addView(sep, slp);
+
+            /* row 4: three equal-width buttons */
             LinearLayout acts = new LinearLayout(act);
             acts.setOrientation(LinearLayout.HORIZONTAL);
             acts.setGravity(Gravity.CENTER_VERTICAL);
@@ -7260,15 +7454,11 @@ public final class TGAutoSignCore {
             bOk.setText(Lang.tr("确认已签"));
             bOk.setTextSize(Theme.TS_CAPTION);
             bOk.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
-                // 处置后只关对话框、重开列表 —— **绝不 finish() Activity**。
-                // 从通知横幅进来时 Activity 在通知栈顶，下面没有可回的页面，
-                // finish() 会直接闪回桌面（实测）。
-                // 这里与长按菜单 showEntryActions 的处置写法保持一致。
                 pendConfirmAsSigned(pfx, eid, edid);
                 reopenPendingWork(act);
             } });
-            acts.addView(bOk);
-            acts.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(dp(5), 1));
+            acts.addView(bOk, new LinearLayout.LayoutParams(0, -2, 1f));
+            acts.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(dp(6), 1));
 
             Button bRe = mkBtn(act);
             bRe.setText(Lang.tr("重试"));
@@ -7277,8 +7467,8 @@ public final class TGAutoSignCore {
                 pendConfirmRetry(pfx, eid, edid);
                 reopenPendingWork(act);
             } });
-            acts.addView(bRe);
-            acts.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(dp(5), 1));
+            acts.addView(bRe, new LinearLayout.LayoutParams(0, -2, 1f));
+            acts.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(dp(6), 1));
 
             Button bIg = mkBtn(act);
             bIg.setText(Lang.tr("忽略今天"));
@@ -7287,7 +7477,7 @@ public final class TGAutoSignCore {
                 pendConfirmIgnoreToday(pfx, eid, edid);
                 reopenPendingWork(act);
             } });
-            acts.addView(bIg);
+            acts.addView(bIg, new LinearLayout.LayoutParams(0, -2, 1f));
 
             card.addView(acts);
             LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
@@ -7330,11 +7520,23 @@ public final class TGAutoSignCore {
     private boolean isPendingConfirm(String prefix, String id) {
         try {
             if (!prefs.getBoolean(kPendingConfirm(prefix, id), false)) return false;
-            // 双保险：条目已删（清空配置 / 手动删除）时，残留的 pendcfm_ 不该让
-            // "重新添加的同一 bot" 一上来就显示「待确认」。
+            /* 今天已签 → 不再需要确认（2026-09-29 修）：
+               只读 pendcfm_ 不能区分「确认后的残留」与「真正待处理」。
+               last_ 是「已签」的最终凭据 —— 已签还赖在待处理里就是 bug。 */
+            if (todayStr().equals(prefs.getString(kLast(prefix, id), ""))) return false;
+            /* 双保险：条目已删（清空配置 / 手动删除）时，残留的 pendcfm_ 不该让
+               "重新添加的同一 bot" 一上来就显示「待确认」。 */
             if (findEntryById(id, accountOfPrefix(prefix)) == null) return false;
             return true;
         } catch (Throwable t) { return false; }
+    }
+
+    /** 清掉该目标的"在途请求"记录（手动签到前清障，2026-09-29） */
+    private void clearPendingRequest(String prefix, String id) {
+        try {
+            // pendingSigns 是 volatile Map，GUI 线程写入
+            if (pendingSigns != null) pendingSigns.remove(id);
+        } catch (Throwable t) { noteSwallowed("clearPendingRequest", t); }
     }
     private void clearPendingConfirm(String prefix, String id) {
         try { if (prefs.getBoolean(kPendingConfirm(prefix, id), false)) prefs.edit().remove(kPendingConfirm(prefix, id)).apply(); }
@@ -7391,6 +7593,7 @@ public final class TGAutoSignCore {
                  .remove(kRetryAt(prefix, id))
                  .remove(kRetryDay(prefix, id))
                  .remove(prefix + "sent_at_" + id)
+                 .remove(prefix + "opt_" + id)
                  .commit();
             boolean answered = todayStr().equals(prefs.getString(Keys.answered(prefix, id), ""));
             // 补写归类（2026-09-28 修）：上轮只改主路径，漏了这条兜底 ——
@@ -7539,6 +7742,21 @@ public final class TGAutoSignCore {
         try {
             if (stateStore.isSignedToday(prefix, id)) return true;   // 今天已签
             if (isInFlightOrPending(prefix, id)) return true;        // 在途 or 已发出待结论
+            // 待确认（bot 未回复 / 回复判不出）：已有归类，等用户处置，**不得再排期**。
+            //
+            // 为什么必须在这里拦（2026-09-30 用户实测「补签一直在补」）：
+            //   promoteSilentToPending 转待确认时会清掉 sent_at_/opt_/retry/retryAt，
+            //   而本函数原先只看「已签 / 在途 / 熔断」—— 三者全为 false，
+            //   于是每轮心跳都重新排一次补签 → 又超时 → 又转待确认，死循环。
+            //   现象：群聊目标（那个群根本没 bot）永远显示「后台 1~5 分钟内补」，
+            //   每次打开 TG 就再发一次。
+            // 注入/群聊目标没有 bot 回复时，永远不会产生结论 —— 再排一百次也一样。
+            if (isPendingConfirm(prefix, id)) return true;
+            // 今日重试已用尽：与 SignLogic.decideSign 的非 manual 分支同义。
+            // 缺这一条时，「忽略今天 / 确认已签」写的 RETRY_LIMIT 拦不住补签通道 ——
+            // sweepDue 会照样排任务（用户实测：点完忽略今天又冒出补签排期）。
+            if (prefs.getInt(kRetry(prefix, id), 0) >= RETRY_LIMIT
+                    && todayStr().equals(prefs.getString(kRetryDay(prefix, id), ""))) return true;
             // 今日熔断：失败达上限 or 命中确定性失败词 → 今天不再排期，明天自动恢复
             return isDailyBlocked(prefix, id) || isPermanentFailedToday(prefix, id);
         } catch (Throwable t) { return false; }
@@ -7765,6 +7983,7 @@ public final class TGAutoSignCore {
     private void ensureTimerPlan(String prefix) {
         try {
             String key = timerPlanKey(prefix);
+        /* 跨天刷新（2026-09-29）：plan key 已随日期自变，如存在即今天；判断也够 */
             if (prefs.contains(key)) return;
             // 支持跨天窗口（如 22:00-02:00）：展开成 [1320, 1560] 的分钟轴，
             // 排完期再折回 0..1439。旧写法遇到跨天直接 return，定时模式整晚不工作。
@@ -7784,6 +8003,12 @@ public final class TGAutoSignCore {
             for (Map<String, Object> m : list) {
                 String id = entryId(m);
                 if (todayStr().equals(prefs.getString(kLast(prefix, id), ""))) continue;   // 今天已签不排
+                if (isFrozen(prefix, id)) continue;                                        // 冻结不排（2026-09-29）
+                /* 2026-09-29 fix: frozen targets must not appear in timer plans.
+                   ensureTimerPlan only filtered "signed today". Frozen targets were still
+                   scheduled → skipScheduling blocked execution but the entry remained →
+                   UI showed "待签" indefinitely. */
+                if (isFrozen(prefix, id)) continue;
                 todo.add(m);
             }
             int nTodo = todo.size();
@@ -7934,6 +8159,17 @@ public final class TGAutoSignCore {
             boolean mb = inMissBackTime();
             if (!win && !mb) return;
             if (pendingSweep != null) return;
+            // 状态归位：把「已发出但久无结论」的转「待确认」。
+            //
+            // 为什么必须放在这里（2026-09-30 用户实测「补签一直在补」）：
+            //   唯一原本的调用点在 scheduleTimerPlan，而它开头就是
+            //   `if (!inWindow()) return;` —— 补签时段（窗口外）**根本走不到**，
+            //   于是群聊/无 bot 的目标永远停在「已发出」，sent_at_ 过期后被当成
+            //   "没发过"重新排期 → 又超时 → 无限补签。
+            //   归位成「待确认」后，skipScheduling 会拦住它，等用户处置。
+            for (int _pa : accountSlots()) {
+                promoteSilentToPendingAll(accountPrefix(_pa));
+            }
             final int _schedAcc = currentAccount();
             // 停用账号不排任务。sendSign 仍会兜住（那里是唯一权威），
             // 但提前返回可以少一轮「排任务→被拒」的空转与日志噪音。
@@ -7946,8 +8182,11 @@ public final class TGAutoSignCore {
             for (Map<String, Object> m : plan) {
                 String id = String.valueOf(m.get("id"));
                 if (todayStr().equals(prefs.getString(kLast(prefix, id), ""))) continue;
+                // 条目已被删除（用户删目标 / 切换配置）却还留在当日时刻表里：
+                // 直接跳过，避免对已不存在的目标排任务（用户实测删除后仍冒出补签排期）。
+                if (findEntryById(id, accountOfPrefix(prefix)) == null) continue;
                 if (skipScheduling(prefix, id)) {
-                    // 三种情况都会走到这：请求在途 / 今天已签 / 已发出待结论（时效内）。
+                    // 各种情况都会走到这：今天已签 / 在途 / 已发出待结论 / 待确认 / 熔断。
                     // 以前这里是三段内联判断，与 sendSign、trySignAll 各写一份 ——
                     // 群签到卡在"发出但无结论"的空档里被反复重发就是漏了其中一段。
                     continue;
@@ -8121,6 +8360,7 @@ public final class TGAutoSignCore {
                 String id = entryId(m);
                 if (isFrozen(prefix, id)) continue;
                 if (isDailyBlocked(prefix, id) || isPermanentFailedToday(prefix, id)) continue;   // 今日熔断
+                if (isPendingConfirm(prefix, id)) continue;   // 待确认：已有归类，等用户处置，别再自动重发
                 if (!today.equals(prefs.getString(kLast(prefix, id), ""))) return true;
             }
         } catch (Throwable ignored) {}
@@ -9893,11 +10133,20 @@ public final class TGAutoSignCore {
      */
     private int accountOfController(Object mc) {
         if (mc == null) return -1;
+        // Try 1: old TG (<12.9) — MessagesController has currentAccount field (BaseController)
         try {
-            Object v = getFieldVal(mc, "currentAccount");   // 声明在父类 BaseController
+            Object v = getFieldVal(mc, "currentAccount");
             if (v instanceof Number) {
                 int a = ((Number) v).intValue();
                 if (a >= 0) return a;
+            }
+        } catch (Throwable t) { /* fall through to Try 2 */ }
+        // Try 2: TG 12.9+ / NagramX — iterate getInstance(i) to match by identity
+        try {
+            int total = activatedAccounts();
+            for (int i = 0; i < Math.min(total, 8); i++) {
+                Object inst = getMessagesController(i);
+                if (inst == mc) return i;
             }
         } catch (Throwable t) { noteSwallowed("accountOfController", t); }
         return -1;
@@ -9911,6 +10160,7 @@ public final class TGAutoSignCore {
      */
     private int accountOfConnection(Object cm) {
         if (cm == null) return -1;
+        // Try 1: old TG — ConnectionsManager has currentAccount field
         try {
             Object v = getFieldVal(cm, "currentAccount");
             if (v instanceof Number) {
@@ -9924,8 +10174,16 @@ public final class TGAutoSignCore {
                     int a = ((Number) v2).intValue();
                     if (a >= 0) return a;
                 }
-            } catch (Throwable t2) { noteSwallowed("accountOfConnection", t2); }
+            } catch (Throwable t2) { /* fall through */ }
         }
+        // Try 2: TG 12.9+ / NagramX — iterate getInstance by identity
+        try {
+            int total = activatedAccounts();
+            for (int i = 0; i < Math.min(total, 8); i++) {
+                Object inst = getConnectionsManager(i);
+                if (inst == cm) return i;
+            }
+        } catch (Throwable t) { noteSwallowed("accountOfConnection", t); }
         return -1;
     }
 
@@ -10006,7 +10264,9 @@ public final class TGAutoSignCore {
                     if (mId > 0) updatePanelLive(peerUid, mId, rm, body, ctrlAcc >= 0 ? ctrlAcc : currentAccount());
                 }
             } catch (Throwable _e32) { noteSwallowed("onUpdateProcessed", _e32); }
-            if (!targetContains(peerUid, ctrlAcc)) return;
+            // ctrlAcc may be -1 on NagramX/TG12.9+; use currentAccount() fallback
+            int _chkAcc = ctrlAcc >= 0 ? ctrlAcc : currentAccount();
+            if (!targetContains(peerUid, _chkAcc)) return;
             Object mtext = getFieldVal(msg, "message");
             if (mtext == null) return;
             final String replyText = String.valueOf(mtext);
@@ -10662,6 +10922,14 @@ public final class TGAutoSignCore {
     private Object getMessagesController(int account) {
         try {
             return staticInvoke(classEx("org.telegram.messenger.MessagesController"), "getInstance", new Class<?>[]{int.class}, new Object[]{account});
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private Object getConnectionsManager(int account) {
+        try {
+            return staticInvoke(classEx("org.telegram.tgnet.ConnectionsManager"), "getInstance", new Class<?>[]{int.class}, new Object[]{account});
         } catch (Throwable t) {
             return null;
         }
