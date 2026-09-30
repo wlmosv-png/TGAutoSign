@@ -33,6 +33,7 @@ public final class SignLogicTest {
         normalizeIdTests();
         cbLabel();
         verdict();
+        navButton();
         extras();
         signGate();
         accountClamp();
@@ -202,6 +203,63 @@ public final class SignLogicTest {
         eq("超长截断", cut, "abcdefghijklmnopqrstuvwx\u2026");
     }
 
+    private static void navButton() {
+        // ══ 用户实测漏掉的三例（2026-09-30 二次修复的起因）══
+        eq("实测·ub_back_menu", SignLogic.navButtonHit("ub_back_menu", "ub_back_menu") != null, true);
+        eq("实测·👤 账户信息", SignLogic.navButtonHit("👤 账户信息", null) != null, true);
+        eq("实测·<<<返回主界面", SignLogic.navButtonHit("<<<返回主界面", null) != null, true);
+        // data 串（网络层只拿得到 data）
+        eq("data 串·back",
+           SignLogic.navButtonHit(null, "menu:back:main") != null, true);
+        eq("data 串·mainmenu",
+           SignLogic.navButtonHit(null, "ub_main_menu") != null, true);
+
+        // 各类别覆盖
+        eq("返回上一步", SignLogic.navButtonHit("返回上一步", null) != null, true);
+        eq("回到首页", SignLogic.navButtonHit("回到首页", null) != null, true);
+        eq("个人中心", SignLogic.navButtonHit("个人中心", null) != null, true);
+        eq("我的账户", SignLogic.navButtonHit("我的账户", null) != null, true);
+        eq("设置", SignLogic.navButtonHit("⚙ 设置", null) != null, true);
+        eq("帮助", SignLogic.navButtonHit("帮助中心", null) != null, true);
+        eq("wallet", SignLogic.navButtonHit("My Wallet", null) != null, true);
+        eq("profile", SignLogic.navButtonHit("Profile", null) != null, true);
+        eq("exit", SignLogic.navButtonHit("Exit", null) != null, true);
+
+        // ══ 防误伤闸门：含签到词的一律不挡 ══
+        eq("闸门·返回签到页不该挡", SignLogic.navButtonHit("返回签到页", null), null);
+        eq("闸门·签到按钮", SignLogic.navButtonHit("签到", null), null);
+        eq("闸门·每日签到", SignLogic.navButtonHit("每日签到", null), null);
+        eq("闸门·check in", SignLogic.navButtonHit("Check in", null), null);
+        eq("闸门·领取奖励", SignLogic.navButtonHit("领取奖励", null), null);
+        eq("闸门·打卡领取", SignLogic.navButtonHit("打卡领取", null), null);
+        eq("闸门·data 含 sign", SignLogic.navButtonHit(null, "bot:sign:daily"), null);
+
+        // 应该被识别为导航按钮（不学习）
+        eq("主菜单", SignLogic.navButtonHit("主菜单") != null, true);
+        eq("← 主菜单", SignLogic.navButtonHit("← 主菜单") != null, true);
+        eq("返回", SignLogic.navButtonHit("返回") != null, true);
+        eq("返回菜单", SignLogic.navButtonHit("返回菜单") != null, true);
+        eq("关闭", SignLogic.navButtonHit("关闭") != null, true);
+        eq("取消", SignLogic.navButtonHit("取消") != null, true);
+        eq("Back", SignLogic.navButtonHit("Back") != null, true);
+        eq("BACK TO MENU", SignLogic.navButtonHit("BACK TO MENU") != null, true);
+        eq("首页", SignLogic.navButtonHit("首页") != null, true);
+        eq("纯箭头", SignLogic.navButtonHit("←") != null, true);
+
+        // 绝不能误伤：这些是真实的签到按钮文案
+        eq("误伤检查·签到", SignLogic.navButtonHit("签到"), null);
+        eq("误伤检查·📅 签到", SignLogic.navButtonHit("📅 签到"), null);
+        eq("误伤检查·每日签到", SignLogic.navButtonHit("每日签到"), null);
+        eq("误伤检查·打卡", SignLogic.navButtonHit("打卡"), null);
+        eq("误伤检查·领取奖励", SignLogic.navButtonHit("领取奖励"), null);
+        eq("误伤检查·点击签到", SignLogic.navButtonHit("点击签到"), null);
+        eq("误伤检查·check in", SignLogic.navButtonHit("Check in"), null);
+        eq("误伤检查·立即签到", SignLogic.navButtonHit("立即签到"), null);
+        eq("误伤检查·去看商城", SignLogic.navButtonHit("去商城逛逛"), null);
+        eq("误伤检查·空", SignLogic.navButtonHit(""), null);
+        eq("误伤检查·null", SignLogic.navButtonHit(null), null);
+    }
+
     private static void verdict() {
         // 成功
         eq("中文成功", SignLogic.verdictOf("签到成功！明天再来", null, null, null), SignLogic.V_SIGNED);
@@ -238,6 +296,31 @@ public final class SignLogicTest {
         Object[] d1 = SignLogic.verdictDetail("您今日已签到", null, null, null);
         eq("detail 判定码", d1[0], SignLogic.V_SIGNED);
         eq("detail 命中词", d1[1], "今日已签");
+
+        // ══ 2026-09-30 新增：否定词优先 ══
+        // 背景：三张表都是子串匹配，中文否定词常加在肯定词前面。
+        // 若先查成功表，「未签到成功」里的「签到成功」会命中 → 把失败判成成功，
+        // 用户以为签上了、实际没签，第二天直接断签。
+        eq("未签到成功 → 失败", SignLogic.verdictOf("未签到成功", null, null, null), SignLogic.V_FAILED);
+        eq("没有签到成功 → 失败", SignLogic.verdictOf("没有签到成功哦", null, null, null), SignLogic.V_FAILED);
+        eq("签到未成功 → 失败", SignLogic.verdictOf("本次签到未成功", null, null, null), SignLogic.V_FAILED);
+        eq("打卡失败 → 失败", SignLogic.verdictOf("打卡失败，明天再来", null, null, null), SignLogic.V_FAILED);
+        eq("not signed → 失败", SignLogic.verdictOf("Sorry, not signed", null, null, null), SignLogic.V_FAILED);
+
+        // ══ 2026-09-30 新增：组合判定 ══
+        // 背景：bot 措辞千奇百怪，穷举词表追不上，实测用户报「签上了却判不出」多属此类。
+        // 规则：同时含「签到类行为词」+「成功类结果词」→ 成功。
+        eq("组合：打卡 +1", SignLogic.verdictOf("✅ 今日打卡 +1", null, null, null), SignLogic.V_SIGNED);
+        eq("组合：签到获得奖励", SignLogic.verdictOf("签到获得 5 积分奖励", null, null, null), SignLogic.V_SIGNED);
+        eq("组合：恭喜签到", SignLogic.verdictOf("恭喜你，签到成功", null, null, null), SignLogic.V_SIGNED);
+        eq("组合：check in success", SignLogic.verdictOf("Check-in success", null, null, null), SignLogic.V_SIGNED);
+        eq("组合：打卡完成", SignLogic.verdictOf("今日打卡已完成", null, null, null), SignLogic.V_SIGNED);
+
+        // 组合判定的边界：只有行为词、或只有结果词，都不算
+        eq("只有「签到」不算成功", SignLogic.verdictOf("请点击下方按钮签到", null, null, null), SignLogic.V_UNKNOWN);
+        eq("只有「成功」不算签到", SignLogic.verdictOf("操作成功", null, null, null) != SignLogic.V_FAILED, true);
+        // 含否定词的组合仍须判失败（否定优先）
+        eq("组合不可覆盖否定", SignLogic.verdictOf("签到未成功，请重试", null, null, null), SignLogic.V_FAILED);
         Object[] d2 = SignLogic.verdictDetail("活动已结束", null, null, null);
         eq("detail 失败码", d2[0], SignLogic.V_FAILED);
         eq("detail 失败命中词", d2[1], "活动已结束");

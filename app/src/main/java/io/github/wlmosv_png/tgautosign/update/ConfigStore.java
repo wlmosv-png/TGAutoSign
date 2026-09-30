@@ -168,7 +168,19 @@ public final class ConfigStore {
     }
 
     private static final String[] ENTRY_HEADS = {"learned_", "kind_", "did_", "data_", "hash_", "msg_id_",
-            "pre_", "loc_", "last_", "retry_", "retry_at_", "retry_day_", "sent_at_"};
+            "pre_", "loc_", "last_", "retry_", "retry_at_", "retry_day_", "sent_at_",
+            // ── 2026-09-30 补：签到历史与连续天数 ──
+            // 实测：换设备导配置后日历只剩一天（导入方只能靠 last_ 回填），
+            // 因为这两类键既不在本表也不以 jmb_ 开头 —— 导出被丢、导入被跳过。
+            // 它们属于「用户数据」（签到史），应当随配置迁移。
+            "sign_days", "streak", "last_sign_date", "fails_",
+            // ── 2026-09-30 补：账号级配置与定时计划 ──
+            // 实测用户反馈「导入后设置全丢」：导出是全量的（getAll），
+            // 但导入只认本表 —— cfg_（窗口/定时/间隔/补签）与 timer_（当日计划）
+            // 都被判成「不认识的老键」丢弃，日志里显示为「忽略 14 个」。
+            // 注意：「清空配置」的 KEEP_ON_CLEAR 明确保留 acc*_cfg_*，
+            // 可见这两个白名单必须保持一致，否则导出→清空→导入就会丢配置。
+            "cfg_", "timer_"};
 
     /** 是不是目标/状态键（含不带 acc 前缀的老格式）；不是的就是设置项 */
     public static boolean isEntryKey(String k) {

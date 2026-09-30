@@ -719,9 +719,80 @@ public final class Lang {
         EN.put("结果未知", "Result unknown");
         EN.put("以下目标发出后未得到明确结论，需要你判断。", "The following targets have been sent but no conclusion received. Please review.");
         EN.put("以下目标来自网络学习，确认后加入自动签到。点「加入」确认，点「忽略」丢弃。", "The following targets are from network learning. Tap 'Add' to confirm, 'Ignore' to discard.");
-        EN.put("指令已发 \u2713", "Command sent ✓");
         EN.put("已发送", "Sent");
-        EN.put("已发指令", "Command sent");
+        EN.put("已发送 \u2713", "Sent \u2713");
+
+        // ── 2026-09-30 补齐（由新增的 check-ui-i18n.py 门禁扫出）──
+        // 其中 4 条是本次日历/日志改造新增，另 5 条为历史遗留。
+        EN.put("(待添加列表为空)\n网络学习命中且「需确认」开启时，这里会出现候选目标。",
+               "(nothing pending)\nCandidates appear here when network learning hits and 'confirm first' is on.");
+        EN.put("(没有需要处理的目标)\n按钮失效、回复判不出、bot 未回复时，这里会出现条目。",
+               "(nothing needs attention)\nEntries appear here when a button expires, a reply is unreadable, or the bot stays silent.");
+        EN.put("仅失败", "Failures only");
+        EN.put("忽略导航按钮", "Ignore navigation buttons");
+        EN.put("今日已全部完成", "All done today");
+        EN.put("「主菜单 / 返回 / 关闭」这类导航按钮不学。只按文案判断，不会误挡签到按钮；关掉即「点什么学什么」",
+               "Skip buttons whose text is clearly navigation (main menu / back / close). Text-based, so real check-in buttons are never blocked. Turn off to learn everything you tap.");
+        EN.put("像是导航按钮（{0}）", "Looks like a navigation button ({0})");
+        EN.put("已开 {0}/4", "{0}/4 on");
+        EN.put("日历样式：", "Calendar style: ");
+        EN.put("未开定时", "timer off");
+        EN.put("用于在「群 / 频道」里发签到指令（不是私聊 bot）。\n\n",
+               "For sending a check-in command inside a group or channel (not a private bot).\n\n");
+        EN.put("选一份备份导入。导入前会显示它的内容，导入后会告诉你目标数有没有变化。\n",
+               "Pick a backup to import. You will see its contents first, and after importing you will be told whether the target count changed.\n");
+        EN.put("（最近没有需要你知道的事情）", "(nothing you need to know recently)");
+
+        // ── 2026-09-30 补齐：日志易懂档 / 日历摘要 / 导入提示 等新增文案 ──
+        // 这些文字本次随日志改造一起加入，此前漏了英文映射，英文设备上会直接显示中文。
+        EN.put("签到成功", "Signed in");
+        EN.put("指令已发出，等机器人回复", "Command sent, waiting for the bot");
+        EN.put("已发出，等机器人回复", "Sent, waiting for the bot");
+        EN.put("按钮已失效，稍后自动重试", "Button expired, will retry later");
+        EN.put("机器人没回复，稍后自动重试", "Bot did not reply, will retry later");
+        EN.put("看不懂机器人的回复，已记下待处理", "Reply not understood, marked for review");
+        EN.put("等待超时，稍后重试", "Timed out, will retry");
+        EN.put("签到失败，详见详细日志", "Sign-in failed — see detailed log");
+        EN.put("补签已执行", "Make-up sign-in done");
+        EN.put("本次跳过", "Skipped this time");
+        EN.put("已冻结，不再签到", "Frozen — no more sign-ins");
+        EN.put("已排除该机器人", "Bot excluded");
+        EN.put("发现新的签到目标", "New target found");
+        EN.put("有新的待添加目标", "New target waiting to be added");
+        EN.put("设置已更新", "Settings updated");
+        EN.put("某目标", "a target");
+
+        // 易懂 / 详细 切换
+        EN.put("易懂", "Plain");
+        EN.put("详细", "Detailed");
+        EN.put("易懂：只显示结果与下一步", "Plain mode: results and next steps only");
+        EN.put("详细：显示原始日志", "Detailed mode: raw log");
+        EN.put("已切到易懂模式：只显示结果与下一步", "Plain mode: results and next steps only");
+        EN.put("已切到详细模式：显示原始日志", "Detailed mode: raw log");
+        EN.put("最近动态", "Recent activity");
+        EN.put("（暂无动态，签到后会在这里显示）", "(nothing yet — activity appears here after a sign-in)");
+        EN.put("查看全部记录 →", "View full log →");
+
+        // 日历摘要
+        EN.put("连续 {0} 天", "{0}-day streak");
+        EN.put("本月 {0} 天", "{0} this month");
+        EN.put("今", "Today");
+
+        // 账号异常告警
+        EN.put("{0} 天", "{0} days");
+        EN.put("账号异常", "Account mismatch");
+
+        // 导入提示
+        EN.put("导入完成。当前账号（{0}）没有目标，但 {1} 有 —— 切过去看看",
+               "Import done. This account ({0}) has no targets, but {1} does — switch over to check.");
+        EN.put("导入完成：写入 {0} 个键", "Import done: {0} keys written");
+
+        // 导入异常与提示
+        EN.put("文件不存在", "File not found");
+        EN.put("配置文件里没有 prefs 段", "Config file has no prefs section");
+        EN.put("配置文件格式不支持（format={0}）", "Unsupported config format (format={0})");
+        EN.put("配置文件里没有可写入的键", "No writable keys in the config file");
+        EN.put("没有可导出的数据（还没有签到目标）", "Nothing to export yet (no targets)");
         EN.put("按钮失效", "Button expired");
         EN.put("回复判不出", "Reply unreadable");
         EN.put("bot 未回复", "Bot did not reply");

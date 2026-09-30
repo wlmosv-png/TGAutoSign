@@ -237,13 +237,22 @@ public final class SignLogic {
             "今日已签", "今天已签", "本日已签", "您已签", "你已签", "已签到", "已经签",
             "已领取", "已参与", "已打卡", "已签过", "重复签到",
             "已完成了签到", "签到已完成", "今天已经签到",
+            // 2026-09-30 扩充：用户反馈「明明签上了却判不出」，多为下列措辞未覆盖
+            "今日已签过", "已签到过", "已经签到", "已经打卡", "已打卡过",
+            "今日签到已完成", "今日打卡完成", "今天已完成", "本日已完成",
+            "您今天已经签到", "你今天已经签到", "今日已领取", "已成功签到",
+            "签到已成功", "打卡已成功",
             // 英文
             "already", "repeated", "again later", "already signed", "already checked",
             "checked in", "signed today"
     };
     public static final String[] OK_WORDS_DEFAULT = {
             "签到成功", "打卡成功", "成功签到", "领取成功", "发送成功", "签到完成", "打卡完成",
-            "签到获得", "获得积分", "success", "claimed", "check-in complete"
+            "签到获得", "获得积分", "success", "claimed", "check-in complete",
+            // 2026-09-30 扩充：常见变体
+            "签到已完成", "打卡已完成", "完成签到", "完成打卡", "签到完毕", "打卡完毕",
+            "已签到成功", "签到奖励", "获得奖励", "领取完成", "已获得", "成功打卡",
+            "恭喜签到", "恭喜打卡", "签到 +1", "打卡 +1", "积分 +"
     };
     public static final String[] FAIL_WORDS_DEFAULT = {
             "签到失败", "打卡失败", "未签到成功", "未成功", "活动已结束", "已过期",
@@ -255,7 +264,11 @@ public final class SignLogic {
             // 这类措辞的共同点是**要求用户先做某事**，属于功能性拒绝而非业务结果。
             "请先加入", "加入频道", "请先绑定", "请先注册", "未绑定", "未注册",
             "请先验证", "无权限", "没有权限", "暂无权限", "不可用", "暂未开放",
-            "please join", "not linked", "not registered", "no permission"
+            "please join", "not linked", "not registered", "no permission",
+            // 2026-09-30 补：否定词 + 签到动词的常见组合。
+            // 单测发现「没有签到成功」会被成功词表的「签到成功」命中 —— 否定必须显式列出。
+            "没有签到成功", "没有成功", "未签到成功", "签到未成功", "打卡未成功",
+            "没有完成签到", "没有打卡成功", "未能签到", "签到未能", "未完成签到"
     };
 
     /**
@@ -269,6 +282,203 @@ public final class SignLogic {
      * 「点了、发出去了、没反应」，且没有任何日志。现在返回 V_UNKNOWN，
      * 调用方必须显式处理（记日志 + 诊断包留痕）。
      */
+    // ════════════════════════════════════════════════════════════════
+    //  导航按钮识别（2026-09-30）
+    //
+    //  背景：2026-09-28 把「按钮性质过滤」整体移除，改为「点什么学什么」——
+    //    起因是那套启发式（data 前缀黑名单、随机 hex、文案黑名单）**猜**得太凶，
+    //    把真正的签到按钮也挡掉了，用户界面上还毫无提示。
+    //
+    //  但完全放开后暴露了新问题：用户点签到按钮后，bot 回复里往往同时挂着
+    //    「← 主菜单」「去商城逛逛」这类**导航按钮**，点签到的那一下会把它们一并学走，
+    //    目标列表迅速被噪音淹没（用户实测反馈）。
+    //
+    //  所以现在恢复的**不是**那套猜测式过滤，而是只针对「确定的导航语义」：
+    //    · 判据是字面文案的语义，不依赖 data 形态、不依赖 bot 类型
+    //    · 命中即不学，且日志会写明原因（不静默）
+    //    · 用户可在「设置 → 学习行为」关闭该过滤（默认开）
+    //    · **手动添加不受限制** —— 手动本身就是明确意图
+    //
+    //  设计原则：宁可漏挡（多学一个导航按钮）也不误挡（漏掉真签到按钮）。
+    //    因此只收录「几乎不可能出现在签到按钮上」的词。
+    // ════════════════════════════════════════════════════════════════
+
+
+    /** 去掉常见装饰符与表情，便于比对（← → « » ⬅ ➡ 🔙 等） */
+    private static String stripDecor(String s) {
+        if (s == null) return "";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            // 保留字母数字与 CJK；丢弃符号/表情
+            if (Character.isLetterOrDigit(ch) || (ch >= '\u4e00' && ch <= '\u9fff')) {
+                sb.append(Character.toLowerCase(ch));
+            } else if (ch == ' ') {
+                sb.append(' ');
+            }
+        }
+        String r = sb.toString().trim();
+        // 折叠连续空格
+        return r.replaceAll("\\s+", " ");
+    }
+
+    /**
+     * 这个按钮文案是否属于「确定的导航按钮」。
+     *
+     * @return 命中的词（用于日志），不是导航按钮则返回 null
+     */
+    /**
+     * 这个按钮是「明确的后退 / 端点类按钮」吗？
+     *
+     * 设计（2026-09-30 二次重做）：
+     *   第一版只列了十来个具体词，实测立刻漏掉三种：
+     *     · `<<<返回主界面`（只有「返回菜单」，没有「返回主界面」）
+     *     · `👤 账户信息`（根本没想到要收录）
+     *     · `ub_back_menu`（这是 data 串，不是文案，压根没比对）
+     *   穷举词表的通病：bot 的说法无穷，列不完。
+     *
+     *   现在改为**按语义类别匹配**，并用「必须命中类别词」+「不得含签到词」双重约束，
+     *   既扩大覆盖，又把误伤压到零。
+     *
+     * @param text 按钮文案（可含 emoji / 箭头装饰）
+     * @param data 回调按钮的 data 原文（可为 null）；网络层只能拿到这个
+     * @return 命中的类别说明（用于日志），不是这类按钮返回 null
+     */
+    public static String navButtonHit(String text, String data) {
+        String raw = text == null ? "" : text.trim();
+        String dat = data == null ? "" : data.trim();
+        if (raw.length() == 0 && dat.length() == 0) return null;
+
+        // 归一化：去 emoji / 箭头 / 标点，转小写；data 另做下划线转空格便于词匹配
+        String bare = stripDecor(raw);
+        String dbare = stripDecor(dat.replace('_', ' ').replace(':', ' '));
+        String hayText = raw.toLowerCase();
+        String hayBare = bare;                       // 已是小写（stripDecor 内已转）
+        String hayData = dbare;
+
+        // ══ 硬性否决：含任何「签到类」词的，一律不挡 ══
+        // 这是防误伤的最后一道闸。哪怕它同时含「返回」也不挡
+        //（例如「返回签到页」这种真·签到入口）。
+        for (String w : SIGN_WORDS) {
+            if (hayBare.contains(w) || hayText.contains(w) || hayData.contains(w)) return null;
+        }
+
+        // ══ 类别一：后退 / 返回（任何"往回走"的表达）══
+        for (String w : BACK_WORDS) {
+            if (hayBare.contains(w) || hayText.contains(w) || hayData.contains(w)) {
+                return "返回类「" + w + "」";
+            }
+        }
+
+        // ══ 类别二：主菜单 / 主界面 / 首页 ══
+        for (String w : MENU_WORDS) {
+            if (hayBare.contains(w) || hayText.contains(w) || hayData.contains(w)) {
+                return "菜单类「" + w + "」";
+            }
+        }
+
+        // ══ 类别三：关闭 / 取消 / 退出 ══
+        for (String w : CLOSE_WORDS) {
+            if (hayBare.contains(w) || hayText.contains(w) || hayData.contains(w)) {
+                return "关闭类「" + w + "」";
+            }
+        }
+
+        // ══ 类别四：账户 / 个人中心 / 设置（非签到功能入口）══
+        for (String w : ACCOUNT_WORDS) {
+            if (hayBare.contains(w) || hayText.contains(w) || hayData.contains(w)) {
+                return "账户类「" + w + "」";
+            }
+        }
+
+        // ══ 类别五：纯符号按钮（只有箭头/省略号，无文字）══
+        if (raw.length() > 0 && bare.length() == 0) return "纯符号";
+
+        return null;
+    }
+
+    /** 兼容旧签名（只需文案时） */
+    public static String navButtonHit(String text) {
+        return navButtonHit(text, null);
+    }
+
+    /**
+     * 签到类词 —— 出现这些的一律**不**判为导航按钮（防误伤）。
+     * 宁可漏挡一个导航按钮，也不能挡掉真签到入口。
+     */
+    private static final String[] SIGN_WORDS = {
+            "签到", "打卡", "签领", "领取", "签到", "每日", "签",
+            "check", "sign", "clock", "daily", "reward", "claim", "bonus",
+    };
+
+    /** 后退类：任何「往回走」的表达 */
+    private static final String[] BACK_WORDS = {
+            // 中文
+            "返回", "后退", "回退", "上一页", "上一步", "回上", "回到上",
+            // 英文（data 串里最常见）
+            "back", "goback", "go back", "previous", "prev", "return",
+    };
+
+    /** 菜单/首页类 */
+    private static final String[] MENU_WORDS = {
+            "主菜单", "主界面", "主页", "首页", "菜单", "初始", "起始",
+            "mainmenu", "main menu", "home", "start", "main",
+    };
+
+    /** 关闭/取消类 */
+    private static final String[] CLOSE_WORDS = {
+            "关闭", "取消", "退出", "我知道了", "知道了",
+            "close", "cancel", "exit", "quit", "dismiss",
+    };
+
+    /**
+     * 账户/个人中心/设置类。
+     *
+     * 这类不是「导航」，而是**非签到的功能入口**——用户不需要每天去点它。
+     * 纳入的理由：截图实测「👤 账户信息」紧挨签到按钮，很容易被顺手点掉；
+     *   而它的语义与签到完全无关，挡掉不会影响任何签到流程。
+     */
+    private static final String[] ACCOUNT_WORDS = {
+            "账户信息", "账户管理", "账号信息", "个人信息", "个人中心", "我的账户", "我的账号",
+            "钱包", "余额", "充值", "设置", "关于我们", "关于", "帮助", "客服",
+            "account", "profile", "wallet", "balance", "settings", "setting",
+            "help", "about", "support", "contact",
+    };
+
+
+    /**
+     * 按关键词判定 bot 回复。
+     *
+     * @param reply    bot 回复原文
+     * @param dup/ok/fail 关键词表（可为 null 表示用默认）
+     * @return V_SIGNED / V_FAILED / V_UNKNOWN
+     *
+     * 抽成纯函数的意义：以前三张表都不命中时**静默返回**，用户看到的现象是
+     * 「点了、发出去了、没反应」，且没有任何日志。现在返回 V_UNKNOWN，
+     * 调用方必须显式处理（记日志 + 诊断包留痕）。
+     */
+    // ════════════════════════════════════════════════════════════════
+    //  导航按钮识别（2026-09-30）
+    //
+    //  背景：2026-09-28 把「按钮性质过滤」整体移除，改为「点什么学什么」——
+    //    起因是那套启发式（data 前缀黑名单、随机 hex、文案黑名单）**猜**得太凶，
+    //    把真正的签到按钮也挡掉了，用户界面上还毫无提示。
+    //
+    //  但完全放开后暴露了新问题：用户点签到按钮后，bot 回复里往往同时挂着
+    //    「← 主菜单」「去商城逛逛」这类**导航按钮**，点签到的那一下会把它们一并学走，
+    //    目标列表迅速被噪音淹没（用户实测反馈）。
+    //
+    //  所以现在恢复的**不是**那套猜测式过滤，而是只针对「确定的导航语义」：
+    //    · 判据是字面文案的语义，不依赖 data 形态、不依赖 bot 类型
+    //    · 命中即不学，且日志会写明原因（不静默）
+    //    · 用户可在「设置 → 学习行为」关闭该过滤（默认开）
+    //    · **手动添加不受限制** —— 手动本身就是明确意图
+    //
+    //  设计原则：宁可漏挡（多学一个导航按钮）也不误挡（漏掉真签到按钮）。
+    //    因此只收录「几乎不可能出现在签到按钮上」的词。
+    // ════════════════════════════════════════════════════════════════
+
+
     public static int verdictOf(String reply, String[] dup, String[] ok, String[] fail) {
         return (Integer) verdictDetail(reply, dup, ok, fail)[0];
     }
@@ -281,13 +491,61 @@ public final class SignLogic {
     public static Object[] verdictDetail(String reply, String[] dup, String[] ok, String[] fail) {
         if (reply == null || reply.length() == 0) return new Object[]{Integer.valueOf(V_UNKNOWN), ""};
         String lower = reply.toLowerCase();
-        String m = matched(lower, dup != null ? dup : DUP_WORDS_DEFAULT);
+
+        // ── 判定顺序（2026-09-30 调整）──
+        // 必须是「失败 → 永久失败 → 重复 → 成功」，不能是「重复 → 成功 → 失败」。
+        //
+        // 原因：这三张表都是**子串匹配**，而中文里否定词常加在肯定词前面：
+        //   「未签到成功」「没有签到成功」「签到未成功」
+        // 若先查成功表，`签到成功` 会命中，把明确的失败判成成功 —— 与用户利益相反
+        // （用户以为签上了，实际没有，第二天直接断签）。
+        //
+        // 失败优先不会反过来误伤：成功语里几乎不会内嵌失败词。
+        String m = matched(lower, fail != null ? fail : FAIL_WORDS_DEFAULT);
+        if (m != null) return new Object[]{Integer.valueOf(V_FAILED), m};
+        m = matched(lower, PERMANENT_FAIL_WORDS);
+        if (m != null) return new Object[]{Integer.valueOf(V_FAILED), m};
+        m = matched(lower, dup != null ? dup : DUP_WORDS_DEFAULT);
         if (m != null) return new Object[]{Integer.valueOf(V_SIGNED), m};
         m = matched(lower, ok != null ? ok : OK_WORDS_DEFAULT);
         if (m != null) return new Object[]{Integer.valueOf(V_SIGNED), m};
-        m = matched(lower, fail != null ? fail : FAIL_WORDS_DEFAULT);
-        if (m != null) return new Object[]{Integer.valueOf(V_FAILED), m};
+        // ── 组合判定（兜底）：词表没覆盖，但语义上明显是成功 ──
+        m = comboSuccess(lower);
+        if (m != null) return new Object[]{Integer.valueOf(V_SIGNED), m};
         return new Object[]{Integer.valueOf(V_UNKNOWN), ""};
+    }
+
+    /** 签到行为词（与「结果词」组合时才生效） */
+    private static final String[] COMBO_ACT = {
+            "签到", "打卡", "签领", "check in", "check-in", "checked in", "sign in", "sign-in"
+    };
+
+    /** 成功结果词 */
+    private static final String[] COMBO_OK = {
+            "成功", "完成", "已", "获得", "领取", "恭喜", "奖励", "积分", "+1",
+            "success", "complete", "done", "earned", "claimed", "received"
+    };
+
+    /**
+     * 组合判定：句子里同时出现「签到类行为词」与「成功类结果词」即判成功。
+     *
+     * 为什么需要：bot 的措辞千奇百怪（「✅ 今日打卡 +1」「签到完成，获得 5 积分」
+     * 「恭喜，今日签到成功」），穷举词表永远追不上。
+     * 实测用户报「明明签上了却显示回复判不出」，多数属于此类。
+     *
+     * 为什么安全：① fail 已在前面先判过，含否定词的根本到不了这里；
+     *            ② 必须两类词同时出现，单个「签到」不构成结果；
+     *            ③ 只是把结果从「判不出」提升为「成功」，
+     *               而「判不出」本身也不会写「今日已签」，不会造成错误记账。
+     *
+     * @return 命中的组合描述（如「签到+成功」），未命中返回 null
+     */
+    private static String comboSuccess(String lower) {
+        String act = matched(lower, COMBO_ACT);
+        if (act == null) return null;
+        String okw = matched(lower, COMBO_OK);
+        if (okw == null) return null;
+        return act + "+" + okw;
     }
 
     private static boolean hit(String lower, String[] words) {

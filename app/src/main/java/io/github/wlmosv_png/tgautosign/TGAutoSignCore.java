@@ -72,6 +72,9 @@ public final class TGAutoSignCore {
     private String LEARN_KEYWORDS = DEF_KEYWORDS;
     /** 排除规则：一行一条，命中即不学习。支持正则（用 /.../ 包裹），否则按子串匹配。 */
     private String LEARN_EXCLUDE = "";
+
+    /** 忽略导航按钮（主菜单/返回/关闭…）：默认开，用户可关。 */
+    private boolean LEARN_SKIP_NAV = true;
     /** 排除的 bot ID 集合（整只 bot 不学习、不签到） */
     private final java.util.Set<Long> LEARN_BLOCKED_DIDS = new java.util.HashSet<Long>();
 
@@ -193,6 +196,7 @@ public final class TGAutoSignCore {
     private String WINDOW = "";
     private boolean TIMER_ENABLED = false;       // 定时签到模式：开=只在窗口内按当日时刻表逐个签 / 关=全天自动补签
     private int THEME_MODE = 0;                  // 主题模式：0=自动（跟宿主/系统）1=始终日间 2=始终夜间
+    private int CAL_STYLE = 0;                   // 日历格样式：0=方角斜纹 1=圆角发光 2=硬方波 3=切角 4=圆点 5=柱条
     private boolean NOTIFY_ON = true;            // 签到结果通知
     private boolean NOTIFY_FAIL_ONLY = false;    // 只通知失败
     private boolean NOTIFY_ALL_ACCOUNTS = false; // 汇总时包含其它账号
@@ -273,16 +277,52 @@ public final class TGAutoSignCore {
             synchronized (logBuffer) { if (logBuffer.size() > 0) { int f = Math.max(0, logBuffer.size() - 4); for (int i = f; i < logBuffer.size(); i++) recent.add(logBuffer.get(i)); } }
             if (recent.isEmpty()) {
                 TextView e1 = new TextView(act2); e1.setTextSize(Theme.TS_CAPTION); e1.setTypeface(Theme.text()); e1.setTextColor(Theme.termFaint(act2));
-                e1.setText(Lang.tr("$ (暂无日志消息，稍后自动出现)")); body.addView(e1);
+                e1.setText(Lang.tr("（暂无动态，签到后会在这里显示）")); body.addView(e1);
                 return;
             }
+            int shown = 0;
             for (LogLine l : recent) {
+                // 易懂档：翻译成一句话；内部机制条跳过，不留空行
+                String text;
+                String icName = null;
+                String sem = null;
+                if (logPlain) {
+                    String[] pp = plainLogParts(l.msg);
+                    if (pp == null) continue;
+                    icName = pp[0];
+                    text = pp[1];
+                    sem = pp.length > 2 ? pp[2] : "info";
+                } else {
+                    text = l.msg;
+                }
                 TextView lv2 = new TextView(act2); lv2.setTextSize(Theme.TS_CAPTION); lv2.setTypeface(android.graphics.Typeface.MONOSPACE);
-                String lineText = new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(new java.util.Date(l.ts)) + "  " + l.msg;
-                if (lineText.length() > 46) lineText = lineText.substring(0, 46) + "...";
-                lv2.setText("$ " + lineText);
-                lv2.setTextColor(l.lv == LV_ERR ? Theme.termPink(act2) : l.lv == LV_OK ? Theme.termGreen(act2) : l.lv == LV_WARN ? Theme.termAmber(act2) : Theme.termMuted(act2));
+                String lineText = new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(new java.util.Date(l.ts)) + "  " + text;
+                if (lineText.length() > 52) lineText = lineText.substring(0, 52) + "...";
+                lv2.setText(lineText);
+                int lcol = (sem != null)
+                        ? plainColor(sem, act2)
+                        : (l.lv == LV_ERR ? Theme.termPink(act2)
+                           : l.lv == LV_OK ? Theme.termGreen(act2)
+                           : l.lv == LV_WARN ? Theme.termAmber(act2)
+                           : Theme.termMuted(act2));
+                lv2.setTextColor(lcol);
+                if (icName != null) {
+                    android.graphics.drawable.Drawable ic = Icons.d(act2, icName, 11f, lcol);
+                    if (ic != null) {
+                        int isz = Theme.dp(act2, 11);
+                        ic.setBounds(0, 0, isz, isz);
+                        lv2.setCompoundDrawables(ic, null, null, null);
+                        lv2.setCompoundDrawablePadding(Theme.dp(act2, 4));
+                    }
+                }
                 body.addView(lv2);
+                if (++shown >= 4) break;
+            }
+            if (shown == 0) {
+                TextView e2 = new TextView(act2); e2.setTextSize(Theme.TS_CAPTION); e2.setTypeface(Theme.text());
+                e2.setTextColor(Theme.termFaint(act2));
+                e2.setText(Lang.tr("（最近没有需要你知道的事情）"));
+                body.addView(e2);
             }
         } catch (Throwable ignored) {}
     }
@@ -494,8 +534,23 @@ public final class TGAutoSignCore {
 
     /** 状态徽章：开=绿实心点，关=灰空心点（主界面状态卡片用） */
     private TextView badge(final Activity act, String label, boolean on) {
+        return badge(act, label, on, null);
+    }
+
+    /** 带图标的徽章：图标让标签含义一眼可辨（徽章文字很短，光看字容易不知所云）。 */
+    private TextView badge(final Activity act, String label, boolean on, String icon) {
         TextView b = new TextView(act);
         b.setText((on ? "[ON]  " : "[OFF] ") + Lang.trShort(label));
+        if (icon != null) {
+            android.graphics.drawable.Drawable ic = Icons.d(act, icon, 11f,
+                    on ? Theme.termGreen(act) : Theme.termMuted(act));
+            if (ic != null) {
+                int sz = dp(11);
+                ic.setBounds(0, 0, sz, sz);
+                b.setCompoundDrawables(ic, null, null, null);
+                b.setCompoundDrawablePadding(dp(3));
+            }
+        }
         if (Lang.isEnglish()) { b.setSingleLine(false); b.setMaxLines(2); b.setEllipsize(null); }
         b.setTextSize(Theme.TS_CAPTION);
         b.setTypeface(android.graphics.Typeface.MONOSPACE);
@@ -513,17 +568,9 @@ public final class TGAutoSignCore {
         android.widget.LinearLayout.LayoutParams lp = new android.widget.LinearLayout.LayoutParams(-2, -2);
         lp.rightMargin = dp(6);
         b.setLayoutParams(lp);
-        if (on) {
-            final android.animation.ValueAnimator ba = android.animation.ValueAnimator.ofFloat(0.6f, 1f);
-            ba.setDuration(2400); ba.setRepeatCount(android.animation.ValueAnimator.INFINITE); ba.setRepeatMode(android.animation.ValueAnimator.REVERSE);
-            ba.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
-                @Override public void onAnimationUpdate(android.animation.ValueAnimator a) { b.setAlpha(((Float) a.getAnimatedValue()).floatValue()); }
-            });
-            b.addOnAttachStateChangeListener(new android.view.View.OnAttachStateChangeListener() {
-                @Override public void onViewAttachedToWindow(android.view.View vv) { ba.start(); }
-                @Override public void onViewDetachedFromWindow(android.view.View vv) { ba.cancel(); b.setAlpha(1f); }
-            });
-        }
+        // 2026-09-30：取消常驻呼吸动画。
+        // 原为 0.6↔1.0 无限闪烁，一个屏幕上同时有几个徽章在闪，
+        // 既分散注意力又让人觉得"有什么东西出错了"。开关状态用颜色表达已足够。
         return b;
     }
 
@@ -811,6 +858,7 @@ public final class TGAutoSignCore {
         try {
             if (prefs.contains("jmb_keywords")) LEARN_KEYWORDS = prefs.getString("jmb_keywords", DEF_KEYWORDS);
             if (prefs.contains(kExclude())) LEARN_EXCLUDE = prefs.getString(kExclude(), "");
+            LEARN_SKIP_NAV = prefs.getBoolean("jmb_skip_nav", true);
             LEARN_BLOCKED_DIDS.clear();
             try {
                 String bd = prefs.getString(kBlockedDids(), "");
@@ -829,6 +877,7 @@ public final class TGAutoSignCore {
             GAP_MIN = cfgInt("gap", 0);
             MISS_BACK = cfgBool("missback", false);
             if (prefs.contains("jmb_theme")) THEME_MODE = prefs.getInt("jmb_theme", 0);
+            if (prefs.contains("jmb_cal_style")) CAL_STYLE = prefs.getInt("jmb_cal_style", 0);
             if (prefs.contains("jmb_lang")) { try { io.github.wlmosv_png.tgautosign.Lang.MODE = prefs.getInt("jmb_lang", 0); } catch (Throwable ignored) {} }
             if (prefs.contains("jmb_notify")) NOTIFY_ON = prefs.getBoolean("jmb_notify", true);
             if (prefs.contains("jmb_notify_fail_only")) NOTIFY_FAIL_ONLY = prefs.getBoolean("jmb_notify_fail_only", false);
@@ -1731,7 +1780,9 @@ public final class TGAutoSignCore {
                     || m.contains("重试") || m.contains("退避") || m.contains("限流")
                     || m.contains("跳过发送") || m.contains("跳过排期") || m.contains("跳过本次")
                     || m.contains("未找到") || m.contains("警告") || m.contains("没有可签")
-                    || m.contains("账号实况") || m.contains("账号跟随") || m.contains("越过")) return LV_WARN;
+                    || m.contains("账号跟随") || m.contains("越过")) return LV_WARN;
+                    // 注：2026-09-30 起「账号实况」不再强制升为警告 ——
+                    //   它已改为「正常走 logd、异常才 logw」，这里再强升会把调试条也染成黄色。
             // ③ 用户可感知的成功动作
             if (m.contains("成功") || m.contains("已添加") || m.contains("已保存") || m.contains("已绑定")
                     || m.contains("已删除") || m.contains("已导入") || m.contains("已导出")
@@ -2031,7 +2082,7 @@ public final class TGAutoSignCore {
      */
     private static final Set<String> KEEP_ON_CLEAR = new HashSet<String>(Arrays.asList(
             "jmb_keywords", "jmb_retry", "jmb_wake_cmd", "jmb_alfilter", "jmb_autolearn",
-            "jmb_autolearn_net", "jmb_autolearn_net_confirm", "jmb_tut_seen", "jmb_prompt_day",
+            "jmb_autolearn_net", "jmb_autolearn_net_confirm", "jmb_skip_nav", "jmb_tut_seen", "jmb_prompt_day",
             "jmb_theme", "jmb_lang", "jmb_notify", "jmb_notify_fail_only", "jmb_notify_all_acc",
             "jmb_sort", "jmb_fx", "jmb_judge", "jmb_judge_custom", "jmb_loose",
             "jmb_ok_words", "jmb_fail_words", "jmb_blocked_dids", "jmb_exclude", "jmb_config_ts",
@@ -4502,10 +4553,21 @@ public final class TGAutoSignCore {
             try {
                 int cur = prefs.getInt(kRetry(prefix, id), 0);
                 if (cur > 0 && !todayStr().equals(prefs.getString(kRetryDay(prefix, id), ""))) cur = 0;
+                // ── 日志降噪（2026-09-30）──
+                // 起因：实测用户日志被同一条原因刷屏 30+ 行 ——
+                //   11 个目标 × 最多 5 次退避 = 55 行「取不到这个 bot 的会话数据」，
+                //   把真正有用的信息淹没，用户以为模块坏了。
+                // 做法：同一「目标 + 原因」当天只记前 2 次，之后只累计不落日志；
+                //   达到上限时才再记一条总结，保留排障所需的全部关键事实。
+                final String dkey = "softfail_n_" + prefix + "_" + id;
+                int seen = prefs.getInt(dkey, 0);
+                if (seen > 0 && !todayStr().equals(prefs.getString(dkey + "_d", ""))) seen = 0;
+
                 if (cur >= RETRY_LIMIT) {   // 已达上限：不再排重试，明确标注今日放弃
                     prefs.edit().putLong(kRetryAt(prefix, id), 0L).apply();
                     logw(why + "：" + targetTitle(entryDid(entry)) + " · " + accountLabel(account)
-                            + " · 今日已试 " + cur + " 次达上限，今日不再重试");
+                            + " · 今日已试 " + cur + " 次达上限，今日不再重试"
+                            + (seen > 2 ? "（同类记录已折叠 " + (seen - 2) + " 条）" : ""));
                     return;
                 }
                 long wait = backoffDelay(cur);
@@ -4513,8 +4575,14 @@ public final class TGAutoSignCore {
                         .putString(kRetryDay(prefix, id), todayStr())
                         .putLong(kRetryAt(prefix, id), System.currentTimeMillis() + wait)
                         .apply();
-                logw(why + "：" + targetTitle(entryDid(entry)) + " · " + accountLabel(account)
-                        + " · 第 " + (cur + 1) + "/" + RETRY_LIMIT + " 次，" + (wait / 60000L) + " 分钟后再试");
+                prefs.edit().putInt(dkey, seen + 1).putString(dkey + "_d", todayStr()).apply();
+                if (seen < 2) {
+                    logw(why + "：" + targetTitle(entryDid(entry)) + " · " + accountLabel(account)
+                            + " · 第 " + (cur + 1) + "/" + RETRY_LIMIT + " 次，" + (wait / 60000L) + " 分钟后再试");
+                } else {
+                    logd("（已折叠）" + why + " · " + targetTitle(entryDid(entry))
+                            + " · 第 " + (cur + 1) + "/" + RETRY_LIMIT + " 次");
+                }
             } catch (Throwable t) { logd("记录失败状态异常: " + t); }
         }
 
@@ -4680,16 +4748,15 @@ public final class TGAutoSignCore {
     private String statusOf(String prefix, String id, String today) {
         String lastSign = prefs.getString(kLast(prefix, id), "");
         if (today.equals(lastSign)) {
-            // ── 诚实标注（2026-09-28）──
-            // 文本指令目标（如 /checkin）的「已签」来自"发出即已签"：
-            // sendText 没有回执通道，永远等不到结论，不这样处理就会每轮巡检重发
-            //（实测曾 5~15 秒一发）。但它与按钮目标的"判定成功"性质不同，
-            // 混在一起显示绿色会让用户分不清哪个真签上了、哪个只是指令发出去了。
-            // 所以文本目标单独用「已发指令」，颜色走中性色。
-            try {
-                Map<String, Object> _em = findEntryById(id, accountOfPrefix(prefix));
-                if (_em != null && KIND_TEXT.equals(entryKind(_em))) return Lang.tr("指令已发 \u2713");
-            } catch (Throwable ignored) {}
+            // ── 文案统一（2026-09-30）──
+            // 历史轨迹：
+            //   早期文本指令走"发出即已签"，与按钮目标性质不同，故单独标注「指令已发 ✓」；
+            //   2026-09-28 修复后发现文本指令**有**回复判定通道（见 4110 行附近的实测记录），
+            //     与按钮目标流程完全一致：收到回复 → 判定 → 成功才写 last_，超时归「bot 未回复」。
+            //   即：能进入本分支（lastSign == today）就说明**确实判定成功了**。
+            // 结论：再区分「已发送」已无意义 —— 那会让用户以为"只是发出去了、没签上"，
+            //       而事实是已经签上了。统一显示「已签」，判定依据的差异属于实现细节，
+            //       不应外泄到状态文案里让用户困惑。
             return Lang.tr("已签");
         }
         // ── 归类驱动（2026-09-28）──
@@ -5211,11 +5278,21 @@ public final class TGAutoSignCore {
         else if (status != null && (status.contains("bot 未回复") || status.contains("判定已关") || status.contains("放弃"))) stCol = Theme.termMuted(c);
         st.setTextColor(stCol);
         st.setText(Lang.tr(status));
-        // 状态前导图标：已签=勾、待签=钟、退避/重试=警告
+        // ── 状态前导图标（2026-09-30 重做）──
+        // 语义分工：
+        //   回调按钮签到 = 实心闪电，做「能量脉冲」——已签是瞬时完成的动作
+        //   文本指令签到 = 进度环，从 0 扫到满——指令发出后 bot 结论不可知，
+        //                  这个状态本质是「进行中」，转动填充最贴切
+        //   其余状态沿用原有静态图标
+        boolean _cbKind = false;
+        try { _cbKind = entry != null && KIND_CB.equals(entryKind(entry)); } catch (Throwable _eK) {}
+        final boolean isCallbackKind = _cbKind;
+
+        final boolean stDone = status != null
+                && (status.contains("已签") || status.contains("已发送") || status.contains("指令已发"));
         String stIcon = null;
         if (status != null) {
-            if (status.contains("已发送")) stIcon = "rocket";  // 绿色已在 stCol 设好
-            else if (status.contains("已签") || status.contains("指令已发")) stIcon = "check";
+            if (stDone) stIcon = null;                       // 完成态走下面专门的绘制
             else if (status.contains("按钮失效") || status.contains("回复判不出")
                      || status.contains("结果未知")) stIcon = "warn";
             else if (status.contains("bot 未回复") || status.contains("判定已关")) stIcon = "info";
@@ -5231,21 +5308,88 @@ public final class TGAutoSignCore {
                 st.setCompoundDrawablePadding(Theme.dp(c, 4));
             }
         }
-        /* 已签图标呼吸闪烁（2026-09-29）：冻结/排除行跳过（已双重虚化）*/
+
+        /* 完成态动态图标：冻结/排除行跳过（已双重虚化，动画纯属干扰） */
         boolean _frozenRow = false;
         try { _frozenRow = isFrozen(accountPrefix(), id) || isBotBlocked(did); } catch (Throwable _eFr) {}
-        if (!_frozenRow && status != null && (status.contains("已签") || status.contains("已发送") || status.contains("指令已发"))) {
-            st.setAlpha(1.0f);
-            android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(0.55f, 1.0f);
-            va.setDuration(1100);
-            va.setRepeatCount(android.animation.ValueAnimator.INFINITE);
-            va.setRepeatMode(android.animation.ValueAnimator.REVERSE);
-            va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
-                @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
-                    st.setAlpha((Float) a.getAnimatedValue());
+
+        if (!_frozenRow && stDone) {
+            final int ISZ = 14;                              // 略大，动效才看得清
+            int ssz = Theme.dp(c, ISZ);
+            final int baseCol = stCol;
+            final int hotCol  = 0xFFFFFFFF;                  // 白热峰值
+
+            if (isCallbackKind) {
+                // ══ 回调：闪电 · 能量爆发 ══
+                // 三层同时动作，制造"放电炸开"的观感：
+                //   ① 闪电本体白热化：绿 → 白 → 绿
+                //   ② 本体缩放：0.82 → 1.22，快起慢落
+                //   ③ 冲击波：一个环从中心炸开并淡出（用 RippleDrawable 的一环表达）
+                final android.graphics.drawable.Drawable bolt = Icons.d(c, "boltfill", ISZ, baseCol, 1.0f);
+                final Icons.RippleDrawable wave = Icons.ripple(c, ISZ + 6, hotCol, 1.1f);
+                if (bolt != null) {
+                    bolt.setBounds(0, 0, ssz, ssz);
+                    st.setCompoundDrawables(bolt, null, null, null);
+                    st.setCompoundDrawablePadding(Theme.dp(c, 5));
+
+                    android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(0f, 1f);
+                    va.setDuration(1000);
+                    va.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+                    va.setRepeatMode(android.animation.ValueAnimator.RESTART);
+                    va.setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f));
+                    va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                        @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                            float f = (Float) a.getAnimatedValue();
+
+                            // ── ① 白热化：快速冲到白，再缓慢退回本色 ──
+                            float heat = f < 0.22f
+                                    ? (f / 0.22f)                       // 0 → 1，猛冲
+                                    : (1f - (f - 0.22f) / 0.78f);       // 1 → 0，缓退
+                            if (heat < 0f) heat = 0f;
+                            int col = blendArgb(baseCol, hotCol, heat);
+                            bolt.setColorFilter(new android.graphics.PorterDuffColorFilter(
+                                    col, android.graphics.PorterDuff.Mode.SRC_IN));
+
+                            // ── ② 缩放：炸开瞬间最大 ──
+                            float k = 0.86f + 0.40f * heat;
+                            int hw = (int) (ssz * k / 2f);
+                            int cx = ssz / 2, cy = ssz / 2;
+                            bolt.setBounds(cx - hw, cy - hw, cx + hw, cy + hw);
+                            bolt.setAlpha(255);
+
+                            // ── ③ 冲击波 ──
+                            if (wave != null) {
+                                wave.setProgress(f);
+                                int wsz = Theme.dp(c, ISZ + 6);
+                                wave.setBounds(0, 0, wsz, wsz);
+                            }
+                        }
+                    });
+                    va.start();
                 }
-            });
-            va.start();
+            } else {
+                // ══ 指令：环形涟漪（信号发出 → 收回）══
+                // 不用转圈：匀速扫满 360° 是机械的进度条语义。
+                // 涟漪更贴"指令发出、bot 回应"这个一来一回的过程。
+                final Icons.RippleDrawable rp = Icons.ripple(c, ISZ, baseCol, 1.3f);
+                if (rp != null) {
+                    rp.setBounds(0, 0, ssz, ssz);
+                    st.setCompoundDrawables(rp, null, null, null);
+                    st.setCompoundDrawablePadding(Theme.dp(c, 5));
+
+                    android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(0f, 1f);
+                    va.setDuration(1900);                     // 比原先的转圈慢得多
+                    va.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+                    va.setRepeatMode(android.animation.ValueAnimator.RESTART);
+                    va.setInterpolator(new android.view.animation.LinearInterpolator());
+                    va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                        @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                            rp.setProgress((Float) a.getAnimatedValue());
+                        }
+                    });
+                    va.start();
+                }
+            }
         }
         t2r.addView(st, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         t2r.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,8), 1));
@@ -5403,7 +5547,21 @@ public final class TGAutoSignCore {
                 } catch (Throwable ignored) {}
                 _sb.append("  acc").append(i).append("目标=").append(_c);
             }
-            logw(_sb.toString());
+            // ── 正常静默，异常才告警（2026-09-30 方案 A）──
+            // 改前：每次打开 /jmb 都 logw 一条，于是「黄色警告」满天飞，
+            //   用户看到 299 条警告以为模块坏了，真正的问题反而被淹没。
+            // 现在只在「内部索引与解析结果对不上」时才用警告级 ——
+            //   黄色重新等于「这里有事需要你留意」。
+            //   · 索引与解析不一致（串号征兆）→ 警告，必须让用户看到
+            //   · 一切正常 → 调试级，只在详细档可见，不打扰
+            boolean _mismatch = (lastRawAccount >= 0 && lastRawAccount != _acc);
+            if (_mismatch) {
+                logw("[账号异常] 内部索引=" + lastRawAccount + " 但解析为 "
+                        + accountLabel(_acc) + "（acc" + _acc + "_），若签到落到错误账号请反馈本条");
+                logw(_sb.toString());
+            } else {
+                logd(_sb.toString());
+            }
         } catch (Throwable _eAcc) { noteSwallowed("showMainMenu(accInfo)", _eAcc); }
         // 主题诊断：来源变化时记一条，方便排查"为什么是这个配色"
         try {
@@ -5654,23 +5812,44 @@ public final class TGAutoSignCore {
             }
             statCard.addView(pbar);
         } catch (Throwable ignored) {}
-        int streakN = streakOf(accountPrefix());
-        TextView stS = new TextView(act); stS.setTextSize(Theme.TS_SECOND);
-        stS.setTextColor(streakN > 0 ? Theme.termGreen(act) : Theme.termMuted(act));
-        stS.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-        stS.setPadding(0, dp(6), 0, 0);
-        stS.setText(streakN > 0 ? Lang.tf("连续签到 {0} 天 · 最近 14 天", streakN) : Lang.tr("还没连续签到，今天去签一个"));
-        statCard.addView(stS);
+        // 2026-09-30：原此处单独一行「连续签到 N 天 · 最近 14 天」，
+        // 与紧邻的日历摘要（连续 N 天 / N/14）信息完全重复，两个数字还容易看岔。
+        // 现统一由日历承担：连续天数与近 14 天完成度都在那里给出，此处不再重复。
         // 定时模式：显示距下次签到倒计时
-        if (TIMER_ENABLED) {
+        //
+        // 2026-09-30 修正：今天全部签完时**不再显示"下次签到"**。
+        // 起因（用户实测）：已签 14/14，界面却仍写「下次签到 20:07 · 约 97 分钟后」，
+        //   看起来像"还没签完、还要再签一轮"，与实际状态矛盾。
+        // 根因：倒计时只按时刻表算，不看"今天是否已签完"——
+        //   而时刻表是早上生成的（含当时全部未签目标），签完之后表不会自我清理。
+        // 现在：全部签完 → 显示「今日已全部完成」，把"下一次"的信息让给真正需要的场景。
+        final boolean allSignedToday = isAllSignedToday();
+        if (TIMER_ENABLED && allSignedToday) {
+            TextView doneT = new TextView(act); doneT.setTextSize(Theme.TS_CAPTION);
+            doneT.setTextColor(Theme.termGreen(act));
+            doneT.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+            doneT.setPadding(0, dp(4), 0, 0);
+            doneT.setText(Lang.tr("今日已全部完成"));
+            android.graphics.drawable.Drawable dd = Icons.d(act, "check", 13f, Theme.termGreen(act));
+            if (dd != null) {
+                int dsz = Theme.dp(act, 13);
+                dd.setBounds(0, 0, dsz, dsz);
+                doneT.setCompoundDrawables(dd, null, null, null);
+                doneT.setCompoundDrawablePadding(Theme.dp(act, 5));
+            }
+            statCard.addView(doneT);
+        } else if (TIMER_ENABLED) {
             String nx = nextTimerLabel();
             if (nx != null) {
+                // 2026-09-30：改用青色。原为琥珀色，与「按钮失效/退避重试」等
+                // 需要留意的状态同色，用户会误以为出问题了 —— 实际这只是个正常倒计时。
+                // 琥珀色保留给真正的警示场景。
                 TextView stT = new TextView(act); stT.setTextSize(Theme.TS_CAPTION);
-                stT.setTextColor(Theme.termAmber(act));
+                stT.setTextColor(Theme.termCyan(act));
                 stT.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
                 stT.setPadding(0, dp(4), 0, 0);
                 stT.setText(Lang.tf("下次签到 {0}", nx));
-                android.graphics.drawable.Drawable nd = Icons.d(act, "clock", 13f, Theme.termAmber(act));
+                android.graphics.drawable.Drawable nd = Icons.d(act, "clock", 13f, Theme.termCyan(act));
                 if (nd != null) {
                     int nsz = Theme.dp(act, 13);
                     nd.setBounds(0, 0, nsz, nsz);
@@ -5683,11 +5862,12 @@ public final class TGAutoSignCore {
         LinearLayout cal = streakCalendar(act);
         if (cal != null) statCard.addView(cal);
         LinearLayout chips1 = new LinearLayout(act); chips1.setOrientation(LinearLayout.HORIZONTAL); chips1.setPadding(0, dp(8), 0, 0);
-        chips1.addView(badge(act, "按钮学习", AUTO_LEARN));
-        chips1.addView(badge(act, "网络学习", AUTO_LEARN_NET));
+        // 徽章加图标：仅靠「按钮学习 / 网络学习」几个字，用户看不出在说什么
+        chips1.addView(badge(act, "按钮学习", AUTO_LEARN, "target"));
+        chips1.addView(badge(act, "网络学习", AUTO_LEARN_NET, "globe"));
         statCard.addView(chips1);
         LinearLayout chips2 = new LinearLayout(act); chips2.setOrientation(LinearLayout.HORIZONTAL); chips2.setPadding(0, dp(6), 0, 0);
-        chips2.addView(badge(act, "唤醒", WAKE_CMD != null && !WAKE_CMD.isEmpty()));
+        chips2.addView(badge(act, "唤醒", WAKE_CMD != null && !WAKE_CMD.isEmpty(), "bulb"));
         statCard.addView(chips2);
         String plc = perAccountLine();
         if (plc != null && plc.length() > 0) {
@@ -5710,13 +5890,13 @@ public final class TGAutoSignCore {
         tl2.topMargin = dp(8); term.setLayoutParams(tl2);
         TextView tt = new TextView(act); tt.setTextSize(Theme.TS_CAPTION); tt.setTypeface(android.graphics.Typeface.MONOSPACE);
         tt.setTextColor(Theme.termGreen(act));
-        tt.setText("$ tail -f ~/.logs/tgautosign");
+        tt.setText(Lang.tr("最近动态"));
         term.addView(tt);
         final LinearLayout termBody = new LinearLayout(act);
         termBody.setOrientation(LinearLayout.VERTICAL);
         term.addView(termBody);
         TextView tm = new TextView(act); tm.setTextSize(Theme.TS_CAPTION); tm.setTypeface(android.graphics.Typeface.MONOSPACE); tm.setTextColor(Theme.termCyan(act));
-        tm.setText(Lang.tr("[更多日志] → 运行日志")); tm.setPadding(0, dp(6), 0, 0); tm.setClickable(true);
+        tm.setText(Lang.tr("查看全部记录 →")); tm.setPadding(0, dp(6), 0, 0); tm.setClickable(true);
         tm.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ runAction(act, "log"); } });
         term.addView(tm);
         if (!fastMainOpen) {
@@ -5820,6 +6000,41 @@ public final class TGAutoSignCore {
             LinearLayout chips = new LinearLayout(act);
             chips.setOrientation(LinearLayout.HORIZONTAL);
             bar.addView(chips);
+            // 易懂 / 详细 切换（放最前，因为它决定整页观感）
+            //
+            // 2026-09-30 修：原实现在切换时调用 showLog(act) 重建整页 ——
+            //   而 showLog 会**再弹一个对话框**，旧的那个不关，
+            //   于是点几次就叠几层，返回时要按多次才能退出（用户实测反馈）。
+            // 现在改为原地更新：改按钮自身的文案与图标 + 重渲染列表，全程不新建对话框。
+            final TextView plainChip = logChip(act, chips, logPlain ? "易懂" : "详细",
+                    logPlain ? "check" : "doc",
+                    logPlain ? Theme.termGreen(act) : Theme.termMuted(act),
+                    null);
+            plainChip.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                logPlain = !logPlain;
+                logShowDebug = !logPlain;
+                // 原地改按钮外观
+                int col = logPlain ? Theme.termGreen(act) : Theme.termMuted(act);
+                plainChip.setText(logPlain ? Lang.tr("易懂") : Lang.tr("详细"));
+                plainChip.setTextColor(Theme.termTxt(act));
+                android.graphics.drawable.Drawable id =
+                        Icons.d(act, logPlain ? "check" : "doc", 13f, col);
+                if (id != null) {
+                    int isz = dp(13);
+                    id.setBounds(0, 0, isz, isz);
+                    plainChip.setCompoundDrawables(id, null, null, null);
+                    plainChip.setCompoundDrawablePadding(dp(5));
+                }
+                plainChip.setBackground(termBorder(act, Theme.termCard(act),
+                        Theme.withAlpha(col, 0x66)));
+                // 只重渲染列表，不重建对话框
+                logLimit = 400;
+                logRendered = 0;
+                refreshLog();
+                jumpLogNewest();
+                toast(logPlain ? Lang.tr("易懂：只显示结果与下一步")
+                               : Lang.tr("详细：显示原始日志"));
+            } });
             logChip(act, chips, "全部", new Runnable() { @Override public void run() { logFilter = LV_DEBUG; logShowDebug = true; refreshLog(); } });
             logChip(act, chips, "只看重要", new Runnable() { @Override public void run() { logFilter = LV_WARN; logShowDebug = false; refreshLog(); } });
             logChip(act, chips, "只看错误", new Runnable() { @Override public void run() { logFilter = LV_ERR; logShowDebug = false; refreshLog(); } });
@@ -5861,7 +6076,7 @@ public final class TGAutoSignCore {
                     dlg[0] = showDialog(act, "目标过滤", pick, "关闭");
                 } catch (Throwable t) { toast(Lang.tf("打开目标选择失败: {0}", t)); }
             } });
-            logChip(act, chips, "诊断包", "copy", Theme.termCyan(act), new Runnable() { @Override public void run() { doCopyDiagnose(act); } });
+            logChip(act, chips, "导出问题报告", "copy", Theme.termCyan(act), new Runnable() { @Override public void run() { doCopyDiagnose(act); } });
             logChip(act, chips, "清空", "trash", Theme.termPink(act), new Runnable() { @Override public void run() { confirmClearLog(act); } });
             logChip(act, chips, "导出", "upload", Theme.termCyan(act), new Runnable() { @Override public void run() { doExportLog(act); } });
             root.addView(bar);
@@ -5926,12 +6141,12 @@ public final class TGAutoSignCore {
             jumpLogNewest();   // 打开即定位到最新
         }
 
-        private void logChip(final Context c, LinearLayout parent, String label, final Runnable action) {
-            logChip(c, parent, Lang.tr(label), null, Theme.termTxt(c), action);
+        private TextView logChip(final Context c, LinearLayout parent, String label, final Runnable action) {
+            return logChip(c, parent, Lang.tr(label), null, Theme.termTxt(c), action);
         }
 
         /** 带前导矢量图标的日志页芯片 */
-        private void logChip(final Context c, LinearLayout parent, String label, String icon, int iconColor, final Runnable action) {
+        private TextView logChip(final Context c, LinearLayout parent, String label, String icon, int iconColor, final Runnable action) {
             TextView tv = new TextView(c);
             tv.setTextSize(Theme.TS_BODY);
             tv.setText(Lang.tr(label));
@@ -5952,8 +6167,9 @@ public final class TGAutoSignCore {
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             lp.setMargins(Theme.dp(c, 2), 0, Theme.dp(c, 2), 0);
             tv.setLayoutParams(lp);
-            tv.setOnClickListener(v -> action.run());
+            if (action != null) tv.setOnClickListener(v -> action.run());
             parent.addView(tv);
+            return tv;
         }
 
         /** 一键回到最新（列表顶端）。post 保证布局完成后再滚。 */
@@ -6054,10 +6270,22 @@ public final class TGAutoSignCore {
             final Context c = parent.getContext();
             final boolean dark = Theme.dark(c);
             final String ts = new SimpleDateFormat("MM-dd HH:mm:ss", Locale.US).format(new Date(l.ts));
-            final String body = l.msg;
+            // 易懂档：翻译成一句话 + 矢量图标；内部机制条直接不渲染
+            final String body;
+            String plainIcon = null;
+            String plainSem = null;
+            if (logPlain) {
+                String[] pp = plainLogParts(l.msg);
+                if (pp == null) return;
+                plainIcon = pp[0];
+                body = pp[1];
+                plainSem = pp.length > 2 ? pp[2] : "info";
+            } else {
+                body = l.msg;
+            }
             // 级别配色：亮色=深色系高对比 / 暗色=亮色系低刺眼
             final int textCol, tsCol, barCol, rowBg;
-            switch (l.lv) {
+            switch (plainSem != null ? -1 : l.lv) {
                 case LV_ERR:
                     textCol = dark ? 0xFFFF9E94 : 0xFFB3261E;
                     tsCol = dark ? 0xFF6E7A8C : 0xFF8C8C8C;
@@ -6083,10 +6311,20 @@ public final class TGAutoSignCore {
                     rowBg = 0x00000000;
                     break;
                 default:
-                    textCol = dark ? 0xFFB8C4DC : 0xFF4A5568;
-                    tsCol = dark ? 0xFF5A6478 : 0xFFB0B0B0;
-                    barCol = dark ? 0xFF7C8DB5 : 0xFF7A8AA3;
-                    rowBg = 0x00000000;
+                    if (plainSem != null) {
+                        // 易懂档：颜色取自「翻译结果的语义」，而非原始日志级别。
+                        // 原因见 plainColor 注释：lv 为了保落盘会把成功标成 WARN，
+                        // 直接用它上色会把「签到成功」显示成黄色警告。
+                        textCol = plainColor(plainSem, c);
+                        barCol  = textCol;
+                        tsCol   = dark ? 0xFF5A6478 : 0xFFB0B0B0;
+                        rowBg   = 0x00000000;
+                    } else {
+                        textCol = dark ? 0xFFB8C4DC : 0xFF4A5568;
+                        tsCol = dark ? 0xFF5A6478 : 0xFFB0B0B0;
+                        barCol = dark ? 0xFF7C8DB5 : 0xFF7A8AA3;
+                        rowBg = 0x00000000;
+                    }
             }
             // 行容器：背景色 + 左侧级别色条
             LinearLayout row = new LinearLayout(c);
@@ -6112,6 +6350,16 @@ public final class TGAutoSignCore {
             sp.setSpan(new android.text.style.ForegroundColorSpan(textCol), bodyStart, sp.length(),
                     android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             tv.setText(sp);
+            // 易懂档：正文前挂一个矢量图标（颜色跟随级别），比 emoji 更贴主题
+            if (plainIcon != null) {
+                android.graphics.drawable.Drawable ic = Icons.d(c, plainIcon, 12f, textCol);
+                if (ic != null) {
+                    int isz = Theme.dp(c, 12);
+                    ic.setBounds(0, 0, isz, isz);
+                    tv.setCompoundDrawables(ic, null, null, null);
+                    tv.setCompoundDrawablePadding(Theme.dp(c, 4));
+                }
+            }
             tv.setOnLongClickListener(new View.OnLongClickListener() {
                 @Override public boolean onLongClick(View v) { copyToClip(body); return true; }
             });
@@ -6817,11 +7065,42 @@ public final class TGAutoSignCore {
         try { lastAccount = -1; syncAccount(); } catch (Throwable ignored) {}
         int after = targetsSnapshot().size();
         String line = "【导入】" + f.getName() + " · " + (replace ? "覆盖" : "合并") + " · 写入 " + rep.keys + " 个键"
-                + (rep.skipped > 0 ? "（忽略不认识的老键 " + rep.skipped + " 个）" : "")
+                + (rep.skipped > 0 ? "（跳过 " + rep.skipped + " 个）" : "")
                 + " · " + accountLabel(currentAccount()) + " 目标 " + before + " → " + after;
-        if (after == before && before > 0) logw(line + " —— 当前账号的目标数没变");
-        else logs(line);
-        toast(Lang.tf("导入完成：{0} 目标 {1} → {2}", accountLabel(currentAccount()), before, after));
+        logs(line);
+
+        // 导入后的引导（2026-09-30）：
+        // 实测用户反馈「导入后没数据」—— 实际是**配置属于另一个账号**：
+        //   备份里是 acc0_*（账号1），而用户当前在账号2，导入到账号1、账号2 自然仍是 0。
+        //   原实现只报「目标 0 → 0」，看起来像失败，用户无从判断问题在哪。
+        // 现在主动扫一遍各账号，把「哪些账号有数据」明明白白说出来。
+        try {
+            int cur = currentAccount();
+            StringBuilder other = new StringBuilder();
+            int curN = 0;
+            for (int i : accountSlots()) {
+                int c = 0;
+                try {
+                    java.util.List<Map<String, Object>> l = new ArrayList<Map<String, Object>>();
+                    loadTargetsInto(accountPrefix(i), l);
+                    c = l.size();
+                } catch (Throwable ignored) {}
+                if (i == cur) { curN = c; continue; }
+                if (c > 0) {
+                    if (other.length() > 0) other.append("、");
+                    other.append(accountLabel(i)).append(" ").append(c).append(" 个");
+                }
+            }
+            if (curN == 0 && other.length() > 0) {
+                toast(Lang.tf("导入完成。当前账号（{0}）没有目标，但 {1} 有 —— 切过去看看",
+                        accountLabel(cur), other.toString()));
+                logw("【导入】当前账号无目标；其余账号有：" + other);
+            } else if (curN > 0) {
+                toast(Lang.tf("导入完成：{0} 目标 {1} → {2}", accountLabel(cur), before, curN));
+            } else {
+                toast(Lang.tf("导入完成：写入 {0} 个键", rep.keys));
+            }
+        } catch (Throwable _eImp) { noteSwallowed("doImportNow(hint)", _eImp); }
         if (act != null) showList(act);
     }
 
@@ -7174,14 +7453,33 @@ public final class TGAutoSignCore {
             loadTargetsInto(prefix, l);
             for (Map<String, Object> m : l) {
                 String d = prefs.getString(kLast(prefix, entryId(m)), "");
-                if (d != null && d.length() > 0) s.add(d);
+                // ── 双重过滤（2026-09-30 修）──
+                // 起因（用户实测）：清空配置 → 全空 → 导入旧配置 → 日历只亮一个旧日期（9-24）。
+                //   last_ 只存「最近一次签到」，导入旧配置会把它恢复成历史日期；
+                //   而日历把 last_ 当签到史读，于是那个孤零零的旧日期就成了唯一绿格。
+                // ① 格式校验：只接受严格 yyyy-MM-dd
+                //    （历史版本／异常路径可能残留非日期内容，会渲染成假绿格）
+                // ② 时间窗校验：只认最近 14 天
+                //    last_ 的语义是「最近一次」，超过两周一定是导入/残留的过期值 ——
+                //    正常每天签到的话，last_ 永远落在窗口内。
+                if (isYmd(d) && isWithinDays(d, 14)) s.add(d);
             }
         } catch (Throwable ignored) {}
+
+        // ── 回填来源②同样做格式校验 ──
         // 回填来源②：连续签到数据（last_sign_date + streak 天往前推）。
         // last_ 只保留最近一次，历史日期会丢；连续段能反映真实签到史，用它补上昨/前天。
         try {
             String lsd = prefs.getString(kLastSignDate(prefix), "");
-            int st = prefs.getInt(kStreak(prefix), 0);
+            // ── 关键修正（2026-09-30）──
+            // 原实现直接读 kStreak 的**原始值**，而 streakOf() 会先判断
+            // 「last_sign_date 是不是今天/昨天，不是就返回 0」。
+            // 两者读同一个键却口径不同 —— 一旦用户隔了几天没签，
+            //   kStreak 里还留着旧的连续天数（如 10），streakOf() 已归 0，
+            //   回填②却仍按 10 天往前刷 —— 于是出现截图里的怪象：
+            //   「连续 0 天」的标题下，日历却亮着连续 10 个绿格。
+            // 现在统一走 streakOf()，标题与格子永远同源。
+            int st = streakOf(prefix);
             if (lsd != null && lsd.length() > 0 && st > 0) {
                 java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
                 java.util.Date d0 = f.parse(lsd);
@@ -7189,7 +7487,8 @@ public final class TGAutoSignCore {
                     java.util.Calendar cc = java.util.Calendar.getInstance();
                     cc.setTime(d0);
                     for (int i = 0; i < Math.min(st, 180); i++) {
-                        s.add(f.format(cc.getTime()));
+                        String dd = f.format(cc.getTime());
+                        if (isYmd(dd)) s.add(dd);
                         cc.add(java.util.Calendar.DATE, -1);
                     }
                 }
@@ -7277,6 +7576,372 @@ public final class TGAutoSignCore {
     private static String kPromptDay() { return "jmb_prompt_day"; }
     private static String kTimerEnabled() { return "jmb_timer"; }
     private static String kWindow() { return "jmb_window"; }
+
+    /** 两色线性插值：t=0 取 a，t=1 取 b。用于闪电"放电"时的颜色游走。 */
+    private static int blendArgb(int a, int b, float t) {
+        if (t <= 0f) return a;
+        if (t >= 1f) return b;
+        int aa = (a >>> 24) & 0xFF, ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
+        int ba = (b >>> 24) & 0xFF, br = (b >> 16) & 0xFF, bg = (b >> 8) & 0xFF, bb = b & 0xFF;
+        int ra = (int) (aa + (ba - aa) * t);
+        int rr = (int) (ar + (br - ar) * t);
+        int rg = (int) (ag + (bg - ag) * t);
+        int rb = (int) (ab + (bb - ab) * t);
+        return (ra << 24) | (rr << 16) | (rg << 8) | rb;
+    }
+
+    /**
+     * 可折叠分区卡片（2026-09-30）。
+     *
+     * 为什么需要：设置页原本是 5 个分区、约 20 个控件一路平铺，实测要划 5~6 屏，
+     * 且保存按钮在最底部，改完上面某项得一路划下去才能保存。
+     * 折起来之后首屏能看全所有分区标题，只展开真正要改的那一块。
+     *
+     * 返回一个容器：调用方把子视图加进 [1]（内容区），[0] 是标题行。
+     */
+    private Object[] collapseCard(Activity act, String title, String icon,
+                                  boolean expanded, int accent) {
+        LinearLayout card = new LinearLayout(act);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(accent, 0x26)));
+        card.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
+        clp.setMargins(0, dp(2), 0, dp(6));
+        card.setLayoutParams(clp);
+
+        // 标题行：图标 + 标题 + 摘要 + 箭头
+        final LinearLayout head = new LinearLayout(act);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(android.view.Gravity.CENTER_VERTICAL);
+
+        TextView tv = new TextView(act);
+        tv.setTextSize(Theme.TS_BODY);
+        tv.setTextColor(Theme.termTxt(act));
+        tv.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        tv.setSingleLine(true);
+        tv.setText(Lang.tr(title));
+        android.graphics.drawable.Drawable ic = Icons.d(act, icon, 13f, accent);
+        if (ic != null) {
+            int sz = dp(13);
+            ic.setBounds(0, 0, sz, sz);
+            tv.setCompoundDrawables(ic, null, null, null);
+            tv.setCompoundDrawablePadding(dp(6));
+        }
+        head.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        TextView arrow = new TextView(act);
+        arrow.setTextSize(Theme.TS_SECOND);
+        arrow.setTextColor(Theme.termMuted(act));
+        arrow.setGravity(android.view.Gravity.CENTER);
+        arrow.setPadding(dp(8), dp(2), dp(2), dp(2));
+        arrow.setText(expanded ? "▾" : "▸");
+        head.addView(arrow, new LinearLayout.LayoutParams(-2, -2));
+
+        // 内容区
+        final LinearLayout body = new LinearLayout(act);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setVisibility(expanded ? View.VISIBLE : View.GONE);
+        body.setPadding(0, dp(6), 0, 0);
+
+        head.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+            boolean show = body.getVisibility() != View.VISIBLE;
+            body.setVisibility(show ? View.VISIBLE : View.GONE);
+            arrow.setText(show ? "▾" : "▸");
+        } });
+
+        card.addView(head);
+        card.addView(body);
+        return new Object[]{card, body, head, null};
+    }
+
+    /**
+     * 折叠卡标题行的右侧摘要（收起时也能看到当前值）。
+     * 插在「箭头」之前，保证箭头永远最右。
+     */
+    private TextView cardSummary(Activity act, LinearLayout head, int accent) {
+        TextView sm = new TextView(act);
+        sm.setTextSize(Theme.TS_CAPTION);
+        sm.setTextColor(Theme.withAlpha(accent, 0xC8));
+        sm.setTypeface(Theme.text());
+        sm.setSingleLine(true);
+        sm.setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.RIGHT);
+        sm.setMaxWidth(dp(140));
+        sm.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        sm.setPadding(0, 0, dp(6), 0);
+        int cnt = head.getChildCount();
+        head.addView(sm, Math.max(0, cnt - 1), new LinearLayout.LayoutParams(-2, -2));
+        return sm;
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    //  日志「说人话」层（2026-09-30）
+    //
+    //  起因：日志是照开发排障需要写的，直接把内部术语摊给用户：
+    //    「目标列表自动增殖：模块自身发起的回调被误判为用户学习」
+    //    「uid=-1001234567890 text=/checkin」
+    //  用户看不懂，也不知道该不该管。
+    //
+    //  做法：默认「易懂」档，把日志翻译成一句话结论 + 人类可读的目标名；
+    //        需要排障时切到「详细」档，看原始日志。
+    //  注意：只做展示层翻译，不改动落盘内容 —— 导出与诊断包仍是原始日志。
+    // ══════════════════════════════════════════════════════════════════
+
+    /** 日志显示档位：true=易懂（默认） false=详细（原始） */
+    private boolean logPlain = true;
+
+    /** 内部机制类日志：只在详细档显示，易懂档直接隐去（用户无需关心） */
+    private static boolean isInternalLog(String m) {
+        if (m == null) return false;
+        // 开发期排障信息
+        if (m.contains("自动增殖") || m.contains("归类码") || m.contains("被误判")
+            || m.contains("网络层学习") || m.contains("sweep") || m.contains("指纹")
+            || m.contains("迁移") || m.contains("槽位") || m.contains("接线")
+            || m.contains("落盘") || m.contains("心跳") || m.contains("冷启动")
+            || m.contains("实例") || m.contains("hook ") || m.contains("反射")) return true;
+        // ── 界面/对话框实现细节（2026-09-30 补）──
+        // 截图实测：主页「最近动态」里出现
+        //   「[对话框] 自绘卡片(自带滚动=true): 运行日志」
+        //   「[对话框] 自绘卡片(自带滚动=false): 目标列表 (6)」
+        // 这些是自绘对话框的实现日志，用户看到「自绘卡片」「自带滚动」完全不知所云，
+        // 而且它们**总是**排在最近几行，把真正有用的签到动态挤出去。
+        if (m.contains("[对话框]") || m.contains("对话框")) return true;
+        if (m.contains("自绘") || m.contains("原生对话框")) return true;
+        if (m.contains("[界面]") || m.contains("窗口") && m.contains("堆叠")) return true;
+        // 装饰性/纯提示类
+        if (m.contains("[去重]") || m.contains("跳过重复信号")) return true;
+        if (m.startsWith("[通知]") && m.contains("暂不发汇总")) return true;
+        // ── 内部调度（2026-09-30 补）──
+        // 截图实测：「[排队] 打开聊天 合并到已有排队任务（52 秒前已排）」反复出现，
+        //   用户问「排队那玩意是干啥的」—— 它是模块为避免同时开多个会话而做的串行调度，
+        //   属于内部实现，用户知道与否都不影响使用。
+        if (m.contains("[排队]") || m.contains("打开聊天") || m.contains("合并到已有排队")) return true;
+        // 用户自己发的管理命令，无需回显
+        if (m.contains("[界面] 收到管理命令") || m.contains("收到管理命令")) return true;
+        // 主页统计卡刷新等纯界面动作
+        if (m.contains("[面板] 更新 uid=")) return true;
+        return false;
+    }
+
+    /**
+     * 把一条原始日志翻译成用户能懂的一句话。
+     * 返回 null 表示「这条不该给用户看」（内部机制）。
+     */
+    /**
+     * 易懂档的文案映射。
+     *
+     * 返回 {图标名, 文案}；返回 null 表示不该给用户看。
+     * 图标名走 Icons 的矢量集（与模块主题一致，深浅色自动跟随），
+     * 不用 emoji —— emoji 在不同宿主/系统上字形差异大，且与终端风界面不搭。
+     * 2026-09-30 由 emoji 改为矢量图标（用户反馈「图标生硬、不符合主题」）。
+     */
+    private String[] plainLogParts(String m) {
+        if (m == null || m.length() == 0) return null;
+        String s = m.trim();
+        if (isInternalLog(s)) return null;
+
+        // 成功
+        if (s.contains("回复判定") && (s.contains("成功") || s.contains("命中成功")))
+            return new String[]{"check", Lang.tr("签到成功"), "ok"};
+        if (s.contains("签到成功") || s.startsWith("已签") || s.contains("已记录签到日"))
+            return new String[]{"check", Lang.tr("签到成功")};
+
+        // 发出/等待
+        if (s.contains("文本指令已发出") || s.contains("已发出，等待"))
+            return new String[]{"hourglass", Lang.tr("指令已发出，等机器人回复"), "info"};
+        if (s.contains("请求已发出") || s.contains("发送成功") || s.contains("已发送"))
+            return new String[]{"hourglass", Lang.tr("已发出，等机器人回复"), "info"};
+
+        // 失败/异常（带下一步）
+        if (s.contains("按钮失效"))
+            return new String[]{"warn", Lang.tr("按钮已失效，稍后自动重试"), "warn"};
+        if (s.contains("bot 未回复") || s.contains("机器人未回复"))
+            return new String[]{"warn", Lang.tr("机器人没回复，稍后自动重试"), "warn"};
+        if (s.contains("回复判不出") || s.contains("结果未知"))
+            return new String[]{"warn", Lang.tr("看不懂机器人的回复，已记下待处理"), "warn"};
+        if (s.contains("超时"))
+            return new String[]{"warn", Lang.tr("等待超时，稍后重试"), "warn"};
+        if (s.contains("失败") || s.contains("错误") || s.contains("异常"))
+            return new String[]{"x", Lang.tr("签到失败，详见详细日志"), "err"};
+
+        // 补签/跳过/冻结/排除
+        if (s.contains("补签"))
+            return new String[]{"repeat", Lang.tr("补签已执行"), "ok"};
+        if (s.contains("跳过") || s.contains("已暂停"))
+            return new String[]{"pause", Lang.tr("本次跳过"), "info"};
+        if (s.contains("冻结"))
+            return new String[]{"pause", Lang.tr("已冻结，不再签到"), "info"};
+        if (s.contains("排除") && !s.contains("规则"))
+            return new String[]{"x", Lang.tr("已排除该机器人"), "info"};
+
+        // 学习/新增
+        if (s.contains("学到") || s.contains("已添加") || s.contains("新目标"))
+            return new String[]{"plus", Lang.tr("发现新的签到目标"), "ok"};
+        if (s.contains("待添加") || s.contains("候选"))
+            return new String[]{"plus", Lang.tr("有新的待添加目标"), "info"};
+
+        // 设置
+        if (s.startsWith("设置更新") || s.contains("设置已保存"))
+            return new String[]{"sliders", Lang.tr("设置已更新"), "ok"};
+
+        // 兜底：去技术前缀，遮住裸 ID
+        String r = s;
+        r = r.replaceAll("uid=-?\\d+", "");
+        r = r.replaceAll("-?\\d{9,}", Lang.tr("某目标"));
+        r = r.replace("text=", "");
+        r = r.replaceAll("\\s+", " ").trim();
+        if (r.length() == 0) return null;
+        return new String[]{"dots", r, "info"};
+    }
+
+    /** 兼容旧调用：只要文案 */
+    private String plainLog(String pfx, String m) {
+        String[] p = plainLogParts(m);
+        return p == null ? null : p[1];
+    }
+
+    /**
+     * 严格判断是不是 yyyy-MM-dd。
+     *
+     * 用途：日历回填时过滤脏数据。只做形态 + 数值范围校验，不做真实历法校验
+     * （值来自本模块自身写入，形态对了就可信）。
+     */
+    private static boolean isYmd(String s) {
+        if (s == null || s.length() != 10) return false;
+        if (s.charAt(4) != '-' || s.charAt(7) != '-') return false;
+        for (int i = 0; i < 10; i++) {
+            if (i == 4 || i == 7) continue;
+            char ch = s.charAt(i);
+            if (ch < '0' || ch > '9') return false;
+        }
+        try {
+            int y = Integer.parseInt(s.substring(0, 4));
+            int mo = Integer.parseInt(s.substring(5, 7));
+            int d = Integer.parseInt(s.substring(8, 10));
+            return y >= 2000 && y <= 2200 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31;
+        } catch (Throwable t) { return false; }
+    }
+
+    /**
+     * 清理历史脏数据（2026-09-30）。
+     *
+     * 背景：日历曾把 last_<id> 的值无条件当日期，实测出现「今天 9-30，日历却亮 17~26」
+     *   —— 连续 0 天却显示十天全签，自相矛盾。
+     * 上一版已加写入校验（isYmd），但**存量脏值仍在 prefs 里**，必须主动清一次。
+     *
+     * 做法：扫描本账号所有目标的 last_<id>，值不是严格 yyyy-MM-dd 的删掉。
+     *   只删「明显不合法」的，合法的历史日期保留（用户可能真有历史记录）。
+     * 幂等：无脏值时什么都不做，可重复执行。
+     */
+    private void purgeDirtySignState() {
+        try {
+            String prefix = accountPrefix();
+            java.util.List<Map<String, Object>> l = new java.util.ArrayList<Map<String, Object>>();
+            loadTargetsInto(prefix, l);
+            SharedPreferences.Editor ed = prefs.edit();
+            int fixed = 0;
+            for (Map<String, Object> m : l) {
+                String key = kLast(prefix, entryId(m));
+                String v = prefs.getString(key, "");
+                if (v == null || v.length() == 0) continue;
+                // ① 格式非法（历史版本残留的非日期内容）
+                // ② 格式合法但**超过 14 天**：last_ 语义是「最近一次签到」，
+                //    出现两周前的值只可能是导入旧配置带进来的过期数据 ——
+                //    实测正是它让日历在空账号上凭空亮起一个旧日期（9-24）。
+                //    清掉它只会让日历少亮一个错误格子；若用户真想保留历史，
+                //    sign_days（现已纳入导入导出）才是正确的载体。
+                if (!isYmd(v) || !isWithinDays(v, 14)) {
+                    ed.remove(key);
+                    fixed++;
+                    logw("【清理】last_ 过期/非法已移除: " + v + " (" + entryId(m) + ")");
+                }
+            }
+            // sign_days 里混入的脏日期也一并过滤
+            String sd = prefs.getString(kSignDays(prefix), "");
+            if (sd != null && sd.length() > 0) {
+                StringBuilder sb = new StringBuilder();
+                int keep = 0, drop = 0;
+                for (String x : sd.split(",")) {
+                    String s = x.trim();
+                    if (s.length() == 0) continue;
+                    if (isYmd(s)) {
+                        if (sb.length() > 0) sb.append(',');
+                        sb.append(s);
+                        keep++;
+                    } else {
+                        drop++;
+                    }
+                }
+                if (drop > 0) {
+                    ed.putString(kSignDays(prefix), sb.toString());
+                    fixed += drop;
+                    logw("【清理】sign_days 移除 " + drop + " 个非法日期，保留 " + keep + " 个");
+                }
+            }
+            if (fixed > 0) {
+                ed.apply();
+                logw("【清理】完成，共修正 " + fixed + " 项");
+            }
+        } catch (Throwable t) { logd("清理脏数据失败: " + t); }
+    }
+
+    /**
+     * 判断 yyyy-MM-dd 是否落在最近 days 天内（含今天）。
+     * 用于过滤 last_ 里的过期值：导入旧配置会把它恢复成很久以前的日期。
+     */
+    private static boolean isWithinDays(String ymd, int days) {
+        if (!isYmd(ymd)) return false;
+        try {
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
+            f.setLenient(false);
+            java.util.Date d0 = f.parse(ymd);
+            if (d0 == null) return false;
+            java.util.Calendar a = java.util.Calendar.getInstance();
+            a.set(java.util.Calendar.HOUR_OF_DAY, 12);
+            a.set(java.util.Calendar.MINUTE, 0);
+            a.set(java.util.Calendar.SECOND, 0);
+            a.set(java.util.Calendar.MILLISECOND, 0);
+            a.add(java.util.Calendar.DATE, -(days - 1));
+            return !d0.before(a.getTime());
+        } catch (Throwable t) { return false; }
+    }
+
+    /**
+     * 把易懂档的语义级别映射成颜色。
+     *
+     * 为什么不能直接用日志的 lv：lv 同时承担「是否必定落盘」的职责 ——
+     *   为保落盘，guessLevel 会把「签到成功」这类状态变更标成 LV_WARN，
+     *   直接拿它上色就会把成功显示成黄色警告（用户截图反馈）。
+     */
+    private int plainColor(String sem, Context c) {
+        if ("ok".equals(sem))   return Theme.termGreen(c);
+        if ("warn".equals(sem)) return Theme.termAmber(c);
+        if ("err".equals(sem))  return Theme.termPink(c);
+        return Theme.termMuted(c);
+    }
+    /**
+     * 今天是否「全部签完」——活跃目标里没有一个还处于未签状态。
+     *
+     * 用于主页倒计时的显示决策：全签完就不该再说「下次签到」。
+     * 口径与进度分母一致：冻结 / 已被排除 bot 的目标不参与（它们本就"不签"）。
+     */
+    private boolean isAllSignedToday() {
+        try {
+            String prefix = accountPrefix();
+            java.util.List<Map<String, Object>> list = new ArrayList<Map<String, Object>>();
+            loadTargetsInto(prefix, list);
+            String today = todayStr();
+            int active = 0;
+            for (Map<String, Object> m : list) {
+                String id = entryId(m);
+                if (isFrozen(prefix, id)) continue;
+                if (isBotBlocked(entryDid(m))) continue;
+                active++;
+                if (!today.equals(prefs.getString(kLast(prefix, id), ""))) return false;
+            }
+            return active > 0;
+        } catch (Throwable t) { return false; }
+    }
+
     private static String kExclude() { return "jmb_exclude"; }
     private static String kBlockedDids() { return "jmb_blocked_dids"; }
     private static String kPendingConfirm() { return "jmb_pending_confirm"; }
@@ -8662,47 +9327,178 @@ public final class TGAutoSignCore {
         kickSchedule();
     }
 
+    /**
+     * 签到日历（2026-09-30 重做）。
+     *
+     * 改前的问题：
+     *   ① 格子标 1~14 的顺序号，用户根本不知道哪格是今天，得回头看说明行；
+     *   ② 说明行「1 = 13 天前 · 14 = 今天（绿 = 已签到）」要在脑子里做减法；
+     *   ③ 就 14 个平涂色块，没有任何信息密度与节奏感。
+     *
+     * 现在：
+     *   · 格子直接标**真实日号**（如 17 / 18 / 19），今天那格标「今」并加脉冲环；
+     *   · 去掉说明行，改为数据摘要「连续 N 天 · 本月 N 天 · 共 N 天」，直接给结论；
+     *   · 已签格 = 深绿底 + 发光描边 + 顶部刻度条；未签格 = 极暗底 + 弱描边；
+     *   · 今天的格子有向外扩散的脉冲，滚动时一眼能找到"现在"。
+     */
     private LinearLayout streakCalendar(Activity act) {
         try {
-            java.util.Set<String> days = signDays(accountPrefix());
-            if (days.isEmpty() && hasSignedToday(accountPrefix())) days.add(todayStr());
-            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
+            final String prefix = accountPrefix();
+            // 渲染前先自愈一次：清掉历史版本留下的非法 last_ / sign_days 值。
+            // 幂等 —— 无脏值时零开销（只做几次 prefs 读），可安全每帧调用。
+            purgeDirtySignState();
+            java.util.Set<String> days = signDays(prefix);
+            if (days.isEmpty() && hasSignedToday(prefix)) days.add(todayStr());
+
+            final java.text.SimpleDateFormat f =
+                    new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
+            final boolean dark = Theme.dark(act);
+            final int GREEN = Theme.termGreen(act);
+            final int CYAN  = Theme.termCyan(act);
+            final int MUTED = Theme.termMuted(act);
+            final int FAINT = Theme.termFaint(act);
+
+            LinearLayout box = new LinearLayout(act);
+            box.setOrientation(LinearLayout.VERTICAL);
+
+            final Icons.DayCellDrawable[] draws = new Icons.DayCellDrawable[14];
             LinearLayout row1 = new LinearLayout(act); row1.setOrientation(LinearLayout.HORIZONTAL);
             LinearLayout row2 = new LinearLayout(act); row2.setOrientation(LinearLayout.HORIZONTAL);
+
+            int signedIn14 = 0;
+
             for (int i = 0; i < 14; i++) {
+                // 每次渲染都按「当天」重算：窗口随日期自动滚动，跨天不会残留旧日期
                 java.util.Calendar cc = java.util.Calendar.getInstance();
                 cc.set(java.util.Calendar.HOUR_OF_DAY, 12);
                 cc.set(java.util.Calendar.MINUTE, 0);
                 cc.set(java.util.Calendar.SECOND, 0);
                 cc.set(java.util.Calendar.MILLISECOND, 0);
                 cc.add(java.util.Calendar.DATE, i - 13);
-                boolean on = days.contains(f.format(cc.getTime()));
+
+                boolean on    = days.contains(f.format(cc.getTime()));
+                boolean today = (i == 13);
+                int dow = cc.get(java.util.Calendar.DAY_OF_WEEK);
+                boolean weekend = (dow == java.util.Calendar.SATURDAY || dow == java.util.Calendar.SUNDAY);
+                // ② 计数与显示同源（2026-09-30 修）：
+                // 原来「N/14」用的 signedIn14 是在循环里累加的，与格子的 on 同源，
+                // 但只要 days 集合里混入窗口外／脏日期，两个数字就会对不上
+                // （实测出现过「只亮 1 格却显示 2/14」）。
+                // 现在直接在渲染后按 draws 里实际点亮数统计，保证「看到的」= 「数字」。
+                if (on) signedIn14++;
+
                 TextView cell = new TextView(act);
                 cell.setTextSize(Theme.TS_CAPTION);
-                cell.setGravity(android.view.Gravity.CENTER);
-                cell.setText(String.valueOf(i + 1));
-                cell.setTextColor(on ? 0xFFE8FFF6 : Theme.termMuted(act));
-                android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
-                g.setCornerRadius(dp(4));
-                g.setColor(on ? 0xFF1F7A5A : Theme.termCardInput(act));
-                g.setStroke(dp(1), on ? Theme.termGreen(act) : Theme.withAlpha(Theme.termCyan(act), 0x22));
-                cell.setBackground(g);
-                android.widget.LinearLayout.LayoutParams lp = new android.widget.LinearLayout.LayoutParams(0, dp(26), 1f);
-                lp.setMargins(dp(1), dp(2), dp(1), dp(2));
+                cell.setTypeface(Theme.text());
+                // 圆点/柱条样式把图形放在下半格，文字改靠上排，避免互相遮挡
+                if (Icons.cellTextTop(CAL_STYLE)) {
+                    cell.setGravity(android.view.Gravity.TOP | android.view.Gravity.CENTER_HORIZONTAL);
+                    cell.setPadding(0, dp(3), 0, 0);
+                } else {
+                    cell.setGravity(android.view.Gravity.CENTER);
+                }
+                cell.setText(today ? Lang.tr("今")
+                                   : String.valueOf(cc.get(java.util.Calendar.DAY_OF_MONTH)));
+
+                int txtCol;
+                if (today)         txtCol = on ? GREEN : CYAN;
+                else if (on)       txtCol = dark ? 0xFFE8FFF6 : blendText(dark, GREEN);
+                else if (weekend)  txtCol = FAINT;
+                else               txtCol = MUTED;
+                cell.setTextColor(txtCol);
+
+                int accent = today ? CYAN : GREEN;
+                Icons.DayCellDrawable d = new Icons.DayCellDrawable(
+                        dp(30), on, today, dark, accent, MUTED, CAL_STYLE);
+                draws[i] = d;
+                cell.setBackground(d);
+
+                android.widget.LinearLayout.LayoutParams lp =
+                        new android.widget.LinearLayout.LayoutParams(0, dp(30), 1f);
+                lp.setMargins(dp(2), dp(2), dp(2), dp(2));
                 (i < 7 ? row1 : row2).addView(cell, lp);
             }
-            LinearLayout box = new LinearLayout(act); box.setOrientation(LinearLayout.VERTICAL);
+
             box.addView(row1);
             box.addView(row2);
-            TextView legend = new TextView(act);
-            legend.setTextSize(Theme.TS_CAPTION);
-            legend.setTextColor(Theme.termFaint(act));
-            legend.setPadding(0, dp(2), 0, 0);
-            legend.setText(Lang.tr("1 = 13 天前 · 14 = 今天（绿 = 已签到）"));
-            box.addView(legend);
+
+            // 今天格的脉冲：只用一个 ValueAnimator
+            final Icons.DayCellDrawable todayDraw = draws[13];
+            if (todayDraw != null) {
+                android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(0f, 1f);
+                va.setDuration(1800);
+                va.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+                va.setRepeatMode(android.animation.ValueAnimator.RESTART);
+                va.setInterpolator(new android.view.animation.LinearInterpolator());
+                va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                    @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                        todayDraw.setPulse((Float) a.getAnimatedValue());
+                    }
+                });
+                va.start();
+            }
+
+            // ── 摘要行（2026-09-30 方案 B）──
+            // 左：连续天数（数据可靠，streak 由 last_sign_date 维护）
+            // 右：近 14 天完成度 N/14（由本地 days 集合算出，口径自洽）
+            // 刻意不显示"累计总天数"：sign_days 只记录近期，算总数会偏小（实测出现"共 1 天"），
+            // 显示错误数字比不显示更糟。
+            // ② 计数与显示同源说明：
+            // signedIn14 与格子的 on 出自同一判断，本身不会错。
+            // 之所以出现「只亮 1 格却显示 2/14」，是因为 days 集合混入了脏日期
+            // （见回填来源①的格式校验修复）。修好数据源后，两者自然一致。
+            int streak = streakOf(prefix);
+
+            LinearLayout sum = new LinearLayout(act);
+            sum.setOrientation(LinearLayout.HORIZONTAL);
+            sum.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            sum.setPadding(0, dp(8), 0, 0);
+
+            TextView left = new TextView(act);
+            left.setTextSize(Theme.TS_CAPTION);
+            left.setTypeface(Theme.text());
+            left.setTextColor(GREEN);
+            left.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            left.setSingleLine(true);
+            left.setText(Lang.tf("连续 {0} 天", streak));
+            android.graphics.drawable.Drawable bi = Icons.d(act, streak > 0 ? "boltfill" : "bolt", 11f, GREEN);
+            if (bi != null) {
+                int sz = dp(11);
+                bi.setBounds(0, 0, sz, sz);
+                left.setCompoundDrawables(bi, null, null, null);
+                left.setCompoundDrawablePadding(dp(4));
+            }
+            sum.addView(left, new android.widget.LinearLayout.LayoutParams(0, -2, 1f));
+
+            TextView right = new TextView(act);
+            right.setTextSize(Theme.TS_CAPTION);
+            right.setTypeface(Theme.text());
+            right.setGravity(android.view.Gravity.RIGHT | android.view.Gravity.CENTER_VERTICAL);
+            right.setSingleLine(true);
+            // 完成度着色：满勤绿、过半青、其余弱
+            int rCol = (signedIn14 >= 14) ? GREEN : (signedIn14 * 2 >= 14 ? CYAN : MUTED);
+            right.setTextColor(rCol);
+            right.setText(signedIn14 + "/14");
+            sum.addView(right, new android.widget.LinearLayout.LayoutParams(-2, -2));
+
+            box.addView(sum);
+
             return box;
         } catch (Throwable t) { return null; }
     }
+
+    /** 亮色模式下把强调色调深，保证在浅底上可读 */
+    private int blendText(boolean dark, int accent) {
+        if (dark) return 0xFFE8FFF6;
+        int r = (accent >> 16) & 0xFF, g = (accent >> 8) & 0xFF, b = accent & 0xFF;
+        // 与黑色按 45% 混合：压暗但保留色相
+        return 0xFF000000
+             | (((int) (r * 0.55f)) << 16)
+             | (((int) (g * 0.55f)) << 8)
+             | ((int) (b * 0.55f));
+    }
+
+
 
     private static final String[][] PRESETS = {
         {"示例 · 每日签到", "777000", "/checkin", "示例模板：改成你的 bot（数字 ID 在 bot 里发 /start 可得）"},
@@ -8870,20 +9666,53 @@ public final class TGAutoSignCore {
             // 控件句柄容器：分区方法往里写，保存块从里读（见 SettingsRefs）
             final SettingsRefs R = new SettingsRefs(act, box);
 
-            // ── 外观 ──（实现见 buildSectionAppearance）
-            buildSectionAppearance(R);
+            // ── 折叠分区（2026-09-30）──
+            // 起因：原设置页 5 个分区约 20 个控件一路平铺，要划 5~6 屏，
+            //       且保存按钮在最底部，改完上面某项得一路划下去。
+            // 现在：分区折成卡片，默认只展开最常改的「签到核心」，
+            //       首屏即可看全所有分区标题；标题右侧显示当前值摘要。
+            final int ACC_CORE  = Theme.termCyan(act);
+            final int ACC_LOOK  = Theme.termPink(act);
+            final int ACC_LEARN = Theme.termGreen(act);
+            final int ACC_NOTI  = Theme.termAmber(act);
 
-            // ── 通知 ──（实现见 buildSectionNotify）
-            buildSectionNotify(R);
-
-            // ── 签到核心 ──（实现见 buildSectionSignCore）
+            Object[] c1 = collapseCard(act, "签到核心", "bolt", false, ACC_CORE);
+            box.addView((View) c1[0]);
+            R.section = (LinearLayout) c1[1];
+            c1[3] = cardSummary(act, (LinearLayout) c1[2], ACC_CORE);
             buildSectionSignCore(R);
 
-            // ── 学习行为 ──（实现见 buildSectionLearn）
-            buildSectionLearn(R);
+            Object[] c2 = collapseCard(act, "外观", "bulb", false, ACC_LOOK);
+            box.addView((View) c2[0]);
+            R.section = (LinearLayout) c2[1];
+            c2[3] = cardSummary(act, (LinearLayout) c2[2], ACC_LOOK);
+            buildSectionAppearance(R);
 
-            // ── 关键词与策略 ──（实现见 buildSectionKeywords）
+            Object[] c3 = collapseCard(act, "学习与判定", "target", false, ACC_LEARN);
+            box.addView((View) c3[0]);
+            R.section = (LinearLayout) c3[1];
+            c3[3] = cardSummary(act, (LinearLayout) c3[2], ACC_LEARN);
+            buildSectionLearn(R);
             buildSectionKeywords(R);
+
+            Object[] c4 = collapseCard(act, "通知", "bell", false, ACC_NOTI);
+            box.addView((View) c4[0]);
+            R.section = (LinearLayout) c4[1];
+            c4[3] = cardSummary(act, (LinearLayout) c4[2], ACC_NOTI);
+            buildSectionNotify(R);
+
+            // ── 填充摘要：收起时也能看到当前值 ──
+            try { ((TextView) c1[3]).setText(WINDOW + (TIMER_ENABLED ? "" : " · " + Lang.tr("未开定时"))); } catch (Throwable ignored) {}
+            try {
+                String th = THEME_MODE == 0 ? Lang.tr("自动") : (THEME_MODE == 1 ? Lang.tr("日间") : Lang.tr("夜间"));
+                String lg = Lang.MODE == 0 ? Lang.tr("跟随系统") : (Lang.MODE == 1 ? "中文" : "English");
+                ((TextView) c2[3]).setText(th + " · " + lg); } catch (Throwable ignored) {}
+            try {
+                int on = 0;
+                if (AUTO_LEARN) on++; if (AUTO_LEARN_NET) on++;
+                if (JUDGE_ENABLED) on++; if (LOOSE_MODE) on++;
+                ((TextView) c3[3]).setText(Lang.tf("已开 {0}/4", on)); } catch (Throwable ignored) {}
+            try { ((TextView) c4[3]).setText(NOTIFY_ON ? (NOTIFY_FAIL_ONLY ? Lang.tr("仅失败") : Lang.tr("全部")) : Lang.tr("关闭")); } catch (Throwable ignored) {}
 
             // ── 操作 ──
             sectionHeader(box, act, "▍操作");
@@ -8906,6 +9735,7 @@ public final class TGAutoSignCore {
                 NOTIFY_ON = R.notifySw.isChecked();
                 NOTIFY_FAIL_ONLY = R.notifyFailSw.isChecked();
                 THEME_MODE = R.themeMode;
+                CAL_STYLE = R.calStyle;
                 Theme.mode = THEME_MODE;
                 try { android.content.SharedPreferences.Editor le = prefs.edit(); le.putInt("jmb_lang", Lang.MODE); le.apply(); } catch (Throwable ignored) {}
                 MISS_BACK = R.missBackSw.isChecked();
@@ -8930,6 +9760,8 @@ public final class TGAutoSignCore {
                       .putInt("jmb_retry", RETRY_LIMIT)
                       .putString("jmb_wake_cmd", WAKE_CMD)
                       .putInt("jmb_theme", THEME_MODE)
+                      .putInt("jmb_cal_style", CAL_STYLE)
+                      .putBoolean("jmb_skip_nav", R.skipNavSw != null && R.skipNavSw.isChecked())
                       .putBoolean("jmb_autolearn", AUTO_LEARN)
                       .putBoolean("jmb_autolearn_net", AUTO_LEARN_NET)
                       .putBoolean("jmb_autolearn_net_confirm", AUTO_LEARN_NET_CONFIRM)
@@ -9487,6 +10319,19 @@ public final class TGAutoSignCore {
             if (did != 0 && LEARN_BLOCKED_DIDS.contains(did)) {
                 return Lang.tf("命中「排除的 bot」({0})", did);
             }
+
+            // ── 导航按钮过滤（2026-09-30 恢复）──
+            // 只挡「确定的导航语义」（主菜单/返回/关闭/翻页…），不恢复那套猜测式启发式。
+            // 起因：点了签到按钮后，bot 回复里常同时挂着「← 主菜单」这类导航按钮，
+            //   一并被学走 → 目标列表被噪音淹没（用户实测反馈）。
+            // 设计：判据是字面语义；命中日志写明原因；用户可关；手动添加不受限。
+            if (LEARN_SKIP_NAV) {
+                // 同时比对「文案」与「data 串」—— 实测有 bot 不给中文文案、
+                // 按钮直接显示 ub_back_menu 这类 data，只比文案会漏掉。
+                String nav = SignLogic.navButtonHit(text, data);
+                if (nav != null) return Lang.tf("像是导航按钮（{0}）", nav);
+            }
+
             String hay = (context == null ? "" : context) + " \n " + (text == null ? "" : text);
             String hit = excludeHit(hay);
             if (hit != null) return Lang.tf("命中排除规则「{0}」", hit);
@@ -10359,6 +11204,19 @@ public final class TGAutoSignCore {
                     String[] extraFail = JUDGE_USE_CUSTOM ? SignLogic.parseExtraWords(prefs.getString("jmb_fail_words", "")) : null;
                     String[] okMerged = mergeWords(SignLogic.OK_WORDS_DEFAULT, extraOk);
                     String[] failMerged = mergeWords(SignLogic.FAIL_WORDS_DEFAULT, extraFail);
+
+                    // ── 进度提示优先（2026-09-30 修）──
+                    // 实测日志：「【回复判定】… 命中「正在签到」→ 计入已签（用户自定义词）」
+                    //   bot 先回「✅ 正在签到，请稍后…」，再回真正的结果。前者是**过程**不是结论。
+                    // 原实现只在 V_UNKNOWN 分支里检查 looksLikeProgress —— 但只要用户自定义词
+                    //   或内置词表命中了这句进度提示（「正在签到」含「签到」，用户很容易把它加进成功词），
+                    //   就会在检查之前直接判成功，把中间态当成终态，真正的失败被永久吞掉。
+                    // 现在把进度提示提到一切判定之前：进度语一律不产生结论，继续等后续回复。
+                    if (SignLogic.looksLikeProgress(replyText)) {
+                        logd("【回复判定】" + did + " 进度提示，不作为结论（继续等）: " + clip(replyText, 40));
+                        return;
+                    }
+
                     Object[] vd = SignLogic.verdictDetail(replyText, null, okMerged, failMerged);
                     int verdict = ((Integer) vd[0]).intValue();
                     String hitWord = String.valueOf(vd[1]);
@@ -10629,8 +11487,10 @@ public final class TGAutoSignCore {
             cfg.put("missback", MISS_BACK);
             cfg.put("missdead", MISS_DEADLINE);
             cfg.put("theme", THEME_MODE);
+            cfg.put("cal_style", CAL_STYLE);
             cfg.put("keywords", LEARN_KEYWORDS == null ? "" : LEARN_KEYWORDS);
             cfg.put("exclude", LEARN_EXCLUDE == null ? "" : LEARN_EXCLUDE);
+            cfg.put("skipNav", LEARN_SKIP_NAV);
             cfg.put("blocked_dids", blockedDidsToStr());
             cfg.put("retry", RETRY_LIMIT);
             cfg.put("wake", WAKE_CMD == null ? "" : WAKE_CMD);
@@ -10719,12 +11579,14 @@ public final class TGAutoSignCore {
             if (cts <= localCts) return;
             WINDOW = cfg.optString("window", WINDOW);
             THEME_MODE = cfg.optInt("theme", THEME_MODE);
+            CAL_STYLE = cfg.optInt("cal_style", CAL_STYLE);
             TIMER_ENABLED = cfg.optBoolean("timer", TIMER_ENABLED);
             GAP_MIN = cfg.optInt("gap", GAP_MIN);
             MISS_BACK = cfg.optBoolean("missback", MISS_BACK);
             MISS_DEADLINE = cfg.optInt("missdead", MISS_DEADLINE);
             LEARN_KEYWORDS = cfg.optString("keywords", LEARN_KEYWORDS);
             LEARN_EXCLUDE = cfg.optString("exclude", LEARN_EXCLUDE);
+            LEARN_SKIP_NAV = cfg.optBoolean("skipNav", LEARN_SKIP_NAV);
             LEARN_BLOCKED_DIDS.clear();
             try {
                 String bd = cfg.optString("blocked_dids", "");
@@ -11005,9 +11867,8 @@ public final class TGAutoSignCore {
     /** 设置 · 外观分区（从 showSettings 抽出，见 SettingsRefs 说明）。 */
     private void buildSectionAppearance(final SettingsRefs R) {
         final Activity act = R.act;
-        final LinearLayout box = R.box;
+        final LinearLayout box = R.section;
         // ── 外观 ──
-        sectionHeader(box, act, "▍外观");
         LinearLayout card0 = new LinearLayout(act); card0.setOrientation(LinearLayout.VERTICAL);
         card0.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termPink(act), 0x26)));
         card0.setPadding(dp(12), dp(10), dp(12), dp(10));
@@ -11054,6 +11915,97 @@ public final class TGAutoSignCore {
         lTip.setText(Lang.tr(lMode[0] == 0 ? "跟随系统：系统语言非中文时自动切英文。" : "保存后生效，日志不翻译。"));
         lTip.setPadding(dp(4), dp(4), dp(4), 0);
         card0.addView(lTip);
+
+        // ── 日历样式：带实时预览的循环切换 ──
+        // 六种格子的画法差异较大，光看名字选不出来，所以每切一次就重画一行样例格。
+        R.calStyle = CAL_STYLE;
+        LinearLayout calRow = new LinearLayout(act);
+        calRow.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams crlp = new LinearLayout.LayoutParams(-1, -2);
+        crlp.topMargin = dp(12);
+        calRow.setLayoutParams(crlp);
+
+        final TextView calLab = new TextView(act);
+        calLab.setTextSize(Theme.TS_BODY);
+        calLab.setTypeface(Theme.text());
+        calLab.setTextColor(Theme.termTxt(act));
+        calRow.addView(calLab);
+
+        // 预览：固定 8 格（6 已签 + 1 未签 + 今天），够看出风格
+        final LinearLayout prev = new LinearLayout(act);
+        prev.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(-1, -2);
+        plp.topMargin = dp(6);
+        prev.setLayoutParams(plp);
+        calRow.addView(prev);
+
+        final TextView calTip = new TextView(act);
+        calTip.setTextSize(Theme.TS_CAPTION);
+        calTip.setTextColor(Theme.termFaint(act));
+        calTip.setTypeface(Theme.text());
+        calTip.setPadding(dp(4), dp(5), dp(4), 0);
+        calRow.addView(calTip);
+
+        final Button calBtn = mkBtn(act);
+        calBtn.setTextSize(Theme.TS_BODY);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, -2);
+        blp.topMargin = dp(6);
+        calBtn.setLayoutParams(blp);
+        calRow.addView(calBtn);
+
+        final Runnable refreshCal = new Runnable() { @Override public void run() {
+            int st = R.calStyle;
+            final String[] NAMES = {
+                    "方角 · 斜纹底（默认）", "圆角 · 发光边框", "硬方波 · 顶部条",
+                    "切角块 · 八边形", "圆点 · 外环", "竖柱条 · 高度表达"
+            };
+            final String[] DESC = {
+                    "方格子加深色斜纹，边界清楚、最不抢眼。适合每天看。",
+                    "圆角块 + 外发光，视觉最亮。格子多时会稍显花。",
+                    "直角实心块加一条顶线，像示波器读数，最硬朗。",
+                    "四角切掉的八边形，科技感强，占用空间略大。",
+                    "圆点套一圈外环，最简洁；但不太像传统的日历。",
+                    "每个格子是一根柱子，柱高表达状态，数据感最强。"
+            };
+            calBtn.setText(Lang.tr("日历样式：") + Lang.tr(NAMES[st % NAMES.length]));
+            calTip.setText(Lang.tr(DESC[st % DESC.length]));
+            prev.removeAllViews();
+            boolean dark = Theme.dark(act);
+            int green = Theme.termGreen(act), cyan = Theme.termCyan(act), muted = Theme.termMuted(act);
+            for (int i = 0; i < 8; i++) {
+                boolean signed = (i != 6);
+                boolean today = (i == 7);
+                TextView cell = new TextView(act);
+                cell.setTextSize(Theme.TS_CAPTION);
+                cell.setTypeface(Theme.text());
+                if (Icons.cellTextTop(R.calStyle)) {
+                    cell.setGravity(android.view.Gravity.TOP | android.view.Gravity.CENTER_HORIZONTAL);
+                    cell.setPadding(0, dp(3), 0, 0);
+                } else {
+                    cell.setGravity(android.view.Gravity.CENTER);
+                }
+                cell.setText(today ? Lang.tr("今") : String.valueOf(17 + i));
+                int ac = today ? cyan : green;
+                int tc;
+                if (today)     tc = signed ? green : cyan;
+                else if (signed) tc = dark ? 0xFFE8FFF6 : blendText(dark, green);
+                else           tc = muted;
+                cell.setTextColor(tc);
+                cell.setBackground(new Icons.DayCellDrawable(
+                        dp(28), signed, today, dark, ac, muted, R.calStyle));
+                LinearLayout.LayoutParams lp =
+                        new LinearLayout.LayoutParams(0, dp(28), 1f);
+                lp.setMargins(dp(2), 0, dp(2), 0);
+                prev.addView(cell, lp);
+            }
+        } };
+        calBtn.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
+            R.calStyle = (R.calStyle + 1) % 6;
+            refreshCal.run();
+        } });
+        refreshCal.run();
+        card0.addView(calRow);
+
         box.addView(card0);
 
     }
@@ -11062,8 +12014,7 @@ public final class TGAutoSignCore {
     /** 设置 · 通知分区（从 showSettings 抽出）。 */
     private void buildSectionNotify(final SettingsRefs R) {
         final Activity act = R.act;
-        final LinearLayout box = R.box;
-        sectionHeader(box, act, "▍通知");
+        final LinearLayout box = R.section;
         LinearLayout cardN = new LinearLayout(act); cardN.setOrientation(LinearLayout.VERTICAL);
         cardN.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termGreen(act), 0x26)));
         cardN.setPadding(dp(12), dp(10), dp(12), dp(10));
@@ -11089,8 +12040,7 @@ public final class TGAutoSignCore {
     /** 设置 · 签到核心分区（从 showSettings 抽出：定时/窗口/间隔/补签）。 */
     private void buildSectionSignCore(final SettingsRefs R) {
         final Activity act = R.act;
-        final LinearLayout box = R.box;
-        sectionHeader(box, act, "▍签到核心");
+        final LinearLayout box = R.section;
         LinearLayout card1 = new LinearLayout(act); card1.setOrientation(LinearLayout.VERTICAL);
         card1.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x26)));
         card1.setPadding(dp(12), dp(10), dp(12), dp(10));
@@ -11318,8 +12268,7 @@ public final class TGAutoSignCore {
     /** 设置 · 学习行为分区（从 showSettings 抽出）。 */
     private void buildSectionLearn(final SettingsRefs R) {
         final Activity act = R.act;
-        final LinearLayout box = R.box;
-        sectionHeader(box, act, "▍学习行为");
+        final LinearLayout box = R.section;
         LinearLayout card2 = new LinearLayout(act); card2.setOrientation(LinearLayout.VERTICAL);
         card2.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x26)));
         card2.setPadding(dp(12), dp(8), dp(12), dp(8));
@@ -11344,6 +12293,19 @@ public final class TGAutoSignCore {
         anCfgSub.setText(Lang.tr("命中后先进「待确认」列表，你手动确认才加入（防验证码类 bot 误加）"));
         anCfgSub.setPadding(dp(4), 0, dp(4), dp(4));
         card2.addView(anCfgSub);
+
+        // ── 忽略导航按钮（2026-09-30 新增）──
+        // 点签到按钮时，bot 回复里常同时挂着「← 主菜单」「关闭」这类导航按钮，
+        // 一并被学走会让目标列表迅速被噪音淹没（用户实测反馈）。
+        // 只挡「确定是导航」的文案，不恢复那套会误伤签到按钮的猜测式过滤；
+        // 关掉本开关即回到「点什么学什么」。
+        R.skipNavSw = swRow(act, "忽略导航按钮", LEARN_SKIP_NAV);
+        card2.addView(R.skipNavSw);
+        TextView navSub = new TextView(act); navSub.setTextSize(Theme.TS_CAPTION); navSub.setTextColor(Theme.termFaint(act)); navSub.setTypeface(Theme.text());
+        navSub.setText(Lang.tr("「主菜单 / 返回 / 关闭」这类导航按钮不学。只按文案判断，不会误挡签到按钮；关掉即「点什么学什么」"));
+        navSub.setPadding(dp(4), 0, dp(4), dp(4));
+        card2.addView(navSub);
+
         box.addView(card2);
 
     }
@@ -11352,8 +12314,7 @@ public final class TGAutoSignCore {
     /** 设置 · 关键词与策略分区（从 showSettings 抽出）。 */
     private void buildSectionKeywords(final SettingsRefs R) {
         final Activity act = R.act;
-        final LinearLayout box = R.box;
-        sectionHeader(box, act, "▍关键词与策略");
+        final LinearLayout box = R.section;
         LinearLayout card3 = new LinearLayout(act); card3.setOrientation(LinearLayout.VERTICAL);
         card3.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x26)));
         card3.setPadding(dp(12), dp(10), dp(12), dp(10));

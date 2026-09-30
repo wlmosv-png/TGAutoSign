@@ -20,6 +20,12 @@ public final class SettingsRefs {
 
     public Activity act;
     public LinearLayout box;
+    /** 折叠卡的内容区（每次 buildSectionXxx 前由 showSettings 设置）。 */
+    public LinearLayout section;
+    /** 折叠卡的标题行，供分区写摘要文字。 */
+    public LinearLayout sectionHead;
+    /** 折叠卡的摘要 TextView（收起时也能看到当前值）。 */
+    public android.widget.TextView sectionSummary;
 
     // 开关
     public Switch timerSw;      // 定时签到
@@ -29,6 +35,7 @@ public final class SettingsRefs {
     public Switch autoLearnSw;  // 按钮学习
     public Switch autoLearnNetSw;       // 网络学习
     public Switch autoLearnNetCfmSw;    // 网络学习需确认
+    public Switch skipNavSw;            // 忽略导航按钮
     public Switch looseSw;      // 宽松模式
     public Switch judgeSw;      // 自动判定成功/失败
     public Switch judgeCustomSw;// 使用自定义词
@@ -54,6 +61,7 @@ public final class SettingsRefs {
     public String window = "";          // 签到窗口
     public int missDeadlineMin = 23 * 60;
     public int themeMode = 0;
+    public int calStyle = 0;            // 日历格样式（分区内改动，保存时读取）
 
     public SettingsRefs(Activity a, LinearLayout b) { this.act = a; this.box = b; }
 }

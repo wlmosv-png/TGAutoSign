@@ -72,6 +72,18 @@ if [ "${TGAS_SKIP_CHLOG:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/check-chlog-i18n.py
     echo "FATAL: 更新日志英文不完整（临时跳过：TGAS_SKIP_CHLOG=1）" >&2; exit 1; }
 fi
 
+# ── 界面文案双语门禁：Lang.tr/tf 的中文串必须有 EN 映射 ──
+# 为什么单列一道（2026-09-30 定）：check-chlog-i18n 只管 CHANGELOG，
+# 而日志改造一口气新增 40+ 条界面文案全部漏译 —— 英文设备上显示中文，
+# 不报错、不崩溃，只能靠人眼发现。这与「更新日志漏译」是同一类问题，
+# 但覆盖面完全不同，故独立成门。
+# 跳过：TGAS_SKIP_UI18N=1
+if [ "${TGAS_SKIP_UI18N:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/check-ui-i18n.py" ]; then
+  echo "== 界面文案双语检查 =="
+  python3 "$TGAS_SRC/tools/check-ui-i18n.py" || {
+    echo "FATAL: 界面文案英文映射不完整（临时跳过：TGAS_SKIP_UI18N=1）" >&2; exit 1; }
+fi
+
 # ── 版本四查：build.gradle / UpdateChecker / module.prop / CHANGELOG 必须同版本 ──
 if [ "${TGAS_SKIP_VERCHK:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/check-versions.py" ]; then
   echo "== 版本四查 =="
