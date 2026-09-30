@@ -85,25 +85,19 @@ The fingerprint corresponds to the release key in use since September 2026; any 
 
 **English UI** — built in on English devices, no setup required
 
-### Dark
+Each page shown in dark / light
 
-| Main panel | Targets |
+| Main panel · Dark | Main panel · Light |
 | --- | --- |
-| ![Main panel](docs/screenshots/shot-main-dark.png) | ![Targets](docs/screenshots/shot-targets-dark.png) |
+| ![Main panel·Dark](docs/screenshots/shot-main-dark.png) | ![Main panel·Light](docs/screenshots/shot-main-light.png) |
 
-| Settings | |
+| Targets · Dark | Targets · Light |
 | --- | --- |
-| ![Settings](docs/screenshots/shot-settings-dark.png) | |
+| ![Targets·Dark](docs/screenshots/shot-targets-dark.png) | ![Targets·Light](docs/screenshots/shot-targets-light.png) |
 
-### Light
-
-| Main panel | Targets |
+| Settings · Dark | Settings · Light |
 | --- | --- |
-| ![Main panel](docs/screenshots/shot-main-light.png) | ![Targets](docs/screenshots/shot-targets-light.png) |
-
-| Settings | |
-| --- | --- |
-| ![Settings](docs/screenshots/shot-settings-light.png) | |
+| ![Settings·Dark](docs/screenshots/shot-settings-dark.png) | ![Settings·Light](docs/screenshots/shot-settings-light.png) |
 
 ## ✨ What it does
 
