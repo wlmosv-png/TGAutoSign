@@ -220,6 +220,70 @@ public final class TGAutoSignCore {
     private volatile boolean SHOT_DONE = false;      // 本轮是否已用掉
     private String SHOT_TITLE = null;                // 本次要导出的页面标题
     private View SHOT_VIEW = null;                   // 拦截到的页面 View
+    private final java.util.concurrent.atomic.AtomicBoolean SHOT_BUSY =
+            new java.util.concurrent.atomic.AtomicBoolean(false);   // 同时只允许一轮导出
+    private volatile int SHOT_BG = 0;   // 主线程取的页面底色（渲染在子线程，必须提前取好）
+    // ── 导出打码（README 用图不能带真实 bot 名）──
+    // 目标名不在 targets map 里：targetTitle() 是实时向宿主查 botName()/chatTitle() 的，
+    // 所以打码必须做在显示层（targetTitle/targetSubtitle），改 map 字段无效。
+    private volatile boolean SHOT_MASK = false;
+    // 导出期间的日志截断点：面板「最近动态」读的是实时日志缓冲，
+    // 而导出本身会往里写 [导出]/[主题]/账号实况 等诊断行，
+    // 不截断的话这些导出过程自己的日志会出现在宣传图里。
+    private volatile int SHOT_LOG_CUTOFF = -1;
+    // 文本脱敏：日志行里可能出现真实 bot 名（targetTitle 被多处 log 调用）。
+    // 渲染日志时把真名替换成同一个占位名，保证图上不出现真实身份。
+    private volatile boolean SHOT_RAW = false;   // true 时 targetTitle 返回真名（供建表用）
+    private volatile java.util.Map<String,String> shotTable = null;   // 导出期脱敏表
+
+    /** 建立「真名 -> 占位名」映射。 */
+    private java.util.Map<String, String> shotScrubTable() {
+        java.util.Map<String, String> t = new java.util.HashMap<String, String>();
+        try {
+            java.util.List<Map<String, Object>> snap = targetsSnapshot();
+            for (Map<String, Object> m : snap) {
+                long did = entryDid(m);
+                String alias = shotAlias(did, false);
+                SHOT_RAW = true;
+                String real = null;
+                try { real = targetTitle(did); } catch (Throwable ignored) {}
+                String sub = null;
+                try { sub = targetSubtitle(did); } catch (Throwable ignored) {}
+                SHOT_RAW = false;
+                if (real != null && real.length() > 1) t.put(real, alias);
+                if (sub != null && sub.length() > 1) t.put(sub, shotAlias(did, true));
+                String u = null;
+                try { u = botUsername(did); } catch (Throwable ignored) {}
+                if (u != null && u.length() > 1) t.put(u, "demo_bot");
+            }
+        } catch (Throwable e) {
+            jlog("[导出] 建脱敏表失败: " + e);
+        } finally {
+            SHOT_RAW = false;
+        }
+        return t;
+    }
+
+    /** 把文本里出现的真名替换成占位名。 */
+    private String shotScrub(String text, java.util.Map<String, String> table) {
+        if (text == null || table == null || table.isEmpty()) return text;
+        String out = text;
+        for (java.util.Map.Entry<String, String> e : table.entrySet()) {
+            String k = e.getKey();
+            if (k != null && k.length() > 1 && out.contains(k)) out = out.replace(k, e.getValue());
+        }
+        return out;
+    }
+    private final java.util.Map<Long, Integer> shotNameMap = new java.util.HashMap<Long, Integer>();
+    private int shotNameSeq = 0;
+
+    /** 给一个目标分配稳定的占位编号；同一 did 在深浅两次导出里拿到同一个号。 */
+    private String shotAlias(long did, boolean username) {
+        Integer n = shotNameMap.get(did);
+        if (n == null) { n = Integer.valueOf(++shotNameSeq); shotNameMap.put(did, n); }
+        String num = n.intValue() < 10 ? "0" + n : String.valueOf(n);
+        return username ? ("@demo_bot_" + num) : ("Demo Bot " + num);
+    }
     private boolean lastPollInWindow = true;
     private String SIGN = "wlmosv";
     private boolean AUTO_LEARN = true;                        // 按钮/回调学习总开关。默认开：新装用户点一次 bot 按钮就能学会，
@@ -280,12 +344,49 @@ public final class TGAutoSignCore {
         return g;
     }
 
+    /**
+     * 导出图里不适合出现的日志行：模块启动行、导出自身、纯机制信息。
+     * 只作用于 SHOT_MODE，普通用户的「最近动态」显示规则不变。
+     */
+    private static boolean isShotHiddenLog(String m) {
+        if (m == null) return true;
+        String s = m.trim();
+        if (s.length() == 0) return true;
+        if (s.startsWith("[导出]")) return true;
+        if (s.contains("已加载")) return true;
+        if (s.contains("注入:")) return true;
+        if (s.startsWith("宿主:")) return true;
+        if (s.startsWith("账号:")) return true;
+        if (s.startsWith("使用:")) return true;
+        if (s.contains("启动补签")) return true;
+        if (s.contains("收到管理命令")) return true;
+        if (s.startsWith("[主题]")) return true;
+        if (s.contains("账号实况")) return true;
+        if (isInternalLog(s)) return true;
+        return false;
+    }
+
     /** 终端日志卡内容：按最近 4 行重建（面板开着时每 4 秒自动刷新一次） */
     private void renderTermBody(final LinearLayout body, final Activity act2) {
         try {
             body.removeAllViews();
             java.util.List<LogLine> recent = new ArrayList<>();
-            synchronized (logBuffer) { if (logBuffer.size() > 0) { int f = Math.max(0, logBuffer.size() - 4); for (int i = f; i < logBuffer.size(); i++) recent.add(logBuffer.get(i)); } }
+            synchronized (logBuffer) {
+                int end = logBuffer.size();
+                if (SHOT_MODE && SHOT_LOG_CUTOFF >= 0 && SHOT_LOG_CUTOFF < end) end = SHOT_LOG_CUTOFF;
+                if (SHOT_MODE) {
+                    // 导出图：从尾部往前挑真正有内容的行（跳过启动/机制噪声），
+                    // 这样即使最近几行是启动信息，图上也会显示靠前的签到动态。
+                    for (int i = end - 1; i >= 0 && recent.size() < 4; i--) {
+                        LogLine cand = logBuffer.get(i);
+                        if (isShotHiddenLog(cand.msg)) continue;
+                        recent.add(0, cand);
+                    }
+                } else if (end > 0) {
+                    int f = Math.max(0, end - 4);
+                    for (int i = f; i < end; i++) recent.add(logBuffer.get(i));
+                }
+            }
             if (recent.isEmpty()) {
                 TextView e1 = new TextView(act2); e1.setTextSize(Theme.TS_CAPTION); e1.setTypeface(Theme.text()); e1.setTextColor(Theme.termFaint(act2));
                 e1.setText(Lang.tr("（暂无动态，签到后会在这里显示）")); body.addView(e1);
@@ -307,6 +408,8 @@ public final class TGAutoSignCore {
                     text = l.msg;
                 }
                 TextView lv2 = new TextView(act2); lv2.setTextSize(Theme.TS_CAPTION); lv2.setTypeface(android.graphics.Typeface.MONOSPACE);
+                // 导出时对日志文本脱敏（日志里可能出现真实 bot 名）
+                if (SHOT_MODE) text = shotScrub(text, shotTable);
                 String lineText = new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(new java.util.Date(l.ts)) + "  " + text;
                 if (lineText.length() > 52) lineText = lineText.substring(0, 52) + "...";
                 lv2.setText(lineText);
@@ -4728,6 +4831,7 @@ public final class TGAutoSignCore {
 
     /** 目标显示标题：备注名 > bot 显示名 > @username > 群名，不再裸露数字 ID。 */
     private String targetTitle(long did) {
+        if (SHOT_MASK && !SHOT_RAW) return shotAlias(did, false);
         // 群 / 频道：先查群名
         if (did < 0) {
             String ct = chatTitle(did, currentAccount());
@@ -4750,6 +4854,7 @@ public final class TGAutoSignCore {
 
     /** 目标副标题：@username（可读、能猜用途）；没有 username 才退回数字 ID。 */
     private String targetSubtitle(long did) {
+        if (SHOT_MASK && !SHOT_RAW) return shotAlias(did, true);
         if (did < 0) return String.valueOf(did); // 群直接显示 ID
         String u = botUsername(did);
         if (u != null && u.length() > 0) return "@" + u;
@@ -5532,7 +5637,7 @@ public final class TGAutoSignCore {
     private void showMainMenu(Activity act) {
 
         long now0 = System.currentTimeMillis();
-        fastMainOpen = now0 - lastMainOpen < 15000L;
+        fastMainOpen = SHOT_MODE || (now0 - lastMainOpen < 15000L);
         lastMainOpen = now0;
         TITLE_FX = (TITLE_FX + 1) % 4;
         try { prefs.edit().putInt("jmb_fx", TITLE_FX).apply(); } catch (Throwable ignored) {}
@@ -6691,15 +6796,16 @@ public final class TGAutoSignCore {
     private static final boolean FORCE_CUSTOM_DIALOG = true;
 
     private Object showDialog(Activity act, String title, View view, String negLabel) {
-        title = Lang.tr(title);
-        negLabel = Lang.tr(negLabel);
-
-        // 导出模式：只记录页面 View 并让调用方尽快收手，不真正弹窗
-        if (SHOT_MODE && !SHOT_DONE && title != null && title.equals(SHOT_TITLE)) {
+        // 导出模式：只记录页面 View 并让调用方尽快收手，不真正弹窗。
+        // 取「本次页面构建的第一个 showDialog」，不靠标题匹配 ——
+        // 页面标题会随语言变化（目标列表（11） / Targets (11)），匹配标题必然漏页。
+        if (SHOT_MODE && !SHOT_DONE) {
             SHOT_DONE = true;
             SHOT_VIEW = view;
             return null;
         }
+        title = Lang.tr(title);
+        negLabel = Lang.tr(negLabel);
 
         if (act == null || act.isFinishing()) { toast(act == null ? Lang.tr("请在 Telegram 界面内使用 /jmb") : Lang.tr("页面已关闭，请重新打开")); return null; }
 
@@ -6846,8 +6952,16 @@ public final class TGAutoSignCore {
      */
     private void exportShots(final Activity act, String scaleArg) {
         if (act == null) { toast(Lang.tr("请在 Telegram 界面内使用 /jmb")); return; }
+        if (!SHOT_BUSY.compareAndSet(false, true)) {
+            toast(Lang.tr("界面图正在导出，请稍候…"));
+            return;
+        }
         final float scale = parseScale(scaleArg);
         final int savedTheme = THEME_MODE;
+        SHOT_MASK = true;
+        shotNameMap.clear(); shotNameSeq = 0;
+        try { synchronized (logBuffer) { SHOT_LOG_CUTOFF = logBuffer.size(); } } catch (Throwable ignored) {}
+        shotTable = shotScrubTable();   // 先建脱敏表，再截断日志
         final String[] PAGES = { "TGAutoSign · 管理", "目标列表", "设置" };
         jlog("[导出] 开始：3 页 × 深浅色，密度 " + scale + "x");
         toast(Lang.tr("正在导出界面图…"));
@@ -6876,7 +6990,7 @@ public final class TGAutoSignCore {
                             if (dir == null) { jlog("[导出] 目录不可用"); fail++; continue; }
                             String fn = "shot-" + shotBaseName(pt) + (dk ? "-dark" : "-light") + ".png";
                             java.io.File f = new java.io.File(dir, fn);
-                            if (renderViewToPng(v, scale, f)) {
+                            if (renderViewToPng(v, scale, f, SHOT_BG)) {
                                 ok++; jlog("[导出] OK " + fn + " " + f.length() + "B");
                             } else { fail++; jlog("[导出] 渲染失败: " + fn); }
                         } catch (Throwable t) { fail++; jlog("[导出] 异常 " + pt + ": " + t); }
@@ -6888,6 +7002,10 @@ public final class TGAutoSignCore {
                 final int fOk = ok, fFail = fail;
                 mainHandler.post(new Runnable() { @Override public void run() {
                     try { shotEnd(savedTheme); } catch (Throwable ignored) {}
+                    SHOT_MASK = false;
+                    SHOT_LOG_CUTOFF = -1;
+                    shotTable = null;
+                    SHOT_BUSY.set(false);
                     toast(Lang.tf("界面图导出完成：成功 {0} 张，失败 {1} 张", fOk, fFail));
                 } });
             }
@@ -6901,9 +7019,12 @@ public final class TGAutoSignCore {
         int savedTheme = THEME_MODE;
         try {
             SHOT_MODE = true;
+            SHOT_DONE = false;      // 每页都要重置：否则第二页起永远不被截获
             SHOT_TITLE = pageTitle;
             SHOT_VIEW = null;
             Theme.mode = dark ? 2 : 1;   // 1=始终日间 2=始终夜间；dark() 直接采信，绕过缓存
+            // 底色必须在主线程、主题生效时取：渲染在子线程做，那时主题已复位
+            SHOT_BG = Theme.termCardDeep(act);
             buildPageByTitle(act, pageTitle);
             holder.set(SHOT_VIEW);
         } catch (Throwable t) {
@@ -6931,7 +7052,72 @@ public final class TGAutoSignCore {
      * 宽度按真实对话框的卡片宽度算（屏宽 92%，上限 400dp），
      * 所以导出的图和用户实际看到的面板一样宽。
      */
-    private boolean renderViewToPng(View root, float scale, java.io.File out) {
+    /**
+     * 裁掉与底色相同的边缘：对话框卡片比画布窄，四周会留一圈底色。
+     * 直接从四边往内扫，遇到第一行/列与底色不同的像素即为边界。
+     */
+    private Bitmap cropToContent(Bitmap src, int bg) {
+        try {
+            int w = src.getWidth(), h = src.getHeight();
+            int tol = 6;
+            int br = (bg >> 16) & 0xFF, bgc = (bg >> 8) & 0xFF, bb = bg & 0xFF;
+            int[] row = new int[w];
+            int top = 0, bottom = h - 1, left = 0, right = w - 1;
+            boolean found;
+            // top
+            found = false;
+            for (int y = 0; y < h && !found; y++) {
+                src.getPixels(row, 0, w, 0, y, w, 1);
+                for (int x = 0; x < w; x++) {
+                    int c = row[x];
+                    if (Math.abs(((c >> 16) & 0xFF) - br) > tol
+                            || Math.abs(((c >> 8) & 0xFF) - bgc) > tol
+                            || Math.abs((c & 0xFF) - bb) > tol) { top = y; found = true; break; }
+                }
+            }
+            // bottom
+            found = false;
+            for (int y = h - 1; y >= 0 && !found; y--) {
+                src.getPixels(row, 0, w, 0, y, w, 1);
+                for (int x = 0; x < w; x++) {
+                    int c = row[x];
+                    if (Math.abs(((c >> 16) & 0xFF) - br) > tol
+                            || Math.abs(((c >> 8) & 0xFF) - bgc) > tol
+                            || Math.abs((c & 0xFF) - bb) > tol) { bottom = y; found = true; break; }
+                }
+            }
+            // left / right（逐列抽样即可）
+            int[] col = new int[h];
+            found = false;
+            for (int x = 0; x < w && !found; x++) {
+                src.getPixels(col, 0, 1, x, 0, 1, h);
+                for (int y = 0; y < h; y++) {
+                    int c = col[y];
+                    if (Math.abs(((c >> 16) & 0xFF) - br) > tol
+                            || Math.abs(((c >> 8) & 0xFF) - bgc) > tol
+                            || Math.abs((c & 0xFF) - bb) > tol) { left = x; found = true; break; }
+                }
+            }
+            found = false;
+            for (int x = w - 1; x >= 0 && !found; x--) {
+                src.getPixels(col, 0, 1, x, 0, 1, h);
+                for (int y = 0; y < h; y++) {
+                    int c = col[y];
+                    if (Math.abs(((c >> 16) & 0xFF) - br) > tol
+                            || Math.abs(((c >> 8) & 0xFF) - bgc) > tol
+                            || Math.abs((c & 0xFF) - bb) > tol) { right = x; found = true; break; }
+                }
+            }
+            if (right <= left || bottom <= top) return src;
+            jlog("[导出] 裁边 (" + left + "," + top + ")-(" + right + "," + bottom + ") 画布 " + w + "x" + h);
+            return Bitmap.createBitmap(src, left, top, right - left + 1, bottom - top + 1);
+        } catch (Throwable t) {
+            jlog("[导出] 裁边失败: " + t);
+            return src;
+        }
+    }
+
+    private boolean renderViewToPng(View root, float scale, java.io.File out, int bg) {
         Bitmap bmp = null;
         try {
             Context c = root.getContext();
@@ -6944,12 +7130,17 @@ public final class TGAutoSignCore {
             bmp = Bitmap.createBitmap((int) (cardW * scale), (int) (h * scale), Bitmap.Config.ARGB_8888);
             android.graphics.Canvas cv = new android.graphics.Canvas(bmp);
             cv.scale(scale, scale);
-            cv.drawColor(Theme.termCardDeep(c));
+            // 底色用主线程取好的值铺满：页面卡片比画布窄（对话框宽 92% 屏宽），
+            // 两侧与上下会留透明边，直接存 PNG 会变成黑边。
+            cv.drawColor(bg);
             root.layout(0, 0, cardW, h);
             root.draw(cv);
+            // 再裁到实际有内容的矩形，去掉透明边距
+            Bitmap outBmp = cropToContent(bmp, bg);
             java.io.FileOutputStream fos = new java.io.FileOutputStream(out);
-            bmp.compress(Bitmap.CompressFormat.PNG, 100, fos);
+            outBmp.compress(Bitmap.CompressFormat.PNG, 100, fos);
             fos.flush(); fos.close();
+            if (outBmp != bmp) outBmp.recycle();
             return true;
         } catch (Throwable t) {
             jlog("[导出] render 失败: " + t);

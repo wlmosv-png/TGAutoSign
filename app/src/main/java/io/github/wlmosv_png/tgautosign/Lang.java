@@ -817,5 +817,6 @@ public final class Lang {
         EN.put("▍待添加", "\u258d TO ADD");
         EN.put("正在导出界面图…", "Exporting UI screenshots…");
         EN.put("界面图导出完成：成功 {0} 张，失败 {1} 张", "Screenshot export done: {0} ok, {1} failed");
+        EN.put("界面图正在导出，请稍候…", "Screenshot export already running, please wait…");
     }
 }
