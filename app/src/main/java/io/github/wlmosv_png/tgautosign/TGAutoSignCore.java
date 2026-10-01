@@ -6066,23 +6066,13 @@ public final class TGAutoSignCore {
         //   看起来像"还没签完、还要再签一轮"，与实际状态矛盾。
         // 根因：倒计时只按时刻表算，不看"今天是否已签完"——
         //   而时刻表是早上生成的（含当时全部未签目标），签完之后表不会自我清理。
-        // 现在：全部签完 → 显示「今日已全部完成」，把"下一次"的信息让给真正需要的场景。
+        // 2026-10-01：此处原本在「今天全部签完」时显示一行「✓ 今日已全部完成」，
+        // 但紧邻的日历摘要行已用「✓ 今天已签」表达同一件事，且区分四态、信息更全
+        // （用户截图里同一信息出现了四次）。移除该行，只保留"下次签到"倒计时。
+        // 注意：倒计时**仅在没有全部签完时**显示 —— 已签完还提示"下次签到"会
+        // 让人以为还要再签一轮（2026-09-30 修过这个矛盾，这里保持该约束）。
         final boolean allSignedToday = isAllSignedToday();
-        if (TIMER_ENABLED && allSignedToday) {
-            TextView doneT = new TextView(act); doneT.setTextSize(Theme.TS_CAPTION);
-            doneT.setTextColor(Theme.termGreen(act));
-            doneT.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-            doneT.setPadding(0, dp(4), 0, 0);
-            doneT.setText(Lang.tr("今日已全部完成"));
-            android.graphics.drawable.Drawable dd = Icons.d(act, "check", 13f, Theme.termGreen(act));
-            if (dd != null) {
-                int dsz = Theme.dp(act, 13);
-                dd.setBounds(0, 0, dsz, dsz);
-                doneT.setCompoundDrawables(dd, null, null, null);
-                doneT.setCompoundDrawablePadding(Theme.dp(act, 5));
-            }
-            statCard.addView(doneT);
-        } else if (TIMER_ENABLED) {
+        if (TIMER_ENABLED && !allSignedToday) {
             String nx = nextTimerLabel();
             if (nx != null) {
                 // 2026-09-30：改用青色。原为琥珀色，与「按钮失效/退避重试」等
@@ -10095,19 +10085,29 @@ public final class TGAutoSignCore {
                 sum.addView(mid, new android.widget.LinearLayout.LayoutParams(-2, -2));
             }
 
-            // ③ 近 14 天完成度：最弱色，趋势参考
-            TextView right = new TextView(act);
-            right.setTextSize(Theme.TS_CAPTION);
-            right.setTypeface(Theme.text());
-            right.setGravity(android.view.Gravity.RIGHT | android.view.Gravity.CENTER_VERTICAL);
-            right.setSingleLine(true);
-            int rCol = (signedIn14 >= 14) ? GREEN : (signedIn14 * 2 >= 14 ? CYAN : FAINT);
-            right.setTextColor(rCol);
-            right.setText(Lang.tf("近 14 天 {0}", signedIn14 + "/14"));
-            android.widget.LinearLayout.LayoutParams rlp =
-                    new android.widget.LinearLayout.LayoutParams(-2, -2);
-            rlp.leftMargin = dp(streak > 0 ? 10 : 0);
-            sum.addView(right, rlp);
+            // ③ 近 14 天完成度：**仅在日历有缺口时才显示**（2026-10-01 按用户反馈收紧）
+            //
+            // 用户实测反馈「14/14 太多了」——确实。满勤时这个数字就是在数上面那 14 个
+            // 绿格，日历本身已经说完了，数字纯属重复（截图里同一信息出现了四次：
+            // 头部「已签 10/10」、状态行「今日已全部完成」、14 个绿格、以及这一行）。
+            //
+            // 保留条件：只有**中间断过**（signedIn14 < 14）时，
+            // 「连续 N 天」与「N/14」的**差值**才有信息量 —— 它解释了
+            // "为什么连续天数不是 14"。满勤时两者恒等，没有解释价值。
+            if (signedIn14 < 14) {
+                TextView right = new TextView(act);
+                right.setTextSize(Theme.TS_CAPTION);
+                right.setTypeface(Theme.text());
+                right.setGravity(android.view.Gravity.RIGHT | android.view.Gravity.CENTER_VERTICAL);
+                right.setSingleLine(true);
+                int rCol = (signedIn14 * 2 >= 14) ? CYAN : FAINT;
+                right.setTextColor(rCol);
+                right.setText(Lang.tf("近 14 天 {0}", signedIn14 + "/14"));
+                android.widget.LinearLayout.LayoutParams rlp =
+                        new android.widget.LinearLayout.LayoutParams(-2, -2);
+                rlp.leftMargin = dp(streak > 0 ? 10 : 0);
+                sum.addView(right, rlp);
+            }
 
             box.addView(sum);
 
