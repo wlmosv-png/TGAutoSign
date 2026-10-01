@@ -1479,19 +1479,9 @@ public final class TGAutoSignCore {
             try {
                 if (NOTIFY_ON) {
                     for (final Integer accObj : snapshot.keySet()) {
-                        final int accN = accObj.intValue();
-                        if (!allSettledToday(accN)) {
-                            jlog("[通知] " + accountLabel(accN) + " 还有目标未出结果，暂不发汇总");
-                            continue;
-                        }
-                        String nk = "jmb_notified_" + accN;
-                        String today = todayStr();
-                        if (!today.equals(prefs.getString(nk, ""))) {
-                            prefs.edit().putString(nk, today).apply();
-                            mainHandler.postDelayed(new Runnable() { @Override public void run() {
-                                try { notifySummary(accN); } catch (Throwable ignored) {}
-                            } }, 3000L);
-                        }
+                        // 走统一的幂等入口，与心跳里的检查共用同一套判定，
+                        // 避免两处逻辑分叉（这正是 2026-10-01 摘要发不出的成因）
+                        trySendDailySummary(accObj.intValue());
                     }
                 }
             } catch (Throwable ignored) {}
@@ -1596,6 +1586,31 @@ public final class TGAutoSignCore {
     }
 
     /** 组装并发送今日签到摘要。 */
+    /**
+     * 到点就发每日摘要（幂等）。
+     *
+     * 背景（2026-10-01 实测）：摘要原本只在「签到轮次结束」时检查，
+     * 而检查点 if (allSettledToday) 不满足时只记一条日志、不重试 ——
+     * 如果窗口结束后没有新的签到轮次，摘要永远不会发出。
+     * 实测日志里「暂不发汇总」17 次、摘要 0 次，用户完全收不到日报。
+     *
+     * 本方法由心跳循环调用（每轮都查），补齐「窗口结束后」的触发点。
+     * 幂等靠 jmb_notified_<acc> 键：当天发过就不再发。
+     */
+    private void trySendDailySummary(final int acc) {
+        try {
+            if (!NOTIFY_ON) return;
+            final String nk = "jmb_notified_" + acc;
+            if (todayStr().equals(prefs.getString(nk, ""))) return;   // 今天已发
+            if (!allSettledToday(acc)) return;                        // 窗口未结束 / 仍有在途
+            // 先落盘再发：心跳密集触发时避免重复投递
+            prefs.edit().putString(nk, todayStr()).apply();
+            mainHandler.post(new Runnable() { @Override public void run() {
+                try { notifySummary(acc); } catch (Throwable ignored) {}
+            } });
+        } catch (Throwable t) { noteSwallowed("trySendDailySummary", t); }
+    }
+
     private void notifySummary() { notifySummary(currentAccount()); }
 
     private void notifySummary(final int acc) {
@@ -1606,27 +1621,49 @@ public final class TGAutoSignCore {
             loadTargetsInto(prefix, list);
             if (list.isEmpty()) return;
             int total = list.size(), done = 0;
-            List<String> fails = new ArrayList<>();
+            // 按「要不要用户动手」分两组：
+            //   needYou —— 待确认：只有人能决定，模块不会自愈
+            //   auto    —— 失败/待签：模块会自己重试或补签
+            List<String> needYou = new ArrayList<>();
+            List<String> auto = new ArrayList<>();
             String today = todayStr();
             for (Map<String, Object> m : list) {
                 String id = entryId(m);
                 if (today.equals(prefs.getString(kLast(prefix, id), ""))) { done++; continue; }
-                int rt = prefs.getInt(kRetry(prefix, id), 0);
                 String nm = entryDisplayName(m);
-                if (rt > 0) fails.add(Lang.tf("{0}（失败 {1} 次）", nm, rt));
-                else if (!isSnoozed(prefix, id)) fails.add(Lang.tf("{0}（待签）", nm));
+                if (isPendingConfirm(prefix, id)) {
+                    needYou.add(Lang.tf("{0} — {1}", nm, attentionLabel(prefix, id)));
+                    continue;
+                }
+                int rt = prefs.getInt(kRetry(prefix, id), 0);
+                if (rt > 0) auto.add(Lang.tf("{0}（失败 {1} 次）", nm, rt));
+                else if (!isSnoozed(prefix, id)) auto.add(Lang.tf("{0}（待签）", nm));
             }
-            if (NOTIFY_FAIL_ONLY && fails.isEmpty()) return;
+            int bad = needYou.size() + auto.size();
+            if (NOTIFY_FAIL_ONLY && bad == 0) return;
+
             StringBuilder sb = new StringBuilder();
-            if (fails.isEmpty()) {
-                sb.append(Lang.tf("✅ TGAutoSign 今日签到完成 {0}", done));
+            sb.append(Lang.tf("TGAutoSign 每日摘要 · {0}", accountLabel(acc))).append("\n");
+            if (bad == 0) {
+                sb.append(Lang.tf("今日 {0} 个目标全部已签", done));
             } else {
-                sb.append(Lang.tf("⚠️ TGAutoSign 今日 {0}/{1} 已签，{2} 个未完成", done, total, fails.size()));
-                sb.append("\n");
-                int n = 0;
-                for (String f : fails) { if (n++ >= 8) { sb.append("\n…"); break; } sb.append("\n· ").append(f); }
+                sb.append(Lang.tf("今日 {0}/{1} 已签", done, total));
             }
-            sb.append("\n").append(nowHM()).append(" · ").append(accountLabel(acc));
+
+            // 需要你决定的放前面 —— 这组不做就永远没结果
+            if (!needYou.isEmpty()) {
+                sb.append("\n\n").append(Lang.tf("⚠ 需要你决定（{0}）", needYou.size()));
+                int n = 0;
+                for (String f : needYou) { if (n++ >= 6) { sb.append("\n· …"); break; } sb.append("\n· ").append(f); }
+                sb.append("\n").append(Lang.tr("发送 /jmb 打开面板处理"));
+            }
+            // 自动重试中的放后面 —— 告知即可，不用动手
+            if (!auto.isEmpty()) {
+                sb.append("\n\n").append(Lang.tf("自动重试中（{0}）", auto.size()));
+                int n = 0;
+                for (String f : auto) { if (n++ >= 6) { sb.append("\n· …"); break; } sb.append("\n· ").append(f); }
+            }
+            sb.append("\n\n").append(nowHM());
             sendSavedMessage(sb.toString(), acc);
         } catch (Throwable t) { logException("[通知] 汇总", t); }
     }
@@ -9377,6 +9414,15 @@ public final class TGAutoSignCore {
                             promoteSilentToPendingAll(accountPrefix(_pa));
                         }
                     } catch (Throwable _eP) { noteSwallowed("tick-promote", _eP); }
+                    // 到点就发每日摘要（幂等）。必须在心跳里查 ——
+                    // 摘要原本只由「签到轮次结束」触发，窗口结束后若没有新轮次
+                    // 就永远不会发（2026-10-01 实测：日志里 17 次「暂不发汇总」、
+                    // 摘要 0 次）。放在 promote 之后：先归类在途目标，再判定更准。
+                    try {
+                        if (NOTIFY_ON) {
+                            for (int _sa : accountSlots()) trySendDailySummary(_sa);
+                        }
+                    } catch (Throwable _eS) { noteSwallowed("tick-summary", _eS); }
                     if (TIMER_ENABLED) {
                         kickSchedule();
                     } else if (inWindow()) {

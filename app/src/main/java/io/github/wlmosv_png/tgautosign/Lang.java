@@ -818,5 +818,11 @@ public final class Lang {
         EN.put("正在导出界面图…", "Exporting UI screenshots…");
         EN.put("界面图导出完成：成功 {0} 张，失败 {1} 张", "Screenshot export done: {0} ok, {1} failed");
         EN.put("界面图正在导出，请稍候…", "Screenshot export already running, please wait…");
+        EN.put("TGAutoSign 每日摘要 · {0}", "TGAutoSign daily summary · {0}");
+        EN.put("⚠ 需要你决定（{0}）", "⚠ Needs your decision ({0})");
+        EN.put("自动重试中（{0}）", "Retrying automatically ({0})");
+        EN.put("今日 {0} 个目标全部已签", "All {0} targets signed in today");
+        EN.put("今日 {0}/{1} 已签", "{0}/{1} signed in today");
+        EN.put("发送 /jmb 打开面板处理", "Send /jmb to open the panel and handle them");
     }
 }
