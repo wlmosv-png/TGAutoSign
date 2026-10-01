@@ -798,6 +798,16 @@ public final class Lang {
         // 「今日已用尽」——bot 明确表示今天不能再操作（次数上限/请明日再试）。
         // 归入今日了结：不标已签、不计失败、不再重发。
         EN.put("今日已用尽", "Daily quota used up");
+        // 日历摘要行的今日状态（2026-10-01）
+        EN.put("今天已签", "Signed today");
+        EN.put("今天待签", "Due today");
+        EN.put("今天未签", "Missed today");
+        EN.put("今天未参与", "Not active today");
+        EN.put("近 14 天", "Last 14 days");
+        EN_SHORT.put("今天已签", "Done");
+        EN_SHORT.put("今天待签", "Due");
+        EN_SHORT.put("今天未签", "Missed");
+        EN_SHORT.put("今天未参与", "Idle");
         EN.put("今日操作次数已用尽，已停止重发", "Daily limit reached; stopped retrying");
         EN_SHORT.put("已用尽", "Used up");
         EN.put("bot 未回复", "Bot did not reply");

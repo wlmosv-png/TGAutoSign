@@ -33,7 +33,9 @@ final class Icons {
             "chevron-d", "chevron-u", "check", "clock", "warn", "target", "down", "bulb", "keyboard",
             "group", "bot", "clean", "megaphone", "chevron-r", "pencil", "pause",
             "hourglass", "gap", "key", "save", "x", "calendar", "bolt",
-            "boltfill", "ring"));
+            "boltfill", "ring",
+            // 今日状态（2026-10-01）：日历摘要行用，与 DayCell 的六种样式解耦
+            "today-done", "today-wait", "today-miss", "today-idle"));
 
     static boolean has(String name) {
         return name != null && NAMES.contains(name);
@@ -296,6 +298,34 @@ final class Icons {
                 poly(s, new float[]{8.5f, 3f, 8.5f, 7.5f}, false);
                 poly(s, new float[]{15.5f, 3f, 15.5f, 7.5f}, false);
                 dot(f, 12f, 15.8f, 1.75f);
+                break;
+            // ── 今日状态四态（2026-10-01）──
+            // 设计约定：统一 24 网格、与既有图标同线宽，**纯几何、不含文字/emoji**，
+            // 因此在日间/夜间与全部 6 种日历格样式下都不会与配色打架。
+            case "today-done":
+                // 实心圆 + 对勾：完成态用"满"表达，对勾比"打勾方框"更轻
+                circle(s, 12f, 12f, 8.4f);
+                poly(s, new float[]{7.8f, 12.2f, 10.9f, 15.3f, 16.4f, 8.6f}, false);
+                break;
+            case "today-wait":
+                // 断续圆环（4 段弧 = "进行中"）+ 中心点：等待态要"未满"的感觉。
+                // 第一段 forceMove=true 起笔，其余 false 续画，避免产生额外 moveto。
+                arc(s, 12f, 12f, 8.4f, -80f, 70f, true);
+                arc(s, 12f, 12f, 8.4f, 20f, 70f, false);
+                arc(s, 12f, 12f, 8.4f, 120f, 70f, false);
+                arc(s, 12f, 12f, 8.4f, 220f, 70f, false);
+                dot(f, 12f, 12f, 1.5f);
+                break;
+            case "today-miss":
+                // 圆环 + 中心短横：错过态要"落空"但不吓人（不用叉，叉太像报错）
+                circle(s, 12f, 12f, 8.4f);
+                poly(s, new float[]{8.6f, 12f, 15.4f, 12f}, false);
+                break;
+            case "today-idle":
+                // 圆环 + 两短竖（暂停符）：不参与态，与「暂停」语义一致
+                circle(s, 12f, 12f, 8.4f);
+                poly(s, new float[]{10.2f, 8.6f, 10.2f, 15.4f}, false);
+                poly(s, new float[]{13.8f, 8.6f, 13.8f, 15.4f}, false);
                 break;
             case "megaphone":
                 poly(s, new float[]{4f, 10f, 8f, 10f, 17f, 5f, 17f, 17f, 8f, 12f}, true);

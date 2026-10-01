@@ -1097,6 +1097,78 @@ public final class SignLogic {
         return verdict == V_SIGNED || verdict == V_EXHAUSTED;
     }
 
+    // ────────────────────────────────────────────────────────────────
+    //  连续签到 / 日历状态（2026-10-01 重做）
+    //
+    //  背景（用户反馈）：日历上"连续 14 天"在**新的一天还没签**时仍然显示 14，
+    //  与日历里今天那格的"空框"互相矛盾；用户不知道"今天到底要不要动手"。
+    //
+    //  根因：streakOf() 把"昨天签过"也算作连续有效，于是整个白天都沿用旧值。
+    //  设计取舍：**今天没签不归零**（中午看到"0 天"会以为白签了），
+    //  但必须把"今天的状态"独立表达出来 —— 那才是唯一可行动的信息。
+    // ────────────────────────────────────────────────────────────────
+
+    /** 今天的状态：已签。 */
+    public static final int TODAY_DONE = 0;
+    /** 今天的状态：还没签，且仍在签到窗口/补签时段内 —— 还来得及。 */
+    public static final int TODAY_PENDING = 1;
+    /** 今天的状态：还没签，且已过窗口与补签截止 —— 今天大概率赶不上了。 */
+    public static final int TODAY_MISSED = 2;
+    /** 今天的状态：账号停用或全部目标冻结 —— 今天不参与。 */
+    public static final int TODAY_IDLE = 3;
+
+    /**
+     * 判定"今天"的状态。
+     *
+     * @param signedToday   今天是否已签（至少一个目标）
+     * @param nowMin        当前分钟（0..1439）
+     * @param windowAny     签到窗口（windowRangeAny 的结果，可为 null=不限）
+     * @param missDeadline  补签截止分钟
+     * @param missBackOn    是否开启补签
+     * @param anyTargetOn   是否还有启用中的目标
+     */
+    public static int todayState(boolean signedToday, int nowMin, int[] windowAny,
+                                 int missDeadline, boolean missBackOn, boolean anyTargetOn) {
+        if (signedToday) return TODAY_DONE;
+        if (!anyTargetOn) return TODAY_IDLE;
+        // 有补签时，窗口结束后仍可补到截止时间 —— 那段时间不算"错过"
+        if (missBackOn && windowAny != null) {
+            if (inMissBackTime(nowMin, new int[]{windowAny[0], windowAny[0]}, missDeadline, true)) {
+                return TODAY_PENDING;
+            }
+        }
+        if (windowAny == null) return TODAY_PENDING;      // 不限窗口 = 随时可签
+        // 窗口内（含跨天）→ 还来得及
+        if (inWindowAny(nowMin, windowAny)) return TODAY_PENDING;
+        // 跨天窗口（如 22:00-02:00）：今天的机会在今晚 22:00 之后，
+        // 当前无论处在"昨夜的尾巴"还是"白天空档"，都还没到今天的点 → 等
+        if (crossesMidnight(windowAny)) return TODAY_PENDING;
+        // 还没到窗口开始（如窗口 08:00 开始、现在 07:00）→ **等**，不是"未签"。
+        // 2026-10-01 修：初版在这里直接落进 TODAY_MISSED，于是早上打开面板
+        // 会看到粉色的"今天未签"——那时压根还没到该签的时候，纯属误报惊吓。
+        if (nowMin < windowAny[0]) return TODAY_PENDING;
+        // 窗口已过、补签也没开或已过 → 今天确实赶不上了
+        return TODAY_MISSED;
+    }
+
+    /**
+     * 连续天数的展示值。
+     *
+     * 规则：今天已签 → 用存储值（含今天）；今天未签但昨天签过 → 存储值（不含今天）；
+     * 否则 0。注意**不因"今天还没签"而归零**，避免用户中午打开看到 0 天。
+     *
+     * @param stored      已存储的连续天数
+     * @param lastDate    最近一次签到日期 yyyy-MM-dd
+     * @param today       今天 yyyy-MM-dd
+     * @param yesterday   昨天 yyyy-MM-dd
+     */
+    public static int streakDisplay(int stored, String lastDate, String today, String yesterday) {
+        if (lastDate == null || lastDate.length() == 0) return 0;
+        if (today != null && today.equals(lastDate)) return Math.max(stored, 1);
+        if (yesterday != null && yesterday.equals(lastDate)) return Math.max(stored, 1);
+        return 0;
+    }
+
     /** 把分钟数说成「1 小时 12 分」/「42 分」。 */
     public static String humanMinutes(int min) {
         if (min <= 0) return "0 分";

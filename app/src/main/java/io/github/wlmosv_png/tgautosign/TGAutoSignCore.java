@@ -1099,6 +1099,15 @@ public final class TGAutoSignCore {
     // ---------------- 工具 ----------------
     private String todayStr() { return new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date()); }
 
+    /** 昨天日期 yyyy-MM-dd。日历摘要判定"连续是否延续"用（2026-10-01）。 */
+    private String yesterdayStr() {
+        try {
+            java.util.Calendar c = java.util.Calendar.getInstance();
+            c.add(java.util.Calendar.DATE, -1);
+            return new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(c.getTime());
+        } catch (Throwable t) { return ""; }
+    }
+
     /** 宿主友好名：已知客户端给短名，未知 fork 显示包名末段 */
     private String hostLabel(String pkg) {
         if (pkg == null || pkg.length() == 0) return "unknown";
@@ -4408,8 +4417,16 @@ public final class TGAutoSignCore {
                                     .remove(kRetryAt(fPrefix, fId))
                                     .remove(kRetryDay(fPrefix, fId))
                                     .commit();
-                                updateStreak(fPrefix);
-                                noteSignedDay(fPrefix);
+                                // ── 记账修正（2026-10-01）──
+                                // 这里**不再**调 updateStreak / noteSignedDay。
+                                // 本分支的语义是"请求发送成功"，紧接着的注释也写着
+                                // "不等于签到成功"——而 bot 完全可能回「请先关注」。
+                                // 原先在此计入连签/日历，导致：
+                                //   · 发送成功但被拒绝的日子，也被算进"连续 N 天"
+                                //   · bot 随后撤销 kLast，但 streak / sign_days 不会撤销
+                                //     → 日历与连续天数长期虚高
+                                // 正确时机是 SignStateStore.markSigned（确认成功）——
+                                // 那里的 onSigned hook 会调这两个方法，且已被去重。
                                 String ans = "";
                                 try { Object am = getFieldValSafe(response, "message"); if (am == null) am = getFieldValSafe(response, "alert"); if (am != null) ans = String.valueOf(am); } catch (Throwable _e16) { noteSwallowed("sendSign", _e16); }
                                 // 注意：这只是「请求发送成功」，**不等于签到成功**。
@@ -9895,6 +9912,7 @@ public final class TGAutoSignCore {
             final int CYAN  = Theme.termCyan(act);
             final int MUTED = Theme.termMuted(act);
             final int FAINT = Theme.termFaint(act);
+            final int PINK  = Theme.termPink(act);   // 「今天未签」用危险色，与"已签绿"形成对照
 
             LinearLayout box = new LinearLayout(act);
             box.setOrientation(LinearLayout.VERTICAL);
@@ -9904,6 +9922,28 @@ public final class TGAutoSignCore {
             LinearLayout row2 = new LinearLayout(act); row2.setOrientation(LinearLayout.HORIZONTAL);
 
             int signedIn14 = 0;
+
+            // ── 今日状态（提前算好，供"今天"那格与摘要行共用，2026-10-01）──
+            // 放在循环前的原因：格子要在渲染时就知道今天该用哪个语义色，
+            // 不能等摘要行算完再回头改（那样两处口径还可能不一致）。
+            String todayS = todayStr();
+            String yestS = yesterdayStr();
+            String lsd = prefs.getString(kLastSignDate(prefix), "");
+            boolean signedToday = todayS.equals(lsd) || hasSignedToday(prefix);
+            int streak = SignLogic.streakDisplay(streakOf(prefix), lsd, todayS, yestS);
+
+            java.util.Calendar ncal = java.util.Calendar.getInstance();
+            int nowMin = ncal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + ncal.get(java.util.Calendar.MINUTE);
+            boolean anyOn = false;
+            try {
+                java.util.List<Map<String, Object>> tl = new java.util.ArrayList<Map<String, Object>>();
+                loadTargetsInto(prefix, tl);
+                for (Map<String, Object> m : tl) {
+                    if (!isFrozen(prefix, entryId(m))) { anyOn = true; break; }
+                }
+            } catch (Throwable ignored) {}
+            final int tState = SignLogic.todayState(signedToday, nowMin,
+                    SignLogic.windowRangeAny(WINDOW), MISS_DEADLINE, MISS_BACK, anyOn);
 
             for (int i = 0; i < 14; i++) {
                 // 每次渲染都按「当天」重算：窗口随日期自动滚动，跨天不会残留旧日期
@@ -9938,14 +9978,25 @@ public final class TGAutoSignCore {
                 cell.setText(today ? Lang.tr("今")
                                    : String.valueOf(cc.get(java.util.Calendar.DAY_OF_MONTH)));
 
+                // 「今天」那格按今日状态取色（2026-10-01）：
+                // 已签→绿、待签→青、未签→粉、未参与→弱。
+                // 这样格子颜色与摘要行文字永远同源，不会出现"格子绿着、
+                // 摘要却说未签"这类自相矛盾的画面。
+                int todayAccent;
+                switch (tState) {
+                    case SignLogic.TODAY_DONE:    todayAccent = GREEN; break;
+                    case SignLogic.TODAY_PENDING: todayAccent = CYAN;  break;
+                    case SignLogic.TODAY_MISSED:  todayAccent = PINK;  break;
+                    default:                      todayAccent = MUTED; break;
+                }
                 int txtCol;
-                if (today)         txtCol = on ? GREEN : CYAN;
+                if (today)         txtCol = todayAccent;
                 else if (on)       txtCol = dark ? 0xFFE8FFF6 : blendText(dark, GREEN);
                 else if (weekend)  txtCol = FAINT;
                 else               txtCol = MUTED;
                 cell.setTextColor(txtCol);
 
-                int accent = today ? CYAN : GREEN;
+                int accent = today ? todayAccent : GREEN;
                 Icons.DayCellDrawable d = new Icons.DayCellDrawable(
                         dp(30), on, today, dark, accent, MUTED, CAL_STYLE);
                 draws[i] = d;
@@ -9977,29 +10028,53 @@ public final class TGAutoSignCore {
             }
 
             // ── 摘要行（2026-09-30 方案 B）──
-            // 左：连续天数（数据可靠，streak 由 last_sign_date 维护）
-            // 右：近 14 天完成度 N/14（由本地 days 集合算出，口径自洽）
-            // 刻意不显示"累计总天数"：sign_days 只记录近期，算总数会偏小（实测出现"共 1 天"），
-            // 显示错误数字比不显示更糟。
-            // ② 计数与显示同源说明：
-            // signedIn14 与格子的 on 出自同一判断，本身不会错。
-            // 之所以出现「只亮 1 格却显示 2/14」，是因为 days 集合混入了脏日期
-            // （见回填来源①的格式校验修复）。修好数据源后，两者自然一致。
-            int streak = streakOf(prefix);
+            // ── 摘要行（2026-10-01 重做）──
+            //
+            // 设计目标：回答"我今天要不要动手"——这是唯一可行动的信息。
+            //
+            // 旧版问题（用户实测）：只显示「连续 14 天」+「14/14」两个**历史**数字，
+            // 而新的一天还没签时连续天数仍沿用旧值（streakOf 把"昨天签过"也算连续），
+            // 与日历里今天那格的空框互相矛盾 —— 用户看不出今天到底要不要签。
+            //
+            // 新版三栏（左→右，视觉权重递减）：
+            //   ① 今日状态：图标 + 短文案，**唯一带语义色的元素**，一眼看到
+            //   ② 连续天数：中性色，是"已完成的历史"，今天签了才 +1
+            //   ③ 近 14 天完成度：最弱色，趋势参考
+            //
+            // 为什么今天没签**不归零**：中午打开看到"0 天"会让人以为白签了。
+            // 今天的状态由 ① 独立表达，不靠连续天数归零来暗示。
+            //
+            // 图标与配色：4 个矢量图标（today-done/wait/miss/idle）在 24 网格内
+            // 纯几何绘制，与既有图标同线宽，因此在日间/夜间 + 全部 6 种日历格
+            // 样式下都不与配色打架；不使用 emoji。
+            // 今日状态与连续天数已在日历循环前算好（见上），此处直接复用 ——
+            // 同一份数据、同一套口径，格子与文字不会打架。
+            String tIcon, tText; int tColor;
+            switch (tState) {
+                case SignLogic.TODAY_DONE:
+                    tIcon = "today-done"; tText = Lang.tr("今天已签"); tColor = GREEN; break;
+                case SignLogic.TODAY_PENDING:
+                    tIcon = "today-wait"; tText = Lang.tr("今天待签"); tColor = CYAN; break;
+                case SignLogic.TODAY_MISSED:
+                    tIcon = "today-miss"; tText = Lang.tr("今天未签"); tColor = PINK; break;
+                default:
+                    tIcon = "today-idle"; tText = Lang.tr("今天未参与"); tColor = MUTED; break;
+            }
 
             LinearLayout sum = new LinearLayout(act);
             sum.setOrientation(LinearLayout.HORIZONTAL);
             sum.setGravity(android.view.Gravity.CENTER_VERTICAL);
             sum.setPadding(0, dp(8), 0, 0);
 
+            // ① 今日状态：图标 + 文案，唯一承载状态语义
             TextView left = new TextView(act);
             left.setTextSize(Theme.TS_CAPTION);
             left.setTypeface(Theme.text());
-            left.setTextColor(GREEN);
+            left.setTextColor(tColor);
             left.setGravity(android.view.Gravity.CENTER_VERTICAL);
             left.setSingleLine(true);
-            left.setText(Lang.tf("连续 {0} 天", streak));
-            android.graphics.drawable.Drawable bi = Icons.d(act, streak > 0 ? "boltfill" : "bolt", 11f, GREEN);
+            left.setText(tText);
+            android.graphics.drawable.Drawable bi = Icons.d(act, tIcon, 11f, tColor);
             if (bi != null) {
                 int sz = dp(11);
                 bi.setBounds(0, 0, sz, sz);
@@ -10008,16 +10083,31 @@ public final class TGAutoSignCore {
             }
             sum.addView(left, new android.widget.LinearLayout.LayoutParams(0, -2, 1f));
 
+            // ② 连续天数：中性色（不抢 ① 的注意力），今天未签时也照常显示
+            if (streak > 0) {
+                TextView mid = new TextView(act);
+                mid.setTextSize(Theme.TS_CAPTION);
+                mid.setTypeface(Theme.text());
+                mid.setTextColor(MUTED);
+                mid.setGravity(android.view.Gravity.CENTER);
+                mid.setSingleLine(true);
+                mid.setText(Lang.tf("连续 {0} 天", streak));
+                sum.addView(mid, new android.widget.LinearLayout.LayoutParams(-2, -2));
+            }
+
+            // ③ 近 14 天完成度：最弱色，趋势参考
             TextView right = new TextView(act);
             right.setTextSize(Theme.TS_CAPTION);
             right.setTypeface(Theme.text());
             right.setGravity(android.view.Gravity.RIGHT | android.view.Gravity.CENTER_VERTICAL);
             right.setSingleLine(true);
-            // 完成度着色：满勤绿、过半青、其余弱
-            int rCol = (signedIn14 >= 14) ? GREEN : (signedIn14 * 2 >= 14 ? CYAN : MUTED);
+            int rCol = (signedIn14 >= 14) ? GREEN : (signedIn14 * 2 >= 14 ? CYAN : FAINT);
             right.setTextColor(rCol);
-            right.setText(signedIn14 + "/14");
-            sum.addView(right, new android.widget.LinearLayout.LayoutParams(-2, -2));
+            right.setText(Lang.tf("近 14 天 {0}", signedIn14 + "/14"));
+            android.widget.LinearLayout.LayoutParams rlp =
+                    new android.widget.LinearLayout.LayoutParams(-2, -2);
+            rlp.leftMargin = dp(streak > 0 ? 10 : 0);
+            sum.addView(right, rlp);
 
             box.addView(sum);
 
@@ -12554,9 +12644,13 @@ public final class TGAutoSignCore {
             calTip.setText(Lang.tr(DESC[st % DESC.length]));
             prev.removeAllViews();
             boolean dark = Theme.dark(act);
-            int green = Theme.termGreen(act), cyan = Theme.termCyan(act), muted = Theme.termMuted(act);
+            int green = Theme.termGreen(act), cyan = Theme.termCyan(act),
+                muted = Theme.termMuted(act), pink = Theme.termPink(act);
+            // 预览 8 格，覆盖全部会出现的组合，让用户选样式时就看到今天格的语义：
+            //   [0..4] 已签 · [5] 未签 · [6] 未签(周末) · [7] 今天（待签 = 青）
+            // 今天格用"待签"色（青）演示 —— 这是最常见、也最需要看清的状态。
             for (int i = 0; i < 8; i++) {
-                boolean signed = (i != 6);
+                boolean signed = (i <= 4);
                 boolean today = (i == 7);
                 TextView cell = new TextView(act);
                 cell.setTextSize(Theme.TS_CAPTION);
@@ -12570,9 +12664,9 @@ public final class TGAutoSignCore {
                 cell.setText(today ? Lang.tr("今") : String.valueOf(17 + i));
                 int ac = today ? cyan : green;
                 int tc;
-                if (today)     tc = signed ? green : cyan;
+                if (today)       tc = cyan;                 // 演示"今天待签"
                 else if (signed) tc = dark ? 0xFFE8FFF6 : blendText(dark, green);
-                else           tc = muted;
+                else             tc = muted;
                 cell.setTextColor(tc);
                 cell.setBackground(new Icons.DayCellDrawable(
                         dp(28), signed, today, dark, ac, muted, R.calStyle));
