@@ -1843,7 +1843,9 @@ public final class TGAutoSignCore {
                             if (t == null || t.trim().length() == 0) continue;
                             if (seen.contains(t)) continue;
                             seen.add(t);
-                            older.add(parseLogLine(t));
+                            LogLine _pl = parseLogLine(t);
+                            if (_pl == null) continue;   // 不是日志行（外部文本混入），跳过
+                            older.add(_pl);
                             totalRead++;
                             if (totalRead > max) break;
                         }
@@ -1857,16 +1859,22 @@ public final class TGAutoSignCore {
         }
 
         private static LogLine parseLogLine(String flat) {
+            if (flat == null || flat.length() < 19) return null;   // 太短，不可能是日志行
             try {
                 java.util.Date d = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).parse(flat.substring(0, 19));
+                if (d == null) return null;                        // 前 19 字符不是时间戳 → 不是日志行
                 String rest = flat.substring(19).trim();
                 int lv = LV_INFO;
                 if (rest.startsWith("[调试]")) { lv = LV_DEBUG; rest = rest.substring(5).trim(); }
                 else if (rest.startsWith("[成功]")) { lv = LV_OK; rest = rest.substring(5).trim(); }
                 else if (rest.startsWith("[警告]")) { lv = LV_WARN; rest = rest.substring(5).trim(); }
                 else if (rest.startsWith("[错误]")) { lv = LV_ERR; rest = rest.substring(5).trim(); }
-                return new LogLine(d == null ? 0L : d.getTime(), lv, rest);
-            } catch (Throwable t) { return new LogLine(0L, LV_INFO, flat); }
+                return new LogLine(d.getTime(), lv, rest);
+            } catch (Throwable t) {
+                // 解析失败 = 这行不是模块写的日志（可能是被误当日志读进来的外部文本）。
+                // 以前这里返回 ts=0，导出后显示成 1970-01-01，误导排查。
+                return null;
+            }
         }
 
 
@@ -4583,7 +4591,15 @@ public final class TGAutoSignCore {
         synchronized (enqueueLock) {
             long nowE = System.currentTimeMillis();
             if (enqueueAt > 0L && nowE - enqueueAt < 90L * 1000L) {
-                logd("[排队] " + reason + " 合并到已有排队任务（" + ((nowE - enqueueAt) / 1000L) + " 秒前已排）");
+                boolean logIt;
+                synchronized (queueLogAt) {
+                    Long last = queueLogAt.get(reason);
+                    logIt = (last == null || nowE - last.longValue() >= 60_000L);
+                    if (logIt) queueLogAt.put(reason, Long.valueOf(nowE));
+                }
+                if (logIt) {
+                    logd("[排队] " + reason + " 合并到已有排队任务（" + ((nowE - enqueueAt) / 1000L) + " 秒前已排）");
+                }
                 return;
             }
             enqueueAt = nowE;
@@ -4612,6 +4628,12 @@ public final class TGAutoSignCore {
     }
 
     private final Object enqueueLock = new Object();
+
+    // ── 排队合并日志限频（2026-10-01）──
+    // 「[排队] xxx 合并到已有排队任务」在 90 秒合并窗口内每次触发都写，
+    // 实测单日 229 条、占日志 36%。改为同一 reason 60 秒内只记一条：
+    // 仍能看出哪些触发源在反复触发，但不再逐次刷屏。
+    private final java.util.Map<String, Long> queueLogAt = new java.util.HashMap<String, Long>();
     private volatile long enqueueAt = 0L;
 
     /** 兜底解析 peer：缓存与数据库都拿不到 user 时，从会话列表里找这个 did 直接用 */
