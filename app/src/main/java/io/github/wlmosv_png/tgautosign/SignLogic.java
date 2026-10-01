@@ -212,6 +212,59 @@ public final class SignLogic {
      * 该命中词是否属于「确定性失败」。
      * 传入的是 verdictDetail 返回的命中词，不是整段回复。
      */
+    /**
+     * 「今日已用尽」类回复 —— bot 明确表示今天不能再操作了。
+     *
+     * 背景（2026-10-01 用户实测）：
+     *   某群 bot 对重复签到回「❌ 您本日的规则触发数量上限，请明日再试」。
+     *   这句既不含签到词（looksLikeSignResult=false），三张词表也不命中 →
+     *   verdictDetail 返回 V_UNKNOWN → 不写 kLast、不涨 retry、不熔断 →
+     *   心跳每 45 秒重发一次，10 分钟后才转「待确认」，用户看到群里被刷 13 条。
+     *
+     * 语义区分（关键）：
+     *   · PERMANENT_FAIL_WORDS（请先关注/活动已结束）—— **条件不满足**，
+     *     今天再怎么试也没用，且**不是**成功。要撤销已签、计失败。
+     *   · 本表（次数上限/请明日再试）—— **今日额度用尽**，
+     *     说明今天已经操作过了（很可能就是你手动签的）。既不该计失败，
+     *     也不该继续发。归入「今日已了结」，安静收工。
+     *
+     * 判定顺序：必须排在 PERMANENT_FAIL_WORDS 之后、成功/重复词之前 ——
+     * 它同时含"已/用尽"语义，若排在成功词后会与组合判定打架。
+     *
+     * ⚠️ 收录词必须**只表达"今天没了"**，不能是"明天还能来"这种中性的：
+     *   单测实测「您已签到，明天再来」是**成功**语（bot 签到成功后附带的话），
+     *   最初收了"明天再来"→ 把成功的判成"用尽"，332/334 单测直接挂 2 条。
+     *   同理不要收「明日再来」「明天再试」这类 —— 它们与成功语高度重叠。
+     *   保留的「请明日再试」带了"请…再试"，是明确的拒绝语气，与成功语不冲突。
+     */
+    public static final String[] EXHAUSTED_WORDS = {
+            // 中文：额度/次数用尽
+            "次数已达上限", "次数已用完", "次数用完", "已达上限", "已达今日上限",
+            "达到上限", "达到每日上限", "达到今日上限", "已达到上限", "已达到每日上限",
+            "今日上限", "本日上限", "今日次数", "本日次数",
+            "触发数量上限", "数量上限", "操作上限", "超过限制", "超出限制",
+            "请明日再试", "请明天再试", "明日再试", "明天再试",
+            "今日已结束", "本日已结束", "今天已结束",
+            // 英文
+            "daily limit", "limit reached", "reached the limit", "try tomorrow",
+            "come back tomorrow", "tomorrow again", "no more attempts", "quota",
+    };
+
+    /**
+     * 该回复是否表示「今日已用尽」。
+     *
+     * 与 isPermanentFail 一样，入参可以是整段回复（内部自行小写匹配），
+     * 便于调用方在 verdictDetail 之外独立判断。
+     */
+    public static boolean isExhausted(String reply) {
+        if (reply == null || reply.length() == 0) return false;
+        String h = reply.toLowerCase(java.util.Locale.US);
+        for (String w : EXHAUSTED_WORDS) {
+            if (w != null && h.contains(w.toLowerCase(java.util.Locale.US))) return true;
+        }
+        return false;
+    }
+
     public static boolean isPermanentFail(String hitWord) {
         if (hitWord == null || hitWord.length() == 0) return false;
         String h = hitWord.toLowerCase();
@@ -224,6 +277,15 @@ public final class SignLogic {
     public static final int V_SIGNED = 0;   // 成功（或 bot 说已签过，等价于今天签过了）
     public static final int V_FAILED = 1;   // 明确失败 → 撤销已签 + 退避重试
     public static final int V_UNKNOWN = 2;  // 认不出来 → 不猜，留痕
+    /**
+     * 今日已用尽（次数上限/请明日再试）→ **今日了结**，不再重发，不计失败。
+     *
+     * 为什么不并入 V_SIGNED：用户可能真的没签上（额度被别人/别处用掉了），
+     * 直接标"已签"是撒谎。为什么不并入 V_FAILED：这不是失败，
+     * 计进 fail_streak 会污染"连续失败 3 天"告警。
+     * 单独一类，界面显示「今日已了结」，语义准确。
+     */
+    public static final int V_EXHAUSTED = 3;
 
     /**
      * 关键词表。用户可在「设置 → 回复判定词」里追加，默认是下面这些。
@@ -513,6 +575,11 @@ public final class SignLogic {
         if (m != null) return new Object[]{Integer.valueOf(V_FAILED), m};
         m = matched(lower, PERMANENT_FAIL_WORDS);
         if (m != null) return new Object[]{Integer.valueOf(V_FAILED), m};
+        // 今日已用尽（2026-10-01 新增）：排在重复/成功词之前。
+        // 这类回复常同时含"已"字（如"今日次数已用完"），若不抢先判定，
+        // 会被组合判定当成"签到+已"误判成功；但它**不等于签到成功**。
+        m = matched(lower, EXHAUSTED_WORDS);
+        if (m != null) return new Object[]{Integer.valueOf(V_EXHAUSTED), m};
         m = matched(lower, dup != null ? dup : DUP_WORDS_DEFAULT);
         if (m != null) return new Object[]{Integer.valueOf(V_SIGNED), m};
         m = matched(lower, ok != null ? ok : OK_WORDS_DEFAULT);
@@ -825,6 +892,11 @@ public final class SignLogic {
     public static final int R_REPLIED_UNK   = 3;  // bot 回复了，但判不出结果（词表没覆盖）
     public static final int R_NO_REPLY      = 4;  // bot 全程没回复
     public static final int R_JUDGE_OFF     = 5;  // 用户关闭了自动判定，模块不替 bot 下结论
+    /**
+     * 今日已用尽（2026-10-01 新增）：bot 回「次数上限 / 请明日再试」。
+     * 今天不必再管，但**不代表签到成功** —— 界面要说清，别让用户误以为签上了。
+     */
+    public static final int R_EXHAUSTED     = 6;
 
     /** 归类的稳定标识串（存进 pendcfm_note_，跨版本可读）。 */
     public static String resultCode(int r) {
@@ -835,6 +907,7 @@ public final class SignLogic {
             case R_REPLIED_UNK: return "replied_unknown";
             case R_NO_REPLY:    return "no_reply";
             case R_JUDGE_OFF:   return "judge_off";
+            case R_EXHAUSTED:   return "exhausted";
             default:            return "unknown";
         }
     }
@@ -961,6 +1034,67 @@ public final class SignLogic {
     public static int minutesSince(long atMs, long nowMs) {
         if (atMs <= 0L || nowMs <= atMs) return 0;
         return (int) ((nowMs - atMs) / 60000L);
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    //  重复发送控制（2026-10-01）
+    //
+    //  背景：两个真实痛点，根因相同 —— 发送后长时间拿不到「结论」时，
+    //  模块只会傻等固定的 10 分钟，其间每 45 秒重发一次（约 13 条）。
+    //    · 群聊里 bot 完全不回复
+    //    · bot 回了但内容认不出（如「次数上限，请明日再试」）
+    //  用户视角就是"刷屏"，群聊里还会被当成骚扰。
+    //
+    //  设计：区分两种"没结论"，给不同阈值。
+    //    · 完全无回复 → 给足时间（bot 可能慢、可能被限流）
+    //    · 已有回复但判不出 → bot 已经表态了，别再等，早收工
+    //  并且给"发送次数"设硬上限，任何情况下都不会无限刷。
+    // ────────────────────────────────────────────────────────────────
+
+    /** 完全无回复时的宽限（毫秒）：bot 慢/被限流都可能，给足时间。 */
+    public static final long QUIET_GRACE_MS = 10L * 60 * 1000;
+
+    /** 已有回复但判不出时的宽限（毫秒）：bot 已表态，不必久等。 */
+    public static final long ANSWERED_GRACE_MS = 3L * 60 * 1000;
+
+    /**
+     * 同一目标当日「发出后仍无结论」的最大发送次数。
+     *
+     * 硬闸：无论走哪条路径，发到这个次数就转「待确认」，等用户处置。
+     * 取 3 是因为：正常 bot 1~2 次内必有明确结论；到第 3 次还没有，
+     * 要么词表不覆盖、要么 bot 行为异常，继续发只会刷屏。
+     */
+    public static final int MAX_SEND_ATTEMPTS = 3;
+
+    /**
+     * 是否应把「已发出但无结论」的目标转为「待确认」。
+     *
+     * @param attempts    当日已发送次数（含本次）
+     * @param sentAtMs    最近一次发送时刻（毫秒），0 表示无记录
+     * @param nowMs       当前时刻（毫秒）
+     * @param answered    发出后是否收到过任何回复（bot 已表态）
+     * @param signedToday 今天是否已有结论（已签）
+     * @param alreadyPending 是否已在「待确认」
+     * @param retryExhausted 重试是否已用尽
+     * @return true = 应转「待确认」
+     */
+    public static boolean shouldGiveUpSending(int attempts, long sentAtMs, long nowMs,
+                                              boolean answered, boolean signedToday,
+                                              boolean alreadyPending, boolean retryExhausted) {
+        if (signedToday || alreadyPending || retryExhausted) return false;
+        // 次数硬闸：发满即收工（不依赖时间，避免"秒回也被刷 13 条"）
+        if (attempts >= MAX_SEND_ATTEMPTS) return true;
+        // 时间软闸：按"有无回复"分档
+        if (sentAtMs <= 0L) return false;
+        long age = nowMs - sentAtMs;
+        if (age < 0L) return false;                       // 时钟回拨，保守
+        long grace = answered ? ANSWERED_GRACE_MS : QUIET_GRACE_MS;
+        return age >= grace;
+    }
+
+    /** 该状态是否「今日已了结」（不再自动重发，也不计失败）。 */
+    public static boolean isSettledForToday(int verdict) {
+        return verdict == V_SIGNED || verdict == V_EXHAUSTED;
     }
 
     /** 把分钟数说成「1 小时 12 分」/「42 分」。 */

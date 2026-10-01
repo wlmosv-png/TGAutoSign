@@ -4100,6 +4100,13 @@ public final class TGAutoSignCore {
                 markSelfCbRequest(dialogId, _sentData);
             }
             try { prefs.edit().putLong(prefix + "sent_at_" + id, System.currentTimeMillis()).commit(); } catch (Throwable _e11) { noteSwallowed("sendSign", _e11); }
+            // 当日发送次数 +1（2026-10-01）：V_UNKNOWN 不涨 kRetry，靠这个计数
+            // 给"发出后无结论"一个硬上限，见 SignLogic.MAX_SEND_ATTEMPTS。
+            final int _attempts = bumpSendAttempts(prefix, id);
+            if (_attempts >= SignLogic.MAX_SEND_ATTEMPTS) {
+                logw("目标 " + id + " 今日已发送 " + _attempts + " 次仍无结论，"
+                     + "本次为最后一次；若仍判不出将转「待确认」等你处置");
+            }
             Object cm = staticInvoke(classEx("org.telegram.tgnet.ConnectionsManager"), "getInstance", new Class<?>[]{int.class}, new Object[]{account});
             final String fId = id;
             final String fPrefix = prefix;
@@ -4987,6 +4994,7 @@ public final class TGAutoSignCore {
         if (_rc == SignLogic.R_REPLIED_UNK) return Lang.tr("回复判不出");
         if (_rc == SignLogic.R_NO_REPLY)    return Lang.tr("bot 未回复");
         if (_rc == SignLogic.R_JUDGE_OFF)   return Lang.tr("判定已关");
+        if (_rc == SignLogic.R_EXHAUSTED)   return Lang.tr("今日已用尽");
         if (isPendingConfirm(prefix, id)) return Lang.tr("结果未知");
         /* 跨天重置（2026-09-30）：昨天撞上限的，今天不算"已放弃" */
         String _rd = prefs.getString(kRetryDay(prefix, id), "");
@@ -8452,6 +8460,7 @@ public final class TGAutoSignCore {
         if (rc == SignLogic.R_REPLIED_UNK)  return Lang.tr("bot 回复了，但判定词认不出结果");
         if (rc == SignLogic.R_NO_REPLY)     return Lang.tr("bot 全程没回复");
         if (rc == SignLogic.R_JUDGE_OFF)    return Lang.tr("自动判定已关闭，未判成败");
+        if (rc == SignLogic.R_EXHAUSTED)    return Lang.tr("bot 说今日次数已用尽，今天不必再签");
         return Lang.tr("结果未知，需要你看一眼");
     }
 
@@ -8462,6 +8471,7 @@ public final class TGAutoSignCore {
         if (rc == SignLogic.R_REPLIED_UNK)  return Lang.tr("回复判不出");
         if (rc == SignLogic.R_NO_REPLY)     return Lang.tr("bot 未回复");
         if (rc == SignLogic.R_JUDGE_OFF)    return Lang.tr("判定已关");
+        if (rc == SignLogic.R_EXHAUSTED)    return Lang.tr("今日已用尽");
         return Lang.tr("结果未知");
     }
 
@@ -8716,6 +8726,36 @@ public final class TGAutoSignCore {
     }
 
     /** 已发出但久无结论 → 转「待确认」。返回是否发生了转换。 */
+    /**
+     * 读当日发送次数。值形如 "yyyy-MM-dd|3"；跨天自动视为 0。
+     * 见 SignLogic.MAX_SEND_ATTEMPTS 与 Keys.sendAttempts。
+     */
+    private int sendAttemptsToday(String prefix, String id) {
+        try {
+            String v = prefs.getString(Keys.sendAttempts(prefix, id), "");
+            if (v == null || v.length() == 0) return 0;
+            int bar = v.indexOf('|');
+            if (bar <= 0) return 0;
+            if (!todayStr().equals(v.substring(0, bar))) return 0;   // 不是今天 → 归零
+            return Integer.parseInt(v.substring(bar + 1).trim());
+        } catch (Throwable t) { return 0; }
+    }
+
+    /** 当日发送次数 +1（同步落盘：紧随其后的闸门要读它）。 */
+    private int bumpSendAttempts(String prefix, String id) {
+        try {
+            int n = sendAttemptsToday(prefix, id) + 1;
+            prefs.edit().putString(Keys.sendAttempts(prefix, id), todayStr() + "|" + n).commit();
+            return n;
+        } catch (Throwable t) { noteSwallowed("bumpSendAttempts", t); return 0; }
+    }
+
+    /** 清除当日发送计数（有了明确结论时调用）。 */
+    private void clearSendAttempts(String prefix, String id) {
+        try { prefs.edit().remove(Keys.sendAttempts(prefix, id)).commit(); }
+        catch (Throwable t) { noteSwallowed("clearSendAttempts", t); }
+    }
+
     private boolean promoteSilentToPending(String prefix, String id, String why) {
         try {
             // 判定集中在 SignLogic.shouldPromoteToPending（纯逻辑 + 单测覆盖）
@@ -8725,8 +8765,19 @@ public final class TGAutoSignCore {
             boolean sentToday = stateStore.isOptimisticToday(prefix, id);
             long sent = prefs.getLong(prefix + "sent_at_" + id, 0L);
             long now = System.currentTimeMillis();
-            if (!SignLogic.shouldPromoteToPending(sentToday, sent, now, SILENT_TO_PENDING_MS,
-                                                  signedToday, alreadyPending, retryExhausted)) return false;
+            if (!sentToday) return false;                      // 今天没发过，谈不上"发出后无结论"
+            // 是否收到过回复：bot 表态了就早收工，别按"静默"久等（2026-10-01）
+            boolean answered = todayStr().equals(prefs.getString(Keys.answered(prefix, id), ""));
+            int attempts = sendAttemptsToday(prefix, id);
+            // 两个判据取「或」：
+            //   ① 新判据 —— 发送次数硬上限 + 按"有无回复"分档的时间软闸
+            //      （解决：V_UNKNOWN 不涨 retry，心跳每 45 秒重发、刷 13 条）
+            //   ② 旧判据 —— 非跨天的静默超时（保留，避免回归既有行为）
+            boolean giveUp = SignLogic.shouldGiveUpSending(attempts, sent, now, answered,
+                                                           signedToday, alreadyPending, retryExhausted)
+                          || SignLogic.shouldPromoteToPending(true, sent, now, SILENT_TO_PENDING_MS,
+                                                              signedToday, alreadyPending, retryExhausted);
+            if (!giveUp) return false;
             long age = sent > 0L ? (now - sent) : 0L;
             // 条目已不存在就不必标了（避免孤儿键）
             if (findEntryById(id, accountOfPrefix(prefix)) == null) return false;
@@ -8739,7 +8790,6 @@ public final class TGAutoSignCore {
                  .remove(prefix + "sent_at_" + id)
                  .remove(prefix + "opt_" + id)
                  .commit();
-            boolean answered = todayStr().equals(prefs.getString(Keys.answered(prefix, id), ""));
             // 补写归类（2026-09-28 修）：上轮只改主路径，漏了这条兜底 ——
             // 结果界面读不到归类、落回兜底文案，日志也还写着旧词「待确认」。
             // 归类是界面文案与处置入口的唯一真相源，这条路径同样必须写。
@@ -11724,10 +11774,42 @@ public final class TGAutoSignCore {
                             prefs.edit().putInt(kRetry(prefix, id), 0)
                                  .remove(kRetryAt(prefix, id)).remove(kRetryDay(prefix, id)).apply();
                             markSigned(prefix, id);
+                            clearSendAttempts(prefix, id);   // 有结论了，当日发送计数归零
                             marked++;
                         }
                         jlog("【回复判定】" + did + " 命中「" + hitWord + "」→ 计入已签（" + marked + " 条）"
                              + (extraHit(hitWord, extraOk) ? "（用户自定义词）" : ""));
+                        noteResult(ctrlAcc >= 0 ? ctrlAcc : currentAccount(), true);
+                        return;
+                    }
+
+                    if (verdict == SignLogic.V_EXHAUSTED) {
+                        /* 今日已用尽（2026-10-01 新增）。
+                           现场：某群 bot 对重复签到回「❌ 您本日的规则触发数量上限，请明日再试」。
+                           这句不含签到词、三张词表都不命中 → 原本走 V_UNKNOWN →
+                           不写 kLast、不涨 kRetry、不熔断 → 心跳每 45 秒重发，群里被刷 13 条。
+
+                           处置原则：
+                             · **不标已签** —— 用户可能真没签上（额度在别处用掉了），标绿是撒谎；
+                             · **不计失败** —— 这不是失败，计进 fail_streak 会污染"连续 3 天失败"告警；
+                             · **不再重发** —— 归入「今日了结」，清计数与发送计数，当天收工。
+                           界面归类码用 R_SIGNED（今天不必再管），但日志与 Toast 说清是"已用尽"。 */
+                        for (Map<String, Object> m : judgeTargets) {
+                            if (entryDid(m) != did) continue;
+                            String id = entryId(m);
+                            // 清掉"待结论"痕迹：不再重发，也不再计入发送次数
+                            prefs.edit()
+                                 .remove(kLast(prefix, id))          // 不冒充已签
+                                 .putInt(kRetry(prefix, id), RETRY_LIMIT)   // 今日放弃重试
+                                 .putString(kRetryDay(prefix, id), todayStr())
+                                 .remove(prefix + "sent_at_" + id)
+                                 .remove(prefix + "opt_" + id)
+                                 .commit();
+                            clearSendAttempts(prefix, id);
+                            markResultCode(prefix, id, SignLogic.R_EXHAUSTED);
+                        }
+                        jlog("【回复判定】" + did + " 命中「" + hitWord + "」→ 今日已用尽，不再重发"
+                             + "（不计失败、不标已签；如需重签请手动「立即签到」）");
                         noteResult(ctrlAcc >= 0 ? ctrlAcc : currentAccount(), true);
                         return;
                     }
@@ -11746,6 +11828,7 @@ public final class TGAutoSignCore {
                                 prefs.edit().putBoolean(kPermFail(prefix, id), true).commit();
                             }
                             boolean blocked = bumpFailsToday(prefix, id, permanent);
+                            clearSendAttempts(prefix, id);   // 已有结论（失败），交给重试机制
                             prefs.edit()
                                 .remove(kLast(prefix, id))
                                 .putInt(kRetry(prefix, id), blocked ? RETRY_LIMIT : cur + 1)
@@ -11774,6 +11857,18 @@ public final class TGAutoSignCore {
                     // 但它是进度提示，下一句才是结果，补词毫无意义（全日志刷了 8 次纯噪音）。
                     boolean progress = SignLogic.looksLikeProgress(replyText);
                     boolean looksLikeResult = SignLogic.looksLikeSignResult(replyText);
+                    /* 记下「bot 确实回了内容」这一事实（2026-10-01 补）。
+                       为什么必须在这里写：promoteSilentToPending 靠 answered_ 区分
+                       「bot 表态了但判不出」与「bot 完全没理」——
+                       前者 3 分钟就收工，后者才等 10 分钟。
+                       此前只有"就地对答"路径写这个键，回复判定路径漏了，
+                       于是所有判不出的回复都被当成"静默"，白等 10 分钟、多发 10 条。 */
+                    for (Map<String, Object> m : judgeTargets) {
+                        if (entryDid(m) != did) continue;
+                        try {
+                            prefs.edit().putString(Keys.answered(prefix, entryId(m)), todayStr()).commit();
+                        } catch (Throwable ignored) {}
+                    }
                     if (progress) {
                         logd("【回复判定】" + did + " 这是进度提示（继续等真正的结果）: " + clip(replyText, 40));
                     } else if (looksLikeResult) {

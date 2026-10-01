@@ -795,6 +795,11 @@ public final class Lang {
         EN.put("没有可导出的数据（还没有签到目标）", "Nothing to export yet (no targets)");
         EN.put("按钮失效", "Button expired");
         EN.put("回复判不出", "Reply unreadable");
+        // 「今日已用尽」——bot 明确表示今天不能再操作（次数上限/请明日再试）。
+        // 归入今日了结：不标已签、不计失败、不再重发。
+        EN.put("今日已用尽", "Daily quota used up");
+        EN.put("今日操作次数已用尽，已停止重发", "Daily limit reached; stopped retrying");
+        EN_SHORT.put("已用尽", "Used up");
         EN.put("bot 未回复", "Bot did not reply");
         EN.put("判定已关", "Judging off");
         EN.put("待添加 {0} 个", "{0} to add");

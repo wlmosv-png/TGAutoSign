@@ -83,6 +83,15 @@ public final class Keys {
     public static String missAt(String p, String id)    { return p + "miss_at_" + id; }
     /** bot 在 callback answer 里回过内容（但词表没识别出结果）。用于区分"有响应/无响应"。 */
     public static String answered(String p, String id)  { return p + "answered_" + id; }
+    /**
+     * 当日「发出后仍无结论」的发送次数（2026-10-01）。
+     *
+     * 为什么需要：V_UNKNOWN 既不写 kLast 也不涨 kRetry，所有熔断闸都失效，
+     * 心跳每 45 秒重发一次（实测群聊被刷 13 条）。本计数给发送次数一个硬上限，
+     * 与词表、与 bot 类型无关 —— 任何情况下发满 MAX_SEND_ATTEMPTS 即转「待确认」。
+     * 按天记（值形如 "yyyy-MM-dd|3"），跨天自动归零。
+     */
+    public static String sendAttempts(String p, String id){ return p + "send_n_" + id; }
     public static String title(String p, String id)     { return p + "title_" + id; }
     public static String kind(String p, String id)      { return p + "kind_" + id; }
     public static String did(String p, String id)       { return p + "did_" + id; }
@@ -124,7 +133,7 @@ public final class Keys {
      */
     public static final String[] ENTRY_HEADS = {
             "learned_", "kind_", "did_", "data_", "hash_", "msg_id_",
-            "pre_", "loc_", "last_", "opt_", "retry_", "retry_at_", "retry_day_", "sent_at_", "answered_",
+            "pre_", "loc_", "last_", "opt_", "retry_", "retry_at_", "retry_day_", "sent_at_", "answered_", "send_n_",
             "signed_at_", "miss_at_",
             "frozen_", "snooze_", "pendcfm_", "pendcfm_note_", "pendcfm_result_", "title_",
             "fail_streak_", "fail_laststamp_", "fail_alert_", "fail_date_",
@@ -137,6 +146,6 @@ public final class Keys {
     public static final String[] ORPHAN_HEADS = {
             "frozen_", "snooze_", "pendcfm_", "pendcfm_note_",
             "title_", "fail_streak_", "fail_laststamp_", "fail_alert_", "fail_date_",
-            "sent_at_", "signed_at_", "miss_at_", "opt_", "answered_", "panelstale_", "panelstale_day_", "silent_", "silent_day_"
+            "sent_at_", "signed_at_", "miss_at_", "opt_", "answered_", "send_n_", "panelstale_", "panelstale_day_", "silent_", "silent_day_"
     };
 }
