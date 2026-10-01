@@ -1137,7 +1137,18 @@ public final class SignLogic {
                 return TODAY_PENDING;
             }
         }
-        if (windowAny == null) return TODAY_PENDING;      // 不限窗口 = 随时可签
+        // ── 不限窗口（WINDOW 为空）──
+        // 2026-10-01 修：初版这里直接 return TODAY_PENDING，导致"今天未签"**永远不可达**
+        // （用户清空数据后实测反馈：怎么都看不到粉色）。不限窗口虽然意味着全天可签，
+        // 但一天总要有收尾 —— 超过某个点还没签，用户需要知道"今天大概不会自动签上了"。
+        // 这里用「补签截止」当收尾参考点（默认 23:00，用户可改）。
+        //
+        // 边界保护：若该值落在凌晨（< 06:00），说明用户指的是"次日凌晨"，
+        // 拿它当"今天收尾"会导致白天误报未签 → 退回"待签"。
+        if (windowAny == null) {
+            if (missDeadline < 6 * 60) return TODAY_PENDING;
+            return nowMin <= missDeadline ? TODAY_PENDING : TODAY_MISSED;
+        }
         // 窗口内（含跨天）→ 还来得及
         if (inWindowAny(nowMin, windowAny)) return TODAY_PENDING;
         // 跨天窗口（如 22:00-02:00）：今天的机会在今晚 22:00 之后，

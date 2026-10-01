@@ -10094,7 +10094,11 @@ public final class TGAutoSignCore {
             // 保留条件：只有**中间断过**（signedIn14 < 14）时，
             // 「连续 N 天」与「N/14」的**差值**才有信息量 —— 它解释了
             // "为什么连续天数不是 14"。满勤时两者恒等，没有解释价值。
-            if (signedIn14 < 14) {
+            //
+            // 且必须**有启用中的目标**才显示：清空数据后（目标 0、日历全空）
+            // 「近 14 天 0/14」是纯噪音 —— 此时说明职责由下方的
+            // "还没有目标，去该账号学一个"引导行承担（2026-10-01 用户实测）。
+            if (signedIn14 < 14 && anyOn) {
                 TextView right = new TextView(act);
                 right.setTextSize(Theme.TS_CAPTION);
                 right.setTypeface(Theme.text());
