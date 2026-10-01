@@ -182,6 +182,13 @@ public final class TGAutoSignCore {
     private volatile String ctxTrace = "";
     // 静默异常统计：catch(Throwable ignored) 里记一笔，诊断包可见，避免"错误被吞掉却毫无痕迹"
     private final java.util.concurrent.atomic.AtomicInteger swallowedCount = new java.util.concurrent.atomic.AtomicInteger(0);
+    /**
+     * 当日摘要「已投递」的进程内原子闸（2026-10-01）。
+     * 元素形如 "yyyy-MM-dd|账号号"。仅用于同一进程内的心跳/轮次并发去重；
+     * 跨重启仍以 prefs 的 jmb_notified_&lt;acc&gt; 为准（两者都要过）。
+     */
+    private final java.util.Set<String> SUMMARY_SENT_TODAY =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<String, Boolean>());
     private final java.util.concurrent.ConcurrentLinkedQueue<String> swallowedRecent = new java.util.concurrent.ConcurrentLinkedQueue<String>();
     private boolean dlgModeLogged = false;   // 对话框实现方式只报告一次
     private int dlgFallbackLogged = 0;       // 自绘卡片日志限次（避免刷屏）
@@ -1447,13 +1454,40 @@ public final class TGAutoSignCore {
                 if (!pending) return true;
                 // 兜底：窗口/补签截止已经过去 1 小时以上还有目标没结论，就不再等，
                 // 否则目标卡在"待签"时通知会永远发不出去。
-                // 窗口跨天时（如 20:00-23:00）endMin 仍是同日的钟点，用「跨天判定」处理。
+                //
+                // 跨天修复（2026-10-01）：此前用 windowRange()，而它对跨天窗口
+                // （如 22:00-02:00）**返回 null**，endMin 静默退化成 MISS_DEADLINE，
+                // 与真实窗口结束无关 —— 注释却写着"用跨天判定处理"，名实不符。
+                //
+                // 现在统一用 windowRangeAny() + windowSpanAny() 把窗口展开到"分钟轴"：
+                //   非跨天 08:00-20:00          → [480, 1200]
+                //   跨天   22:00-02:00          → [1320, 1560]（结束已 +1440）
+                // 补签截止同理：跨天窗口下若截止钟点小于窗口开始（如截止 06:00、
+                // 窗口 22:00 开始），说明它是"次日钟点"，也要 +1440。
+                //
+                // 判定：endMin > 1439（结束落在次日）时，今天必然还没过点 ——
+                // 因为跨天窗口的"结束"发生在明天凌晨，而那时日期已翻篇、
+                // 会按新一天重新起轮。真正的结算等今晚窗口结束，无需在凌晨硬发。
                 java.util.Calendar c = java.util.Calendar.getInstance();
                 int nowMin = c.get(java.util.Calendar.HOUR_OF_DAY) * 60 + c.get(java.util.Calendar.MINUTE);
-                int[] r = windowRange();
-                int endMin = r != null ? Math.max(r[1], MISS_BACK ? MISS_DEADLINE : r[1]) : MISS_DEADLINE;
-                if (endMin >= nowMin) return false;                       // 还没到点，继续等
-                return (nowMin - endMin) >= 60;                           // 过点 1 小时才放行
+                int[] any = SignLogic.windowRangeAny(WINDOW);
+                if (any == null) {
+                    // 窗口为空/非法 = 不限。只在开了补签时才依赖截止时间，否则立刻放行。
+                    if (!MISS_BACK) return true;
+                    if (nowMin <= MISS_DEADLINE) return false;
+                    return (nowMin - MISS_DEADLINE) >= 60;
+                }
+                int[] span = SignLogic.windowSpanAny(any);
+                int endMin = span[1];
+                if (MISS_BACK) {
+                    int dl = MISS_DEADLINE;
+                    // 跨天窗口且截止钟点早于窗口开始 → 它是次日钟点
+                    if (SignLogic.crossesMidnight(any) && MISS_DEADLINE < span[0]) dl += 24 * 60;
+                    endMin = Math.max(endMin, dl);
+                }
+                if (endMin >= 24 * 60) return false;      // 结束在次日：今天还没到结算点
+                if (nowMin <= endMin) return false;       // 还没到点，继续等
+                return (nowMin - endMin) >= 60;           // 过点 1 小时才放行
             } catch (Throwable t) { return false; }
         }
 
@@ -1601,10 +1635,20 @@ public final class TGAutoSignCore {
         try {
             if (!NOTIFY_ON) return;
             final String nk = "jmb_notified_" + acc;
-            if (todayStr().equals(prefs.getString(nk, ""))) return;   // 今天已发
-            if (!allSettledToday(acc)) return;                        // 窗口未结束 / 仍有在途
-            // 先落盘再发：心跳密集触发时避免重复投递
-            prefs.edit().putString(nk, todayStr()).apply();
+            final String today = todayStr();
+            // 并发闸（2026-10-01 修）：心跳与 flushRoundToast 可能同时到达，
+            // 靠 prefs 去重在“检查→落盘”之间有空窗，两边都会判定“今天没发过”。
+            // 用进程内的 Set 做原子占位；prefs 仍是跨重启的最终凭据。
+            if (!SUMMARY_SENT_TODAY.add(today + "|" + acc)) return;
+            if (!allSettledToday(acc)) { SUMMARY_SENT_TODAY.remove(today + "|" + acc); return; }  // 窗口未结束/仍有在途，不占用
+            if (today.equals(prefs.getString(nk, ""))) return;        // 今天已发（跨重启）
+            // 必须 commit：该键是**状态机键**，紧随其后的调用（心跳/flushRoundToast）
+            // 会读它做闸门。apply 的异步窗口会让闸门失效 → 同一账号收到两条摘要。
+            // 这正是 PrefsStore 里写明的规则（状态机键一律 commit），此前漏用了。
+            if (!prefs.edit().putString(nk, today).commit()) {        // 落盘失败则不标记，留待下次
+                SUMMARY_SENT_TODAY.remove(today + "|" + acc);
+                return;
+            }
             mainHandler.post(new Runnable() { @Override public void run() {
                 try { notifySummary(acc); } catch (Throwable ignored) {}
             } });

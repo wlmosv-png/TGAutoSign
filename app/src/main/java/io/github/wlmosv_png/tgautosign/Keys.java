@@ -116,12 +116,17 @@ public final class Keys {
      * 条目相关的键前缀（清空配置 / 孤儿清理用）。
      * 注意：漏一个前缀的后果是**状态复活** —— nextEntryId 复用 id，
      * 清空后重新添加同一个 bot 会继承旧状态。新增 per-target 键必须加进来。
+     *
+     * 2026-10-01：去掉重复的 "pendcfm_result_"（原本写了两次）。
+     * 另注：timer_plan_ 虽由本类的 timerPlan() 生成，但它是**账号级 · 按天**
+     * 的键（acc{N}_timer_plan_&lt;日期&gt;），归 TGAutoSignCore 的账号级清理表管，
+     * 故意不列在这里 —— 列进来反而会在清空条目时误删当天时刻表。
      */
     public static final String[] ENTRY_HEADS = {
             "learned_", "kind_", "did_", "data_", "hash_", "msg_id_",
             "pre_", "loc_", "last_", "opt_", "retry_", "retry_at_", "retry_day_", "sent_at_", "answered_",
             "signed_at_", "miss_at_",
-            "frozen_", "snooze_", "pendcfm_", "pendcfm_note_", "pendcfm_result_", "pendcfm_result_", "title_",
+            "frozen_", "snooze_", "pendcfm_", "pendcfm_note_", "pendcfm_result_", "title_",
             "fail_streak_", "fail_laststamp_", "fail_alert_", "fail_date_",
             "panelstale_", "panelstale_day_", "silent_", "silent_day_", "peerkind_"
     };
