@@ -805,6 +805,21 @@ public final class Lang {
         EN.put("今天未参与", "Not active today");
         EN.put("近 14 天", "Last 14 days");
         EN.put("近 14 天 {0}", "Last 14 days {0}");
+        // ── 易懂模式（2026-10-03）：日志顶部状态条 + 补签语义 ──
+        EN.put("已启动", "Started");
+        EN.put("今日已签 {0}/{1}", "Signed today {0}/{1}");
+        EN.put("今日未签 {0}/{1}", "Missed today {0}/{1}");
+        EN.put("今日 {0}/{1}（无启用目标）", "Today {0}/{1} (no active targets)");
+        EN.put("连续 {0} 天", "{0}-day streak");
+        EN.put("窗口 {0}-{1}", "Window {0}-{1}");
+        EN.put("不限窗口", "Any time");
+        EN.put("补签至 {0}", "Make-up until {0}");
+        EN.put("还没有签到目标", "No targets yet");
+        EN.put("补签 · 原定 {0} · 稍后执行", "Make-up / planned {0} / queued");
+        EN.put("补了一次", "Make-up sent");
+        EN.put("  /  补签至 {0}", "  /  make-up until {0}");
+        EN.put("  /  补签 {0}", "  /  make-up {0}");
+        EN.put("昨天 {0}/{1} 完成", "Yesterday {0}/{1} done");
         EN_SHORT.put("今天已签", "Done");
         EN_SHORT.put("今天待签", "Due");
         EN_SHORT.put("今天未签", "Missed");

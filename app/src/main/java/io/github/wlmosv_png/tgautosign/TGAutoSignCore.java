@@ -175,6 +175,13 @@ public final class TGAutoSignCore {
     private String logTarget = "";       // 按目标(文本/uid)过滤，空=全部
     private int logLimit = 400;          // 首屏显示条数
     private int logPageStep = 300;       // 每次「加载更多」追加条数
+    /** 易懂档折叠计数（2026-10-03）：同 foldKey 的条数，渲染时显示成「×N」。 */
+    private final java.util.HashMap<String, Integer> logFoldCnt = new java.util.HashMap<String, Integer>();
+    /** 易懂档顶部状态条容器（跨刷新保留引用）。 */
+    private LinearLayout logHeadBar;
+    private TextView logHeadIcon;
+    private TextView logHeadTitle;
+    private TextView logHeadSub;
     private int logRendered = 0;         // 当前已渲染条数（游标，用于追加）
     // 日志上下文：账号 / 轮次 / 链路，统一由 jlog 自动带上，便于筛选与归因
     private volatile String ctxAcc = "";
@@ -6286,6 +6293,8 @@ public final class TGAutoSignCore {
                 // 只重渲染列表，不重建对话框
                 logLimit = 400;
                 logRendered = 0;
+                if (logHeadBar != null) logHeadBar.setVisibility(logPlain ? android.view.View.VISIBLE : android.view.View.GONE);
+                refreshLogHead();
                 refreshLog();
                 jumpLogNewest();
                 toast(logPlain ? Lang.tr("易懂：只显示结果与下一步")
@@ -6357,6 +6366,31 @@ public final class TGAutoSignCore {
             logStat.setTextSize(Theme.TS_CAPTION);
             logStat.setTextColor(Theme.termMuted(act));
             root.addView(logStat);
+
+            // ── 顶部状态条（2026-10-03）──
+            // 解决"易懂模式没劲儿"：战况固定在眼前，不用翻日志找。
+            // 同时是「补签已执行」那条绿色噪音的替代 ——
+            // 用户要的信息（今天签完没、几个目标、下次什么时候）这里一次给全。
+            logHeadBar = new LinearLayout(act);
+            logHeadBar.setOrientation(LinearLayout.VERTICAL);
+            logHeadBar.setPadding(dp(10), dp(8), dp(10), dp(8));
+            LinearLayout headRow = new LinearLayout(act);
+            headRow.setOrientation(LinearLayout.HORIZONTAL);
+            headRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            logHeadIcon = new TextView(act);
+            logHeadTitle = new TextView(act);
+            logHeadTitle.setTextSize(Theme.TS_BODY);
+            logHeadTitle.setTypeface(android.graphics.Typeface.MONOSPACE);
+            logHeadSub = new TextView(act);
+            logHeadSub.setTextSize(Theme.TS_CAPTION);
+            logHeadSub.setTypeface(android.graphics.Typeface.MONOSPACE);
+            headRow.addView(logHeadIcon);
+            headRow.addView(logHeadTitle);
+            logHeadBar.addView(headRow);
+            logHeadBar.addView(logHeadSub);
+            root.addView(logHeadBar);
+            refreshLogHead();
+            maybeAppendYesterdayReport(root);
 
             ScrollView sv = new ScrollView(act);
             logSv = sv;
@@ -6457,7 +6491,7 @@ public final class TGAutoSignCore {
                 List<LogLine> show = logViewCache;
                 if (show == null || logRendered >= show.size()) { updateMoreBtn(show == null ? 0 : show.size(), logRendered); return; }
                 int to = Math.min(show.size(), logRendered + logPageStep);
-                for (int i = logRendered; i < to; i++) logRow(logList, show.get(i));
+                for (int i = logRendered; i < to; i++) logRowAt(logList, show.get(i));
                 logRendered = to;
                 updateMoreBtn(show.size(), logRendered);
                 if (logStat != null) {
@@ -6465,6 +6499,203 @@ public final class TGAutoSignCore {
                     logStat.setText(cur.replaceAll("已载入 [0-9]+", Lang.tf("已载入 {0}", logRendered)));
                 }
             } catch (Throwable t) { try { loge("追加日志失败: " + t); } catch (Throwable ignored) {} }
+        }
+
+        /**
+         * 昨日战报（2026-10-03）。
+         *
+         * 解决"易懂模式没劲儿"的另一半：日志里全是今天的过程，
+         * 没有"昨天结果如何"的总结。这里在状态条下面追加一条，
+         * **同一天只出现一次**（用 prefs 记已展示的日期），不刷屏。
+         *
+         * 数据来源：昨天的 last_（哪些目标签上了）+ 昨天的连续天数记录。
+         * 取不到就整块不显示 —— 宁可不显示，也不要给假数字。
+         */
+        private void maybeAppendYesterdayReport(LinearLayout root) {
+            try {
+                String yest = yesterdayStr();
+                if (yest.length() == 0) return;
+                String shownDay = prefs.getString("jmb_yreport_day", "");
+                if (yest.equals(shownDay)) return;      // 昨天战报今天已展示过
+
+                String prefix = accountPrefix();
+                List<Map<String, Object>> tl = new ArrayList<Map<String, Object>>();
+                loadTargetsInto(prefix, tl);
+                if (tl.isEmpty()) return;
+                int total = tl.size(), done = 0;
+                for (Map<String, Object> m : tl) {
+                    if (yest.equals(prefs.getString(kLast(prefix, entryId(m)), ""))) done++;
+                }
+                if (done == 0) return;                  // 昨天没签成任何目标：不吹不黑，不显示
+
+                Context c = root.getContext();
+                LinearLayout box = new LinearLayout(c);
+                box.setOrientation(LinearLayout.HORIZONTAL);
+                box.setGravity(android.view.Gravity.CENTER_VERTICAL);
+                box.setPadding(dp(10), dp(6), dp(10), dp(6));
+                TextView ic = new TextView(c);
+                android.graphics.drawable.Drawable d = Icons.d(c, "today-done", 14f, Theme.termMuted(c));
+                if (d != null) {
+                    int sz = dp(14);
+                    d.setBounds(0, 0, sz, sz);
+                    ic.setCompoundDrawables(d, null, null, null);
+                    ic.setCompoundDrawablePadding(dp(6));
+                }
+                TextView tv = new TextView(c);
+                tv.setTextSize(Theme.TS_CAPTION);
+                tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+                tv.setTextColor(Theme.termMuted(c));
+                tv.setText(Lang.tf("昨天 {0}/{1} 完成", done, total));
+                box.addView(ic);
+                box.addView(tv);
+                box.setBackground(termBorder(c, Theme.termCard(c), Theme.withAlpha(Theme.termMuted(c), 0x44)));
+                root.addView(box);
+                prefs.edit().putString("jmb_yreport_day", yest).apply();
+            } catch (Throwable t) { noteSwallowed("yesterdayReport", t); }
+        }
+
+        /**
+         * 刷新顶部状态条（2026-10-03）。
+         *
+         * 一行给结论：今天签完没 / 几个目标 / 连续几天 / 下次什么时候，
+         * 颜色直接取四态语义色（绿=已签、青=待签、粉=未签、灰=不参与）。
+         * 详情（窗口、补签截止）放第二行，弱色。
+         */
+        private void refreshLogHead() {
+            try {
+                if (logHeadBar == null || logHeadTitle == null) return;
+                Context c = logHeadBar.getContext();
+                int[] st = accountStats(currentAccount());
+                int total = st[0], signed = st[1];
+                String prefix = accountPrefix();
+                String todayS = todayStr(), yestS = yesterdayStr();
+                int streak = SignLogic.streakDisplay(streakOf(prefix),
+                        prefs.getString(kLastSignDate(prefix), ""), todayS, yestS);
+                java.util.Calendar cc = java.util.Calendar.getInstance();
+                int nowMin = cc.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cc.get(java.util.Calendar.MINUTE);
+                int tState = SignLogic.todayState(signed > 0, nowMin,
+                        SignLogic.windowRangeAny(WINDOW), MISS_DEADLINE, MISS_BACK, total > 0);
+
+                String icon; int col; String title;
+                if (total == 0) {
+                    icon = "today-idle"; col = Theme.termMuted(c);
+                    title = Lang.tr("还没有签到目标");
+                } else {
+                    switch (tState) {
+                        case SignLogic.TODAY_DONE:
+                            icon = "today-done"; col = Theme.termGreen(c);
+                            title = Lang.tf("今日已签 {0}/{1}", signed, total);
+                            break;
+                        case SignLogic.TODAY_MISSED:
+                            icon = "today-miss"; col = Theme.termPink(c);
+                            title = Lang.tf("今日未签 {0}/{1}", signed, total);
+                            break;
+                        case SignLogic.TODAY_IDLE:
+                            icon = "today-idle"; col = Theme.termMuted(c);
+                            title = Lang.tf("今日 {0}/{1}（无启用目标）", signed, total);
+                            break;
+                        default:
+                            icon = "today-wait"; col = Theme.termCyan(c);
+                            title = Lang.tf("今日已签 {0}/{1}", signed, total);
+                            break;
+                    }
+                }
+                logHeadTitle.setText(title);
+                logHeadTitle.setTextColor(col);
+                if (logHeadIcon != null) {
+                    android.graphics.drawable.Drawable d = Icons.d(c, icon, 15f, col);
+                    if (d != null) {
+                        int sz = dp(15);
+                        d.setBounds(0, 0, sz, sz);
+                        logHeadIcon.setCompoundDrawables(null, null, d, null);
+                        logHeadIcon.setCompoundDrawablePadding(dp(6));
+                    }
+                }
+                // 第二行：连续天数 + 今日战绩（最早/最晚/补签几次）+ 窗口
+                // "今日战绩"是用户要的"别的提示"：一眼看到今天干得怎么样，
+                // 而不是在日志里数绿色行。
+                StringBuilder sb = new StringBuilder();
+                if (streak > 0) sb.append(Lang.tf("连续 {0} 天", streak));
+                try {
+                    List<Map<String, Object>> tl = new ArrayList<Map<String, Object>>();
+                    loadTargetsInto(prefix, tl);
+                    long earliest = Long.MAX_VALUE, latest = 0L;
+                    int missN = 0;
+                    for (Map<String, Object> m : tl) {
+                        String id = entryId(m);
+                        if (!todayS.equals(prefs.getString(kLast(prefix, id), ""))) continue;
+                        long at = stateStore.signedAtMs(prefix, id);
+                        if (at > 0L) {
+                            if (at < earliest) earliest = at;
+                            if (at > latest) latest = at;
+                        }
+                        if (stateStore.missAtMsToday(prefix, id) > 0L) missN++;
+                    }
+                    if (latest > 0L) {
+                        if (sb.length() > 0) sb.append("  /  ");
+                        String e = SignLogic.hhmmOf(earliest);
+                        String l = SignLogic.hhmmOf(latest);
+                        sb.append(e.equals(l) ? e : (e + "-" + l));
+                        if (missN > 0) sb.append(Lang.tf("  /  补签 {0}", missN));
+                    }
+                } catch (Throwable _eH) { noteSwallowed("logHead-stats", _eH); }
+                if (total > 0) {
+                    int[] wr = SignLogic.windowRangeAny(WINDOW);
+                    if (wr != null) {
+                        if (sb.length() > 0) sb.append("  /  ");
+                        sb.append(Lang.tf("窗口 {0}-{1}",
+                                SignLogic.hhmm(wr[0]), SignLogic.hhmm(wr[1])));
+                    } else {
+                    if (sb.length() > 0) sb.append("  /  ");
+                        sb.append(Lang.tr("不限窗口"));
+                    }
+                    if (MISS_BACK) {
+                        sb.append(Lang.tf("  /  补签至 {0}", SignLogic.hhmm(MISS_DEADLINE)));
+                    }
+                }
+                logHeadSub.setText(sb.toString());
+                logHeadSub.setTextColor(Theme.termMuted(c));
+                logHeadBar.setBackground(termBorder(c, Theme.termCard(c), Theme.withAlpha(col, 0x55)));
+            } catch (Throwable t) { noteSwallowed("refreshLogHead", t); }
+        }
+
+        /**
+         * 把易懂档里"同一件事反复发生"的条目折叠成一条（2026-10-03）。
+         *
+         * 例：「[定时] X 已有请求在途/待结论，不重排」一天 12 次 ——
+         * 讲的是同一件事（"别重复发"），刷 12 行没有新信息。
+         * 折叠后只留最新一条，后缀「xN」。
+         *
+         * 只折叠带 foldKey 的类别（见 foldKeyOf）；签到成功、失败这类
+         * 每次都是独立事件，不折叠 —— 否则会掩盖真实的发生次数。
+         * 详细档完全不折叠（那里要看原始流水）。
+         */
+        private List<LogLine> foldShow(List<LogLine> show) {
+            logFoldCnt.clear();
+            if (!logPlain || show == null || show.isEmpty()) return show;
+            try {
+                List<LogLine> out = new ArrayList<LogLine>();
+                java.util.HashSet<String> seen = new java.util.HashSet<String>();
+                java.text.SimpleDateFormat dayFmt = new java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US);
+                for (int i = show.size() - 1; i >= 0; i--) {     // 最新 -> 最旧
+                    LogLine l = show.get(i);
+                    String[] pp = plainLogParts(String.valueOf(l.msg));
+                    String fk = (pp != null && pp.length > 3) ? pp[3] : null;
+                    if (fk == null) { out.add(l); continue; }
+                    // \u0001D: 前缀 = 按天折叠（跨天重新计数，避免"×90"失去时间感）
+                    if (fk.length() > 2 && fk.charAt(0) == '\u0001' && fk.charAt(1) == 'D') {
+                        fk = fk.substring(2) + "@" + dayFmt.format(new java.util.Date(l.ts));
+                    }
+                    if (seen.contains(fk)) {
+                        Integer cur = logFoldCnt.get(fk);
+                        logFoldCnt.put(fk, cur == null ? 2 : cur + 1);
+                        continue;
+                    }
+                    seen.add(fk);
+                    out.add(l);
+                }
+                return out;
+            } catch (Throwable t) { return show; }
         }
 
         private void refreshLog() {
@@ -6491,6 +6722,10 @@ public final class TGAutoSignCore {
                     if (!logShowDebug && l.lv == LV_DEBUG) continue;
                     if (l.lv < logFilter) continue;
                     if (qq.length() > 0 && String.valueOf(l.msg).toLowerCase(Locale.US).indexOf(qq) < 0) continue;
+                    // 易懂档：译不出人话的条目直接不参与分页（2026-10-03）。
+                    // 以前只在渲染时 return，空条目照样占"已载入 N 条"的名额，
+                    // 首屏 400 条里常常一大半是看不见的，用户以为日志很少。
+                    if (logPlain && plainLogParts(String.valueOf(l.msg)) == null) continue;
                     if (tf.length() > 0) {
                         String lm = String.valueOf(l.msg);
                         if (lm.indexOf(tf) < 0) {
@@ -6501,13 +6736,15 @@ public final class TGAutoSignCore {
                     }
                     show.add(l);
                 }
+                // 折叠：同 foldKey 的重复事件合并成一条（2026-10-03）
+                show = foldShow(show);
                 Collections.reverse(show);   // 固定「最新在上」
                 logViewCache = show;         // 供「加载更多」追加用
                 int n = Math.min(show.size(), logLimit);
                 logRendered = n;
                 // 按钮文案按真实剩余判断（修复「明明还有却说已全部加载」）
                 updateMoreBtn(show.size(), n);
-                for (int i = 0; i < n; i++) logRow(logList, show.get(i));
+                for (int i = 0; i < n; i++) logRowAt(logList, show.get(i));
                 if (n == 0) emptyView(logList, show.size() == 0 ? "没有符合条件的日志" : Lang.tf("没有匹配「{0}」的日志", logQuery));
                 String span = "";
                 if (!all.isEmpty()) {
@@ -6522,12 +6759,25 @@ public final class TGAutoSignCore {
             }
         }
 
-        private void logRow(LinearLayout parent, final LogLine l) {
+        private void logRow(LinearLayout parent, final LogLine l) { logRow(parent, l, 0); }
+
+        /** 按折叠计数渲染一行（易懂档专用）。 */
+        private void logRowAt(LinearLayout parent, LogLine li) {
+            String fk = null;
+            try {
+                String[] pp = logPlain ? plainLogParts(String.valueOf(li.msg)) : null;
+                fk = (pp != null && pp.length > 3) ? pp[3] : null;
+            } catch (Throwable ignored) {}
+            Integer fc = (fk == null) ? null : logFoldCnt.get(fk);
+            logRow(parent, li, fc == null ? 0 : fc.intValue());
+        }
+
+        private void logRow(LinearLayout parent, final LogLine l, int foldTimes) {
             final Context c = parent.getContext();
             final boolean dark = Theme.dark(c);
             final String ts = new SimpleDateFormat("MM-dd HH:mm:ss", Locale.US).format(new Date(l.ts));
             // 易懂档：翻译成一句话 + 矢量图标；内部机制条直接不渲染
-            final String body;
+            String body;
             String plainIcon = null;
             String plainSem = null;
             if (logPlain) {
@@ -6536,6 +6786,8 @@ public final class TGAutoSignCore {
                 plainIcon = pp[0];
                 body = pp[1];
                 plainSem = pp.length > 2 ? pp[2] : "info";
+                // 折叠计数：同一条内容重复 N 次时显示「×N」，比刷 N 行有用
+                if (foldTimes > 1) body = body + "  x" + foldTimes;
             } else {
                 body = l.msg;
             }
@@ -6616,8 +6868,11 @@ public final class TGAutoSignCore {
                     tv.setCompoundDrawablePadding(Theme.dp(c, 4));
                 }
             }
+            // body 现在可能被折叠计数改写（不再是 effectively final），
+            // 匿名内部类要用它必须走 final 副本。
+            final String bodyForCopy = body;
             tv.setOnLongClickListener(new View.OnLongClickListener() {
-                @Override public boolean onLongClick(View v) { copyToClip(body); return true; }
+                @Override public boolean onLongClick(View v) { copyToClip(bodyForCopy); return true; }
             });
             row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
             parent.addView(row);
@@ -8235,6 +8490,28 @@ public final class TGAutoSignCore {
         if (m.contains("[界面] 收到管理命令") || m.contains("收到管理命令")) return true;
         // 主页统计卡刷新等纯界面动作
         if (m.contains("[面板] 更新 uid=")) return true;
+        // ── 启动横幅（2026-10-03 聚合）──
+        // 每次冷启写 5 行（版本/宿主/注入/账号/使用），一天重启几十次就是几百行，
+        // 把真正的签到动态全挤走（实测 3076 行里约 350 行是它）。
+        // 易懂档只留"已启动"一条；详情在「详细」档完整可见。
+        if (m.startsWith("宿主:") || m.startsWith("注入:") || m.startsWith("账号:")
+                || m.startsWith("使用:")) return true;
+        // ── 账号实况 / 主题判定（每次刷新都打，纯诊断）──
+        if (m.contains("账号实况:") || m.contains("selectedAccount=")) return true;
+        if (m.contains("主题判定:") || m.contains("主题来源") || m.contains("来源=ui-color")) return true;
+        // ── 防重复发的内部记账（2026-10-03）──
+        // 「已有请求在途/待结论，不重排」「跳过排期」讲的是"我没重复发"。
+        // 实测一天 60+ 条，对用户不是信息（出问题看详细档即可）。
+        if (m.contains("不重排") || m.contains("跳过排期")) return true;
+        // ── 启动维护（2026-10-03）──
+        // 每次冷启都跑一次的内部卫生动作，结论永远是"清掉 N 个残留"，
+        // 用户既无法行动也无需知道（真出问题在详细档可见）。
+        if (m.contains("清理孤儿状态键") || m.contains("清理跨天残留")
+                || m.contains("清理历史遗留配置") || m.contains("清理更新残留")) return true;
+        // ── 未识别候选（"不含签到关键词，不自动添加"）──
+        // 每次有人发言就判一次，实测上百条，而结论永远是"不加"。
+        // 用户真正关心的是"学到了什么"（那条会作为"发现新目标"显示）。
+        if (m.contains("不含签到关键词") || m.contains("非bot，不自动添加")) return true;
         return false;
     }
 
@@ -8254,11 +8531,15 @@ public final class TGAutoSignCore {
         if (m == null || m.length() == 0) return null;
         String s = m.trim();
         if (isInternalLog(s)) return null;
+        // 折叠键（2026-10-03）：同一条重复文案（如"不重排"刷 12 次）
+        // 由界面层按 uid 计数合并，这里只负责给出"按什么折叠"。
+        String foldKey = foldKeyOf(s);
 
         // 成功
         if (s.contains("回复判定") && (s.contains("成功") || s.contains("命中成功")))
             return new String[]{"check", Lang.tr("签到成功"), "ok"};
-        if (s.contains("签到成功") || s.startsWith("已签") || s.contains("已记录签到日"))
+        if (s.contains("签到成功") || s.startsWith("已签") || s.contains("已记录签到日")
+                || s.contains("标记今日已签") || s.contains("已记为今日已签"))
             return new String[]{"check", Lang.tr("签到成功")};
 
         // 发出/等待
@@ -8279,11 +8560,32 @@ public final class TGAutoSignCore {
         if (s.contains("失败") || s.contains("错误") || s.contains("异常"))
             return new String[]{"x", Lang.tr("签到失败，详见详细日志"), "err"};
 
-        // 补签/跳过/冻结/排除
-        if (s.contains("补签"))
-            return new String[]{"repeat", Lang.tr("补签已执行"), "ok"};
+        // ── 补签（2026-10-03 重做）──
+        // 旧实现：只要出现"补签"二字就吐绿色「补签已执行」。
+        // 结果 `=== 启动补签 ===`（每轮心跳起点的内部标记，实测 45 次）
+        // 和各种"跳过补签 / 不触发补签"全被翻译成绿色成功 ——
+        // 用户已签完却一直看到绿色，以为在反复补签（截图反馈）。
+        //
+        // 现在按后缀分辨语义：
+        //   · 跳过类 / 启动标记 / 设置层 → 内部机制，易懂档不显示
+        //   · 真排了补签 → 说清"原定几点、稍后执行"（它还没执行，别谎报已执行）
+        if (s.contains("补签")) {
+            if (s.contains("跳过补签") || s.contains("不触发补签") || s.contains("未开补签")
+                    || s.contains("非补签时段") || s.contains("跳过排期")
+                    || s.contains("启动补签")) return null;
+            // "[定时] 错过补签 X（原计划 07:19）约 4 分钟后触发"
+            java.util.regex.Matcher bm = java.util.regex.Pattern
+                    .compile("原计划\\s*(\\d{2}:\\d{2})").matcher(s);
+            if (bm.find())
+                return new String[]{"repeat", Lang.tf("补签 · 原定 {0} · 稍后执行", bm.group(1)), "info"};
+            if (s.contains("补签已执行"))
+                return new String[]{"repeat", Lang.tr("补了一次"), "ok"};
+            return null;   // 补签截止/补签列表等设置层文案，不懂档不显示
+        }
         if (s.contains("跳过") || s.contains("已暂停"))
-            return new String[]{"pause", Lang.tr("本次跳过"), "info"};
+            // 无目标键时也按天折叠：同一天几十条"跳过"讲的是同一件事
+            return new String[]{"pause", Lang.tr("本次跳过"), "info",
+                    foldKey == null ? "\u0001D:skip" : foldKey};
         if (s.contains("冻结"))
             return new String[]{"pause", Lang.tr("已冻结，不再签到"), "info"};
         if (s.contains("排除") && !s.contains("规则"))
@@ -8292,12 +8594,21 @@ public final class TGAutoSignCore {
         // 学习/新增
         if (s.contains("学到") || s.contains("已添加") || s.contains("新目标"))
             return new String[]{"plus", Lang.tr("发现新的签到目标"), "ok"};
-        if (s.contains("待添加") || s.contains("候选"))
-            return new String[]{"plus", Lang.tr("有新的待添加目标"), "info"};
+        // 候选（网络学习命中但未达关键词）2026-10-03 改：
+        // 旧实现在这里吐笼统的"有新的待添加目标"，实测一天 169 条同质噪音。
+        // 真正的网络学习命中（learnFromNetwork）不经过这条路 ——
+        // 它写的是「网络层自动学习」/「网络层学习·待确认」，前面那条已覆盖。
+        // 这里剩下的都是"判过但没加"的候选，属于内部判定过程，不再上易懂档。
+        if (s.contains("待添加") || s.contains("候选")) return null;
 
         // 设置
         if (s.startsWith("设置更新") || s.contains("设置已保存"))
             return new String[]{"sliders", Lang.tr("设置已更新"), "ok"};
+
+        // 启动横幅（其余 4 行已在 isInternalLog 里滤掉）→ 压成一条。
+        // 按天折叠：一天重启十几次，逐条列出只是噪音，合并成"×N"才说明问题。
+        if (s.startsWith("=== TGAutoSign") && s.contains("已加载"))
+            return new String[]{"bot", Lang.tr("已启动"), "info", "\u0001D:boot"};
 
         // 兜底：去技术前缀，遮住裸 ID
         String r = s;
@@ -8306,7 +8617,36 @@ public final class TGAutoSignCore {
         r = r.replace("text=", "");
         r = r.replaceAll("\\s+", " ").trim();
         if (r.length() == 0) return null;
-        return new String[]{"dots", r, "info"};
+        return foldKey == null ? new String[]{"dots", r, "info"}
+                               : new String[]{"dots", r, "info", foldKey};
+    }
+
+    /**
+     * 折叠键：同键的易懂档条目会被界面层合并成"N 次"。
+     *
+     * 只对"同一条内容会反复出现"的类别给键（定时跳过、在途不重排…），
+     * 其余返回 null = 不折叠（每次都是独立事件，比如签到成功）。
+     */
+    private String foldKeyOf(String s) {
+        try {
+            // 目标标识：优先 uid=<数字>（网络层日志），否则取 <数字>_<seq> 形态的 id
+            //（定时/巡检日志只带 id，没有 uid= 前缀 —— 实测 20 条"不重排"全属于后者，
+            //  用 uid= 匹配一条都抓不到，折叠形同虚设）。
+            String key = null;
+            java.util.regex.Matcher mu = java.util.regex.Pattern
+                    .compile("uid=(-?\\d+)").matcher(s);
+            if (mu.find()) key = mu.group(1);
+            if (key == null) {
+                java.util.regex.Matcher mi = java.util.regex.Pattern
+                        .compile("(-?\\d{5,})_(?:g\\d+|cb\\d+|\\d+)").matcher(s);
+                if (mi.find()) key = mi.group(1);
+            }
+            if (key == null) return null;
+            // 「窗口外跳过」还在易懂档显示（它解释"为什么现在没动作"），
+            // 同目标的那句会刷很多遍，折叠成 xN。
+            if (s.contains("窗口外")) return "offwin:" + key;
+            return null;
+        } catch (Throwable t) { return null; }
     }
 
     /** 兼容旧调用：只要文案 */
