@@ -5170,11 +5170,21 @@ public final class TGAutoSignCore {
             String pfx = accountPrefix();
             String q = logTargetFilter == null ? "" : logTargetFilter.trim().toLowerCase(java.util.Locale.US);
             if (q.length() > 0) {
-                String title = String.valueOf(entryTitle(m)).toLowerCase(java.util.Locale.US);
-                String cmd = String.valueOf(entryText(m)).toLowerCase(java.util.Locale.US);
-                String sub = "";
-                try { sub = String.valueOf(targetSubtitle(entryDid(m))).toLowerCase(java.util.Locale.US); } catch (Throwable ignored) {}
-                if (!title.contains(q) && !cmd.contains(q) && !sub.contains(q)) return false;
+                // ── 搜索字段必须覆盖"行上真正显示的东西"（2026-10-03 修"搜不到"）──
+                // 旧实现只搜 entryTitle（条目自定义标题，多数目标是 null/空）、
+                // entryText（指令）与 targetSubtitle（@用户名）。
+                // 但列表中**显示的主标题**是 entryTitle 为空时回退到的
+                // targetTitle(did)（bot 的显示名）—— 用户看着那个名字去搜，
+                // 而它根本不在被搜的字段里，于是"明明看得见却搜不到"。
+                // 现在把显示名、bot 数字 ID 也纳入匹配。
+                StringBuilder hay = new StringBuilder();
+                hay.append(String.valueOf(entryTitle(m)));
+                hay.append('\u0001').append(String.valueOf(entryText(m)));
+                try { hay.append('\u0001').append(String.valueOf(targetTitle(entryDid(m)))); } catch (Throwable ignored) {}
+                try { hay.append('\u0001').append(String.valueOf(targetSubtitle(entryDid(m)))); } catch (Throwable ignored) {}
+                hay.append('\u0001').append(entryDid(m));
+                String hayLower = hay.toString().toLowerCase(java.util.Locale.US);
+                if (hayLower.indexOf(q) < 0) return false;
             }
             String f = listFilter == null ? "全部" : listFilter;
             if ("全部".equals(f)) return true;
@@ -8927,7 +8937,13 @@ public final class TGAutoSignCore {
             if (tabBody == null) return;
             tabBody.removeAllViews();
             if ("stats".equals(listTab)) {
-                tabBody.addView(buildStatsPage(act));
+                // 同样包一层定高 ScrollView（2026-10-03 修"点统计框又缩小"）：
+                // 对话框高度随内容自适应，统计页内容比目标列表短，
+                // 不包定高就会缩回去 —— 这正是用户反复反馈的"老毛病"。
+                android.widget.ScrollView sv = new android.widget.ScrollView(act);
+                LinearLayout inner = buildStatsPage(act);
+                sv.addView(inner, new android.widget.ScrollView.LayoutParams(-1, -2));
+                tabBody.addView(sv, new LinearLayout.LayoutParams(-1, listContentHeight(act)));
             } else if ("log".equals(listTab)) {
                 tabBody.addView(buildInlineLogPage(act));
             } else if (listTargetContainer != null
@@ -9110,6 +9126,13 @@ public final class TGAutoSignCore {
             tabInds.add(ind);
             tabBar.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
         }
+        // 构建完必须逐个上色（2026-10-03 修"深色模式看不见"）。
+        // 此前只在**点击时**才调 styleListTab —— 于是首次打开时三个 Tab
+        // 全是"未选"外观：文字用 termMuted、指示条透明。
+        // 深色主题下 termMuted 与卡片底对比很低，看起来就像"什么都没有"。
+        for (int ti = 0; ti < TABS.length; ti++) {
+            styleListTab(tabBtns.get(ti), tabInds.get(ti), act, TABS[ti][0].equals(listTab));
+        }
         tabHost.addView(tabBar);
         tabHost.addView(tabBody);
         box.addView(tabHost);
@@ -9176,16 +9199,28 @@ public final class TGAutoSignCore {
             qEd.setTextSize(Theme.TS_SECOND);
             qEd.setHint(Lang.tr("搜索目标（名称 / 指令 / @用户名）"));
             qEd.setTextColor(Theme.termTxt(act));
-            qEd.setHintTextColor(Theme.termFaint(act));
+            // 提示色不能太暗：深色主题下 termFaint 几乎与背景同色，看不出这是输入框
+            qEd.setHintTextColor(Theme.termMuted(act));
             qEd.setTypeface(android.graphics.Typeface.MONOSPACE);
+            // 此前完全没设背景 —— 深色主题下输入框与卡片底融为一体，看不出可输入。
+            // 给它输入框专用的底 + 青色细描边，与其它输入控件保持一致。
+            try {
+                qEd.setBackground(termBorder(act, Theme.termCardInput(act),
+                        Theme.withAlpha(Theme.termCyan(act), 0x55)));
+            } catch (Throwable ignored) {}
+            qEd.setPadding(dp(10), dp(9), dp(10), dp(9));
             qEd.setText(logTargetFilter == null ? "" : logTargetFilter);
             // 输入法回车即应用搜索（不逐字重建列表 —— 那会打断输入、丢焦点）。
             qEd.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
             qEd.setOnEditorActionListener(new TextView.OnEditorActionListener() {
                 @Override public boolean onEditorAction(TextView v, int actionId, android.view.KeyEvent ev) {
                     logTargetFilter = String.valueOf(qEd.getText()).trim();
-                    dismissOne(listDialog);
-                    showList(lastActivity);
+                    // 原地刷新即可：重建整页会丢输入焦点、也慢。
+                    if (!"target".equals(listTab)) {
+                        listTab = "target";
+                        rebuildTabHost(tabBody, act);
+                    }
+                    fillTargetRows(act);
                     return true;
                 }
             });
