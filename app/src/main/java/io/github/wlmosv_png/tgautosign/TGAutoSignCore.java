@@ -8835,8 +8835,10 @@ public final class TGAutoSignCore {
 
     /** 统计页内容容器（供 4 秒自刷新替换内容）。 */
     private LinearLayout statsHost;
-    /** 统计页**首次**是否已播入场动画（刷新时不重播）。 */
-    private boolean statsAnimated = false;
+    /** 统计页入场动画是否已全部播完（2026-10-04）。
+     *  播完前挂起 4 秒刷新 —— 刷新会整树重建，
+     *  未播区块的锚点随即脱离父级，动画任务永久丢失。 */
+    private volatile boolean statsAnimDone = false;
 
     /**
      * 构建统计页（供 Tab 首次填充）。
@@ -8866,47 +8868,72 @@ public final class TGAutoSignCore {
      *   谁进入可视区（含 1 屏预读）就播谁，播完即从队列移除；
      *   同时立即先检查一次（打开时就在视野内的那些）。
      */
+    /**
+     * 统计页「进入视口才播」驱动器（2026-10-04 重写）。
+     *
+     * 旧版用 ScrollView 的 OnScrollChangedListener 触发，实测一次都没播
+     * （用户反复反馈「没有任何特效」），两个原因叠加：
+     *   ① 回调里先 `if (sv.getHeight() <= 0) return;`，
+     *      而构建阶段的 post 复检（60/160/400/800ms）可能全部落在 layout 之前；
+     *   ② 每 4 秒的 refreshStatsPage 会**整树重建**，
+     *      未播区块的锚点随即脱离父级 → 被判定「已播」跳过 → 永不播放。
+     *
+     * 现在改为**轮询**驱动：
+     *   · 每 60ms 检查一次各锚点相对内容区的纵向位置，
+     *     谁进入可视区（含一屏预读）就播谁，播完出队；
+     *   · 高度还没出来就继续等，不提前判定；
+     *   · 全部播完 → statsAnimDone=true，4 秒刷新这才允许换树；
+     *   · 2.4 秒仍未进视野的（用户在慢慢滚）直接兜底播掉 ——
+     *     宁可让它在屏幕外播完，也不能留一块**空白图**
+     *     （趋势/热力图的起始 progress 是 0，不播就是一片空）。
+     */
     private void attachStatsAnim(final android.widget.ScrollView sv, final View statsBox) {
         try {
             final Object tag = statsBox.getTag();
-            if (!(tag instanceof StatsView.Pending)) return;
+            if (!(tag instanceof StatsView.Pending)) { statsAnimDone = true; return; }
             final StatsView.Pending pend = (StatsView.Pending) tag;
-            final int[] fired = new int[pend.size()];
+            final boolean[] fired = new boolean[pend.size()];
+            final int[] ticks = new int[1];
+            statsAnimDone = pend.size() == 0;
+            logd("[统计] 入场动画任务 " + pend.size() + " 项");
             final Runnable check = new Runnable() {
                 @Override public void run() {
                     try {
-                        if (sv.getHeight() <= 0) return;
+                        int vh = sv.getHeight();
                         int top = sv.getScrollY();
-                        int bottom = top + sv.getHeight() + sv.getHeight();   // 预读一屏
+                        int bottom = top + Math.max(vh, 1) * 2;      // 预读一屏
+                        boolean all = true;
                         for (int i = 0; i < pend.size(); i++) {
-                            if (fired[i] == 1) continue;
+                            if (fired[i]) continue;
                             Object[] item = pend.items.get(i);
                             View anchor = (View) item[0];
-                            if (anchor == null || anchor.getParent() == null) { fired[i] = 1; continue; }
-                            // ── 用"在 inner 内的累计 top"而不是窗口坐标 ──
-                            // getLocationInWindow 在对话框内会随窗口/装饰偏移出偏差，
-                            // 实测导致判断永远不成立、动画一次都不播（用户反馈"没看到特效"）。
-                            // 沿父链累加 getTop() 到 inner 为止 —— 与布局一一对应，稳。
+                            if (anchor == null || anchor.getParent() == null) { fired[i] = true; continue; }
+                            if (vh <= 0) { all = false; continue; }   // 尚未 layout，等下一轮
                             int relTop = offsetIn(anchor, statsBox);
                             int relBottom = relTop + Math.max(anchor.getHeight(), 1);
                             if (relBottom >= top && relTop <= bottom) {
-                                fired[i] = 1;
-                                ((Runnable) item[1]).run();
+                                fired[i] = true;
+                                try { ((Runnable) item[1]).run(); } catch (Throwable ignored) {}
+                            } else {
+                                all = false;
                             }
                         }
+                        if (all) { statsAnimDone = true; logd("[统计] 入场动画全部播完"); return; }
+                        if (++ticks[0] > 40) {                        // 2.4s 兜底
+                            for (int i = 0; i < pend.size(); i++) {
+                                if (fired[i]) continue;
+                                fired[i] = true;
+                                try { ((Runnable) pend.items.get(i)[1]).run(); } catch (Throwable ignored) {}
+                            }
+                            statsAnimDone = true;
+                            logd("[统计] 入场动画超时兜底播完");
+                            return;
+                        }
+                        sv.postDelayed(this, 60L);
                     } catch (Throwable ignored) {}
                 }
             };
-            sv.getViewTreeObserver().addOnScrollChangedListener(
-                    new android.view.ViewTreeObserver.OnScrollChangedListener() {
-                        @Override public void onScrollChanged() { check.run(); }
-                    });
-            // 打开时先跑一遍（首屏内的立即播），再延迟几帧复检（布局未完成时高度为 0）
             sv.post(check);
-            sv.postDelayed(check, 60L);
-            sv.postDelayed(check, 160L);
-            sv.postDelayed(check, 400L);
-            sv.postDelayed(check, 800L);
         } catch (Throwable t) { noteSwallowed("attachStatsAnim", t); }
     }
 
@@ -8981,6 +9008,8 @@ public final class TGAutoSignCore {
                         if (!"stats".equals(listTab)) return;      // 已切走
                         android.view.ViewParent par = inner.getParent();
                         if (!(par instanceof View) || tabBody.indexOfChild((View) par) < 0) return;
+                        // 入场动画还在播时不换树 —— 换了动画任务就丢了（2026-10-04）
+                        if (!statsAnimDone) { mainHandler.postDelayed(this, 600L); return; }
                         // 走 refreshStatsPage：它内部 rebuild 且**不播动画**
                         // （animate=false）——否则每 4 秒数字重滚、柱子重升，很吵。
                         refreshStatsPage(sAct);

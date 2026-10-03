@@ -34,6 +34,20 @@ final class StatsView {
 
     private static int dp(Context c, float v) { return Theme.dp(c, v); }
 
+    /**
+     * 统计页**局部字号梯度**（2026-10-04）。
+     *
+     * 用户反馈「字变得很小」。原因是统计页密集用了
+     * 全局最小两档（TS_CAPTION=11 / TS_SECOND=12），
+     * 而它与普通列表页不同：列表的主标题是 TS_BODY=14，
+     * 统计页却**没有**这一档 —— 全是脚注大小。
+     *
+     * 这里给统计页自己一组（不动全局主题，其它页面不受影响）：
+     *   说明文字 11 → 12.5，次要信息 12 → 13.5。
+     */
+    private static final float FS_SMALL = 12.5f;
+    private static final float FS_MID   = 13.5f;
+
     /** 统一的卡片底（与 Core 里的 termBorder 观感一致；此处自带一份避免反向依赖）。 */
     private static android.graphics.drawable.GradientDrawable border(Context c, int bg, int line) {
         android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
@@ -191,7 +205,7 @@ final class StatsView {
         center.setGravity(Gravity.CENTER);
         int inner = (int) (ringPx * 0.62f);
         TextView num = new TextView(act);
-        num.setTextSize(18);
+        num.setTextSize(23);
         num.setTextColor(col);
         num.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         num.setGravity(Gravity.CENTER);
@@ -204,7 +218,7 @@ final class StatsView {
             } }, 0);
         }
         TextView sub = new TextView(act);
-        sub.setTextSize(Theme.TS_CAPTION);
+        sub.setTextSize(FS_SMALL);
         sub.setTextColor(Theme.termMuted(act));
         sub.setTypeface(Theme.text());
         sub.setGravity(Gravity.CENTER);
@@ -257,13 +271,13 @@ final class StatsView {
         r.setGravity(Gravity.CENTER_VERTICAL);
         r.setPadding(0, dp(act, 4), 0, dp(act, 4));
         TextView l = new TextView(act);
-        l.setTextSize(Theme.TS_CAPTION);
+        l.setTextSize(FS_SMALL);
         l.setTextColor(Theme.termMuted(act));
         l.setTypeface(Theme.text());
         l.setText(label);
         r.addView(l, new LinearLayout.LayoutParams(0, -2, 1f));
         TextView v = new TextView(act);
-        v.setTextSize(Theme.TS_SECOND);
+        v.setTextSize(FS_MID);
         v.setTextColor(col);
         v.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         v.setText(value);
@@ -326,7 +340,7 @@ final class StatsView {
             String trendWord = ht[1] > ht[0] ? Lang.tr("在变好")
                     : ht[1] < ht[0] ? Lang.tr("在变差") : Lang.tr("持平");
             TextView tip = new TextView(act);
-            tip.setTextSize(Theme.TS_CAPTION);
+            tip.setTextSize(FS_SMALL);
             tip.setTextColor(Theme.termFaint(act));
             tip.setTypeface(Theme.text());
             tip.setText(Lang.tf("7 日滑动平均 · 前 7 天 {0}/7 → 近 7 天 {1}/7（{2}）",
@@ -362,7 +376,7 @@ final class StatsView {
                 row.setOrientation(LinearLayout.HORIZONTAL);
                 row.setGravity(Gravity.CENTER_VERTICAL);
                 TextView wl = new TextView(act);
-                wl.setTextSize(Theme.TS_CAPTION);
+                wl.setTextSize(FS_SMALL);
                 wl.setTextColor(Theme.termFaint(act));
                 wl.setTypeface(Typeface.MONOSPACE);
                 wl.setText(WL[r]);
@@ -376,7 +390,7 @@ final class StatsView {
                     boolean isToday = in && s.today.equals(d);
                     StatsCharts.HeatLitDrawable hd =
                             new StatsCharts.HeatLitDrawable(cell, CY, on ? 4 : 0, isToday);
-                    hd.setLit(animate ? 1f : 0f);
+                    hd.setLit(animate ? 0f : 1f);
                     iv.setImageDrawable(hd);
                     heatCells.add(hd);
                     LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(cell, cell);
@@ -392,16 +406,18 @@ final class StatsView {
                 out.add(outer, new Runnable() { @Override public void run() {
                     try {
                         android.animation.ValueAnimator va =
-                                android.animation.ValueAnimator.ofInt(0, nCols);
-                        va.setDuration(Math.min(900, nCols * 26));
+                                android.animation.ValueAnimator.ofFloat(0f, nCols);
+                        va.setDuration(Math.min(1000, nCols * 28));
+                        va.setInterpolator(new android.view.animation.DecelerateInterpolator(1.1f));
                         va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
                             @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
                                 try {
-                                    int done = (Integer) a.getAnimatedValue();
+                                    float done = (Float) a.getAnimatedValue();
                                     for (int i = 0; i < total; i++) {
                                         int colIdx = i / ROWS;
-                                        boolean lit = colIdx >= (nCols - done);
-                                        heatCells.get(i).setLit(lit ? 0f : 1f);
+                                        float lit = done - colIdx;
+                                        heatCells.get(i).setLit(
+                                                lit < 0f ? 0f : (lit > 1f ? 1f : lit));
                                     }
                                 } catch (Throwable ignored) {}
                             }
@@ -416,7 +432,7 @@ final class StatsView {
             legend.setGravity(Gravity.CENTER_VERTICAL);
             legend.setPadding(dp(act, 16), dp(act, 8), 0, 0);
             TextView a = new TextView(act);
-            a.setTextSize(Theme.TS_CAPTION); a.setTextColor(Theme.termFaint(act));
+            a.setTextSize(FS_SMALL); a.setTextColor(Theme.termFaint(act));
             a.setTypeface(Theme.text()); a.setText(Lang.tr("少"));
             legend.addView(a);
             for (int lv = 0; lv <= 4; lv++) {
@@ -427,13 +443,13 @@ final class StatsView {
                 legend.addView(iv, lp2);
             }
             TextView b = new TextView(act);
-            b.setTextSize(Theme.TS_CAPTION); b.setTextColor(Theme.termFaint(act));
+            b.setTextSize(FS_SMALL); b.setTextColor(Theme.termFaint(act));
             b.setTypeface(Theme.text()); b.setText(Lang.tr("多"));
             b.setPadding(dp(act, 4), 0, 0, 0);
             legend.addView(b);
             legend.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(0, 1, 1f));
             TextView cnt = new TextView(act);
-            cnt.setTextSize(Theme.TS_CAPTION);
+            cnt.setTextSize(FS_SMALL);
             cnt.setTextColor(Theme.termMuted(act));
             cnt.setTypeface(Theme.text());
             cnt.setText(Lang.tf("{0} 天有记录", StatsData.countHits(s.signDays, list)));
@@ -459,7 +475,7 @@ final class StatsView {
             head.setOrientation(LinearLayout.HORIZONTAL);
             head.setGravity(Gravity.CENTER_VERTICAL);
             TextView nm = new TextView(act);
-            nm.setTextSize(Theme.TS_SECOND);
+            nm.setTextSize(Theme.TS_BODY);
             nm.setTextColor(col);
             nm.setTypeface(Typeface.MONOSPACE, a.current ? Typeface.BOLD : Typeface.NORMAL);
             nm.setSingleLine(true);
@@ -467,7 +483,7 @@ final class StatsView {
             head.addView(nm, new LinearLayout.LayoutParams(-2, -2));
             head.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(dp(act, 8), 1));
             TextView meta = new TextView(act);
-            meta.setTextSize(Theme.TS_CAPTION);
+            meta.setTextSize(FS_SMALL);
             meta.setTextColor(Theme.termMuted(act));
             meta.setTypeface(Theme.text());
             meta.setSingleLine(true);
@@ -502,7 +518,7 @@ final class StatsView {
             }
 
             TextView pct = new TextView(act);
-            pct.setTextSize(Theme.TS_CAPTION);
+            pct.setTextSize(FS_SMALL);
             pct.setTextColor(col);
             pct.setTypeface(Typeface.MONOSPACE);
             int p = a.span30 > 0 ? (int) (a.hits30 * 100f / a.span30) : 0;
@@ -546,7 +562,7 @@ final class StatsView {
             ax.setPadding(0, dp(act, 4), 0, 0);
             for (String w : WL) {
                 TextView t = new TextView(act);
-                t.setTextSize(Theme.TS_CAPTION);
+                t.setTextSize(FS_SMALL);
                 t.setTextColor(Theme.termFaint(act));
                 t.setTypeface(Theme.text());
                 t.setGravity(Gravity.CENTER);
@@ -600,7 +616,7 @@ final class StatsView {
             ax.setOrientation(LinearLayout.HORIZONTAL);
             for (int i = 0; i < 6; i++) {
                 TextView t = new TextView(act);
-                t.setTextSize(Theme.TS_CAPTION);
+                t.setTextSize(FS_SMALL);
                 t.setTextColor(Theme.termFaint(act));
                 t.setTypeface(Typeface.MONOSPACE);
                 t.setGravity(Gravity.CENTER);
@@ -609,7 +625,7 @@ final class StatsView {
             }
             box.addView(ax);
             TextView span = new TextView(act);
-            span.setTextSize(Theme.TS_CAPTION);
+            span.setTextSize(FS_SMALL);
             span.setTextColor(Theme.termMuted(act));
             span.setTypeface(Theme.text());
             span.setPadding(0, dp(act, 6), 0, 0);
@@ -667,12 +683,12 @@ final class StatsView {
                 // 未就位时显示随机字符 + 左右抖动，就位瞬间白闪后归位。
                 final StatsCharts.DecodeTextView nm =
                         new StatsCharts.DecodeTextView(act, t.name,
-                                Theme.TS_SECOND, Theme.termTxt(act), 0xFFFFFFFF);
+                                FS_MID + 1.5f, Theme.termTxt(act), 0xFFFFFFFF);
                 nm.setPadding(dp(act, 10), 0, dp(act, 8), 0);
                 card.addView(nm, new LinearLayout.LayoutParams(0, -2, 1f));
 
                 TextView st = new TextView(act);
-                st.setTextSize(Theme.TS_CAPTION);
+                st.setTextSize(FS_SMALL);
                 st.setTextColor(col);
                 st.setTypeface(Theme.text());
                 st.setSingleLine(true);
@@ -697,7 +713,7 @@ final class StatsView {
 
     private static TextView sectionTitle(Activity act, String s) {
         TextView tv = new TextView(act);
-        tv.setTextSize(Theme.TS_CAPTION);
+        tv.setTextSize(13);                      // 区块标题比脚注大一档（用户反馈统计页字偏小）
         tv.setTextColor(Theme.termCyan(act));
         tv.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         tv.setLetterSpacing(0.06f);
@@ -708,7 +724,7 @@ final class StatsView {
 
     private static TextView hintText(Activity act, String s) {
         TextView e = new TextView(act);
-        e.setTextSize(Theme.TS_CAPTION);
+        e.setTextSize(FS_SMALL);
         e.setTextColor(Theme.termFaint(act));
         e.setTypeface(Theme.text());
         e.setText(s);
