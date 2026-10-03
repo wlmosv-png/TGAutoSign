@@ -820,6 +820,12 @@ public final class Lang {
         EN.put("  /  补签至 {0}", "  /  make-up until {0}");
         EN.put("  /  补签 {0}", "  /  make-up {0}");
         EN.put("昨天 {0}/{1} 完成", "Yesterday {0}/{1} done");
+        EN.put("今日 {0}", "Today {0}");
+        EN.put("  /  补签 {0} 次", "  /  {0} make-ups");
+        EN.put("你已忽略该目标（今天不再试）", "You ignored this target (no retry today)");
+        EN.put("你已确认该目标签上了", "You confirmed this target as signed");
+        EN.put("你点了重试，已重新发送", "You tapped retry; resent");
+        EN.put("某目标", "a target");
         EN_SHORT.put("今天已签", "Done");
         EN_SHORT.put("今天待签", "Due");
         EN_SHORT.put("今天未签", "Missed");

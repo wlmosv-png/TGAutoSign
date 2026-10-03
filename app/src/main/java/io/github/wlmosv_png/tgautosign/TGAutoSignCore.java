@@ -182,6 +182,7 @@ public final class TGAutoSignCore {
     private TextView logHeadIcon;
     private TextView logHeadTitle;
     private TextView logHeadSub;
+    private TextView logHeadStat;
     private int logRendered = 0;         // 当前已渲染条数（游标，用于追加）
     // 日志上下文：账号 / 轮次 / 链路，统一由 jlog 自动带上，便于筛选与归因
     private volatile String ctxAcc = "";
@@ -6384,10 +6385,14 @@ public final class TGAutoSignCore {
             logHeadSub = new TextView(act);
             logHeadSub.setTextSize(Theme.TS_CAPTION);
             logHeadSub.setTypeface(android.graphics.Typeface.MONOSPACE);
+            logHeadStat = new TextView(act);
+            logHeadStat.setTextSize(Theme.TS_CAPTION);
+            logHeadStat.setTypeface(android.graphics.Typeface.MONOSPACE);
             headRow.addView(logHeadIcon);
             headRow.addView(logHeadTitle);
             logHeadBar.addView(headRow);
             logHeadBar.addView(logHeadSub);
+            logHeadBar.addView(logHeadStat);
             root.addView(logHeadBar);
             refreshLogHead();
             maybeAppendYesterdayReport(root);
@@ -6611,9 +6616,10 @@ public final class TGAutoSignCore {
                         logHeadIcon.setCompoundDrawablePadding(dp(6));
                     }
                 }
-                // 第二行：连续天数 + 今日战绩（最早/最晚/补签几次）+ 窗口
-                // "今日战绩"是用户要的"别的提示"：一眼看到今天干得怎么样，
-                // 而不是在日志里数绿色行。
+                // 第二行（配置）= 连续天数 + 窗口 + 补签截止；
+                // 第三行（战绩）= 今日实际签的时段 + 补签几次。
+                // 拆两行是因为一行塞不下：实测"窗口"被裁成"窗□"、
+                // "补签至"被挤到下一行（用户截图）。
                 StringBuilder sb = new StringBuilder();
                 if (streak > 0) sb.append(Lang.tf("连续 {0} 天", streak));
                 try {
@@ -6632,19 +6638,23 @@ public final class TGAutoSignCore {
                         if (stateStore.missAtMsToday(prefix, id) > 0L) missN++;
                     }
                     if (latest > 0L) {
-                        if (sb.length() > 0) sb.append("  /  ");
+                        StringBuilder s2 = new StringBuilder();
                         String e = SignLogic.hhmmOf(earliest);
                         String l = SignLogic.hhmmOf(latest);
-                        sb.append(e.equals(l) ? e : (e + "-" + l));
-                        if (missN > 0) sb.append(Lang.tf("  /  补签 {0}", missN));
+                        s2.append(Lang.tf("今日 {0}", e.equals(l) ? e : (e + "-" + l)));
+                        if (missN > 0) s2.append(Lang.tf("  /  补签 {0} 次", missN));
+                        logHeadStat.setText(s2.toString());
+                    } else {
+                        logHeadStat.setText("");
                     }
                 } catch (Throwable _eH) { noteSwallowed("logHead-stats", _eH); }
                 if (total > 0) {
                     int[] wr = SignLogic.windowRangeAny(WINDOW);
                     if (wr != null) {
                         if (sb.length() > 0) sb.append("  /  ");
-                        sb.append(Lang.tf("窗口 {0}-{1}",
-                                SignLogic.hhmm(wr[0]), SignLogic.hhmm(wr[1])));
+                        // 去掉"窗口"二字：第二行要放 4 段信息，前缀词太占宽度，
+                        // 实测换行时"窗口"会被裁成"窗□"（用户截图）。
+                        sb.append(SignLogic.hhmm(wr[0]) + "-" + SignLogic.hhmm(wr[1]));
                     } else {
                     if (sb.length() > 0) sb.append("  /  ");
                         sb.append(Lang.tr("不限窗口"));
@@ -6654,7 +6664,8 @@ public final class TGAutoSignCore {
                     }
                 }
                 logHeadSub.setText(sb.toString());
-                logHeadSub.setTextColor(Theme.termMuted(c));
+                logHeadSub.setTextColor(Theme.termFaint(c));
+                if (logHeadStat != null) logHeadStat.setTextColor(Theme.termMuted(c));
                 logHeadBar.setBackground(termBorder(c, Theme.termCard(c), Theme.withAlpha(col, 0x55)));
             } catch (Throwable t) { noteSwallowed("refreshLogHead", t); }
         }
@@ -6694,6 +6705,11 @@ public final class TGAutoSignCore {
                     seen.add(fk);
                     out.add(l);
                 }
+                // 遍历是"新->旧"，收集出来也就成了新->旧；
+                // 但调用方（renderLog）拿到的是"旧->新"的列表、后面还要 reverse 一次。
+                // 这里必须还原成同序交给它，否则一翻再翻 → 最旧的在最上面
+                // （2026-10-03 用户截图实测：09-28 的老记录跑到第一行）。
+                Collections.reverse(out);
                 return out;
             } catch (Throwable t) { return show; }
         }
@@ -8499,6 +8515,11 @@ public final class TGAutoSignCore {
         // ── 账号实况 / 主题判定（每次刷新都打，纯诊断）──
         if (m.contains("账号实况:") || m.contains("selectedAccount=")) return true;
         if (m.contains("主题判定:") || m.contains("主题来源") || m.contains("来源=ui-color")) return true;
+        // ── 超时/在途的内部细节（2026-10-03）──
+        // 「收到 BOT_RESPONSE_TIMEOUT —— 本轮请求 kind=cb(有前置命令) 发出于 15 秒前」
+        // 紧跟的下一行才是结论（"机器人没回复，稍后自动重试"），这条纯属重复。
+        if (m.contains("BOT_RESPONSE_TIMEOUT")) return true;
+        if (m.contains("前置命令已全部发出") || m.contains("等待面板刷新")) return true;
         // ── 防重复发的内部记账（2026-10-03）──
         // 「已有请求在途/待结论，不重排」「跳过排期」讲的是"我没重复发"。
         // 实测一天 60+ 条，对用户不是信息（出问题看详细档即可）。
@@ -8591,6 +8612,12 @@ public final class TGAutoSignCore {
         if (s.contains("排除") && !s.contains("规则"))
             return new String[]{"x", Lang.tr("已排除该机器人"), "info"};
 
+        // 用户处置待确认（2026-10-03）：原句带着"【待确认】某目标 用户忽略今天
+        // （今日不再自动重试）"，又长又有内部名词。这里给出短句。
+        if (s.contains("用户忽略今天")) return new String[]{"pause", Lang.tr("你已忽略该目标（今天不再试）"), "info"};
+        if (s.contains("用户确认已签")) return new String[]{"check", Lang.tr("你已确认该目标签上了"), "ok"};
+        if (s.contains("用户点了重试")) return new String[]{"refresh", Lang.tr("你点了重试，已重新发送"), "info"};
+
         // 学习/新增
         if (s.contains("学到") || s.contains("已添加") || s.contains("新目标"))
             return new String[]{"plus", Lang.tr("发现新的签到目标"), "ok"};
@@ -8612,6 +8639,11 @@ public final class TGAutoSignCore {
 
         // 兜底：去技术前缀，遮住裸 ID
         String r = s;
+        // 去掉上下文前缀 [账号1|#3|a0_df28]：[...] 里带 | 或 a0_ 这类链路标记的即内部上下文
+        r = r.replaceAll("^\\[[^\\]]*[|][^\\]]*\\]\\s*", "");
+        // 去掉残留的 [某目标_cb1] 方括号（目标 id 已由下面的数字替换处理）
+        r = r.replaceAll("^\\[[^\\]]*_cb\\d+\\]\\s*", "");
+        r = r.replaceAll("\\[[^\\]]*_cb\\d+\\]", Lang.tr("某目标"));
         r = r.replaceAll("uid=-?\\d+", "");
         r = r.replaceAll("-?\\d{9,}", Lang.tr("某目标"));
         r = r.replace("text=", "");
