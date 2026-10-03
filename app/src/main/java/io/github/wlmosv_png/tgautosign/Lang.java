@@ -900,7 +900,6 @@ public final class Lang {
         EN.put("近 90 天", "Last 90 days");
         EN.put("各账号对比", "ACCOUNTS");
         EN.put("（当前）", " (current)");
-        EN.put("今日 {0}/{1} · 连续 {2}", "{0}/{1} today · streak {2}");
         EN.put("各目标近 30 天", "TARGETS (TODAY)");
         EN.put("今天已签", "signed today");
         EN.put("今天待签", "due today");
@@ -915,6 +914,7 @@ public final class Lang {
         EN.put("星期分布", "WEEKDAY PATTERN");
         EN.put("{0} 天有记录", "{0} days recorded");
         EN.put("月", "/");
+        EN.put("今日 {0}/{1} · 连续 {2} 天", "{0}/{1} today · {2}d streak");
         EN.put("各目标", "TARGETS");
         EN.put("近 30 天", "last 30d");
         EN.put("天", "d");

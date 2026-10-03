@@ -9029,76 +9029,53 @@ public final class TGAutoSignCore {
         LinearLayout outer = new LinearLayout(act);
         outer.setOrientation(LinearLayout.VERTICAL);
         try {
-            final int COLS = 7;
-            int rows = (span + COLS - 1) / COLS;
-            // ── 从"固定 12dp 格子"改成"按可用宽度自适应"（2026-10-03）──
-            // 截图问题：格子固定 12dp，7 列只占屏幕左侧三分之一，
-            // 右边一大片空白；同时格与格挨得太近，像一坨。
-            // 现在：先让单元格充满可用宽度，格间距按比例；格子本身也变大，
-            // 整块与上方图表同宽，视觉不再"半边空"。
-            int availW = act.getResources().getDisplayMetrics().widthPixels
-                    - dp(56);              // 减去对话框左右内边距与星期标签列
-            int gap = Math.max(dp(2), availW / 90);
-            int cell = Math.max(dp(8), (availW - gap * (COLS - 1) - dp(20)) / COLS);
+            // ── 布局改成「13 列 × 7 行」（2026-10-03 第二次重做）──
+            // 上一版想"铺满宽度"，于是 7 列硬撑到 44.6dp/格 ——
+            // 90 天 = 13 行 × 44.6dp ≈ 589dp，比整块空间还高，直接爆掉（用户截图）。
+            // 现在反过来：**列数多、行数固定为 7**（一周一行），
+            // 格子只有 ~15dp，整块高度约 110dp，一屏足够；宽度自然铺满。
+            final int ROWS = 7;
+            int cols = (span + ROWS - 1) / ROWS;      // 90 天 → 13 列
+            int availW = act.getResources().getDisplayMetrics().widthPixels;
+            int sidePad = dp(44);                     // 对话框内边距 + 星期标签列
+            int gap = Math.max(dp(2), availW / 200);
+            int cell = Math.max(dp(6),
+                    (availW - sidePad - gap * (cols - 1)) / cols);
 
-            java.util.Calendar c2 = java.util.Calendar.getInstance();
-            c2.add(java.util.Calendar.DATE, -(span - 1));
             java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
+            java.util.Calendar c2 = java.util.Calendar.getInstance();
+            // 起点对齐到"整周前的周一"，这样每行正好一周、列正好一星期几
+            int dow = c2.get(java.util.Calendar.DAY_OF_WEEK);          // 1=周日
+            int toMon = (dow + 5) % 7;                                  // 距本周一的天数
+            c2.add(java.util.Calendar.DATE, -(span - 1) - toMon);
             java.util.List<String> list = new java.util.ArrayList<String>();
-            for (int i = 0; i < span; i++) { list.add(f.format(c2.getTime())); c2.add(java.util.Calendar.DATE, 1); }
+            int total = cols * ROWS;
+            for (int i = 0; i < total; i++) { list.add(f.format(c2.getTime())); c2.add(java.util.Calendar.DATE, 1); }
             String todayS = todayStr();
             int CY = Theme.termCyan(act);
 
-            // ── 月份标签行（对齐到每列首次出现的月份）──
             String[] WL = {Lang.tr("一"), Lang.tr("二"), Lang.tr("三"), Lang.tr("四"),
                     Lang.tr("五"), Lang.tr("六"), Lang.tr("日")};
-            LinearLayout monthRow = new LinearLayout(act);
-            monthRow.setOrientation(LinearLayout.HORIZONTAL);
-            monthRow.setPadding(0, 0, 0, dp(3));
-            String lastMon = "";
-            for (int col = 0; col < COLS; col++) {
-                final TextView mt = new TextView(act);
-                mt.setTextSize(Theme.TS_CAPTION);
-                mt.setTextColor(Theme.termFaint(act));
-                mt.setTypeface(android.graphics.Typeface.MONOSPACE);
-                // 该列第一格的月份
-                String mon = "";
-                for (int r = 0; r < rows; r++) {
-                    int idx = r * COLS + col;
-                    if (idx < list.size()) {
-                        String d = list.get(idx);
-                        if (d.length() >= 7) { mon = d.substring(5, 7); break; }
-                    }
-                }
-                if (mon.length() > 0 && !mon.equals(lastMon) && col > 0) {
-                    mt.setText(Integer.parseInt(mon) + Lang.tr("月"));
-                    lastMon = mon;
-                }
-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(cell, -2);
-                lp.setMargins(0, 0, gap, 0);
-                monthRow.addView(mt, lp);
-            }
-            outer.addView(monthRow);
 
-            // ── 网格：每行左侧带星期标签 ──
-            for (int r = 0; r < rows; r++) {
+            // 每行一个星期几；列方向是"周"
+            for (int r = 0; r < ROWS; r++) {
                 LinearLayout row = new LinearLayout(act);
                 row.setOrientation(LinearLayout.HORIZONTAL);
                 row.setGravity(android.view.Gravity.CENTER_VERTICAL);
-                // 左标签（只标一/三/五，避免拥挤）
                 TextView wl = new TextView(act);
                 wl.setTextSize(Theme.TS_CAPTION);
                 wl.setTextColor(Theme.termFaint(act));
                 wl.setTypeface(android.graphics.Typeface.MONOSPACE);
                 wl.setGravity(android.view.Gravity.CENTER_VERTICAL);
-                wl.setText(r == 0 ? WL[0] : r == 2 ? WL[2] : r == 4 ? WL[4] : "");
-                LinearLayout.LayoutParams wlp = new LinearLayout.LayoutParams(dp(18), cell);
-                row.addView(wl, wlp);
-                for (int col = 0; col < COLS; col++) {
-                    int idx = r * COLS + col;
+                wl.setText(WL[r]);
+                row.addView(wl, new LinearLayout.LayoutParams(dp(16), cell));
+                for (int col = 0; col < cols; col++) {
+                    int idx = col * ROWS + r;              // 列优先：一列 = 一周
                     android.widget.ImageView iv = new android.widget.ImageView(act);
-                    boolean on = idx < list.size() && days.contains(list.get(idx));
-                    boolean isToday = idx < list.size() && todayS.equals(list.get(idx));
+                    boolean inRange = idx < list.size();
+                    String d = inRange ? list.get(idx) : "";
+                    boolean on = inRange && days.contains(d);
+                    boolean isToday = inRange && todayS.equals(d);
                     iv.setImageDrawable(new Icons.HeatDrawable(cell, CY, on ? 4 : 0, isToday));
                     LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(cell, cell);
                     lp.setMargins(0, 0, gap, gap);
@@ -9107,20 +9084,19 @@ public final class TGAutoSignCore {
                 outer.addView(row);
             }
 
-            // ── 图例 + 统计 ──
+            // 图例 + 统计
             LinearLayout legend = new LinearLayout(act);
             legend.setOrientation(LinearLayout.HORIZONTAL);
             legend.setGravity(android.view.Gravity.CENTER_VERTICAL);
-            legend.setPadding(dp(18), dp(6), 0, 0);
+            legend.setPadding(dp(16), dp(8), 0, 0);
             TextView a = new TextView(act);
             a.setTextSize(Theme.TS_CAPTION); a.setTextColor(Theme.termFaint(act));
             a.setTypeface(Theme.text()); a.setText(Lang.tr("少"));
             legend.addView(a);
             for (int lv = 0; lv <= 4; lv++) {
                 android.widget.ImageView iv = new android.widget.ImageView(act);
-                iv.setImageDrawable(new Icons.HeatDrawable(Math.max(dp(8), cell / 2), CY, lv, false));
-                LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(
-                        Math.max(dp(8), cell / 2), Math.max(dp(8), cell / 2));
+                iv.setImageDrawable(new Icons.HeatDrawable(dp(9), CY, lv, false));
+                LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(dp(9), dp(9));
                 lp2.setMargins(dp(3), 0, 0, 0);
                 legend.addView(iv, lp2);
             }
@@ -9180,13 +9156,19 @@ public final class TGAutoSignCore {
                 nm.setTextColor(col);
                 nm.setTypeface(android.graphics.Typeface.MONOSPACE, isCur ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
                 nm.setText(accountLabel(slot) + (isCur ? Lang.tr("（当前）") : ""));
-                head.addView(nm, new LinearLayout.LayoutParams(0, -2, 1f));
+                nm.setSingleLine(true);
+                // 名称按内容宽（-2），数值行用权重 ——
+                // 上一版反了：名称吃权重 1 把空间占满，"连续 16" 被挤到看不见。
+                head.addView(nm, new LinearLayout.LayoutParams(-2, -2));
+                head.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(dp(8), 1));
                 TextView meta = new TextView(act);
                 meta.setTextSize(Theme.TS_CAPTION);
                 meta.setTextColor(Theme.termMuted(act));
                 meta.setTypeface(Theme.text());
-                meta.setText(Lang.tf("今日 {0}/{1} · 连续 {2}", signed, actv, streak));
-                head.addView(meta, new LinearLayout.LayoutParams(-2, -2));
+                meta.setSingleLine(true);
+                meta.setText(Lang.tf("今日 {0}/{1} · 连续 {2} 天", signed, actv, streak));
+                meta.setGravity(android.view.Gravity.END);
+                head.addView(meta, new LinearLayout.LayoutParams(0, -2, 1f));
                 row.addView(head);
                 row.addView(statsMiniBar(act, hit30, 30,
                         isCur ? Theme.termCyan(act) : Theme.termMuted(act)));

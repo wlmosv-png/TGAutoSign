@@ -101,7 +101,8 @@ final class Icons {
             this.vals = values;
             this.col = col;
             line.setStyle(Paint.Style.STROKE);
-            line.setStrokeWidth(Math.max(2f, hPx * 0.035f));
+            // 线细一点（2026-10-03）：上一版 3.5% 高度，在大图上像一条粗带
+            line.setStrokeWidth(Math.max(1.8f, hPx * 0.022f));
             line.setStrokeCap(Paint.Cap.ROUND);
             line.setStrokeJoin(Paint.Join.ROUND);
             line.setColor(col);
@@ -129,8 +130,15 @@ final class Icons {
                 area.lineTo((n - 1) * dx, h);
                 area.lineTo(firstX, h);
                 area.close();
+                // ── 填充改成"只要底部一点点"（2026-10-03）──
+                // 上一版从线到图底整片填充（0x66 起），在深色底上像一整块实心色，
+                // 完全盖过了折线本身，看着"不像趋势图像色块"（用户截图）。
+                // 现在渐变起点也贴近线（0x4D），且到 45% 高度就完全透明 ——
+                // 只在曲线下方留一层薄光晕，视线仍落在线上。
                 android.graphics.LinearGradient lg = new android.graphics.LinearGradient(
-                        0, 0, 0, h, withA(col, 0x66), withA(col, 0x00),
+                        0, 0, 0, h,
+                        new int[]{withA(col, 0x4D), withA(col, 0x14), withA(col, 0x00)},
+                        new float[]{0f, 0.45f, 1f},
                         android.graphics.Shader.TileMode.CLAMP);
                 fill.setShader(lg);
                 cv.drawPath(area, fill);
@@ -163,7 +171,9 @@ final class Icons {
                 int w = getBounds().width(), h = getBounds().height();
                 if (w <= 0 || h <= 0 || vals == null || vals.length == 0) return;
                 int n = vals.length;
-                float gap = w * 0.035f;
+                // 柱太宽太满（2026-10-03）：上一版 3.5% 间隙、柱子几乎占满一格，
+                // 七根粗柱像七块砖。现在加宽间隙、收窄柱体，露出呼吸感。
+                float gap = w / (n * 0.55f);
                 float bw = (w - gap * (n - 1)) / n;
                 float r = Math.min(bw * 0.32f, h * 0.10f);
                 for (int i = 0; i < n; i++) {
