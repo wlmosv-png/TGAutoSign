@@ -402,10 +402,19 @@ public final class TGAutoSignCore {
                         // 易懂档：向前找"翻译得出来"的行（与日志页同一判据），
                         // 否则最后 4 行恰好都是内部条时首页会空着，
                         // 而日志页却有一堆内容（用户实测的"外面有里面没有"反向版）。
+                        //
+                        // 2026-10-03 补去重：只有 4 行位置，却可能被同一条文案占满
+                        //（截图实测：两条一模一样的「不在签到时间，稍后自动执行」，
+                        //  那是两个目标各报一次，但首页空间宝贵，重复等于浪费）。
+                        // 按**翻译后的文案**去重，而不是原始文本 ——
+                        // 用户看到的就是文案，文案相同即为重复。
+                        java.util.LinkedHashSet<String> seenText = new java.util.LinkedHashSet<String>();
                         for (int i = end - 1; i >= 0 && recent.size() < 4; i--) {
                             LogLine cand = logBuffer.get(i);
                             if (isInternalLog(String.valueOf(cand.msg))) continue;
-                            if (plainLogParts(String.valueOf(cand.msg)) == null) continue;
+                            String[] pp = plainLogParts(String.valueOf(cand.msg));
+                            if (pp == null) continue;
+                            if (!seenText.add(pp[1])) continue;      // 同文案已有更近的一条
                             recent.add(0, cand);
                         }
                     } else {
@@ -721,15 +730,21 @@ public final class TGAutoSignCore {
             // 真实槽位遍历（见 accountSlots 说明）：连续区间会漏掉非连续槽位
             int[] slots = accountSlots();
             String today = todayStr();
+            // ── 跳过当前账号（2026-10-03）──
+            // 主面板顶部已经写了「账号1 · 目标 12」+「已签 11/11」，
+            // 这里再列一遍「账号1：目标 11 · 已签 11/11」就是同一屏第三遍。
+            // 这一行的职责是"**其它**账号怎么样"，当前账号不需要再说。
+            int cur = currentAccount();
             for (int i : slots) {
+                if (i == cur) continue;
                 List<Map<String, Object>> l = new ArrayList<Map<String, Object>>();
                 loadTargetsInto(accountPrefix(i), l);
-                // v1.5.7：分母用活跃目标（排除冻结/排除的 bot）
                 String pfx2 = accountPrefix(i);
                 int done = activeSignedCount(pfx2, l, today);
                 int actv = activeTargetCount(pfx2, l);
-                if (i > 0) sb.append('\n');
-                sb.append(Lang.tf("{0}：目标 {1} · 已签 {2}/{3}", accountLabel(i), l.size(), done, actv));
+                if (sb.length() > 0) sb.append('\n');
+                // 分子分母同口径（两者都排除冻结/排除），否则会出现"11/12"这种永不满的分数
+                sb.append(Lang.tf("{0}：目标 {1} · 已签 {2}/{3}", accountLabel(i), actv, done, actv));
                 if (l.isEmpty()) sb.append(Lang.tr("（还没有目标，去该账号学一个）"));
             }
         } catch (Throwable ignored) {}
@@ -738,16 +753,28 @@ public final class TGAutoSignCore {
 
     /** 把当前账号的目标复制给其它账号（只复制目标，不带已签状态） */
     /** 账号概览数据：目标数 / 今日已签 / 是否有定时计划。 */
+    /**
+     * 账号概况：活跃目标数 / 今日已签 / 是否定时。
+     *
+     * 2026-10-03 修口径不一致：本方法原先用 l.size()（**含**冻结与排除的目标），
+     * 而主面板用的是 activeTargetCount（**排除**它们）——
+     * 于是同一个账号，主面板显示「已签 11/11」，日志页顶部却显示「已签 12/12」，
+     * 用户截图直接问"是不是不同步"。
+     *
+     * 现在统一到同一口径：**分母只算参与签到的目标**。
+     * 冻结/被排除的目标本来就不参与，算进分母只会让进度永远到不了满。
+     */
     private int[] accountStats(int acc) {
         int total = 0, signed = 0, timer = 0;
         try {
             String prefix = accountPrefix(acc);
             List<Map<String, Object>> l = new ArrayList<>();
             loadTargetsInto(prefix, l);
-            total = l.size();
             String today = todayStr();
             for (Map<String, Object> m : l) {
                 try {
+                    if (isInactive(prefix, m)) continue;      // 冻结/排除：不进分母
+                    total++;
                     if (today.equals(prefs.getString(kLast(prefix, entryId(m)), ""))) signed++;
                 } catch (Throwable ignored) {}
             }
@@ -4682,8 +4709,12 @@ public final class TGAutoSignCore {
             acc += 3000L + (long) (random.nextInt(7000));
         }
         int fired = todo.size();
-        String sm = total == 0 ? accountLabel(account) + "：还没有签到目标（切到该账号，去 bot 会话点一下按钮或发一次指令）"
-                : accountLabel(account) + "：目标 " + total + " · 已签 " + signed + " · 待重试 " + busy + " · 本轮发出 " + fired;
+        // 2026-10-03：total 改用活跃目标数，与主面板/日志页同一口径。
+        // 原先 total = list.size()（含冻结），会拼出"目标 12 · 已签 11"这种
+        // 分母对不上的句子（用户截图里那行）。
+        int actvN = activeTargetCount(prefix, list);
+        String sm = actvN == 0 ? accountLabel(account) + "：还没有签到目标（切到该账号，去 bot 会话点一下按钮或发一次指令）"
+                : accountLabel(account) + "：目标 " + actvN + " · 已签 " + signed + " · 待重试 " + busy + " · 本轮发出 " + fired;
         lastRound = sm;
         if (total > 0) jlog("[" + reason + "] " + sm);
         if (promptToday && total > 0 && signed == total) {
@@ -5849,14 +5880,21 @@ public final class TGAutoSignCore {
      */
     private int stateAccent(Context c, String status, boolean signed, boolean isChat) {
         int col;
-        if (signed) {
+        // ── 冻结/排除必须最先判（2026-10-03 修）──
+        // 原来 signed 排在最前，而"冻结"的目标昨天可能已签过（last_ 仍是今天），
+        // 于是冻结行照样显示**绿条** —— 用户截图问"看不出灰色"就是这个原因。
+        // 冻结/排除的目标已经"不参与"，它的颜色就该是"不参与"的灰，
+        // 优先于任何"今天签没签"的结果。
+        if (status != null && (status.contains("冻结") || status.contains("排除")
+                || status.contains("已暂停"))) {
+            col = Theme.termMuted(c);
+        } else if (signed) {
             col = Theme.termGreen(c);
         } else if (status != null && (status.contains("按钮失效") || status.contains("回复判不出")
                 || status.contains("结果未知") || status.contains("未回复")
                 || status.contains("失败") || status.contains("放弃"))) {
             col = Theme.termAmber(c);
-        } else if (status != null && (status.contains("冻结") || status.contains("排除")
-                || status.contains("判定已关") || status.contains("已暂停"))) {
+        } else if (status != null && status.contains("判定已关")) {
             col = Theme.termMuted(c);
         } else {
             col = Theme.termCyan(c);
