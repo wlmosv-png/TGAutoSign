@@ -859,6 +859,26 @@ public final class Lang {
         EN.put("已签 {0}/{1}", "Signed {0}/{1}");
         EN.put("目标 {0}", "{0} targets");
         EN.put("待签 {0}", "{0} due");
+        // ── 规则测试器（2026-10-03）──
+        EN.put("▍规则测试", "RULE TESTER");
+        EN.put("规则测试", "Rule tester");
+        EN.put("测试", "Test");
+        EN.put("把机器人回复粘到这里…", "Paste the bot's reply here...");
+        EN.put("粘贴一段机器人回复，看它会被判成什么。用的是**和实际签到完全相同**的判定链。",
+               "Paste a bot reply to see how it would be judged. Uses the exact same chain as a real sign-in.");
+        EN.put("没有输入内容", "Nothing entered");
+        EN.put("没命中任何词 -> 判定：认不出（会记为「结果未知」等你处置）",
+               "No keyword matched -> unreadable (recorded as \"unknown\" for you to handle)");
+        EN.put("像是进度提示 -> 不是结论，会继续等后续回复", "Looks like a progress note -> not a result; keeps waiting");
+        EN.put("命中进度词「{0}」-> 不是结论，会继续等后续回复", "Progress word \"{0}\" -> not a result; keeps waiting");
+        EN.put("命中「{0}」{1} -> 判定：已签", "Matched \"{0}\"{1} -> signed");
+        EN.put("命中失败词「{0}」{1} -> 判定：失败", "Matched failure word \"{0}\"{1} -> failed");
+        EN.put("命中「{0}」-> 判定：今日已用尽（不再重发）", "Matched \"{0}\" -> daily quota used up (no resend)");
+        EN.put("（你的自定义词）", " (your custom word)");
+        EN.put("测试出错：{0}", "Test error: {0}");
+        EN.put("测试失败: {0}", "Test failed: {0}");
+        EN.put("另外：命中排除规则「{0}」→ 这个 bot 不会被学习", "Also: block rule \"{0}\" hit -> this bot will not be learned");
+        EN.put("另外：未命中任何排除规则", "Also: no block rule matched");
         EN.put("今日 {0}", "Today {0}");
         EN.put("  /  补签 {0} 次", "  /  {0} make-ups");
         EN.put("你已忽略该目标（今天不再试）", "You ignored this target (no retry today)");

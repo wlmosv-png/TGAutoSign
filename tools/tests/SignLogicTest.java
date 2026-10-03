@@ -45,6 +45,7 @@ public final class SignLogicTest {
         sendAttemptsGate();
         pendingDaySemantics();
         crossDayRetry();
+        ruleTesterChain();
 
         System.out.println("----------------------------------------");
         System.out.println("通过 " + passed + " / 失败 " + failed.size());
@@ -913,5 +914,57 @@ public final class SignLogicTest {
         tru("昨天计数今天不算用尽", !(retry >= limit && today.equals(yesterday)));
         tru("今天的计数才算用尽", retry >= limit && today.equals(today));
         tru("旧判据确实会误判（回归保护）", retry >= limit);
+    }
+
+    // ── 规则测试器用的判定链（2026-10-03）─────────────────────────
+    /**
+     * 测试器必须与生产链路同序：进度词优先 -> 失败 > 重复 > 成功。
+     *
+     * 这里不直接测 judgeReplyForTest（它依赖 Android prefs），
+     * 而是把**它依赖的那条链**逐项钉住 —— 链一变，测试器就不再可信。
+     */
+    private static void ruleTesterChain() {
+        String[] dup = SignLogic.DUP_WORDS_DEFAULT;
+        String[] ok  = SignLogic.OK_WORDS_DEFAULT;
+        String[] fail = SignLogic.FAIL_WORDS_DEFAULT;
+
+        // ① 进度词优先：即使内容里有成功词，也不能产生结论
+        tru("进度词「正在签到」被识别",
+            SignLogic.looksLikeProgress("✅ 正在签到，请稍后..."));
+        tru("进度词不是成功结论",
+            SignLogic.verdictOf("✅ 正在签到，请稍后...", dup, ok, fail) == SignLogic.V_UNKNOWN
+            || SignLogic.looksLikeProgress("✅ 正在签到，请稍后..."));
+
+        // ② 否定词优先于肯定词（中文否定常加在肯定词前）
+        eq("「未签到成功」判失败",
+            SignLogic.verdictOf("未签到成功", dup, ok, fail), SignLogic.V_FAILED);
+        eq("「没有签到成功」判失败",
+            SignLogic.verdictOf("没有签到成功", dup, ok, fail), SignLogic.V_FAILED);
+
+        // ③ 明确的成功
+        eq("「签到成功」判已签",
+            SignLogic.verdictOf("签到成功", dup, ok, fail), SignLogic.V_SIGNED);
+
+        // ④ 已签过等价于已签（dup 表）
+        eq("「您今天已经签到过了」判已签",
+            SignLogic.verdictOf("您今天已经签到过了", dup, ok, fail), SignLogic.V_SIGNED);
+
+        // ⑤ 认不出 -> V_UNKNOWN（测试器要显示"认不出"而不是瞎猜）
+        eq("无关文本判认不出",
+            SignLogic.verdictOf("今天天气不错", dup, ok, fail), SignLogic.V_UNKNOWN);
+
+        // ⑥ verdictDetail 必须同时给出命中词（测试器的核心输出）
+        Object[] vd = SignLogic.verdictDetail("签到成功", dup, ok, fail);
+        eq("detail 判定码", ((Integer) vd[0]).intValue(), SignLogic.V_SIGNED);
+        tru("detail 带命中词", String.valueOf(vd[1]).length() > 0);
+
+        // ⑦ 今日用尽
+        eq("「已达每日上限」判用尽",
+            SignLogic.verdictOf("您已达到每日上限，请明日再试", dup, ok, fail),
+            SignLogic.V_EXHAUSTED);
+
+        // ⑧ 空输入不炸
+        eq("空串判认不出",
+            SignLogic.verdictOf("", dup, ok, fail), SignLogic.V_UNKNOWN);
     }
 }

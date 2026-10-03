@@ -8489,6 +8489,66 @@ public final class TGAutoSignCore {
             exTip.setPadding(dp(4), dp(4), dp(4), dp(6));
             box.addView(exTip);
 
+            // ── 规则测试（2026-10-03 新增）──
+            // 位置就放在排除规则下面：用户改完规则立刻能验，
+            // 不必等第二天真机跑一轮才发现把成功词写成失败词。
+            sectionHeader(box, act, "▍规则测试");
+            TextView ttTip = new TextView(act);
+            ttTip.setTextSize(Theme.TS_CAPTION);
+            ttTip.setTextColor(Theme.termFaint(act));
+            ttTip.setTypeface(Theme.text());
+            ttTip.setText(Lang.tr("粘贴一段机器人回复，看它会被判成什么。用的是**和实际签到完全相同**的判定链。"));
+            ttTip.setPadding(dp(4), dp(2), dp(4), dp(4));
+            box.addView(ttTip);
+            final EditText ttIn = adInput(act, "把机器人回复粘到这里…", 0);
+            ttIn.setMinLines(3);
+            box.addView(ttIn);
+            final LinearLayout ttOut = new LinearLayout(act);
+            ttOut.setOrientation(LinearLayout.VERTICAL);
+            ttOut.setPadding(dp(2), dp(6), dp(2), dp(2));
+            box.addView(ttOut);
+            Button ttBtn = mkBtnPrimary(act);
+            withIconText(act, ttBtn, "flask", Lang.tr("测试"));
+            ttBtn.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    try {
+                        ttOut.removeAllViews();
+                        String inp = String.valueOf(ttIn.getText()).trim();
+                        String[] res = judgeReplyForTest(inp);
+                        int col = "ok".equals(res[2]) ? Theme.termGreen(act)
+                                : "err".equals(res[2]) ? Theme.termPink(act)
+                                : "warn".equals(res[2]) ? Theme.termAmber(act)
+                                : Theme.termCyan(act);
+                        TextView line = new TextView(act);
+                        line.setTextSize(Theme.TS_SECOND);
+                        line.setTextColor(col);
+                        line.setTypeface(android.graphics.Typeface.MONOSPACE);
+                        line.setText(res[0]);
+                        line.setPadding(dp(10), dp(9), dp(10), dp(9));
+                        line.setBackground(termBorder(act, Theme.termCard(act),
+                                Theme.withAlpha(col, 0x66)));
+                        ttOut.addView(line);
+                        // 真的会被排除吗？也一并验（它与判定是两条独立链路）
+                        if (inp.length() > 0) {
+                            String hitEx = excludeHit(inp);
+                            TextView ex2 = new TextView(act);
+                            ex2.setTextSize(Theme.TS_CAPTION);
+                            ex2.setTypeface(Theme.text());
+                            if (hitEx != null) {
+                                ex2.setTextColor(Theme.termPink(act));
+                                ex2.setText(Lang.tf("另外：命中排除规则「{0}」→ 这个 bot 不会被学习", hitEx));
+                            } else {
+                                ex2.setTextColor(Theme.termFaint(act));
+                                ex2.setText(Lang.tr("另外：未命中任何排除规则"));
+                            }
+                            ex2.setPadding(dp(10), dp(4), dp(10), 0);
+                            ttOut.addView(ex2);
+                        }
+                    } catch (Throwable t) { toast(Lang.tf("测试失败: {0}", String.valueOf(t))); }
+                }
+            });
+            box.addView(ttBtn);
+
             sectionHeader(box, act, "▍排除的 bot");
             final TextView blVal = new TextView(act);
             blVal.setTextSize(Theme.TS_CAPTION); blVal.setTextColor(Theme.termFaint(act)); blVal.setTypeface(Theme.text());
@@ -10220,6 +10280,73 @@ public final class TGAutoSignCore {
             final Activity fa = a;
             mainHandler.post(new Runnable() { @Override public void run() { showList(fa); } });
         } catch (Throwable t) { noteSwallowed("refreshListFrom", t); }
+    }
+
+    /**
+     * 用**与实际签到完全同一套**词表与顺序判定一段 bot 回复。
+     *
+     * 为什么单独抽出来（2026-10-03 规则测试器）：测试器如果自己拼一套简化逻辑，
+     * 测出来的结果与真机行为不一致 —— 那比没有测试器更糟（会误导用户改错词）。
+     * 这里严格复刻 onUpdateProcessed 的判定链：
+     *   进度词优先 -> verdictDetail（失败 > 永久失败 > 重复 > 成功）-> 用户自定义词叠加
+     *
+     * @return String[]{结果文案, 命中词, 语义色}；语义色 = ok / warn / err / info
+     */
+    private String[] judgeReplyForTest(String reply) {
+        try {
+            if (reply == null || reply.trim().length() == 0)
+                return new String[]{Lang.tr("没有输入内容"), "", "info"};
+            String r = reply.trim();
+
+            // (1) 进度提示：一律不产生结论（与生产链路一致）
+            if (SignLogic.looksLikeProgress(r)) {
+                String ph = "";
+                try {
+                    String lower = r.toLowerCase(java.util.Locale.US);
+                    for (String w : SignLogic.PROGRESS_WORDS) {
+                        if (w != null && lower.contains(w.toLowerCase(java.util.Locale.US))) { ph = w; break; }
+                    }
+                } catch (Throwable ignored) {}
+                return new String[]{ph.length() > 0
+                        ? Lang.tf("命中进度词「{0}」-> 不是结论，会继续等后续回复", ph)
+                        : Lang.tr("像是进度提示 -> 不是结论，会继续等后续回复"), ph, "info"};
+            }
+
+            // (2) 词表：与生产完全相同的组装方式
+            String[] extraOk = JUDGE_USE_CUSTOM
+                    ? SignLogic.parseExtraWords(prefs.getString("jmb_ok_words", "")) : null;
+            String[] extraFail = JUDGE_USE_CUSTOM
+                    ? SignLogic.parseExtraWords(prefs.getString("jmb_fail_words", "")) : null;
+            String[] okMerged = mergeWords(SignLogic.OK_WORDS_DEFAULT, extraOk);
+            String[] failMerged = mergeWords(SignLogic.FAIL_WORDS_DEFAULT, extraFail);
+
+            Object[] vd = SignLogic.verdictDetail(r, null, okMerged, failMerged);
+            int v = ((Integer) vd[0]).intValue();
+            String hit = String.valueOf(vd[1]);
+            boolean customHit = JUDGE_USE_CUSTOM && hit.length() > 0
+                    && (containsWord(extraOk, hit) || containsWord(extraFail, hit));
+
+            if (v == SignLogic.V_SIGNED)
+                return new String[]{Lang.tf("命中「{0}」{1} -> 判定：已签",
+                        hit, customHit ? Lang.tr("（你的自定义词）") : ""), hit, "ok"};
+            if (v == SignLogic.V_FAILED)
+                return new String[]{Lang.tf("命中失败词「{0}」{1} -> 判定：失败",
+                        hit, customHit ? Lang.tr("（你的自定义词）") : ""), hit, "err"};
+            if (v == SignLogic.V_EXHAUSTED)
+                return new String[]{Lang.tf("命中「{0}」-> 判定：今日已用尽（不再重发）", hit), hit, "info"};
+            return new String[]{Lang.tr("没命中任何词 -> 判定：认不出（会记为「结果未知」等你处置）"), "", "warn"};
+        } catch (Throwable t) {
+            return new String[]{Lang.tf("测试出错：{0}", String.valueOf(t)), "", "err"};
+        }
+    }
+
+    /** 词数组里是否含某词（大小写不敏感，与匹配口径一致）。 */
+    private static boolean containsWord(String[] arr, String w) {
+        if (arr == null || w == null || w.length() == 0) return false;
+        for (String a : arr) {
+            if (a != null && a.equalsIgnoreCase(w)) return true;
+        }
+        return false;
     }
 
     /** 该条目今天是否已被用户处置过（用于避免每天重复弹提示）。 */
