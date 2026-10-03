@@ -8901,7 +8901,14 @@ public final class TGAutoSignCore {
                     try {
                         int vh = sv.getHeight();
                         int top = sv.getScrollY();
-                        int bottom = top + Math.max(vh, 1) * 2;      // 预读一屏
+                        // 预读 = 一屏 + 25%（2026-10-04 第二次修）。
+                        // 旧值是 vh*2（两屏），而整个统计页内容约 1364dp、
+                        // ScrollView 只有 0.78 屏高 —— vh*2 已经盖过全部内容，
+                        // 20 个区块于是在同一帧集体起飞、9 百 ms 内全部结束。
+                        // 用户眼睛还在第一屏，下面已经演完 ——
+                        // 表现就是「滚动到才好像有一点点变化」。
+                        // 现在只播「真正在看得到的那一屏」，下面的等滚到再播。
+                        int bottom = top + (int) (Math.max(vh, 1) * 1.25f);
                         boolean all = true;
                         for (int i = 0; i < pend.size(); i++) {
                             if (fired[i]) continue;
@@ -8914,22 +8921,24 @@ public final class TGAutoSignCore {
                             if (relBottom >= top && relTop <= bottom) {
                                 fired[i] = true;
                                 try { ((Runnable) item[1]).run(); } catch (Throwable ignored) {}
+                                logd("[统计] 动画 #" + i + " 进视区并播放 (top=" + relTop
+                                        + " scroll=" + top + " vh=" + vh + ")");
                             } else {
                                 all = false;
                             }
                         }
                         if (all) { statsAnimDone = true; logd("[统计] 入场动画全部播完"); return; }
-                        if (++ticks[0] > 40) {                        // 2.4s 兜底
+                        if (++ticks[0] > 120) {                       // 6s 兜底（前值 2.4s 太短，用户还在看第一屏）
                             for (int i = 0; i < pend.size(); i++) {
                                 if (fired[i]) continue;
                                 fired[i] = true;
                                 try { ((Runnable) pend.items.get(i)[1]).run(); } catch (Throwable ignored) {}
                             }
                             statsAnimDone = true;
-                            logd("[统计] 入场动画超时兜底播完");
+                            logd("[统计] 入场动画 6s 兜底播完");
                             return;
                         }
-                        sv.postDelayed(this, 60L);
+                        sv.postDelayed(this, 50L);
                     } catch (Throwable ignored) {}
                 }
             };

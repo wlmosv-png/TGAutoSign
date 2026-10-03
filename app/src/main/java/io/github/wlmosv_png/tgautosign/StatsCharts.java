@@ -177,10 +177,21 @@ final class StatsCharts {
             } catch (Throwable t) { seg = full; }
             invalidateSelf();
         }
+        /** 已构建路径的尺寸（用于懒重建）。 */
+        private int builtW = -1, builtH = -1;
+
         @Override public void draw(Canvas cv) {
             try {
                 int w = getBounds().width(), h = getBounds().height();
                 if (w <= 0 || h <= 0 || vals == null || vals.length == 0) return;
+                // 构造时传的是 dp(280)，而 ImageView 是 match_parent（实际约 330dp）——
+                // 路径只铺满左边一截，右侧空白。
+                // 现在第一次绘制时按**真实 bounds** 重建，并重算当前进度切片。
+                if (w != builtW || h != builtH) {
+                    builtW = w; builtH = h;
+                    build(w, h);
+                    setProgress(progress);   // seg 基于新路径重算，避免用旧尺寸的残片
+                }
                 Path use = (seg != null) ? seg : full;
                 // 面积（渐变淡），随进度一致生长
                 Path area = new Path(use);

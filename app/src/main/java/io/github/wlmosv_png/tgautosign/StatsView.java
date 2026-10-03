@@ -188,7 +188,7 @@ final class StatsView {
                 try {
                     android.animation.ValueAnimator va =
                             android.animation.ValueAnimator.ofFloat(0f, ratio);
-                    va.setDuration(900);
+                    va.setDuration(1250);
                     va.setInterpolator(new android.view.animation.DecelerateInterpolator(1.5f));
                     va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
                         @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
@@ -250,7 +250,7 @@ final class StatsView {
                 try {
                     android.animation.ValueAnimator va =
                             android.animation.ValueAnimator.ofFloat(0f, 1f);
-                    va.setDuration(460);
+                    va.setDuration(620);
                     va.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
                     va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
                         @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
@@ -290,7 +290,7 @@ final class StatsView {
         try {
             android.animation.ValueAnimator va =
                     android.animation.ValueAnimator.ofInt(0, signed);
-            va.setDuration(350);
+            va.setDuration(560);
             va.setInterpolator(new android.view.animation.DecelerateInterpolator(1.4f));
             va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
                 @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
@@ -324,7 +324,7 @@ final class StatsView {
                     try {
                         android.animation.ValueAnimator va =
                                 android.animation.ValueAnimator.ofFloat(0f, 1f);
-                        va.setDuration(1100);
+                        va.setDuration(1500);
                         va.setInterpolator(new android.view.animation.DecelerateInterpolator(1.2f));
                         va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
                             @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
@@ -407,7 +407,7 @@ final class StatsView {
                     try {
                         android.animation.ValueAnimator va =
                                 android.animation.ValueAnimator.ofFloat(0f, nCols);
-                        va.setDuration(Math.min(1000, nCols * 28));
+                        va.setDuration(Math.min(1400, nCols * 40));
                         va.setInterpolator(new android.view.animation.DecelerateInterpolator(1.1f));
                         va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
                             @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
@@ -547,7 +547,7 @@ final class StatsView {
             iv.setImageDrawable(bg2);
             wf.addView(iv, new FrameLayout.LayoutParams(-1, hPx));
             if (animate && out != null) out.add(wf, new Runnable() { @Override public void run() {
-                growUp(bg2, 460, 0);
+                growUp(bg2, 640, 0);
             } }, 0);
             View base = new View(act);
             base.setBackgroundColor(Theme.withAlpha(Theme.termCyan(act), 0x33));
@@ -604,7 +604,7 @@ final class StatsView {
             iv.setImageDrawable(hb);
             wf.addView(iv, new FrameLayout.LayoutParams(-1, hPx));
             if (animate && out != null) out.add(wf, new Runnable() { @Override public void run() {
-                growUp(hb, 460, 0);
+                growUp(hb, 640, 0);
             } }, 0);
             View base = new View(act);
             base.setBackgroundColor(Theme.withAlpha(Theme.termCyan(act), 0x33));
@@ -780,12 +780,12 @@ final class StatsView {
             card.setAlpha(0f);
             card.setTranslationX(dist);
             card.animate().alpha(1f).translationX(0f)
-                    .setDuration(340)
+                    .setDuration(480)
                     .setInterpolator(new android.view.animation.DecelerateInterpolator(1.5f))
                     .start();
             if (name == null) return;
             android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(0f, 1f);
-            va.setDuration(620);                    // 比滑动长一点：卡到位后文字还在拼
+            va.setDuration(900);                    // 比滑动长一点：卡到位后文字还在拼
             va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
                 @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
                     try { name.setProgress((Float) a.getAnimatedValue()); } catch (Throwable ignored) {}
