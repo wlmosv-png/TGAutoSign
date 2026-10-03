@@ -8737,675 +8737,116 @@ public final class TGAutoSignCore {
      * 放在目标列表内做 Tab，而不是另开一张大卡片 ——
      * 统计的价值是"看出哪个 bot 拖后腿"，跟目标列表挨着才方便对照。
      */
-    private LinearLayout buildStatsPage(Activity act) {
-        LinearLayout box = new LinearLayout(act);
-        box.setOrientation(LinearLayout.VERTICAL);
-        try {
-            String prefix = accountPrefix();
-            java.util.Set<String> days = signDays(prefix);
-            String today = todayStr();
-            java.util.List<Map<String, Object>> tl = targetsSnapshot();
-            int total = activeTargetCount(prefix, tl);
-            int signed = activeSignedCount(prefix, tl, today);
-
-            // ══ ① 门面：环形进度 + 右侧三项关键值 ══
-            box.addView(statHeroCard(act, prefix, days, today, total, signed));
-
-            // ══ ② 近 30 天趋势折线 ══
-            box.addView(statsSectionTitle(act, Lang.tr("近 30 天趋势")));
-            box.addView(trendCard(act, days));
-
-            // ══ ③ 近 90 天热力图 + 星期轴 ══
-            box.addView(statsSectionTitle(act, Lang.tr("近 90 天打卡")));
-            box.addView(heatGrid(act, days, 90));
-
-            // ══ ④ 多账号对比 ══
-            box.addView(statsSectionTitle(act, Lang.tr("各账号对比")));
-            box.addView(accountCompare(act));
-
-            // ══ ⑤ 星期分布（哪天最常签）══
-            box.addView(statsSectionTitle(act, Lang.tr("星期分布")));
-            box.addView(weekdayChart(act, days));
-
-            // ══ ⑥ 各目标 ══
-            box.addView(statsSectionTitle(act, Lang.tr("各目标")));
-            box.addView(targetRates(act));
-        } catch (Throwable t) { noteSwallowed("buildStatsPage", t); }
-        return box;
-    }
+    // ═══════════ 统计页（2026-10-04 分层重构）═══════════
+    // UI 构件全部搬到 StatsView（纯渲染）、图表搬到 StatsCharts、
+    // 纯计算搬到 StatsData；Core 这里只保留**唯一一处取数**：
+    // 读 prefs / 遍历目标 → 填出 StatsSnapshot。
+    // 这样统计页的口径只有一处，也不会再让 Core 继续膨胀。
 
     /**
-     * 门面卡（2026-10-03 重做）。
-     *
-     * 改前是"三个大数字并排"—— 三个都亮绿、都 26sp，
-     * 视觉上没有主次（用户截图反馈"有点问题"）。
-     * 现在：左边一个 96dp 环形表达"今日完成度"（闭合=满），
-     * 圆心放大号 x/y；右侧竖排三项次要指标（连续/累计/完成率），
-     * 字号降一档、颜色区分 —— 一眼知道该看哪。
+     * 采集统计快照。**唯一的取数处**（StatsView 不读任何状态）。
      */
-    private LinearLayout statHeroCard(Activity act, String prefix, java.util.Set<String> days,
-                                      String today, int total, int signed) {
-        LinearLayout card = new LinearLayout(act);
-        card.setOrientation(LinearLayout.HORIZONTAL);
-        card.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        card.setPadding(dp(10), dp(12), dp(10), dp(14));
-        try {
-            boolean allDone = total > 0 && signed >= total;
-            int col = allDone ? Theme.termGreen(act) : Theme.termCyan(act);
-
-            // ── 左：环形 + 圆心数字（用 FrameLayout 叠）──
-            android.widget.FrameLayout ring = new android.widget.FrameLayout(act);
-            android.widget.ImageView iv = new android.widget.ImageView(act);
-            // 环加大到 108dp：原来 96dp 的内径只有约 77dp，
-            // 22sp 的 "11/11" 横向放不下，直接顶出圈外（用户截图可见）。
-            int ringPx = dp(108);
-            iv.setImageDrawable(new Icons.RingStatDrawable(ringPx,
-                    total <= 0 ? 0f : (float) signed / total, col,
-                    Theme.withAlpha(col, 0x22)));
-            ring.addView(iv, new android.widget.FrameLayout.LayoutParams(ringPx, ringPx));
-            LinearLayout center = new LinearLayout(act);
-            center.setOrientation(LinearLayout.VERTICAL);
-            center.setGravity(android.view.Gravity.CENTER);
-            // 圆心区域只占环的内径（0.62 是环内可用比例），超出会压到环上
-            int innerPx = (int) (ringPx * 0.62f);
-            TextView num = new TextView(act);
-            num.setTextSize(18);          // 22 -> 18，配合内径更合适
-            num.setTextColor(col);
-            num.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-            num.setGravity(android.view.Gravity.CENTER);
-            num.setSingleLine(true);
-            num.setText(signed + "/" + total);
-            center.addView(num, new LinearLayout.LayoutParams(innerPx, -2));
-            TextView sub = new TextView(act);
-            sub.setTextSize(Theme.TS_CAPTION);
-            sub.setTextColor(Theme.termMuted(act));
-            sub.setTypeface(Theme.text());
-            sub.setGravity(android.view.Gravity.CENTER);
-            sub.setSingleLine(true);
-            sub.setText(Lang.tr("今日完成"));
-            center.addView(sub, new LinearLayout.LayoutParams(innerPx, -2));
-            ring.addView(center, new android.widget.FrameLayout.LayoutParams(innerPx, -2,
-                    android.view.Gravity.CENTER));
-            card.addView(ring);
-
-            // ── 右：三项次要指标 ──
-            LinearLayout meta = new LinearLayout(act);
-            meta.setOrientation(LinearLayout.VERTICAL);
-            meta.setPadding(dp(14), 0, 0, 0);
-            int streak = SignLogic.streakDisplay(streakOf(prefix),
-                    prefs.getString(kLastSignDate(prefix), ""), today, yesterdayStr());
-            meta.addView(heroMetaRow(act, Lang.tr("连续"), streak + " " + Lang.tr("天"),
-                    Theme.termGreen(act)));
-            meta.addView(heroMetaRow(act, Lang.tr("累计"), days.size() + " " + Lang.tr("天"),
-                    Theme.termTxt(act)));
-            int r30 = 0;
-            java.util.Calendar c2 = java.util.Calendar.getInstance();
-            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
-            for (int i = 0; i < 30; i++) {
-                if (days.contains(f.format(c2.getTime()))) r30++;
-                c2.add(java.util.Calendar.DATE, -1);
-            }
-            meta.addView(heroMetaRow(act, Lang.tr("近 30 天"), r30 + "/30",
-                    r30 >= 25 ? Theme.termGreen(act) : Theme.termAmber(act)));
-            card.addView(meta, new LinearLayout.LayoutParams(0, -2, 1f));
-        } catch (Throwable t) { noteSwallowed("statHeroCard", t); }
-        return card;
-    }
-
-    /** 门面右侧的一行：左标签（弱色）+ 右值（着色）。 */
-    private LinearLayout heroMetaRow(Activity act, String label, String value, int col) {
-        LinearLayout r = new LinearLayout(act);
-        r.setOrientation(LinearLayout.HORIZONTAL);
-        r.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        r.setPadding(0, dp(4), 0, dp(4));
-        TextView l = new TextView(act);
-        l.setTextSize(Theme.TS_CAPTION);
-        l.setTextColor(Theme.termMuted(act));
-        l.setTypeface(Theme.text());
-        l.setText(label);
-        r.addView(l, new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView v = new TextView(act);
-        v.setTextSize(Theme.TS_SECOND);
-        v.setTextColor(col);
-        v.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-        v.setText(value);
-        r.addView(v, new LinearLayout.LayoutParams(-2, -2));
-        return r;
-    }
-
-    /** 近 30 天趋势：一条带渐变填充的折线 + 首尾对比。 */
-    private LinearLayout trendCard(Activity act, java.util.Set<String> days) {
-        LinearLayout wrap = new LinearLayout(act);
-        wrap.setOrientation(LinearLayout.VERTICAL);
-        try {
-            final int N = 30;
-            float[] vals = new float[N];
-            java.util.Calendar c = java.util.Calendar.getInstance();
-            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
-            java.util.List<String> list = new java.util.ArrayList<String>();
-            java.util.Calendar c2 = (java.util.Calendar) c.clone();
-            c2.add(java.util.Calendar.DATE, -(N - 1));
-            for (int i = 0; i < N; i++) { list.add(f.format(c2.getTime())); c2.add(java.util.Calendar.DATE, 1); }
-            for (int i = 0; i < N; i++) vals[i] = days.contains(list.get(i)) ? 1f : 0f;
-            // 7 天滑动平均：原始 0/1 折线是锯齿，看不出趋势
-            float[] smooth = new float[N];
-            for (int i = 0; i < N; i++) {
-                int from = Math.max(0, i - 6);
-                float s = 0f; int cnt = 0;
-                for (int j = from; j <= i; j++) { s += vals[j]; cnt++; }
-                smooth[i] = cnt > 0 ? s / cnt : 0f;
-            }
-            android.widget.ImageView iv = new android.widget.ImageView(act);
-            int hPx = dp(72);
-            iv.setImageDrawable(new Icons.SparkDrawable(smooth, Theme.termCyan(act), dp(280), hPx));
-            wrap.addView(iv, new LinearLayout.LayoutParams(-1, hPx));
-            // 说明：这是 7 日滑动平均，不是原始点，避免用户误读
-            TextView tip = new TextView(act);
-            tip.setTextSize(Theme.TS_CAPTION);
-            tip.setTextColor(Theme.termFaint(act));
-            tip.setTypeface(Theme.text());
-            int first7 = 0, last7 = 0;
-            for (int i = 0; i < 7; i++) first7 += (int) vals[i];
-            for (int i = N - 7; i < N; i++) last7 += (int) vals[i];
-            String trend = last7 > first7 ? Lang.tr("在变好")
-                    : last7 < first7 ? Lang.tr("在变差") : Lang.tr("持平");
-            tip.setText(Lang.tf("7 日滑动平均 · 前 7 天 {0}/7 → 近 7 天 {1}/7（{2}）",
-                    first7, last7, trend));
-            tip.setPadding(0, dp(4), 0, 0);
-            wrap.addView(tip);
-        } catch (Throwable t) { noteSwallowed("trendCard", t); }
-        return wrap;
-    }
-
-    /** 星期分布：周一到周日各签了多少天。 */
-    private LinearLayout weekdayChart(Activity act, java.util.Set<String> days) {
-        LinearLayout wrap = new LinearLayout(act);
-        wrap.setOrientation(LinearLayout.VERTICAL);
-        try {
-            int[] cnt = new int[7];    // 0=周一 ... 6=周日
-            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
-            for (String d : days) {
-                try {
-                    java.util.Date dt = f.parse(d);
-                    if (dt == null) continue;
-                    java.util.Calendar c = java.util.Calendar.getInstance();
-                    c.setTime(dt);
-                    int dow = c.get(java.util.Calendar.DAY_OF_WEEK);   // 1=周日
-                    int idx = (dow + 5) % 7;                            // 转成 0=周一
-                    cnt[idx]++;
-                } catch (Throwable ignored) {}
-            }
-            // 2026-10-03：改成"细胶囊 + 弱亮色 + 基线"。
-            // 上一版是 7 根绿色实心方块（用户原话"像绿砖，不圆润"）。
-            // 现在：柱更细（靠 BarsDrawable 内部收窄 + 这里降低高度）、
-            // 用青色（与统计页主色一致，绿色留给"已完成"语义）、
-            // 顶部圆角拉大、底部加一条基线让"从哪长出来"看得见。
-            android.widget.FrameLayout wf = new android.widget.FrameLayout(act);
-            android.widget.ImageView iv = new android.widget.ImageView(act);
-            // 高度降到 40dp、柱宽占 26%：上一版圆角拉到柱宽一半 = 药丸形，
-            // 看着不像"柱状图"而像一排胶囊（用户截图）。现在圆角只占柱宽 22%，
-            // 是"圆角矩形柱"而不是胶囊。
-            int hPx = dp(40);
-            iv.setImageDrawable(new Icons.BarsDrawable(cnt, Theme.termCyan(act), true));
-            wf.addView(iv, new android.widget.FrameLayout.LayoutParams(-1, hPx));
-            View base = new View(act);
-            base.setBackgroundColor(Theme.withAlpha(Theme.termCyan(act), 0x33));
-            android.widget.FrameLayout.LayoutParams blp2 = new android.widget.FrameLayout.LayoutParams(
-                    -1, dp(1));
-            blp2.gravity = android.view.Gravity.BOTTOM;
-            wf.addView(base, blp2);
-            wrap.addView(wf, new LinearLayout.LayoutParams(-1, hPx));
-            String[] WL = {Lang.tr("一"), Lang.tr("二"), Lang.tr("三"), Lang.tr("四"),
-                    Lang.tr("五"), Lang.tr("六"), Lang.tr("日")};
-            LinearLayout ax = new LinearLayout(act);
-            ax.setOrientation(LinearLayout.HORIZONTAL);
-            ax.setPadding(0, dp(4), 0, 0);
-            for (String w : WL) {
-                TextView t = new TextView(act);
-                t.setTextSize(Theme.TS_CAPTION);
-                t.setTextColor(Theme.termFaint(act));
-                t.setTypeface(Theme.text());
-                t.setGravity(android.view.Gravity.CENTER);
-                t.setText(w);
-                ax.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
-            }
-            wrap.addView(ax);
-        } catch (Throwable t) { noteSwallowed("weekdayChart", t); }
-        return wrap;
-    }
-
-    private TextView statsSectionTitle(Activity act, String s) {
-        TextView tv = new TextView(act);
-        tv.setTextSize(Theme.TS_CAPTION);
-        tv.setTextColor(Theme.termCyan(act));
-        tv.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-        tv.setTextColor(Theme.termCyan(act));
-        tv.setLetterSpacing(0.06f);
-        tv.setPadding(0, dp(14), 0, dp(6));
-        tv.setText(s);
-        return tv;
-    }
-
-    /** 一行：标签 + 进度条 + x/y。 */
-    private LinearLayout statsBarRow(Activity act, String label, int hit, int span, int col) {
-        // 排版重做（2026-10-03）：第一版字号与间距都很挤，
-        // 进度条 6dp 在小屏上像一条粗线压在文字下面。
-        // 现在：标签用次要字号、数值同字号但加粗着色、
-        // 条降到 5dp 且左右留出与文字对齐的内边距，行距拉开。
-        LinearLayout row = new LinearLayout(act);
-        row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(0, dp(6), 0, dp(8));
-        LinearLayout head = new LinearLayout(act);
-        head.setOrientation(LinearLayout.HORIZONTAL);
-        head.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        TextView l = new TextView(act);
-        l.setTextSize(Theme.TS_SECOND);
-        l.setTextColor(Theme.termMuted(act));
-        l.setTypeface(android.graphics.Typeface.MONOSPACE);
-        l.setText(label);
-        head.addView(l, new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView v = new TextView(act);
-        v.setTextSize(Theme.TS_SECOND);
-        v.setTextColor(col);
-        v.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-        v.setText(hit + "/" + span);
-        head.addView(v, new LinearLayout.LayoutParams(-2, -2));
-        row.addView(head);
-
-        // 进度条：用 FrameLayout 让"已填"部分有最小宽度（1 天也看得见）
-        android.widget.FrameLayout track = new android.widget.FrameLayout(act);
-        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
-        bg.setColor(Theme.withAlpha(Theme.termCyan(act), 0x1A));
-        bg.setCornerRadius(dp(2));
-        track.setBackground(bg);
-        if (hit > 0) {
-            // 按比例算宽度（FrameLayout 里用不了权重）；
-            // 最小 2% 保证"只签了 1 天"也看得见一格
-            final float ratio = Math.max(0.02f, Math.min(1f, (float) hit / (float) span));
-            final android.widget.FrameLayout trackRef = track;
-            track.post(new Runnable() { @Override public void run() {
-                try {
-                    int w = (int) (trackRef.getWidth() * ratio);
-                    android.view.View f2 = new android.view.View(trackRef.getContext());
-                    android.graphics.drawable.GradientDrawable g2 = new android.graphics.drawable.GradientDrawable();
-                    g2.setColor(col);
-                    g2.setCornerRadius(dp(2));
-                    f2.setBackground(g2);
-                    trackRef.addView(f2, new android.widget.FrameLayout.LayoutParams(w, -1));
-                } catch (Throwable ignored) {}
-            } });
-        }
-        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(-1, dp(5));
-        tlp.topMargin = dp(6);
-        row.addView(track, tlp);
-        return row;
-    }
-
-    private LinearLayout heatGrid(Activity act, java.util.Set<String> days, int span) {
-        LinearLayout outer = new LinearLayout(act);
-        outer.setOrientation(LinearLayout.VERTICAL);
-        try {
-            // ── 布局改成「13 列 × 7 行」（2026-10-03 第二次重做）──
-            // 上一版想"铺满宽度"，于是 7 列硬撑到 44.6dp/格 ——
-            // 90 天 = 13 行 × 44.6dp ≈ 589dp，比整块空间还高，直接爆掉（用户截图）。
-            // 现在反过来：**列数多、行数固定为 7**（一周一行），
-            // 格子只有 ~15dp，整块高度约 110dp，一屏足够；宽度自然铺满。
-            final int ROWS = 7;
-            int cols = (span + ROWS - 1) / ROWS;      // 90 天 → 13 列
-            // ── 宽度基准必须用「对话框可用宽」，不能用屏幕宽（2026-10-04 修）──
-            // showDialog 把对话框限制为 min(屏宽*0.92, 400dp)，
-            // 而卡片自己还有 12dp*2 的内边距。我上一版直接拿屏宽算，
-            // 导致整块比对话框宽 74px —— 右边被裁掉（用户截图里
-            // "17 天有记录"只剩半截就是这个）。
-            int availW = dialogContentWidth(act) - dp(2);
-            int sidePad = dp(20);                     // 星期标签列
-            int gap = Math.max(dp(2), availW / 130);
-            int cell = Math.max(dp(5),
-                    (availW - sidePad - gap * (cols - 1)) / cols);
-            if (cell > dp(18)) cell = dp(18);         // 上限，避免大屏格子过大
-
-            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
-            // ── 日期范围：**必须以今天结尾往前推**（2026-10-03 修）──
-            // 上一版从"span 天前的周一"往后铺 total 格，于是范围是
-            // 07-02…09-30 —— 最后一格停在 09-30，**根本没到今天**（今天 10-04）。
-            // 用户看到"今天是周日"却找不到对应的格，完全看不懂。
-            // 正确做法：先定位本周一（今天所在那列的周一），
-            // 再往前推 (cols-1) 周，终点正好是今天。
-            java.util.Calendar c2 = java.util.Calendar.getInstance();
-            int dow = c2.get(java.util.Calendar.DAY_OF_WEEK);          // 1=周日
-            int toMon = (dow + 5) % 7;                                  // 距本周一的天数(0=周一)
-            c2.add(java.util.Calendar.DATE, -toMon);                    // 先回到本周一
-            c2.add(java.util.Calendar.DATE, -(cols - 1) * 7);           // 再往前 (cols-1) 周
-            java.util.List<String> list = new java.util.ArrayList<String>();
-            int total = cols * ROWS;
-            for (int i = 0; i < total; i++) { list.add(f.format(c2.getTime())); c2.add(java.util.Calendar.DATE, 1); }
-            String todayS = todayStr();
-            int CY = Theme.termCyan(act);
-
-            String[] WL = {Lang.tr("一"), Lang.tr("二"), Lang.tr("三"), Lang.tr("四"),
-                    Lang.tr("五"), Lang.tr("六"), Lang.tr("日")};
-
-            // 每行一个星期几；列方向是"周"
-            for (int r = 0; r < ROWS; r++) {
-                LinearLayout row = new LinearLayout(act);
-                row.setOrientation(LinearLayout.HORIZONTAL);
-                row.setGravity(android.view.Gravity.CENTER_VERTICAL);
-                TextView wl = new TextView(act);
-                wl.setTextSize(Theme.TS_CAPTION);
-                wl.setTextColor(Theme.termFaint(act));
-                wl.setTypeface(android.graphics.Typeface.MONOSPACE);
-                wl.setGravity(android.view.Gravity.CENTER_VERTICAL);
-                wl.setText(WL[r]);
-                row.addView(wl, new LinearLayout.LayoutParams(dp(16), cell));
-                for (int col = 0; col < cols; col++) {
-                    int idx = col * ROWS + r;              // 列优先：一列 = 一周
-                    android.widget.ImageView iv = new android.widget.ImageView(act);
-                    boolean inRange = idx < list.size();
-                    String d = inRange ? list.get(idx) : "";
-                    boolean on = inRange && days.contains(d);
-                    boolean isToday = inRange && todayS.equals(d);
-                    iv.setImageDrawable(new Icons.HeatDrawable(cell, CY, on ? 4 : 0, isToday));
-                    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(cell, cell);
-                    lp.setMargins(0, 0, gap, gap);
-                    row.addView(iv, lp);
-                }
-                outer.addView(row);
-            }
-
-            // 图例 + 统计
-            LinearLayout legend = new LinearLayout(act);
-            legend.setOrientation(LinearLayout.HORIZONTAL);
-            legend.setGravity(android.view.Gravity.CENTER_VERTICAL);
-            legend.setPadding(dp(16), dp(8), 0, 0);
-            TextView a = new TextView(act);
-            a.setTextSize(Theme.TS_CAPTION); a.setTextColor(Theme.termFaint(act));
-            a.setTypeface(Theme.text()); a.setText(Lang.tr("少"));
-            legend.addView(a);
-            for (int lv = 0; lv <= 4; lv++) {
-                android.widget.ImageView iv = new android.widget.ImageView(act);
-                iv.setImageDrawable(new Icons.HeatDrawable(dp(9), CY, lv, false));
-                LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(dp(9), dp(9));
-                lp2.setMargins(dp(3), 0, 0, 0);
-                legend.addView(iv, lp2);
-            }
-            TextView b = new TextView(act);
-            b.setTextSize(Theme.TS_CAPTION); b.setTextColor(Theme.termFaint(act));
-            b.setTypeface(Theme.text()); b.setText(Lang.tr("多"));
-            b.setPadding(dp(4), 0, 0, 0);
-            legend.addView(b);
-            legend.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(0, 1, 1f));
-            int hitN = 0;
-            for (String d : list) if (days.contains(d)) hitN++;
-            TextView cnt = new TextView(act);
-            cnt.setTextSize(Theme.TS_CAPTION);
-            cnt.setTextColor(Theme.termMuted(act));
-            cnt.setTypeface(Theme.text());
-            cnt.setText(Lang.tf("{0} 天有记录", hitN));
-            legend.addView(cnt);
-            outer.addView(legend);
-        } catch (Throwable t) { noteSwallowed("heatGrid", t); }
-        return outer;
-    }
-
-    private LinearLayout accountCompare(Activity act) {
-        LinearLayout box = new LinearLayout(act);
-        box.setOrientation(LinearLayout.VERTICAL);
-        try {
-            int cur = currentAccount();
-            java.util.Calendar cal = java.util.Calendar.getInstance();
-            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
-            for (int slot : accountSlots()) {
-                String pfx = accountPrefix(slot);
-                java.util.List<Map<String, Object>> l = new java.util.ArrayList<Map<String, Object>>();
-                loadTargetsInto(pfx, l);
-                if (l.isEmpty()) continue;
-                int actv = activeTargetCount(pfx, l);
-                int signed = activeSignedCount(pfx, l, todayStr());
-                java.util.Set<String> ds = signDays(pfx);
-                int hit30 = 0;
-                java.util.Calendar c2 = (java.util.Calendar) cal.clone();
-                for (int i = 0; i < 30; i++) {
-                    if (ds.contains(f.format(c2.getTime()))) hit30++;
-                    c2.add(java.util.Calendar.DATE, -1);
-                }
-                int streak = SignLogic.streakDisplay(streakOf(pfx),
-                        prefs.getString(kLastSignDate(pfx), ""), todayStr(), yesterdayStr());
-                boolean isCur = slot == cur;
-                int col = isCur ? Theme.termCyan(act) : Theme.termMuted(act);
-
-                LinearLayout row = new LinearLayout(act);
-                row.setOrientation(LinearLayout.VERTICAL);
-                row.setPadding(0, dp(5), 0, dp(5));
-                LinearLayout head = new LinearLayout(act);
-                head.setOrientation(LinearLayout.HORIZONTAL);
-                head.setGravity(android.view.Gravity.CENTER_VERTICAL);
-                TextView nm = new TextView(act);
-                nm.setTextSize(Theme.TS_SECOND);
-                nm.setTextColor(col);
-                nm.setTypeface(android.graphics.Typeface.MONOSPACE, isCur ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
-                nm.setText(accountLabel(slot) + (isCur ? Lang.tr("（当前）") : ""));
-                nm.setSingleLine(true);
-                // 名称按内容宽（-2），数值行用权重 ——
-                // 上一版反了：名称吃权重 1 把空间占满，"连续 16" 被挤到看不见。
-                head.addView(nm, new LinearLayout.LayoutParams(-2, -2));
-                head.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(dp(8), 1));
-                TextView meta = new TextView(act);
-                meta.setTextSize(Theme.TS_CAPTION);
-                meta.setTextColor(Theme.termMuted(act));
-                meta.setTypeface(Theme.text());
-                meta.setSingleLine(true);
-                meta.setText(Lang.tf("今日 {0}/{1} · 连续 {2} 天", signed, actv, streak));
-                meta.setGravity(android.view.Gravity.END);
-                head.addView(meta, new LinearLayout.LayoutParams(0, -2, 1f));
-                row.addView(head);
-                row.addView(statsMiniBar(act, hit30, 30,
-                        isCur ? Theme.termCyan(act) : Theme.termMuted(act)));
-                box.addView(row);
-            }
-        } catch (Throwable t) { noteSwallowed("accountCompare", t); }
-        return box;
-    }
-
-    private android.widget.FrameLayout statsMiniBar(Activity act, int hit, int span, int col) {
-        android.widget.FrameLayout track = new android.widget.FrameLayout(act);
-        try {
-            android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
-            bg.setColor(Theme.withAlpha(Theme.termCyan(act), 0x1A));
-            bg.setCornerRadius(dp(2));
-            track.setBackground(bg);
-            final float ratio = span <= 0 ? 0f : Math.max(0.015f, Math.min(1f, (float) hit / (float) span));
-            final android.widget.FrameLayout tr = track;
-            final int fc = col;
-            track.post(new Runnable() { @Override public void run() {
-                try {
-                    if (tr.getWidth() <= 0) return;
-                    android.view.View f = new android.view.View(tr.getContext());
-                    android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
-                    g.setColor(fc);
-                    g.setCornerRadius(dp(2));
-                    f.setBackground(g);
-                    tr.addView(f, new android.widget.FrameLayout.LayoutParams(
-                            (int) (tr.getWidth() * ratio), -1));
-                } catch (Throwable ignored) {}
-            } });
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(4));
-            lp.topMargin = dp(5);
-            track.setLayoutParams(lp);
-        } catch (Throwable t) { noteSwallowed("statsMiniBar", t); }
-        return track;
-    }
-
-    private LinearLayout targetRates(Activity act) {
-        LinearLayout box = new LinearLayout(act);
-        box.setOrientation(LinearLayout.VERTICAL);
+    private StatsSnapshot statsSnapshot() {
+        StatsSnapshot s = new StatsSnapshot();
         try {
             String prefix = accountPrefix();
-            String today = todayStr();
-            java.util.List<Map<String, Object>> tl = new java.util.ArrayList<Map<String, Object>>();
-            loadTargetsInto(prefix, tl);
-            final String pfx = prefix;
-            java.util.Collections.sort(tl, new java.util.Comparator<Map<String, Object>>() {
-                @Override public int compare(Map<String, Object> a, Map<String, Object> b) {
-                    int fa = 0, fb = 0;
-                    try { fa = prefs.getInt(Keys.failStreak(pfx, entryId(a)), 0); } catch (Throwable ignored) {}
-                    try { fb = prefs.getInt(Keys.failStreak(pfx, entryId(b)), 0); } catch (Throwable ignored) {}
-                    return fb - fa;
+            s.today = todayStr();
+            s.yesterday = yesterdayStr();
+            s.signDays = signDays(prefix);
+
+            List<Map<String, Object>> tl = targetsSnapshot();
+            s.todayTotal = activeTargetCount(prefix, tl);
+            s.todaySigned = activeSignedCount(prefix, tl, s.today);
+            s.streak = SignLogic.streakDisplay(streakOf(prefix),
+                    prefs.getString(kLastSignDate(prefix), ""), s.today, s.yesterday);
+            s.totalDays = s.signDays.size();
+
+            java.util.List<String> r30 = StatsData.dateRange(s.today, 30, false);
+            java.util.List<String> r90 = StatsData.dateRange(s.today, 90, false);
+            s.hits30 = StatsData.countHits(s.signDays, r30);
+            s.hits90 = StatsData.countHits(s.signDays, r90);
+
+            // ── 多账号 ──
+            int cur = currentAccount();
+            java.util.List<String> last30 = StatsData.dateRange(s.today, 30, false);
+            for (int slot : accountSlots()) {
+                java.util.List<Map<String, Object>> l = new ArrayList<Map<String, Object>>();
+                try { loadTargetsInto(accountPrefix(slot), l); } catch (Throwable ignored) {}
+                if (l.isEmpty()) continue;
+                StatsSnapshot.Account a = new StatsSnapshot.Account();
+                a.slot = slot;
+                a.label = accountLabel(slot);
+                a.current = slot == cur;
+                String pfx = accountPrefix(slot);
+                a.todayTotal = activeTargetCount(pfx, l);
+                a.todaySigned = activeSignedCount(pfx, l, s.today);
+                a.streak = SignLogic.streakDisplay(streakOf(pfx),
+                        prefs.getString(kLastSignDate(pfx), ""), s.today, s.yesterday);
+                a.hits30 = StatsData.countHits(signDays(pfx), last30);
+                a.span30 = 30;
+                s.accounts.add(a);
+            }
+
+            // ── 各目标（全列，不再截断）──
+            for (Map<String, Object> m : tl) {
+                try {
+                    StatsSnapshot.Target t = new StatsSnapshot.Target();
+                    String id = entryId(m);
+                    String nm = entryTitle(m);
+                    if (nm == null || nm.length() == 0 || "null".equals(nm)) nm = targetTitle(entryDid(m));
+                    if (nm == null || nm.length() == 0 || "null".equals(nm)) nm = String.valueOf(entryDid(m));
+                    t.name = nm;
+                    t.signedToday = s.today.equals(prefs.getString(kLast(prefix, id), ""));
+                    try { t.failStreak = prefs.getInt(Keys.failStreak(prefix, id), 0); } catch (Throwable ignored) {}
+                    t.signedAtMs = stateStore.signedAtMs(prefix, id);
+                    t.pending = isPendingConfirm(prefix, id);
+                    t.frozen = isFrozen(prefix, id) || isBotBlocked(entryDid(m));
+                    if (t.signedAtMs > 0L) s.todayTimes.add(Long.valueOf(t.signedAtMs));
+                    s.targets.add(t);
+                } catch (Throwable ignored) {}
+            }
+            // 失败多的排前面
+            final String fp = prefix;
+            java.util.Collections.sort(s.targets, new java.util.Comparator<StatsSnapshot.Target>() {
+                @Override public int compare(StatsSnapshot.Target a, StatsSnapshot.Target b) {
+                    if (a.frozen != b.frozen) return a.frozen ? 1 : -1;
+                    return b.failStreak - a.failStreak;
                 }
             });
-            int shown = 0;
-            for (Map<String, Object> m : tl) {
-                if (shown >= 8) { break; }
-                String id = entryId(m);
-                int fs = 0;
-                try { fs = prefs.getInt(Keys.failStreak(pfx, id), 0); } catch (Throwable ignored) {}
-                boolean doneToday = today.equals(prefs.getString(kLast(pfx, id), ""));
-                String nm = entryTitle(m);
-                // 主标题同列表页：自定义标题为空则回退到 bot 显示名。
-                // 上一版这里直接 String.valueOf(null) 得到 "null" 或空串，
-                // 行渲染出来是空白（用户截图里「各目标」下面是空的）。
-                if (nm == null || nm.length() == 0 || "null".equals(nm)) nm = targetTitle(entryDid(m));
-                if (nm == null || nm.length() == 0 || "null".equals(nm)) nm = String.valueOf(entryDid(m));
-                if (nm != null && nm.length() > 14) nm = nm.substring(0, 14) + "…";
-                int col = fs >= 2 ? Theme.termAmber(act)
-                        : doneToday ? Theme.termGreen(act) : Theme.termMuted(act);
-                String val = fs >= 2 ? Lang.tf("连续失败 {0} 天", fs)
-                        : doneToday ? Lang.tr("今天已签") : Lang.tr("今天待签");
-                box.addView(statsKvRow(act, String.valueOf(nm), val, col));
-                shown++;
-            }
-            if (shown == 0) {
-                TextView e = new TextView(act);
-                e.setTextSize(Theme.TS_CAPTION);
-                e.setTextColor(Theme.termFaint(act));
-                e.setTypeface(Theme.text());
-                e.setText(Lang.tr("还没有签到目标"));
-                e.setPadding(0, dp(2), 0, dp(6));
-                box.addView(e);
-            }
-        } catch (Throwable t) { noteSwallowed("targetRates", t); }
-        return box;
+        } catch (Throwable t) { noteSwallowed("statsSnapshot", t); }
+        return s;
     }
 
-    private LinearLayout todayHourBars(Activity act) {
-        LinearLayout box = new LinearLayout(act);
-        box.setOrientation(LinearLayout.VERTICAL);
+    /** 统计页内容容器（供 4 秒自刷新替换内容）。 */
+    private LinearLayout statsHost;
+    /** 统计页**首次**是否已播入场动画（刷新时不重播）。 */
+    private boolean statsAnimated = false;
+
+    /** 构建统计页（供 Tab 首次填充）。 */
+    private LinearLayout buildStatsPage(Activity act) {
+        LinearLayout wrap = new LinearLayout(act);
+        wrap.setOrientation(LinearLayout.VERTICAL);
         try {
-            String prefix = accountPrefix();
-            String today = todayStr();
-            java.util.List<Map<String, Object>> tl = new java.util.ArrayList<Map<String, Object>>();
-            loadTargetsInto(prefix, tl);
-            int[] buckets = new int[6];        // 每 4 小时一格
-            int total = 0;
-            long earliest = Long.MAX_VALUE, latest = 0L;
-            for (Map<String, Object> m : tl) {
-                String id = entryId(m);
-                if (!today.equals(prefs.getString(kLast(prefix, id), ""))) continue;
-                long at = stateStore.signedAtMs(prefix, id);
-                if (at <= 0L) continue;
-                java.util.Calendar c = java.util.Calendar.getInstance();
-                c.setTimeInMillis(at);
-                int b = c.get(java.util.Calendar.HOUR_OF_DAY) / 4;
-                if (b >= 0 && b < 6) buckets[b]++;
-                total++;
-                if (at < earliest) earliest = at;
-                if (at > latest) latest = at;
-            }
-            if (total == 0) {
-                TextView e = new TextView(act);
-                e.setTextSize(Theme.TS_CAPTION);
-                e.setTextColor(Theme.termFaint(act));
-                e.setTypeface(Theme.text());
-                e.setText(Lang.tr("今天还没有签到记录"));
-                e.setPadding(0, dp(2), 0, dp(6));
-                box.addView(e);
-                return box;
-            }
-            LinearLayout bars = new LinearLayout(act);
-            bars.setOrientation(LinearLayout.HORIZONTAL);
-            bars.setGravity(android.view.Gravity.BOTTOM);
-            bars.setPadding(0, dp(4), 0, 0);
-            int max = 1;
-            for (int v : buckets) if (v > max) max = v;
-            for (int i = 0; i < 6; i++) {
-                LinearLayout col = new LinearLayout(act);
-                col.setOrientation(LinearLayout.VERTICAL);
-                col.setGravity(android.view.Gravity.BOTTOM | android.view.Gravity.CENTER_HORIZONTAL);
-                TextView cnt = new TextView(act);
-                cnt.setTextSize(Theme.TS_CAPTION);
-                cnt.setTextColor(buckets[i] > 0 ? Theme.termCyan(act) : Theme.termFaint(act));
-                cnt.setTypeface(android.graphics.Typeface.MONOSPACE);
-                cnt.setText(buckets[i] > 0 ? String.valueOf(buckets[i]) : "");
-                cnt.setGravity(android.view.Gravity.CENTER);
-                col.addView(cnt);
-                android.view.View bar = new android.view.View(act);
-                android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
-                g.setColor(buckets[i] > 0 ? Theme.termCyan(act) : Theme.withAlpha(Theme.termCyan(act), 0x1A));
-                g.setCornerRadius(dp(2));
-                bar.setBackground(g);
-                int h = buckets[i] > 0 ? (int) (dp(6) + dp(34) * buckets[i] / (float) max) : dp(3);
-                LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(dp(14), h);
-                blp.topMargin = dp(2);
-                col.addView(bar, blp);
-                TextView lb = new TextView(act);
-                lb.setTextSize(Theme.TS_CAPTION);
-                lb.setTextColor(Theme.termFaint(act));
-                lb.setTypeface(android.graphics.Typeface.MONOSPACE);
-                lb.setText(String.format("%02d", i * 4));
-                lb.setPadding(0, dp(2), 0, 0);
-                col.addView(lb);
-                bars.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
-            }
-            box.addView(bars);
-            TextView span = new TextView(act);
-            span.setTextSize(Theme.TS_CAPTION);
-            span.setTextColor(Theme.termMuted(act));
-            span.setTypeface(Theme.text());
-            span.setPadding(0, dp(6), 0, 0);
-            span.setText(Lang.tf("最早 {0} · 最晚 {1} · 共 {2} 个",
-                    SignLogic.hhmmOf(earliest), SignLogic.hhmmOf(latest), total));
-            box.addView(span);
-        } catch (Throwable t) { noteSwallowed("todayHourBars", t); }
-        return box;
+            statsAnimated = false;                 // 每次打开面板重新播一次
+            View inner = StatsView.build(act, statsSnapshot(), true);
+            statsAnimated = true;
+            wrap.addView(inner, new LinearLayout.LayoutParams(-1, -2));
+            statsHost = wrap;
+        } catch (Throwable t) { noteSwallowed("buildStatsPage", t); }
+        return wrap;
     }
 
-    /**
-     * 对话框内容区可用宽度（px）。
-     *
-     * 与 showDialog 里的 `min(屏宽*0.92, 400dp)` 保持一致，
-     * 再减去卡片自身左右各 12dp 的内边距，并留 4dp 余量。
-     * 凡是"要按宽度算格子尺寸"的地方都该用它 ——
-     * 直接拿屏幕宽算必然溢出（统计页热力图踩过这个坑）。
-     */
-    private int dialogContentWidth(Activity act) {
-        int w = 0;
-        try { w = act.getResources().getDisplayMetrics().widthPixels; } catch (Throwable ignored) {}
-        if (w <= 0) w = 1080;
-        int wTarget = Math.min((int) (w * 0.92f), Theme.dp(act, 400));
-        return Math.max(0, wTarget - dp(28));
+    /** 刷新统计内容（4 秒一次；animate=false 避免数字/柱子反复重播）。 */
+    private void refreshStatsPage(Activity act) {
+        try {
+            if (statsHost == null) return;
+            statsHost.removeAllViews();
+            statsHost.addView(StatsView.build(act, statsSnapshot(), false),
+                    new LinearLayout.LayoutParams(-1, -2));
+        } catch (Throwable t) { noteSwallowed("refreshStatsPage", t); }
     }
 
-    /** 一行：左标签 + 右值。 */
-    private LinearLayout statsKvRow(Activity act, String k, String v, int col) {
-        LinearLayout row = new LinearLayout(act);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(2), dp(5), dp(2), dp(5));
-        TextView l = new TextView(act);
-        l.setTextSize(Theme.TS_SECOND);
-        l.setTextColor(Theme.termTxt(act));
-        l.setTypeface(android.graphics.Typeface.MONOSPACE);
-        l.setText(k);
-        l.setSingleLine(true);
-        l.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        row.addView(l, new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView r = new TextView(act);
-        r.setTextSize(Theme.TS_SECOND);
-        r.setTextColor(col);
-        r.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-        r.setText(v);
-        row.addView(r, new LinearLayout.LayoutParams(-2, -2));
-        return row;
-    }
+
 
     /**
      * Tab 外观（2026-10-03 重做）：文字 + 底部指示条。
@@ -9460,13 +8901,9 @@ public final class TGAutoSignCore {
                         if (!"stats".equals(listTab)) return;      // 已切走
                         android.view.ViewParent par = inner.getParent();
                         if (!(par instanceof View) || tabBody.indexOfChild((View) par) < 0) return;
-                        inner.removeAllViews();
-                        LinearLayout fresh = buildStatsPage(sAct);
-                        while (fresh.getChildCount() > 0) {
-                            View v = fresh.getChildAt(0);
-                            fresh.removeViewAt(0);
-                            inner.addView(v);
-                        }
+                        // 走 refreshStatsPage：它内部 rebuild 且**不播动画**
+                        // （animate=false）——否则每 4 秒数字重滚、柱子重升，很吵。
+                        refreshStatsPage(sAct);
                         mainHandler.postDelayed(this, 4000L);
                     } catch (Throwable ignored) {}
                 } }, 4000L);

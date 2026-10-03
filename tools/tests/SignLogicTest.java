@@ -46,6 +46,7 @@ public final class SignLogicTest {
         pendingDaySemantics();
         crossDayRetry();
         ruleTesterChain();
+        statsData();
 
         System.out.println("----------------------------------------");
         System.out.println("通过 " + passed + " / 失败 " + failed.size());
@@ -966,5 +967,78 @@ public final class SignLogicTest {
         // ⑧ 空输入不炸
         eq("空串判认不出",
             SignLogic.verdictOf("", dup, ok, fail), SignLogic.V_UNKNOWN);
+    }
+
+    // ── 统计页纯计算（2026-10-04 分层重构后新增）──────────────────
+    /**
+     * 这些用例的存在理由：热力图日期范围曾经算错（最后一格不是今天），
+     * 当时只能靠 Python 手算才发现。搬进 StatsData 后就能钉住。
+     */
+    private static void statsData() {
+        // ① 周列范围：起点必须是周一，终点必须是今天
+        java.util.List<String> r = StatsData.dateRange("2026-10-04", 90, true);
+        eq("周列起点是周一", weekdayOf(r.get(0)), 0);
+        eq("周列终点是今天", r.get(r.size() - 1), "2026-10-04");
+        eq("周列长度是 7 的倍数", r.size() % 7, 0);
+        // 起点 = 今天回退 12 周 + 本周内的偏移
+        eq("周列首格是 07-06", r.get(0), "2026-07-06");
+
+        // ② 普通范围：终点今天、长度正确
+        java.util.List<String> r2 = StatsData.dateRange("2026-10-04", 30, false);
+        eq("普通范围长度", r2.size(), 30);
+        eq("普通范围终点", r2.get(29), "2026-10-04");
+        eq("普通范围起点", r2.get(0), "2026-09-05");
+
+        // ③ 跨月/跨年边界
+        java.util.List<String> r3 = StatsData.dateRange("2026-01-01", 5, false);
+        eq("跨年终点", r3.get(4), "2026-01-01");
+        eq("跨年起点", r3.get(0), "2025-12-28");
+
+        // ④ 滑动平均：全 1 输入 → 全 1 输出
+        float[] ones = StatsData.movingAvg(new float[]{1,1,1,1,1,1,1,1,1,1}, 7);
+        tru("均线全 1", Math.abs(ones[ones.length - 1] - 1f) < 0.001f);
+        // 前 3 天为 1、后面 0 → 窗口 3 时第 3 天为 1、第 4 天约 2/3
+        float[] mix = StatsData.movingAvg(new float[]{1,1,1,0,0,0,0}, 3);
+        tru("均线第3天 = 1", Math.abs(mix[2] - 1f) < 0.001f);
+        tru("均线第4天 = 2/3", Math.abs(mix[3] - 0.6667f) < 0.01f);
+        // 空输入不炸
+        eq("均线空输入长度", StatsData.movingAvg(new float[0], 7).length, 0);
+        eq("均线 null 输入", StatsData.movingAvg(null, 7).length, 0);
+
+        // ⑤ 命中计数
+        java.util.Set<String> d = new java.util.HashSet<String>();
+        d.add("2026-10-01"); d.add("2026-10-03");
+        java.util.List<String> range = java.util.Arrays.asList(
+                "2026-09-30","2026-10-01","2026-10-02","2026-10-03");
+        eq("命中 2 天", StatsData.countHits(d, range), 2);
+        eq("null 集合算 0", StatsData.countHits(null, range), 0);
+
+        // ⑥ 星期分布：2026-10-04 是周日 → 索引 6
+        java.util.Set<String> one = new java.util.HashSet<String>();
+        one.add("2026-10-04");
+        int[] wd = StatsData.weekdayDist(one);
+        eq("周日落在索引6", wd[6], 1);
+        eq("周一为 0", wd[0], 0);
+        // 2026-10-05 是周一 → 索引 0
+        one.clear(); one.add("2026-10-05");
+        eq("周一落在索引0", StatsData.weekdayDist(one)[0], 1);
+
+        // ⑦ 首尾对比
+        java.util.Set<String> h = new java.util.HashSet<String>();
+        for (int i = 0; i < 7; i++) h.add(r2.get(i));
+        int[] ht = StatsData.headTailHits(h, r2, 7);
+        eq("前 7 天命中", ht[0], 7);
+        eq("后 7 天命中", ht[1], 0);
+    }
+
+    /** 取 yyyy-MM-dd 的星期（0=周一 … 6=周日）。 */
+    private static int weekdayOf(String ymd) {
+        try {
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
+            java.util.Calendar c = java.util.Calendar.getInstance();
+            c.setTime(f.parse(ymd));
+            int dow = c.get(java.util.Calendar.DAY_OF_WEEK);   // 1=周日
+            return (dow + 5) % 7;
+        } catch (Throwable t) { return -1; }
     }
 }
