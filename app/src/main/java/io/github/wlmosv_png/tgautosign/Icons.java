@@ -42,6 +42,155 @@ final class Icons {
     }
 
     /**
+     * 环形进度（2026-10-03）：统计页门面。
+     *
+     * 用 Canvas 画一段圆弧表达完成度 —— 比"11/11 三个大数字并排"强在：
+     *   · 一眼看出"满没满"（圆环闭合 = 完成）；
+     *   · 中心能放大号数字，视觉重心明确；
+     *   · 底环留白表达"还剩多少"，条状进度做不到这种暗示。
+     * 颜色由调用方给，深浅色自动跟随；不用任何图片资源。
+     */
+    static final class RingStatDrawable extends Drawable {
+        private final Paint arc = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint base = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF oval;
+        private final float stroke;
+        private final float ratio;
+        RingStatDrawable(int sizePx, float ratio, int col, int baseCol) {
+            float pad = sizePx * 0.10f;
+            this.stroke = sizePx * 0.115f;
+            this.ratio = Math.max(0f, Math.min(1f, ratio));
+            oval = new RectF(pad, pad, sizePx - pad, sizePx - pad);
+            base.setStyle(Paint.Style.STROKE);
+            base.setStrokeWidth(stroke);
+            base.setStrokeCap(Paint.Cap.ROUND);
+            base.setColor(baseCol);
+            arc.setStyle(Paint.Style.STROKE);
+            arc.setStrokeWidth(stroke);
+            arc.setStrokeCap(Paint.Cap.ROUND);
+            arc.setColor(col);
+        }
+        @Override public void draw(Canvas cv) {
+            try {
+                // 底环：从 -90° 起一整圈
+                cv.drawArc(oval, -90f, 360f, false, base);
+                if (ratio > 0f) {
+                    // 进度弧：从 12 点方向顺时针，最小 3° 保证"只签了一个"也看得见
+                    float sweep = Math.max(3f, 360f * ratio);
+                    cv.drawArc(oval, -90f, sweep, false, arc);
+                }
+            } catch (Throwable ignored) {}
+        }
+        @Override public void setAlpha(int a) {}
+        @Override public void setColorFilter(ColorFilter cf) {}
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
+    /**
+     * 趋势折线（2026-10-03）：把"每天的完成率"连成一条曲线。
+     *
+     * 这是三个数字给不了的东西 —— 数字只说"现在"，折线说"在变好还是变差"。
+     * 面积用线性渐变从色到透明，视觉上是"填补过的曲线"而不是干巴巴的线。
+     */
+    static final class SparkDrawable extends Drawable {
+        private final Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final float[] vals;     // 0..1
+        private final int col;
+        SparkDrawable(float[] values, int col, int wPx, int hPx) {
+            this.vals = values;
+            this.col = col;
+            line.setStyle(Paint.Style.STROKE);
+            line.setStrokeWidth(Math.max(2f, hPx * 0.035f));
+            line.setStrokeCap(Paint.Cap.ROUND);
+            line.setStrokeJoin(Paint.Join.ROUND);
+            line.setColor(col);
+            fill.setStyle(Paint.Style.FILL);
+        }
+        @Override public void draw(Canvas cv) {
+            try {
+                int w = getBounds().width(), h = getBounds().height();
+                if (w <= 0 || h <= 0 || vals == null || vals.length == 0) return;
+                float padY = h * 0.14f;
+                float usable = h - padY * 2f;
+                int n = vals.length;
+                float dx = n > 1 ? (float) w / (n - 1) : w;
+                Path p = new Path();
+                float firstX = 0f, firstY = 0f;
+                for (int i = 0; i < n; i++) {
+                    float v = Math.max(0f, Math.min(1f, vals[i]));
+                    float x = i * dx;
+                    float y = padY + (1f - v) * usable;
+                    if (i == 0) { p.moveTo(x, y); firstX = x; firstY = y; }
+                    else p.lineTo(x, y);
+                }
+                // 面积：把曲线首尾接到基线
+                Path area = new Path(p);
+                area.lineTo((n - 1) * dx, h);
+                area.lineTo(firstX, h);
+                area.close();
+                android.graphics.LinearGradient lg = new android.graphics.LinearGradient(
+                        0, 0, 0, h, withA(col, 0x66), withA(col, 0x00),
+                        android.graphics.Shader.TileMode.CLAMP);
+                fill.setShader(lg);
+                cv.drawPath(area, fill);
+                cv.drawPath(p, line);
+            } catch (Throwable ignored) {}
+        }
+        @Override public void setAlpha(int a) {}
+        @Override public void setColorFilter(ColorFilter cf) {}
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
+    /**
+     * 迷你柱状（2026-10-03）：时段分布 / 星期分布用。
+     * 柱子按值高低给不同透明度，高点更亮 —— 比同色柱子更能看出"峰"。
+     */
+    static final class BarsDrawable extends Drawable {
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final int[] vals;
+        private final int col;
+        private final int max;
+        BarsDrawable(int[] values, int col) {
+            this.vals = values;
+            this.col = col;
+            int m = 1;
+            if (values != null) for (int v : values) if (v > m) m = v;
+            this.max = m;
+        }
+        @Override public void draw(Canvas cv) {
+            try {
+                int w = getBounds().width(), h = getBounds().height();
+                if (w <= 0 || h <= 0 || vals == null || vals.length == 0) return;
+                int n = vals.length;
+                float gap = w * 0.035f;
+                float bw = (w - gap * (n - 1)) / n;
+                float r = Math.min(bw * 0.32f, h * 0.10f);
+                for (int i = 0; i < n; i++) {
+                    float x = i * (bw + gap);
+                    if (vals[i] <= 0) {
+                        // 空桶：一条底线，表示"这个时段没有"
+                        p.setColor(withA(col, 0x33));
+                        RectF t = new RectF(x, h - Math.max(2f, h * 0.04f), x + bw, h);
+                        cv.drawRoundRect(t, r, r, p);
+                        continue;
+                    }
+                    float ratio = vals[i] / (float) max;
+                    float bh = Math.max(h * 0.10f, h * ratio);
+                    // 越高的柱子越不透明，峰一眼可见
+                    int alpha = 0x77 + (int) (ratio * 0x88);
+                    p.setColor(withA(col, Math.min(0xFF, alpha)));
+                    RectF t = new RectF(x, h - bh, x + bw, h);
+                    cv.drawRoundRect(t, r, r, p);
+                }
+            } catch (Throwable ignored) {}
+        }
+        @Override public void setAlpha(int a) {}
+        @Override public void setColorFilter(ColorFilter cf) {}
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
+    /**
      * 热力图小格（2026-10-03）：统计页用。
      *
      * 与日历的 DayCellDrawable 区别：那个表达"某天签没签 + 是不是今天"，

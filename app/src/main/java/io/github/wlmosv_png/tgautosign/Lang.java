@@ -909,6 +909,25 @@ public final class Lang {
         EN.put("最早 {0} · 最晚 {1} · 共 {2} 个", "earliest {0} · latest {1} · {2} total");
         EN.put("少", "less");
         EN.put("多", "more");
+        // ── 统计页 v3（2026-10-03）──
+        EN.put("近 30 天趋势", "30-DAY TREND");
+        EN.put("近 90 天打卡", "90-DAY ACTIVITY");
+        EN.put("星期分布", "WEEKDAY PATTERN");
+        EN.put("各目标", "TARGETS");
+        EN.put("近 30 天", "last 30d");
+        EN.put("天", "d");
+        EN.put("一", "M");
+        EN.put("二", "T");
+        EN.put("三", "W");
+        EN.put("四", "T");
+        EN.put("五", "F");
+        EN.put("六", "S");
+        EN.put("日", "S");
+        EN.put("在变好", "improving");
+        EN.put("在变差", "declining");
+        EN.put("持平", "steady");
+        EN.put("7 日滑动平均 · 前 7 天 {0}/7 → 近 7 天 {1}/7（{2}）",
+               "7-day moving average - first 7 days {0}/7 -> last 7 days {1}/7 ({2})");
         EN.put("完整日志（含筛选、导出、清空）在「全部功能 → 数据 → 运行日志」里",
                "Full log (filters, export, clear) is under All features - Data - Run log");
         EN.put("(暂无日志)", "(no log yet)");

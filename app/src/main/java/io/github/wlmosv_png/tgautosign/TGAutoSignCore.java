@@ -8744,84 +8744,280 @@ public final class TGAutoSignCore {
             String prefix = accountPrefix();
             java.util.Set<String> days = signDays(prefix);
             String today = todayStr();
+            java.util.List<Map<String, Object>> tl = targetsSnapshot();
+            int total = activeTargetCount(prefix, tl);
+            int signed = activeSignedCount(prefix, tl, today);
 
-            // ══ ① 大数字：今日 + 连续（统计页的门面）══
-            box.addView(statHero(act, days, prefix, today));
+            // ══ ① 门面：环形进度 + 右侧三项关键值 ══
+            box.addView(statHeroCard(act, prefix, days, today, total, signed));
 
-            // ══ ② 近 90 天热力图 ══
-            box.addView(statsSectionTitle(act, Lang.tr("近 90 天")));
+            // ══ ② 近 30 天趋势折线 ══
+            box.addView(statsSectionTitle(act, Lang.tr("近 30 天趋势")));
+            box.addView(trendCard(act, days));
+
+            // ══ ③ 近 90 天热力图 + 星期轴 ══
+            box.addView(statsSectionTitle(act, Lang.tr("近 90 天打卡")));
             box.addView(heatGrid(act, days, 90));
 
-            // ══ ③ 多账号对比 ══
+            // ══ ④ 多账号对比 ══
             box.addView(statsSectionTitle(act, Lang.tr("各账号对比")));
             box.addView(accountCompare(act));
 
-            // ══ ④ 逐目标近 30 天 ══
-            box.addView(statsSectionTitle(act, Lang.tr("各目标近 30 天")));
-            box.addView(targetRates(act));
+            // ══ ⑤ 星期分布（哪天最常签）══
+            box.addView(statsSectionTitle(act, Lang.tr("星期分布")));
+            box.addView(weekdayChart(act, days));
 
-            // ══ ⑤ 今天几点签的（时段分布）══
-            box.addView(statsSectionTitle(act, Lang.tr("今日时段")));
-            box.addView(todayHourBars(act));
+            // ══ ⑥ 各目标 ══
+            box.addView(statsSectionTitle(act, Lang.tr("各目标")));
+            box.addView(targetRates(act));
         } catch (Throwable t) { noteSwallowed("buildStatsPage", t); }
         return box;
     }
 
     /**
-     * 统计页门面：两个大数字（今日完成 / 连续天数）+ 一句结论（2026-10-03）。
+     * 门面卡（2026-10-03 重做）。
      *
-     * 为什么单独做这么一块：统计页最容易做成"一堆小字的列表"，
-     * 用户扫一眼不知道重点。把最该看到的两个数字放大，其余信息降级为辅助。
+     * 改前是"三个大数字并排"—— 三个都亮绿、都 26sp，
+     * 视觉上没有主次（用户截图反馈"有点问题"）。
+     * 现在：左边一个 96dp 环形表达"今日完成度"（闭合=满），
+     * 圆心放大号 x/y；右侧竖排三项次要指标（连续/累计/完成率），
+     * 字号降一档、颜色区分 —— 一眼知道该看哪。
      */
-    private LinearLayout statHero(Activity act, java.util.Set<String> days, String prefix, String today) {
+    private LinearLayout statHeroCard(Activity act, String prefix, java.util.Set<String> days,
+                                      String today, int total, int signed) {
         LinearLayout card = new LinearLayout(act);
         card.setOrientation(LinearLayout.HORIZONTAL);
-        card.setPadding(dp(4), dp(10), dp(4), dp(12));
+        card.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(10), dp(12), dp(10), dp(14));
         try {
-            int total = activeTargetCount(prefix, targetsSnapshot());
-            int signed = activeSignedCount(prefix, targetsSnapshot(), today);
+            boolean allDone = total > 0 && signed >= total;
+            int col = allDone ? Theme.termGreen(act) : Theme.termCyan(act);
+
+            // ── 左：环形 + 圆心数字（用 FrameLayout 叠）──
+            android.widget.FrameLayout ring = new android.widget.FrameLayout(act);
+            android.widget.ImageView iv = new android.widget.ImageView(act);
+            int ringPx = dp(96);
+            iv.setImageDrawable(new Icons.RingStatDrawable(ringPx,
+                    total <= 0 ? 0f : (float) signed / total, col,
+                    Theme.withAlpha(col, 0x22)));
+            ring.addView(iv, new android.widget.FrameLayout.LayoutParams(ringPx, ringPx));
+            LinearLayout center = new LinearLayout(act);
+            center.setOrientation(LinearLayout.VERTICAL);
+            center.setGravity(android.view.Gravity.CENTER);
+            TextView num = new TextView(act);
+            num.setTextSize(22);
+            num.setTextColor(col);
+            num.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+            num.setGravity(android.view.Gravity.CENTER);
+            num.setText(signed + "/" + total);
+            center.addView(num);
+            TextView sub = new TextView(act);
+            sub.setTextSize(Theme.TS_CAPTION);
+            sub.setTextColor(Theme.termMuted(act));
+            sub.setTypeface(Theme.text());
+            sub.setGravity(android.view.Gravity.CENTER);
+            sub.setText(Lang.tr("今日完成"));
+            center.addView(sub);
+            ring.addView(center, new android.widget.FrameLayout.LayoutParams(-1, -1));
+            card.addView(ring);
+
+            // ── 右：三项次要指标 ──
+            LinearLayout meta = new LinearLayout(act);
+            meta.setOrientation(LinearLayout.VERTICAL);
+            meta.setPadding(dp(14), 0, 0, 0);
             int streak = SignLogic.streakDisplay(streakOf(prefix),
                     prefs.getString(kLastSignDate(prefix), ""), today, yesterdayStr());
-            int col = (total > 0 && signed >= total) ? Theme.termGreen(act) : Theme.termCyan(act);
-            card.addView(heroCell(act, String.valueOf(signed) + "/" + total,
-                    Lang.tr("今日完成"), col), new LinearLayout.LayoutParams(0, -2, 1f));
-            card.addView(heroCell(act, String.valueOf(streak),
-                    Lang.tr("连续天数"), Theme.termGreen(act)), new LinearLayout.LayoutParams(0, -2, 1f));
-            card.addView(heroCell(act, String.valueOf(days.size()),
-                    Lang.tr("累计天数"), Theme.termMuted(act)), new LinearLayout.LayoutParams(0, -2, 1f));
-        } catch (Throwable t) { noteSwallowed("statHero", t); }
+            meta.addView(heroMetaRow(act, Lang.tr("连续"), streak + " " + Lang.tr("天"),
+                    Theme.termGreen(act)));
+            meta.addView(heroMetaRow(act, Lang.tr("累计"), days.size() + " " + Lang.tr("天"),
+                    Theme.termTxt(act)));
+            int r30 = 0;
+            java.util.Calendar c2 = java.util.Calendar.getInstance();
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
+            for (int i = 0; i < 30; i++) {
+                if (days.contains(f.format(c2.getTime()))) r30++;
+                c2.add(java.util.Calendar.DATE, -1);
+            }
+            meta.addView(heroMetaRow(act, Lang.tr("近 30 天"), r30 + "/30",
+                    r30 >= 25 ? Theme.termGreen(act) : Theme.termAmber(act)));
+            card.addView(meta, new LinearLayout.LayoutParams(0, -2, 1f));
+        } catch (Throwable t) { noteSwallowed("statHeroCard", t); }
         return card;
     }
 
-    /** 大数字单元：上面大号数字，下面小字标签。 */
-    private LinearLayout heroCell(Activity act, String num, String label, int col) {
-        LinearLayout c = new LinearLayout(act);
-        c.setOrientation(LinearLayout.VERTICAL);
-        c.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
-        TextView n = new TextView(act);
-        n.setTextSize(26);
-        n.setTextColor(col);
-        n.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-        n.setText(num);
-        n.setGravity(android.view.Gravity.CENTER);
-        c.addView(n);
+    /** 门面右侧的一行：左标签（弱色）+ 右值（着色）。 */
+    private LinearLayout heroMetaRow(Activity act, String label, String value, int col) {
+        LinearLayout r = new LinearLayout(act);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        r.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        r.setPadding(0, dp(4), 0, dp(4));
         TextView l = new TextView(act);
         l.setTextSize(Theme.TS_CAPTION);
         l.setTextColor(Theme.termMuted(act));
         l.setTypeface(Theme.text());
         l.setText(label);
-        l.setGravity(android.view.Gravity.CENTER);
-        l.setPadding(0, dp(2), 0, 0);
-        c.addView(l);
-        return c;
+        r.addView(l, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView v = new TextView(act);
+        v.setTextSize(Theme.TS_SECOND);
+        v.setTextColor(col);
+        v.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        v.setText(value);
+        r.addView(v, new LinearLayout.LayoutParams(-2, -2));
+        return r;
     }
 
-    /**
-     * 近 N 天热力图（2026-10-03）。
-     *
-     * 14 格实在太少（一眼就看完了），90 天才是"能看出习惯"的长度。
-     * 7 列一行 = 一周一行，符合日历直觉；空格子表示那天没签。
-     */
+    /** 近 30 天趋势：一条带渐变填充的折线 + 首尾对比。 */
+    private LinearLayout trendCard(Activity act, java.util.Set<String> days) {
+        LinearLayout wrap = new LinearLayout(act);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        try {
+            final int N = 30;
+            float[] vals = new float[N];
+            java.util.Calendar c = java.util.Calendar.getInstance();
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
+            java.util.List<String> list = new java.util.ArrayList<String>();
+            java.util.Calendar c2 = (java.util.Calendar) c.clone();
+            c2.add(java.util.Calendar.DATE, -(N - 1));
+            for (int i = 0; i < N; i++) { list.add(f.format(c2.getTime())); c2.add(java.util.Calendar.DATE, 1); }
+            for (int i = 0; i < N; i++) vals[i] = days.contains(list.get(i)) ? 1f : 0f;
+            // 7 天滑动平均：原始 0/1 折线是锯齿，看不出趋势
+            float[] smooth = new float[N];
+            for (int i = 0; i < N; i++) {
+                int from = Math.max(0, i - 6);
+                float s = 0f; int cnt = 0;
+                for (int j = from; j <= i; j++) { s += vals[j]; cnt++; }
+                smooth[i] = cnt > 0 ? s / cnt : 0f;
+            }
+            android.widget.ImageView iv = new android.widget.ImageView(act);
+            int hPx = dp(72);
+            iv.setImageDrawable(new Icons.SparkDrawable(smooth, Theme.termCyan(act), dp(280), hPx));
+            wrap.addView(iv, new LinearLayout.LayoutParams(-1, hPx));
+            // 说明：这是 7 日滑动平均，不是原始点，避免用户误读
+            TextView tip = new TextView(act);
+            tip.setTextSize(Theme.TS_CAPTION);
+            tip.setTextColor(Theme.termFaint(act));
+            tip.setTypeface(Theme.text());
+            int first7 = 0, last7 = 0;
+            for (int i = 0; i < 7; i++) first7 += (int) vals[i];
+            for (int i = N - 7; i < N; i++) last7 += (int) vals[i];
+            String trend = last7 > first7 ? Lang.tr("在变好")
+                    : last7 < first7 ? Lang.tr("在变差") : Lang.tr("持平");
+            tip.setText(Lang.tf("7 日滑动平均 · 前 7 天 {0}/7 → 近 7 天 {1}/7（{2}）",
+                    first7, last7, trend));
+            tip.setPadding(0, dp(4), 0, 0);
+            wrap.addView(tip);
+        } catch (Throwable t) { noteSwallowed("trendCard", t); }
+        return wrap;
+    }
+
+    /** 星期分布：周一到周日各签了多少天。 */
+    private LinearLayout weekdayChart(Activity act, java.util.Set<String> days) {
+        LinearLayout wrap = new LinearLayout(act);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        try {
+            int[] cnt = new int[7];    // 0=周一 ... 6=周日
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
+            for (String d : days) {
+                try {
+                    java.util.Date dt = f.parse(d);
+                    if (dt == null) continue;
+                    java.util.Calendar c = java.util.Calendar.getInstance();
+                    c.setTime(dt);
+                    int dow = c.get(java.util.Calendar.DAY_OF_WEEK);   // 1=周日
+                    int idx = (dow + 5) % 7;                            // 转成 0=周一
+                    cnt[idx]++;
+                } catch (Throwable ignored) {}
+            }
+            android.widget.ImageView iv = new android.widget.ImageView(act);
+            int hPx = dp(56);
+            iv.setImageDrawable(new Icons.BarsDrawable(cnt, Theme.termGreen(act)));
+            wrap.addView(iv, new LinearLayout.LayoutParams(-1, hPx));
+            String[] WL = {Lang.tr("一"), Lang.tr("二"), Lang.tr("三"), Lang.tr("四"),
+                    Lang.tr("五"), Lang.tr("六"), Lang.tr("日")};
+            LinearLayout ax = new LinearLayout(act);
+            ax.setOrientation(LinearLayout.HORIZONTAL);
+            ax.setPadding(0, dp(4), 0, 0);
+            for (String w : WL) {
+                TextView t = new TextView(act);
+                t.setTextSize(Theme.TS_CAPTION);
+                t.setTextColor(Theme.termFaint(act));
+                t.setTypeface(Theme.text());
+                t.setGravity(android.view.Gravity.CENTER);
+                t.setText(w);
+                ax.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
+            }
+            wrap.addView(ax);
+        } catch (Throwable t) { noteSwallowed("weekdayChart", t); }
+        return wrap;
+    }
+
+    private TextView statsSectionTitle(Activity act, String s) {
+        TextView tv = new TextView(act);
+        tv.setTextSize(Theme.TS_CAPTION);
+        tv.setTextColor(Theme.termCyan(act));
+        tv.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        tv.setTextColor(Theme.termCyan(act));
+        tv.setLetterSpacing(0.06f);
+        tv.setPadding(0, dp(14), 0, dp(6));
+        tv.setText(s);
+        return tv;
+    }
+
+    /** 一行：标签 + 进度条 + x/y。 */
+    private LinearLayout statsBarRow(Activity act, String label, int hit, int span, int col) {
+        // 排版重做（2026-10-03）：第一版字号与间距都很挤，
+        // 进度条 6dp 在小屏上像一条粗线压在文字下面。
+        // 现在：标签用次要字号、数值同字号但加粗着色、
+        // 条降到 5dp 且左右留出与文字对齐的内边距，行距拉开。
+        LinearLayout row = new LinearLayout(act);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(0, dp(6), 0, dp(8));
+        LinearLayout head = new LinearLayout(act);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        TextView l = new TextView(act);
+        l.setTextSize(Theme.TS_SECOND);
+        l.setTextColor(Theme.termMuted(act));
+        l.setTypeface(android.graphics.Typeface.MONOSPACE);
+        l.setText(label);
+        head.addView(l, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView v = new TextView(act);
+        v.setTextSize(Theme.TS_SECOND);
+        v.setTextColor(col);
+        v.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        v.setText(hit + "/" + span);
+        head.addView(v, new LinearLayout.LayoutParams(-2, -2));
+        row.addView(head);
+
+        // 进度条：用 FrameLayout 让"已填"部分有最小宽度（1 天也看得见）
+        android.widget.FrameLayout track = new android.widget.FrameLayout(act);
+        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+        bg.setColor(Theme.withAlpha(Theme.termCyan(act), 0x1A));
+        bg.setCornerRadius(dp(2));
+        track.setBackground(bg);
+        if (hit > 0) {
+            // 按比例算宽度（FrameLayout 里用不了权重）；
+            // 最小 2% 保证"只签了 1 天"也看得见一格
+            final float ratio = Math.max(0.02f, Math.min(1f, (float) hit / (float) span));
+            final android.widget.FrameLayout trackRef = track;
+            track.post(new Runnable() { @Override public void run() {
+                try {
+                    int w = (int) (trackRef.getWidth() * ratio);
+                    android.view.View f2 = new android.view.View(trackRef.getContext());
+                    android.graphics.drawable.GradientDrawable g2 = new android.graphics.drawable.GradientDrawable();
+                    g2.setColor(col);
+                    g2.setCornerRadius(dp(2));
+                    f2.setBackground(g2);
+                    trackRef.addView(f2, new android.widget.FrameLayout.LayoutParams(w, -1));
+                } catch (Throwable ignored) {}
+            } });
+        }
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(-1, dp(5));
+        tlp.topMargin = dp(6);
+        row.addView(track, tlp);
+        return row;
+    }
+
     private LinearLayout heatGrid(Activity act, java.util.Set<String> days, int span) {
         LinearLayout outer = new LinearLayout(act);
         outer.setOrientation(LinearLayout.VERTICAL);
@@ -8882,13 +9078,6 @@ public final class TGAutoSignCore {
         return outer;
     }
 
-    /**
-     * 多账号对比（2026-10-03 用户要求把多账号算进来）。
-     *
-     * 遍历真实槽位（accountSlots），每账号一行：
-     *   账号名 · 今日 x/y · 近 30 天 n/30 · 连续 k 天
-     * 当前账号高亮，并用一条迷你进度条表达近 30 天完成度。
-     */
     private LinearLayout accountCompare(Activity act) {
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -8942,7 +9131,6 @@ public final class TGAutoSignCore {
         return box;
     }
 
-    /** 迷你进度条（统计用）：底条 + 按比例填充，高 4dp，无文字。 */
     private android.widget.FrameLayout statsMiniBar(Activity act, int hit, int span, int col) {
         android.widget.FrameLayout track = new android.widget.FrameLayout(act);
         try {
@@ -8972,13 +9160,6 @@ public final class TGAutoSignCore {
         return track;
     }
 
-    /**
-     * 各目标近 30 天成功率（2026-10-03）。
-     *
-     * 逐目标的历史无法完美还原（sign_days 是账号级的），
-     * 因此这里用**能确证的部分**：该目标今天是否签上、连续失败天数、
-     * 以及账号级近 30 天做参照，明确标注口径，不编造逐目标的精确率。
-     */
     private LinearLayout targetRates(Activity act) {
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -9026,10 +9207,6 @@ public final class TGAutoSignCore {
         return box;
     }
 
-    /**
-     * 今日时段分布（2026-10-03）：把每个已签目标的实际签到时刻画成小柱。
-     * 一眼看出"今天集中在什么时候签的"。
-     */
     private LinearLayout todayHourBars(Activity act) {
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -9110,73 +9287,6 @@ public final class TGAutoSignCore {
             box.addView(span);
         } catch (Throwable t) { noteSwallowed("todayHourBars", t); }
         return box;
-    }
-
-    private TextView statsSectionTitle(Activity act, String s) {
-        TextView tv = new TextView(act);
-        tv.setTextSize(Theme.TS_CAPTION);
-        tv.setTextColor(Theme.termCyan(act));
-        tv.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-        tv.setTextColor(Theme.termCyan(act));
-        tv.setLetterSpacing(0.06f);
-        tv.setPadding(0, dp(14), 0, dp(6));
-        tv.setText(s);
-        return tv;
-    }
-
-    /** 一行：标签 + 进度条 + x/y。 */
-    private LinearLayout statsBarRow(Activity act, String label, int hit, int span, int col) {
-        // 排版重做（2026-10-03）：第一版字号与间距都很挤，
-        // 进度条 6dp 在小屏上像一条粗线压在文字下面。
-        // 现在：标签用次要字号、数值同字号但加粗着色、
-        // 条降到 5dp 且左右留出与文字对齐的内边距，行距拉开。
-        LinearLayout row = new LinearLayout(act);
-        row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(0, dp(6), 0, dp(8));
-        LinearLayout head = new LinearLayout(act);
-        head.setOrientation(LinearLayout.HORIZONTAL);
-        head.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        TextView l = new TextView(act);
-        l.setTextSize(Theme.TS_SECOND);
-        l.setTextColor(Theme.termMuted(act));
-        l.setTypeface(android.graphics.Typeface.MONOSPACE);
-        l.setText(label);
-        head.addView(l, new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView v = new TextView(act);
-        v.setTextSize(Theme.TS_SECOND);
-        v.setTextColor(col);
-        v.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-        v.setText(hit + "/" + span);
-        head.addView(v, new LinearLayout.LayoutParams(-2, -2));
-        row.addView(head);
-
-        // 进度条：用 FrameLayout 让"已填"部分有最小宽度（1 天也看得见）
-        android.widget.FrameLayout track = new android.widget.FrameLayout(act);
-        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
-        bg.setColor(Theme.withAlpha(Theme.termCyan(act), 0x1A));
-        bg.setCornerRadius(dp(2));
-        track.setBackground(bg);
-        if (hit > 0) {
-            // 按比例算宽度（FrameLayout 里用不了权重）；
-            // 最小 2% 保证"只签了 1 天"也看得见一格
-            final float ratio = Math.max(0.02f, Math.min(1f, (float) hit / (float) span));
-            final android.widget.FrameLayout trackRef = track;
-            track.post(new Runnable() { @Override public void run() {
-                try {
-                    int w = (int) (trackRef.getWidth() * ratio);
-                    android.view.View f2 = new android.view.View(trackRef.getContext());
-                    android.graphics.drawable.GradientDrawable g2 = new android.graphics.drawable.GradientDrawable();
-                    g2.setColor(col);
-                    g2.setCornerRadius(dp(2));
-                    f2.setBackground(g2);
-                    trackRef.addView(f2, new android.widget.FrameLayout.LayoutParams(w, -1));
-                } catch (Throwable ignored) {}
-            } });
-        }
-        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(-1, dp(5));
-        tlp.topMargin = dp(6);
-        row.addView(track, tlp);
-        return row;
     }
 
     /** 一行：左标签 + 右值。 */
