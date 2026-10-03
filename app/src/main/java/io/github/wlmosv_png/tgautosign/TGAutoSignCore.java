@@ -6726,8 +6726,9 @@ public final class TGAutoSignCore {
             logList = new LinearLayout(act);
             logList.setOrientation(LinearLayout.VERTICAL);
             sv.addView(logList);
-            // 高度自适应：屏高的 56%，比原来固定 340dp 能多看好几行
-            int listH = (int) (act.getResources().getDisplayMetrics().heightPixels * 0.42f);
+            // 统一高度（见 LIST_H_RATIO）：与目标列表、设置页取同一个值，
+            // 页面之间切换时窗口不再"跳"。
+            int listH = listContentHeight(act);
             root.addView(sv, new LinearLayout.LayoutParams(-1, listH));
 
             // 底部工具条：只留「加载更多」（看最新由芯片「回到最新」负责）
@@ -7715,6 +7716,31 @@ public final class TGAutoSignCore {
     // 统一外观：true = 三个宿主都走自绘终端卡片（原生框空隙大、TG 12.10.3 又改了 API）
     private static final boolean FORCE_CUSTOM_DIALOG = true;
 
+    /**
+     * 列表类页面的统一内容高度（屏高比例）。
+     *
+     * 为什么要有这个常量（2026-10-03 用户反馈"目标列表窗口太小、跟别的页格格不入"）：
+     *   对话框内容区上限是屏高的 0.72（见 showDialog 的 maxH），
+     *   但**没有下限** —— 内容少就缩、内容多就撑到 0.72。
+     *   而目标列表/日志页自己写死了 0.42，于是永远只有别人的六成高：
+     *     日志页 0.42 + 顶部芯片 + 搜索 + 统计行 + 底部条 ≈ 0.60
+     *     目标列表 0.42 + 过滤条 + 排序行 ≈ 0.55
+     *     设置页（内容自然撑满）≈ 0.72
+     *   三个页高度不同、切换时窗口"跳"一下，观感就是格格不入。
+     *
+     * 0.64 是实测过的折中：加上标题栏与底部按钮后总高约 0.78，
+     * 在 360×792 的常见机型上不会顶到状态栏/导航栏，同时比 0.42 大一倍。
+     */
+    private static final float LIST_H_RATIO = 0.64f;
+
+    /** 列表类页面的统一内容高度（像素）。 */
+    private int listContentHeight(Activity act) {
+        int h = 0;
+        try { h = act.getResources().getDisplayMetrics().heightPixels; } catch (Throwable ignored) {}
+        if (h <= 0) h = 1920;
+        return (int) (h * LIST_H_RATIO);
+    }
+
     private Object showDialog(Activity act, String title, View view, String negLabel) {
         // 导出模式：只记录页面 View 并让调用方尽快收手，不真正弹窗。
         // 取「本次页面构建的第一个 showDialog」，不靠标题匹配 ——
@@ -7815,6 +7841,18 @@ public final class TGAutoSignCore {
                 w.setLayout(wTarget, -2);
             }
             dlg.show();
+            // ── 入场淡入（2026-10-03）──
+            // 切换分类时是"新建一个对话框、160ms 后关掉旧的"，
+            // 两个窗口短暂共存；如果尺寸不同，视觉上就是"窗口一跳"。
+            // 给新窗口加一段 140ms 淡入 + 轻微上移，让切换看起来是"换内容"
+            // 而不是"关一个再开一个"。
+            try {
+                card.setAlpha(0f);
+                card.setTranslationY(Theme.dp(act, 6));
+                card.animate().alpha(1f).translationY(0f).setDuration(140)
+                        .setInterpolator(new android.view.animation.DecelerateInterpolator(1.5f))
+                        .start();
+            } catch (Throwable ignored) {}
             if (dlgFallbackLogged < 3) { dlgFallbackLogged++; logd("[对话框] 自绘卡片(自带滚动=" + nested + "): " + title); }
             pushDlg(dlg);
             return dlg;
@@ -8711,7 +8749,7 @@ public final class TGAutoSignCore {
                     ? Lang.tf("当前筛选（{0}）下没有目标", Lang.tr(listFilter))
                     : Lang.tr("(暂无目标，点「添加目标」，或直接点 bot 的签到按钮自动学习)"));
         }
-        int listH = (int) (act.getResources().getDisplayMetrics().heightPixels * 0.42f);
+        int listH = listContentHeight(act);
         box.addView(listSv, new LinearLayout.LayoutParams(-1, listH));
 
         Object oldList = listDialog;
