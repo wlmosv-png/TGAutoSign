@@ -62,8 +62,7 @@ public final class SettingsRefs {
     public int missDeadlineMin = 23 * 60;
     public int themeMode = 0;
     public int calStyle = 0;            // 日历格样式（分区内改动，保存时读取）
-    /** 开场动画种类（2026-10-03）：0呼吸 1波浪 2流光 3敲击。 */
-    public int fxKind = 0;
+
 
     public SettingsRefs(Activity a, LinearLayout b) { this.act = a; this.box = b; }
 }

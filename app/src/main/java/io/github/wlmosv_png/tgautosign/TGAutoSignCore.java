@@ -5809,19 +5809,12 @@ public final class TGAutoSignCore {
         long now0 = System.currentTimeMillis();
         fastMainOpen = SHOT_MODE || (now0 - lastMainOpen < 15000L);
         lastMainOpen = now0;
-        // ── 标题特效策略重做（2026-10-03 用户反馈"看腻了"）──
-        // 改前：每次打开都 TITLE_FX = (TITLE_FX + 1) % 4 —— **每次换一种花样**。
-        //   本意是"保持新鲜"，实测相反：变化太频繁反而更快腻，
-        //   而且用户永远看不到自己偏好的那一种（打开一次就换走了）。
-        // 现在：**一天只播一次开场动画**，模式固定（默认霓虹呼吸）。
-        //   第一次打开：完整播一遍；
-        //   当天再次打开：直接定格，干脆利落，不重复看同一套动画。
-        // 用户若想换，在设置 → 外观里手动选（可锁定某一种）。
-        boolean fxOnceToday = todayStr().equals(prefs.getString("jmb_fx_day", ""));
-        fastMainOpen = fastMainOpen || fxOnceToday;     // 今天播过了 = 走"直接定格"分支
-        if (!fxOnceToday) {
-            try { prefs.edit().putString("jmb_fx_day", todayStr()).apply(); } catch (Throwable ignored) {}
-        }
+        // 标题动效：保持原有"每次打开换一种"的轮换（维持新鲜感）。
+        // 真正的节流是上面那行 —— 15 秒内反复打开（切换页面/返回）不重播，
+        // 直接静态显示，避免来回进出时反复闪。
+        // 2026-10-03：曾试过"一天只播一次"，会让面板显得太死，已回退。
+        TITLE_FX = (TITLE_FX + 1) % 4;
+        try { prefs.edit().putInt("jmb_fx", TITLE_FX).apply(); } catch (Throwable ignored) {}
 
         syncAccount();
 
@@ -5907,102 +5900,122 @@ public final class TGAutoSignCore {
         final Runnable fx;
         final int fxKind = TITLE_FX;
         final Runnable flow;
-        // ── 标题动画收敛（2026-10-03 按用户反馈"看腻了"）──
-        // 改前：每种特效都是**永久循环**（40~50ms 一帧，只要面板开着就不停），
-        //       且每打开一次自动换一种花样 —— 看三天就腻，还白耗电。
-        // 现在：改成"开场动画"——
-        //   · 只在面板刚打开时播一遍（约 1.4 秒），之后定格在**最好看的那一帧**；
-        //   · 用 TITLE_FX_DONE 一次性闸，避免同一面板里重复触发；
-        //   · 详情/详情切换、返回再进不重播（fastMainOpen 时直接跳过）。
-        final boolean[] fxDone = { false };
-        final int FX_FRAMES = 28;          // ~1.4s @50ms
-        // 「今天全签完了吗」——标题呼吸动画的判据（见下面 fxKind==0 分支）
+        // ── 标题动效（2026-10-03 重做：从"花哨"改成"精致"）──
+        // 原版四个特效的共同毛病：
+        //   · 幅度过大 —— 波浪上下 3.2dp，23sp 的字看着在抖，不是"流动"是"不稳"；
+        //   · 随机驱动 —— 敲击用 Random 挑字符，观感杂乱无节奏；
+        //   · 硬色环 —— 流光在四色间硬切，像走马灯，跟终端风的克制感冲突；
+        //   · 逐帧全量 setTextColor —— 11 个字 × 25fps，其中大量帧颜色其实没变。
+        //
+        // 现在四个各自重做，统一原则：**小幅度、确定性、平滑插值、跳过无变化的帧**。
+        //   · 颜色量化到 1/24 步，与上一帧相同就不调 setTextColor（省掉无效重绘）；
+        //   · 位移全部 ≤2dp，且用平滑曲线，不再用生硬的线性往返。
+        // 「今天全签完了吗」——呼吸动效的判据（签完即静止）
         boolean _staTmp = false;
         try { _staTmp = isAllSignedToday(); } catch (Throwable ignored) {}
         final boolean signedTodayAll = _staTmp;
+
+        final int nch = chs.size();
+        final int[] lastCol = new int[nch];
+        for (int i = 0; i < nch; i++) lastCol[i] = Integer.MIN_VALUE;
+        final float invN = nch > 1 ? 1f / (nch - 1) : 0f;
+
+        // 只在该字符颜色确实变了才写（量化到 1/24，肉眼无感但能省一大半重绘）
+        final java.util.concurrent.atomic.AtomicInteger _dummy = new java.util.concurrent.atomic.AtomicInteger(0);
+        final Runnable[] _setCol = new Runnable[1];
+
         if (fxKind == 1) {
-            // 1 逐字波浪：正弦起伏，波峰亮、波谷暗
+            // 1 · 波浪：正弦起伏，**幅度减半**（3.2dp → 1.6dp）、颜色随波峰偏绿。
+            //     关键改动是位移曲线用 sin 的平滑段，不再让字"跳"。
             flow = new Runnable() {
-                long frame = 0L;
+                float f = 0f;
                 @Override public void run() {
                     try {
                         if (!floatRow.isShown()) { th.removeCallbacks(this); return; }
-                        int n = chs.size();
-                        for (int i = 0; i < n; i++) {
-                            float ph = (float)((frame * 0.11f + i * 0.55f) % (2f * Math.PI));
-                            float sin = (float)Math.sin(ph);
-                            chs.get(i).setTranslationY(sin * dens * 3.2f);
-                            chs.get(i).setTextColor(Theme.mix(greenC, cyanC, (sin + 1f) / 2f));
+                        for (int i = 0; i < nch; i++) {
+                            float ph = (float)(f * 0.085f + i * 0.42f);
+                            float sn = (float)Math.sin(ph);
+                            float q = Math.round((sn + 1f) / 2f * 24f) / 24f;   // 量化
+                            chs.get(i).setTranslationY(sn * dens * 1.6f);
+                            int col = Theme.mix(greenC, cyanC, q);
+                            if (col != lastCol[i]) { chs.get(i).setTextColor(col); lastCol[i] = col; }
                         }
-                        frame++;
-                        // 播满一轮即定格：把字色/位移收敛到静止态，不再占帧
-                        if (frame >= FX_FRAMES) { settleTitle(chs, cyanC); return; }
-                        th.postDelayed(this, 50L);
+                        f += 1f;
+                        th.postDelayed(this, 40L);
                     } catch (Throwable ignored) {}
                 }
             };
         } else if (fxKind == 2) {
-            // 2 RGB 流光：四色环推进，字符相位错开
+            // 2 · 流光：改成**一道柔光扫过**（原来的四色硬切太花）。
+            //     高光带从左到右穿过标题，经过的字提亮到近白，过了就回到青。
+            //     高斯型衰减（1-d/0.36 的平方）比线性更像真实反光。
             flow = new Runnable() {
-                long frame = 0L;
+                float f = 0f;
                 @Override public void run() {
                     try {
                         if (!floatRow.isShown()) { th.removeCallbacks(this); return; }
-                        float phase0 = (frame % 250) / 250f;
-                        for (int i = 0; i < chs.size(); i++) {
-                            float p = (phase0 + i * 0.28f) % 1f;
-                            float seg = p * 4f;
-                            int a = (int) seg;
-                            chs.get(i).setTextColor(Theme.mix(PAL[a % 4], PAL[(a + 1) % 4], seg - a));
+                        float ph = (f % 105f) / 105f;          // 周期 ~4.2s
+                        float hl = ph * 1.7f - 0.35f;          // 高光位置（允许进出画面）
+                        for (int i = 0; i < nch; i++) {
+                            float pos = i * invN;
+                            float d = Math.abs(pos - hl);
+                            float g0 = d >= 0.36f ? 0f : (1f - d / 0.36f);
+                            float glow = g0 * g0;              // 平方衰减：中心亮、边缘柔
+                            float q = Math.round(glow * 24f) / 24f;
+                            int col = Theme.mix(cyanC, flashCol, q * 0.9f);
+                            if (col != lastCol[i]) { chs.get(i).setTextColor(col); lastCol[i] = col; }
                         }
-                        frame++;
-                        // 让流光完整扫过标题再收：帧数按字符数放大，否则短标题只闪一下
-                        if (frame >= FX_FRAMES + chs.size() * 6) { settleTitle(chs, cyanC); return; }
+                        f += 1f;
                         th.postDelayed(this, 40L);
                     } catch (Throwable ignored) {}
                 }
             };
         } else if (fxKind == 3) {
-            // 3 键盘敲击：随机字符下沉回弹 + 变色
+            // 3 · 涟漪：改成**从左到右有序掠过**（原来是 Random 乱敲，没节奏）。
+            //     一次只点亮一个字，抬起 1.4dp 并变白，扫完一轮从头再来。
             flow = new Runnable() {
-                long frame = 0L;
+                int f = 0;
                 @Override public void run() {
                     try {
                         if (!floatRow.isShown()) { th.removeCallbacks(this); return; }
-                        int i = rnd.nextInt(chs.size());
-                        final TextView c = chs.get(i);
-                        c.setTranslationY(dens * 3f);
-                        c.setTextColor(flashCol);
-                        c.postDelayed(new Runnable() { @Override public void run() {
-                            c.setTranslationY(0f); c.setTextColor(Theme.termCyan(c.getContext()));
-                        } }, 120L);
-                        frame++;
-                        // 敲满一两轮就停手（11 字符 × 2 轮 ≈ 4~11 秒，取决于随机间隔）
-                        if (frame >= chs.size() * 2) { th.postDelayed(new Runnable() {
-                            @Override public void run() { settleTitle(chs, cyanC); } }, 200L); return; }
-                        th.postDelayed(this, 220L + rnd.nextInt(320));
+                        int step = 5;                           // 每字停留 5 帧
+                        int idx = (f / step) % nch;
+                        int sub = f % step;
+                        // 抬起曲线：中间高两边低，像指尖按下再抬起
+                        float t = sub / (float)(step - 1);
+                        float lift = (float)Math.sin(t * Math.PI);
+                        for (int i = 0; i < nch; i++) {
+                            float q;
+                            float ty;
+                            if (i == idx) { q = lift; ty = -lift * dens * 1.4f; }
+                            else { q = 0f; ty = 0f; }
+                            chs.get(i).setTranslationY(ty);
+                            int col = Theme.mix(cyanC, flashCol, Math.round(q * 24f) / 24f * 0.85f);
+                            if (i == idx || col != lastCol[i]) { chs.get(i).setTextColor(col); lastCol[i] = col; }
+                        }
+                        f++;
+                        th.postDelayed(this, 45L);
                     } catch (Throwable ignored) {}
                 }
             };
         } else {
-            // 0 霓虹呼吸：唯一**保留常驻**的特效，因为它承载信息 ——
-            // 今天还没签完时缓慢呼吸（提示"还有事没做"），签完了就静止。
-            // 这样动画不再只是装饰，而是"要不要动手"的一个信号。
+            // 0 · 呼吸：去掉**字符间相位差**（原来每个字错开 0.45 弧度，
+            //     整排字此起彼伏像坏了的霓虹灯）。现在整行同相位呼吸，幅度也更小。
+            //     未签完时缓慢呼吸；今天签完了就停在最亮处不再动（保留信息语义）。
             flow = new Runnable() {
-                long frame = 0L;
+                float f = 0f;
                 @Override public void run() {
                     try {
                         if (!floatRow.isShown()) { th.removeCallbacks(this); return; }
-                        // 今天签完了 → 呼吸停止，定格为静止色
                         if (signedTodayAll) { settleTitle(chs, cyanC); return; }
-                        int n = chs.size();
-                        for (int i = 0; i < n; i++) {
-                            float ph = (float)((frame * 0.035f + i * 0.45f) % (2f * Math.PI));
-                            float v = (float)((Math.sin(ph) + 1f) / 2f);
-                            chs.get(i).setTextColor(Theme.mix(greenC, cyanC, v));
+                        float v = (float)((Math.sin(f * 0.045f) + 1f) / 2f) * 0.55f;  // 幅度压缩到 55%
+                        float q = Math.round(v * 24f) / 24f;
+                        int col = Theme.mix(greenC, cyanC, q);
+                        for (int i = 0; i < nch; i++) {
+                            if (col != lastCol[i]) { chs.get(i).setTextColor(col); lastCol[i] = col; }
                         }
-                        frame++;
-                        th.postDelayed(this, 50L);
+                        f += 1f;
+                        th.postDelayed(this, 55L);
                     } catch (Throwable ignored) {}
                 }
             };
@@ -6038,8 +6051,8 @@ public final class TGAutoSignCore {
                     int w = head.getWidth();
                     sweep.setVisibility(View.VISIBLE);
                     sweep.setTranslationX(-(float) w);
-                    // 与标题开场动画同长（约 1.4s）：扫描线走完，标题也刚定格，
-                    // 两个动画同时收尾，不会出现"标题还在动、扫描线已经没了"的错位感。
+                    // 与标题动效的拍子对齐（约 1.4s）：扫描线走完，标题也正好一轮过去，
+                    // 不会出现"标题还在动、扫描线已经没了"的错位感。
                     sweep.animate().translationX((float) w).setDuration(1400).setStartDelay(0)
                          .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f))
                          .withEndAction(new Runnable() {
@@ -6081,8 +6094,8 @@ public final class TGAutoSignCore {
                 if (ti <= fullCmd.length()) {
                     sv.setText(fullCmd.substring(0, ti));
                     ti++;
-                    // 45ms/字（原 80ms）：整行约 1.3 秒打完，与标题开场动画同一拍收尾。
-                    // 原来打完要 2.4 秒，标题早就静了它还在一个个蹦字。
+                    // 45ms/字（原 80ms）：整行约 1.3 秒打完，与标题动效同一拍收尾。
+                    // 原来打完要 2.4 秒，节奏明显拖在标题后面。
                     th.postDelayed(this, 45L);
                 } else {
                     th.removeCallbacks(this);
@@ -9069,7 +9082,7 @@ public final class TGAutoSignCore {
     /**
      * 标题动画收尾：把所有字符复位到静止态（统一青色、无位移）。
      *
-     * 开场动画播完必须调它 —— 否则最后一个随机帧（比如波浪的某次错位、
+     * 动效收尾/停止时必须调它 —— 否则最后一个中间帧（比如掠过的某个高亮字、
      * 敲击的某个高亮字）会**永久留在屏幕上**，看着像渲染错误。
      */
     private void settleTitle(java.util.List<TextView> chs, int cyan) {
@@ -9908,8 +9921,6 @@ public final class TGAutoSignCore {
     private static String kWakeCmd() { return "jmb_wake_cmd"; }
     private static String kSort() { return "jmb_sort"; }
     private static String kFx() { return "jmb_fx"; }
-    /** 开场动画"今天已播"标记（2026-10-03）：日期串，跨天自动失效。 */
-    private static String kFxDay() { return "jmb_fx_day"; }
     private static String kAutoLearn() { return "jmb_autolearn"; }
     private static String kAutoLearnNet() { return "jmb_autolearn_net"; }
     private static String kLastRound() { return "jmb_last_round"; }
@@ -11114,10 +11125,6 @@ public final class TGAutoSignCore {
                 NOTIFY_FAIL_ONLY = R.notifyFailSw.isChecked();
                 THEME_MODE = R.themeMode;
                 CAL_STYLE = R.calStyle;
-                // 开场动画（2026-10-03）：用户选定后固定，不再每次打开自动轮换。
-                // 同时清掉"今天已播"标记，让改动立刻可见（保存后再打开能看新效果）。
-                TITLE_FX = ((R.fxKind % 4) + 4) % 4;
-                try { prefs.edit().putInt(kFx(), TITLE_FX).remove(kFxDay()).apply(); } catch (Throwable ignored) {}
                 Theme.mode = THEME_MODE;
                 try { android.content.SharedPreferences.Editor le = prefs.edit(); le.putInt("jmb_lang", Lang.MODE); le.apply(); } catch (Throwable ignored) {}
                 MISS_BACK = R.missBackSw.isChecked();
@@ -13321,34 +13328,6 @@ public final class TGAutoSignCore {
         tTip.setPadding(dp(4), dp(4), dp(4), 0);
         card0.addView(tTip);
 
-        // ── 开场动画（2026-10-03 新增入口）──
-        // 背景：标题特效原先"每次打开自动换一种"，实测反而更快看腻，
-        // 且用户永远看不到自己偏好的那一种。现在改成一天只播一次，
-        // 并把选择权交给用户 —— 这里给一个循环切换按钮 + 一行说明。
-        R.fxKind = TITLE_FX;
-        final Button fxSw = mkBtn(act);
-        fxSw.setTextSize(Theme.TS_BODY);
-        final String[] FX_NAMES = {
-                Lang.tr("霓虹呼吸（未签完才动）"),
-                Lang.tr("逐字波浪"),
-                Lang.tr("四色流光"),
-                Lang.tr("键盘敲击") };
-        final Runnable refreshFx = new Runnable() { @Override public void run() {
-            fxSw.setText(Lang.tf("开场动画：{0}", FX_NAMES[((R.fxKind % 4) + 4) % 4]));
-        } };
-        fxSw.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
-            R.fxKind = (R.fxKind + 1) % 4;
-            refreshFx.run();
-            toast(Lang.tr("保存后生效；每天只播一次，之后直接定格"));
-        } });
-        refreshFx.run();
-        card0.addView(fxSw, new LinearLayout.LayoutParams(-1, -2));
-        TextView fxTip = new TextView(act);
-        fxTip.setTextSize(Theme.TS_CAPTION); fxTip.setTextColor(Theme.termFaint(act));
-        fxTip.setTypeface(Theme.text());
-        fxTip.setText(Lang.tr("面板标题的开场动画：每天第一次打开播一遍（约 1.4 秒）然后定格，当天再打开直接静态显示，不再重复播放"));
-        fxTip.setPadding(dp(4), dp(4), dp(4), 0);
-        card0.addView(fxTip);
 
         // 界面语言：跟随系统 / 中文 / English
         final int[] lMode = { Lang.MODE };

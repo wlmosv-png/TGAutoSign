@@ -32,7 +32,7 @@ final class Icons {
             "layers", "receipt", "upload", "download", "flask", "pulse", "refresh", "book",
             "chevron-d", "chevron-u", "check", "clock", "warn", "target", "down", "bulb", "keyboard",
             "group", "bot", "clean", "megaphone", "chevron-r", "pencil", "pause",
-            "hourglass", "gap", "key", "save", "x", "calendar", "bolt",
+            "hourglass", "gap", "key", "save", "x", "calendar", "bolt", "bell",
             "boltfill", "ring",
             // 今日状态（2026-10-01）：日历摘要行用，与 DayCell 的六种样式解耦
             "today-done", "today-wait", "today-miss", "today-idle"));
@@ -207,6 +207,18 @@ final class Icons {
                 break;
             case "check":
                 poly(s, new float[]{5f, 12.5f, 10f, 17.5f, 19f, 6.5f}, false);
+                break;
+            case "bell":
+                // 铃铛：钟体（上宽下宽、颈窄）+ 摆锤。
+                // 纯几何、无文字，24 网格与既有图标同线宽；
+                // 加它是为了修【通知】分区标题图标一直空着的 bug ——
+                // 该处代码早就写着 "bell"，但这里从没实现过。
+                poly(s, new float[]{6.6f, 16.6f, 7.6f, 15.4f, 7.6f, 10.4f}, false);
+                arc(s, 12f, 10.4f, 4.4f, 180f, 180f, false);          // 顶部圆穹
+                poly(s, new float[]{16.4f, 10.4f, 16.4f, 15.4f, 17.4f, 16.6f}, false);
+                poly(s, new float[]{6.6f, 16.6f, 17.4f, 16.6f}, false); // 铃口横线
+                poly(s, new float[]{12f, 4.4f, 12f, 6.2f}, false);      // 顶钮
+                arc(s, 12f, 18.4f, 1.6f, 0f, 180f, true);               // 摆锤
                 break;
             case "clock":
                 circle(s, 12f, 12f, 8.6f);

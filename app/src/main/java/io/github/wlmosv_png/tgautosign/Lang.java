@@ -833,15 +833,7 @@ public final class Lang {
         EN.put("12 · 出问题怎么办", "12 - Troubleshooting");
         EN.put("13 · 换手机 / 备份", "13 - New phone / backup");
         EN.put("14 · 更新与反馈", "14 - Updates & feedback");
-        // ── 开场动画设置（2026-10-03）──
-        EN.put("开场动画：{0}", "Intro animation: {0}");
-        EN.put("霓虹呼吸（未签完才动）", "Neon breath (only when unsigned)");
-        EN.put("逐字波浪", "Letter wave");
-        EN.put("四色流光", "Four-colour sweep");
-        EN.put("键盘敲击", "Key taps");
-        EN.put("保存后生效；每天只播一次，之后直接定格", "Applies after saving; plays once a day, then stays still");
-        EN.put("面板标题的开场动画：每天第一次打开播一遍（约 1.4 秒）然后定格，当天再打开直接静态显示，不再重复播放",
-               "Intro animation for the panel title: plays once on the first open each day (~1.4s) then settles; later opens show it static.");
+
         EN.put("该目标今天已签过，未重复发送", "Already signed today; not sent again");
         EN.put("该目标已发出，正在等回复", "Already sent; waiting for a reply");
         EN.put("该目标正在发送中，未重复发送", "Sending in progress; not sent again");
