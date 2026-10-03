@@ -173,7 +173,7 @@ public final class TGAutoSignCore {
     private boolean logShowDebug = true;   // 默认含调试（与「全部」芯片一致）
     private String logQuery = "";
     private String logTarget = "";       // 按目标(文本/uid)过滤，空=全部
-    private int logLimit = 400;          // 首屏显示条数
+    private int logLimit = 200;          // 首屏显示条数（2026-10-03：400→200，每行要建 7 个 View）
     private int logPageStep = 300;       // 每次「加载更多」追加条数
     /** 易懂档折叠计数（2026-10-03）：同 foldKey 的条数，渲染时显示成「×N」。 */
     private final java.util.HashMap<String, Integer> logFoldCnt = new java.util.HashMap<String, Integer>();
@@ -6321,21 +6321,36 @@ public final class TGAutoSignCore {
                 r.setBackground(rd);
                 pbar.addView(r, new LinearLayout.LayoutParams(0, dp(6), pendN));
             }
-            // 2026-10-03：进度条上叠数字（「已签 x/y」）。
-            // 之前数字只在标题行、条本身是纯色块，评审建议"给进度条加数字" ——
-            // 条与数字在同一视觉单元里，扫一眼就知道进度而不是两处对着看。
-            android.widget.FrameLayout pwrap = new android.widget.FrameLayout(act);
-            pwrap.addView(pbar, new android.widget.FrameLayout.LayoutParams(-1, dp(12)));
+            // 2026-10-03 二次修正：第一版把数字**叠在进度条上**（FrameLayout 居中），
+            // 结果文字压在绿条上、又用的是正文白 —— 用户反馈"怎么在那个位置、
+            // 白色也不好看"。现在改成条**上方**独立一行：
+            //   · 数字用语义色（签完绿 / 未签完青），与状态一致；
+            //   · 右侧补「待签 N」，一行说清"完成多少、还剩多少"；
+            //   · 条本身回归纯色块（原来是 6dp 细线，现在 7dp，视觉重量够）。
+            LinearLayout phead = new LinearLayout(act);
+            phead.setOrientation(LinearLayout.HORIZONTAL);
+            phead.setGravity(android.view.Gravity.CENTER_VERTICAL);
             TextView plab = new TextView(act);
             plab.setTextSize(Theme.TS_CAPTION);
             plab.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-            plab.setTextColor(Theme.termTxt(act));
+            plab.setTextColor(pendN == 0 ? Theme.termGreen(act) : Theme.termCyan(act));
             plab.setText(Lang.tf("已签 {0}/{1}", sigN, actN));
-            plab.setGravity(android.view.Gravity.CENTER);
-            pwrap.addView(plab, new android.widget.FrameLayout.LayoutParams(-1, dp(12)));
-            LinearLayout.LayoutParams plp2 = new LinearLayout.LayoutParams(-1, dp(12));
-            plp2.topMargin = dp(8);
-            statCard.addView(pwrap, plp2);
+            phead.addView(plab, new LinearLayout.LayoutParams(0, -2, 1f));
+            if (pendN > 0) {
+                TextView pleft = new TextView(act);
+                pleft.setTextSize(Theme.TS_CAPTION);
+                pleft.setTypeface(Theme.text());
+                pleft.setTextColor(Theme.termMuted(act));
+                pleft.setText(Lang.tf("待签 {0}", pendN));
+                phead.addView(pleft, new LinearLayout.LayoutParams(-2, -2));
+            }
+            LinearLayout.LayoutParams php = new LinearLayout.LayoutParams(-1, -2);
+            php.topMargin = dp(8);
+            statCard.addView(phead, php);
+
+            LinearLayout.LayoutParams plp2 = new LinearLayout.LayoutParams(-1, dp(7));
+            plp2.topMargin = dp(6);
+            statCard.addView(pbar, plp2);
         } catch (Throwable ignored) {}
         // 2026-09-30：原此处单独一行「连续签到 N 天 · 最近 14 天」，
         // 与紧邻的日历摘要（连续 N 天 / N/14）信息完全重复，两个数字还容易看岔。
@@ -6563,7 +6578,7 @@ public final class TGAutoSignCore {
                 plainChip.setBackground(termBorder(act, Theme.termCard(act),
                         Theme.withAlpha(col, 0x66)));
                 // 只重渲染列表，不重建对话框
-                logLimit = 400;
+                logLimit = 200;
                 logRendered = 0;
                 if (logHeadBar != null) logHeadBar.setVisibility(logPlain ? android.view.View.VISIBLE : android.view.View.GONE);
                 refreshLogHead();
@@ -6701,7 +6716,7 @@ public final class TGAutoSignCore {
             root.addView(legend);
 
             showDialog(act, "运行日志", root, "关闭");
-            logLimit = 400;   // 首屏 400 条
+            logLimit = 200;   // 首屏 200 条（2026-10-03 由 400 下调）
             logRendered = 0;  // 重置分页游标（每次打开都从首屏开始）// 默认多显示一些，配合底部「加载更多」
             refreshLog();
             jumpLogNewest();   // 打开即定位到最新
@@ -6990,7 +7005,12 @@ public final class TGAutoSignCore {
             // 日志一多打开"运行日志"就明显卡顿。丢到 IO 线程，回主线程渲染。
             if (logList == null) return;
             LOG_IO.execute(new Runnable() { @Override public void run() {
-                final List<LogLine> got = mergedLog(20000);
+                // 2026-10-03：读入上限 20000 → 8000（修"点开日志卡一下"）。
+                // 日志页首屏只显示最近若干条，读满 2 万行纯属浪费 ——
+                // 而 renderLog 要对**读进来的每一行**跑一次易懂档翻译过滤
+                // （即使最终只显示几百行），2 万行就是 2 万次字符串扫描 + 正则。
+                // 8000 行足够覆盖"翻几屏 + 加载更多"的实际使用。
+                final List<LogLine> got = mergedLog(8000);
                 mainHandler.post(new Runnable() { @Override public void run() { renderLog(got); } });
             } });
         }
@@ -8629,17 +8649,33 @@ public final class TGAutoSignCore {
             bar.addView(sortChip(act, "最近失败", "fails"));
             box.addView(bar);
         }
+        // ── 列表区：固定高度（2026-10-03 修"筛选一下框就变小"）──
+        // 改前目标行是直接加进 box、box 再交给对话框 —— 而对话框高度随内容自适应，
+        // 于是从"全部（11 行）"切到"需处理（0 行）"时，整个框会**塌成一个小方块**，
+        // 视觉上像界面坏了。日志页早就是固定高度（屏高 42%），这里对齐同一做法：
+        // 行放进一个定高 ScrollView，无论筛出几条，框的大小都不变。
+        ScrollView listSv = new ScrollView(act);
+        listSv.setVerticalScrollBarEnabled(true);
+        LinearLayout listBox = new LinearLayout(act);
+        listBox.setOrientation(LinearLayout.VERTICAL);
+        listSv.addView(listBox, new android.widget.ScrollView.LayoutParams(-1, -2));
+
         String today = todayStr();
         int shownN = 0, filtN = 0;
         for (Map<String, Object> m : sortedTargets()) {
             String st = statusOf(accountPrefix(), entryId(m), today);
             if (!listFilterMatch(m, st, today)) { filtN++; continue; }
-            targetRow(box, m, st, "more");
+            targetRow(listBox, m, st, "more");
             shownN++;
         }
-        if (shownN == 0 && filtN > 0) {
-            emptyView(box, Lang.tf("当前筛选（{0}）下没有目标", Lang.tr(listFilter)));
+        if (shownN == 0) {
+            emptyView(listBox, filtN > 0
+                    ? Lang.tf("当前筛选（{0}）下没有目标", Lang.tr(listFilter))
+                    : Lang.tr("(暂无目标，点「添加目标」，或直接点 bot 的签到按钮自动学习)"));
         }
+        int listH = (int) (act.getResources().getDisplayMetrics().heightPixels * 0.42f);
+        box.addView(listSv, new LinearLayout.LayoutParams(-1, listH));
+
         Object oldList = listDialog;
         listDialog = showDialog(act, Lang.tf("目标列表（{0}）", targets.size()), box, "关闭");
         scheduleDismiss(oldList);
@@ -9070,6 +9106,32 @@ public final class TGAutoSignCore {
      */
     private String[] plainLogParts(String m) {
         if (m == null || m.length() == 0) return null;
+        // ── 结果缓存（2026-10-03 修"点开日志卡一下"）──
+        // 同一条日志在一次渲染里会被翻译 4 遍：
+        //   renderLog 过滤 1 遍 → foldShow 折叠 1 遍 → logRowAt 取折叠键 1 遍
+        //   → logRow 真正渲染 1 遍
+        // 而每次翻译要跑 isInternalLog（约 40 个 contains）+ 若干正则。
+        // 20000 行 × 4 遍 = 8 万次字符串扫描，全部发生在主线程 → 可见卡顿。
+        // 日志行是**不可变文本**，翻译结果天然可缓存。
+        String[] hit = plainCache.get(m);
+        if (hit != null) return hit.length == 0 ? null : hit;   // 空数组代表"译不出"
+        String[] res = plainLogPartsUncached(m);
+        try {
+            if (plainCache.size() > 4000) plainCache.clear();   // 有界，防长跑涨内存
+            plainCache.put(m, res == null ? new String[0] : res);
+        } catch (Throwable ignored) {}
+        return res;
+    }
+
+    /** 翻译结果缓存：key = 原始日志文本，value = 结果（空数组表示"译不出/该隐藏"）。 */
+    private final java.util.LinkedHashMap<String, String[]> plainCache =
+            new java.util.LinkedHashMap<String, String[]>(512, 0.75f, true) {
+                @Override protected boolean removeEldestEntry(java.util.Map.Entry<String, String[]> e) {
+                    return size() > 4000;
+                }
+            };
+
+    private String[] plainLogPartsUncached(String m) {
         String s = m.trim();
         if (isInternalLog(s)) return null;
         // 折叠键（2026-10-03）：同一条重复文案（如"不重排"刷 12 次）
