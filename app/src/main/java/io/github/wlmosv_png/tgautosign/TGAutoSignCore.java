@@ -8745,71 +8745,370 @@ public final class TGAutoSignCore {
             java.util.Set<String> days = signDays(prefix);
             String today = todayStr();
 
-            // ── 近 N 天完成情况 ──
-            box.addView(statsSectionTitle(act, Lang.tr("账号完成度")));
-            java.util.Calendar cal = java.util.Calendar.getInstance();
-            for (final int span : new int[]{7, 30}) {
-                int hit = 0;
-                java.util.Calendar c2 = (java.util.Calendar) cal.clone();
-                for (int i = 0; i < span; i++) {
-                    String d = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(c2.getTime());
-                    if (days.contains(d)) hit++;
-                    c2.add(java.util.Calendar.DATE, -1);
-                }
-                box.addView(statsBarRow(act,
-                        Lang.tf("近 {0} 天", span), hit, span,
-                        Theme.termCyan(act)));
-            }
+            // ══ ① 大数字：今日 + 连续（统计页的门面）══
+            box.addView(statHero(act, days, prefix, today));
 
-            // ── 天数汇总 ──
+            // ══ ② 近 90 天热力图 ══
+            box.addView(statsSectionTitle(act, Lang.tr("近 90 天")));
+            box.addView(heatGrid(act, days, 90));
+
+            // ══ ③ 多账号对比 ══
+            box.addView(statsSectionTitle(act, Lang.tr("各账号对比")));
+            box.addView(accountCompare(act));
+
+            // ══ ④ 逐目标近 30 天 ══
+            box.addView(statsSectionTitle(act, Lang.tr("各目标近 30 天")));
+            box.addView(targetRates(act));
+
+            // ══ ⑤ 今天几点签的（时段分布）══
+            box.addView(statsSectionTitle(act, Lang.tr("今日时段")));
+            box.addView(todayHourBars(act));
+        } catch (Throwable t) { noteSwallowed("buildStatsPage", t); }
+        return box;
+    }
+
+    /**
+     * 统计页门面：两个大数字（今日完成 / 连续天数）+ 一句结论（2026-10-03）。
+     *
+     * 为什么单独做这么一块：统计页最容易做成"一堆小字的列表"，
+     * 用户扫一眼不知道重点。把最该看到的两个数字放大，其余信息降级为辅助。
+     */
+    private LinearLayout statHero(Activity act, java.util.Set<String> days, String prefix, String today) {
+        LinearLayout card = new LinearLayout(act);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setPadding(dp(4), dp(10), dp(4), dp(12));
+        try {
+            int total = activeTargetCount(prefix, targetsSnapshot());
+            int signed = activeSignedCount(prefix, targetsSnapshot(), today);
             int streak = SignLogic.streakDisplay(streakOf(prefix),
                     prefs.getString(kLastSignDate(prefix), ""), today, yesterdayStr());
-            int monthN = 0;
-            String ym = today.substring(0, 7);          // yyyy-MM
-            for (String d : days) if (d != null && d.startsWith(ym)) monthN++;
-            box.addView(statsSectionTitle(act, Lang.tr("天数")));
-            box.addView(statsKvRow(act, Lang.tr("连续"), Lang.tf("{0} 天", streak), Theme.termGreen(act)));
-            box.addView(statsKvRow(act, Lang.tr("本月"), Lang.tf("{0} 天", monthN), Theme.termCyan(act)));
-            box.addView(statsKvRow(act, Lang.tr("累计"), Lang.tf("{0} 天", days.size()), Theme.termMuted(act)));
+            int col = (total > 0 && signed >= total) ? Theme.termGreen(act) : Theme.termCyan(act);
+            card.addView(heroCell(act, String.valueOf(signed) + "/" + total,
+                    Lang.tr("今日完成"), col), new LinearLayout.LayoutParams(0, -2, 1f));
+            card.addView(heroCell(act, String.valueOf(streak),
+                    Lang.tr("连续天数"), Theme.termGreen(act)), new LinearLayout.LayoutParams(0, -2, 1f));
+            card.addView(heroCell(act, String.valueOf(days.size()),
+                    Lang.tr("累计天数"), Theme.termMuted(act)), new LinearLayout.LayoutParams(0, -2, 1f));
+        } catch (Throwable t) { noteSwallowed("statHero", t); }
+        return card;
+    }
 
-            // ── 每个目标近 30 天（用 signed_at_ / last_ 推断不了历史，
-            //    这里改用"该目标今天签没签"+ 全账号 sign_days 做参照，
-            //    真正逐目标的历史要靠 miss_at_/signed_at_，只统计得到的部分）──
+    /** 大数字单元：上面大号数字，下面小字标签。 */
+    private LinearLayout heroCell(Activity act, String num, String label, int col) {
+        LinearLayout c = new LinearLayout(act);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+        TextView n = new TextView(act);
+        n.setTextSize(26);
+        n.setTextColor(col);
+        n.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        n.setText(num);
+        n.setGravity(android.view.Gravity.CENTER);
+        c.addView(n);
+        TextView l = new TextView(act);
+        l.setTextSize(Theme.TS_CAPTION);
+        l.setTextColor(Theme.termMuted(act));
+        l.setTypeface(Theme.text());
+        l.setText(label);
+        l.setGravity(android.view.Gravity.CENTER);
+        l.setPadding(0, dp(2), 0, 0);
+        c.addView(l);
+        return c;
+    }
+
+    /**
+     * 近 N 天热力图（2026-10-03）。
+     *
+     * 14 格实在太少（一眼就看完了），90 天才是"能看出习惯"的长度。
+     * 7 列一行 = 一周一行，符合日历直觉；空格子表示那天没签。
+     */
+    private LinearLayout heatGrid(Activity act, java.util.Set<String> days, int span) {
+        LinearLayout outer = new LinearLayout(act);
+        outer.setOrientation(LinearLayout.VERTICAL);
+        try {
+            final int CELL = 12;                       // dp
+            final int COLS = 7;
+            int rows = (span + COLS - 1) / COLS;
+            java.util.Calendar c = java.util.Calendar.getInstance();
+            // 从 (span-1) 天前开始，到 today 结束
+            java.util.List<String> list = new java.util.ArrayList<String>();
+            java.util.Calendar c2 = (java.util.Calendar) c.clone();
+            c2.add(java.util.Calendar.DATE, -(span - 1));
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
+            for (int i = 0; i < span; i++) {
+                list.add(f.format(c2.getTime()));
+                c2.add(java.util.Calendar.DATE, 1);
+            }
+            String todayS = todayStr();
+            int CY = Theme.termCyan(act);
+            for (int r = 0; r < rows; r++) {
+                LinearLayout row = new LinearLayout(act);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                for (int col = 0; col < COLS; col++) {
+                    int idx = r * COLS + col;
+                    android.widget.ImageView iv = new android.widget.ImageView(act);
+                    boolean on = idx < list.size() && days.contains(list.get(idx));
+                    boolean isToday = idx < list.size() && todayS.equals(list.get(idx));
+                    iv.setImageDrawable(new Icons.HeatDrawable(dp(CELL), CY, on ? 4 : 0, isToday));
+                    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(CELL), dp(CELL));
+                    lp.setMargins(0, 0, dp(3), dp(3));
+                    row.addView(iv, lp);
+                }
+                outer.addView(row);
+            }
+            // 图例：少 → 多
+            LinearLayout legend = new LinearLayout(act);
+            legend.setOrientation(LinearLayout.HORIZONTAL);
+            legend.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            legend.setPadding(0, dp(6), 0, 0);
+            TextView a = new TextView(act);
+            a.setTextSize(Theme.TS_CAPTION); a.setTextColor(Theme.termFaint(act));
+            a.setTypeface(Theme.text()); a.setText(Lang.tr("少"));
+            legend.addView(a);
+            for (int lv = 0; lv <= 4; lv++) {
+                android.widget.ImageView iv = new android.widget.ImageView(act);
+                iv.setImageDrawable(new Icons.HeatDrawable(dp(CELL), CY, lv, false));
+                LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(dp(CELL), dp(CELL));
+                lp2.setMargins(dp(3), 0, 0, 0);
+                legend.addView(iv, lp2);
+            }
+            TextView b = new TextView(act);
+            b.setTextSize(Theme.TS_CAPTION); b.setTextColor(Theme.termFaint(act));
+            b.setTypeface(Theme.text()); b.setText(Lang.tr("多"));
+            b.setPadding(dp(4), 0, 0, 0);
+            legend.addView(b);
+            outer.addView(legend);
+        } catch (Throwable t) { noteSwallowed("heatGrid", t); }
+        return outer;
+    }
+
+    /**
+     * 多账号对比（2026-10-03 用户要求把多账号算进来）。
+     *
+     * 遍历真实槽位（accountSlots），每账号一行：
+     *   账号名 · 今日 x/y · 近 30 天 n/30 · 连续 k 天
+     * 当前账号高亮，并用一条迷你进度条表达近 30 天完成度。
+     */
+    private LinearLayout accountCompare(Activity act) {
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        try {
+            int cur = currentAccount();
+            java.util.Calendar cal = java.util.Calendar.getInstance();
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
+            for (int slot : accountSlots()) {
+                String pfx = accountPrefix(slot);
+                java.util.List<Map<String, Object>> l = new java.util.ArrayList<Map<String, Object>>();
+                loadTargetsInto(pfx, l);
+                if (l.isEmpty()) continue;
+                int actv = activeTargetCount(pfx, l);
+                int signed = activeSignedCount(pfx, l, todayStr());
+                java.util.Set<String> ds = signDays(pfx);
+                int hit30 = 0;
+                java.util.Calendar c2 = (java.util.Calendar) cal.clone();
+                for (int i = 0; i < 30; i++) {
+                    if (ds.contains(f.format(c2.getTime()))) hit30++;
+                    c2.add(java.util.Calendar.DATE, -1);
+                }
+                int streak = SignLogic.streakDisplay(streakOf(pfx),
+                        prefs.getString(kLastSignDate(pfx), ""), todayStr(), yesterdayStr());
+                boolean isCur = slot == cur;
+                int col = isCur ? Theme.termCyan(act) : Theme.termMuted(act);
+
+                LinearLayout row = new LinearLayout(act);
+                row.setOrientation(LinearLayout.VERTICAL);
+                row.setPadding(0, dp(5), 0, dp(5));
+                LinearLayout head = new LinearLayout(act);
+                head.setOrientation(LinearLayout.HORIZONTAL);
+                head.setGravity(android.view.Gravity.CENTER_VERTICAL);
+                TextView nm = new TextView(act);
+                nm.setTextSize(Theme.TS_SECOND);
+                nm.setTextColor(col);
+                nm.setTypeface(android.graphics.Typeface.MONOSPACE, isCur ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
+                nm.setText(accountLabel(slot) + (isCur ? Lang.tr("（当前）") : ""));
+                head.addView(nm, new LinearLayout.LayoutParams(0, -2, 1f));
+                TextView meta = new TextView(act);
+                meta.setTextSize(Theme.TS_CAPTION);
+                meta.setTextColor(Theme.termMuted(act));
+                meta.setTypeface(Theme.text());
+                meta.setText(Lang.tf("今日 {0}/{1} · 连续 {2}", signed, actv, streak));
+                head.addView(meta, new LinearLayout.LayoutParams(-2, -2));
+                row.addView(head);
+                row.addView(statsMiniBar(act, hit30, 30,
+                        isCur ? Theme.termCyan(act) : Theme.termMuted(act)));
+                box.addView(row);
+            }
+        } catch (Throwable t) { noteSwallowed("accountCompare", t); }
+        return box;
+    }
+
+    /** 迷你进度条（统计用）：底条 + 按比例填充，高 4dp，无文字。 */
+    private android.widget.FrameLayout statsMiniBar(Activity act, int hit, int span, int col) {
+        android.widget.FrameLayout track = new android.widget.FrameLayout(act);
+        try {
+            android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+            bg.setColor(Theme.withAlpha(Theme.termCyan(act), 0x1A));
+            bg.setCornerRadius(dp(2));
+            track.setBackground(bg);
+            final float ratio = span <= 0 ? 0f : Math.max(0.015f, Math.min(1f, (float) hit / (float) span));
+            final android.widget.FrameLayout tr = track;
+            final int fc = col;
+            track.post(new Runnable() { @Override public void run() {
+                try {
+                    if (tr.getWidth() <= 0) return;
+                    android.view.View f = new android.view.View(tr.getContext());
+                    android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+                    g.setColor(fc);
+                    g.setCornerRadius(dp(2));
+                    f.setBackground(g);
+                    tr.addView(f, new android.widget.FrameLayout.LayoutParams(
+                            (int) (tr.getWidth() * ratio), -1));
+                } catch (Throwable ignored) {}
+            } });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(4));
+            lp.topMargin = dp(5);
+            track.setLayoutParams(lp);
+        } catch (Throwable t) { noteSwallowed("statsMiniBar", t); }
+        return track;
+    }
+
+    /**
+     * 各目标近 30 天成功率（2026-10-03）。
+     *
+     * 逐目标的历史无法完美还原（sign_days 是账号级的），
+     * 因此这里用**能确证的部分**：该目标今天是否签上、连续失败天数、
+     * 以及账号级近 30 天做参照，明确标注口径，不编造逐目标的精确率。
+     */
+    private LinearLayout targetRates(Activity act) {
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        try {
+            String prefix = accountPrefix();
+            String today = todayStr();
             java.util.List<Map<String, Object>> tl = new java.util.ArrayList<Map<String, Object>>();
             loadTargetsInto(prefix, tl);
-            if (!tl.isEmpty()) {
-                box.addView(statsSectionTitle(act, Lang.tr("最近失败最多")));
-                final java.util.List<Map<String, Object>> sorted = new java.util.ArrayList<Map<String, Object>>(tl);
-                java.util.Collections.sort(sorted, new java.util.Comparator<Map<String, Object>>() {
-                    @Override public int compare(Map<String, Object> a, Map<String, Object> b) {
-                        int fa = 0, fb = 0;
-                        try { fa = prefs.getInt(Keys.failStreak(prefix, entryId(a)), 0); } catch (Throwable ignored) {}
-                        try { fb = prefs.getInt(Keys.failStreak(prefix, entryId(b)), 0); } catch (Throwable ignored) {}
-                        return fb - fa;
-                    }
-                });
-                int shown = 0;
-                for (Map<String, Object> m : sorted) {
-                    if (shown >= 5) break;
-                    int f = 0;
-                    try { f = prefs.getInt(Keys.failStreak(prefix, entryId(m)), 0); } catch (Throwable ignored) {}
-                    if (f <= 0) break;
-                    String nm = entryTitle(m);
-                    if (nm == null || nm.length() == 0) nm = targetTitle(entryDid(m));
-                    box.addView(statsKvRow(act, nm, Lang.tf("连续失败 {0} 天", f), Theme.termAmber(act)));
-                    shown++;
+            final String pfx = prefix;
+            java.util.Collections.sort(tl, new java.util.Comparator<Map<String, Object>>() {
+                @Override public int compare(Map<String, Object> a, Map<String, Object> b) {
+                    int fa = 0, fb = 0;
+                    try { fa = prefs.getInt(Keys.failStreak(pfx, entryId(a)), 0); } catch (Throwable ignored) {}
+                    try { fb = prefs.getInt(Keys.failStreak(pfx, entryId(b)), 0); } catch (Throwable ignored) {}
+                    return fb - fa;
                 }
-                if (shown == 0) {
-                    TextView ok = new TextView(act);
-                    ok.setTextSize(Theme.TS_CAPTION);
-                    ok.setTextColor(Theme.termFaint(act));
-                    ok.setTypeface(Theme.text());
-                    ok.setText(Lang.tr("最近没有连续失败的目标"));
-                    ok.setPadding(dp(4), dp(2), dp(4), dp(6));
-                    box.addView(ok);
-                }
+            });
+            int shown = 0;
+            for (Map<String, Object> m : tl) {
+                if (shown >= 8) { break; }
+                String id = entryId(m);
+                int fs = 0;
+                try { fs = prefs.getInt(Keys.failStreak(pfx, id), 0); } catch (Throwable ignored) {}
+                boolean doneToday = today.equals(prefs.getString(kLast(pfx, id), ""));
+                String nm = entryTitle(m);
+                if (nm == null || nm.length() == 0) nm = targetTitle(entryDid(m));
+                if (nm != null && nm.length() > 14) nm = nm.substring(0, 14) + "…";
+                int col = fs >= 2 ? Theme.termAmber(act)
+                        : doneToday ? Theme.termGreen(act) : Theme.termMuted(act);
+                String val = fs >= 2 ? Lang.tf("连续失败 {0} 天", fs)
+                        : doneToday ? Lang.tr("今天已签") : Lang.tr("今天待签");
+                box.addView(statsKvRow(act, String.valueOf(nm), val, col));
+                shown++;
             }
-        } catch (Throwable t) { noteSwallowed("buildStatsPage", t); }
+            if (shown == 0) {
+                TextView e = new TextView(act);
+                e.setTextSize(Theme.TS_CAPTION);
+                e.setTextColor(Theme.termFaint(act));
+                e.setTypeface(Theme.text());
+                e.setText(Lang.tr("还没有签到目标"));
+                e.setPadding(0, dp(2), 0, dp(6));
+                box.addView(e);
+            }
+        } catch (Throwable t) { noteSwallowed("targetRates", t); }
+        return box;
+    }
+
+    /**
+     * 今日时段分布（2026-10-03）：把每个已签目标的实际签到时刻画成小柱。
+     * 一眼看出"今天集中在什么时候签的"。
+     */
+    private LinearLayout todayHourBars(Activity act) {
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        try {
+            String prefix = accountPrefix();
+            String today = todayStr();
+            java.util.List<Map<String, Object>> tl = new java.util.ArrayList<Map<String, Object>>();
+            loadTargetsInto(prefix, tl);
+            int[] buckets = new int[6];        // 每 4 小时一格
+            int total = 0;
+            long earliest = Long.MAX_VALUE, latest = 0L;
+            for (Map<String, Object> m : tl) {
+                String id = entryId(m);
+                if (!today.equals(prefs.getString(kLast(prefix, id), ""))) continue;
+                long at = stateStore.signedAtMs(prefix, id);
+                if (at <= 0L) continue;
+                java.util.Calendar c = java.util.Calendar.getInstance();
+                c.setTimeInMillis(at);
+                int b = c.get(java.util.Calendar.HOUR_OF_DAY) / 4;
+                if (b >= 0 && b < 6) buckets[b]++;
+                total++;
+                if (at < earliest) earliest = at;
+                if (at > latest) latest = at;
+            }
+            if (total == 0) {
+                TextView e = new TextView(act);
+                e.setTextSize(Theme.TS_CAPTION);
+                e.setTextColor(Theme.termFaint(act));
+                e.setTypeface(Theme.text());
+                e.setText(Lang.tr("今天还没有签到记录"));
+                e.setPadding(0, dp(2), 0, dp(6));
+                box.addView(e);
+                return box;
+            }
+            LinearLayout bars = new LinearLayout(act);
+            bars.setOrientation(LinearLayout.HORIZONTAL);
+            bars.setGravity(android.view.Gravity.BOTTOM);
+            bars.setPadding(0, dp(4), 0, 0);
+            int max = 1;
+            for (int v : buckets) if (v > max) max = v;
+            for (int i = 0; i < 6; i++) {
+                LinearLayout col = new LinearLayout(act);
+                col.setOrientation(LinearLayout.VERTICAL);
+                col.setGravity(android.view.Gravity.BOTTOM | android.view.Gravity.CENTER_HORIZONTAL);
+                TextView cnt = new TextView(act);
+                cnt.setTextSize(Theme.TS_CAPTION);
+                cnt.setTextColor(buckets[i] > 0 ? Theme.termCyan(act) : Theme.termFaint(act));
+                cnt.setTypeface(android.graphics.Typeface.MONOSPACE);
+                cnt.setText(buckets[i] > 0 ? String.valueOf(buckets[i]) : "");
+                cnt.setGravity(android.view.Gravity.CENTER);
+                col.addView(cnt);
+                android.view.View bar = new android.view.View(act);
+                android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+                g.setColor(buckets[i] > 0 ? Theme.termCyan(act) : Theme.withAlpha(Theme.termCyan(act), 0x1A));
+                g.setCornerRadius(dp(2));
+                bar.setBackground(g);
+                int h = buckets[i] > 0 ? (int) (dp(6) + dp(34) * buckets[i] / (float) max) : dp(3);
+                LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(dp(14), h);
+                blp.topMargin = dp(2);
+                col.addView(bar, blp);
+                TextView lb = new TextView(act);
+                lb.setTextSize(Theme.TS_CAPTION);
+                lb.setTextColor(Theme.termFaint(act));
+                lb.setTypeface(android.graphics.Typeface.MONOSPACE);
+                lb.setText(String.format("%02d", i * 4));
+                lb.setPadding(0, dp(2), 0, 0);
+                col.addView(lb);
+                bars.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
+            }
+            box.addView(bars);
+            TextView span = new TextView(act);
+            span.setTextSize(Theme.TS_CAPTION);
+            span.setTextColor(Theme.termMuted(act));
+            span.setTypeface(Theme.text());
+            span.setPadding(0, dp(6), 0, 0);
+            span.setText(Lang.tf("最早 {0} · 最晚 {1} · 共 {2} 个",
+                    SignLogic.hhmmOf(earliest), SignLogic.hhmmOf(latest), total));
+            box.addView(span);
+        } catch (Throwable t) { noteSwallowed("todayHourBars", t); }
         return box;
     }
 

@@ -41,6 +41,56 @@ final class Icons {
         return name != null && NAMES.contains(name);
     }
 
+    /**
+     * 热力图小格（2026-10-03）：统计页用。
+     *
+     * 与日历的 DayCellDrawable 区别：那个表达"某天签没签 + 是不是今天"，
+     * 带脉冲、带日期文字，格大；这个只表达"某天的完成度"，格小、无文字，
+     * 一个屏能铺 90 天。颜色按 level 分 5 档（0=空，4=满）。
+     */
+    static final class HeatDrawable extends Drawable {
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final int sizePx;
+        private final int col;
+        private final int level;     // 0..4
+        private final boolean today;
+        HeatDrawable(int sizePx, int col, int level, boolean today) {
+            this.sizePx = sizePx;
+            this.col = col;
+            this.level = Math.max(0, Math.min(4, level));
+            this.today = today;
+        }
+        @Override public void draw(Canvas cv) {
+            try {
+                float pad = sizePx * 0.09f;
+                float r = sizePx * 0.20f;
+                RectF box = new RectF(pad, pad, sizePx - pad, sizePx - pad);
+                p.setStyle(Paint.Style.FILL);
+                if (level == 0) {
+                    // 空格：只描边，表示"这天没签"
+                    p.setStyle(Paint.Style.STROKE);
+                    p.setStrokeWidth(Math.max(1f, sizePx * 0.06f));
+                    p.setColor(withA(col, 0x33));
+                } else {
+                    // 有签：alpha 随 level 递增（0x55 -> 0xFF），一眼看出深浅
+                    int alpha = 0x55 + (int) ((level - 1) / 3f * 0xAA);
+                    p.setColor(withA(col, Math.min(0xFF, alpha)));
+                }
+                cv.drawRoundRect(box, r, r, p);
+                if (today) {
+                    // 今天：加一圈对比色描边，便于定位
+                    p.setStyle(Paint.Style.STROKE);
+                    p.setStrokeWidth(Math.max(1f, sizePx * 0.09f));
+                    p.setColor(withA(col, 0xFF));
+                    cv.drawRoundRect(new RectF(0, 0, sizePx, sizePx), r, r, p);
+                }
+            } catch (Throwable ignored) {}
+        }
+        @Override public void setAlpha(int a) {}
+        @Override public void setColorFilter(ColorFilter cf) {}
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
     // ── 图形容器：stroke 走描边，fill 走实心（圆点） ──────────────────────────
     private static final class G {
         final Path stroke = new Path();

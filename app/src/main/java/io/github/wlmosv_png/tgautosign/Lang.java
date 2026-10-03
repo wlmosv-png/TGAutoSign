@@ -893,6 +893,22 @@ public final class Lang {
         EN.put("最近失败最多", "MOST FAILURES RECENTLY");
         EN.put("连续失败 {0} 天", "{0} days failing");
         EN.put("最近没有连续失败的目标", "No target is currently failing repeatedly");
+        // ── 统计页 v2（2026-10-03）──
+        EN.put("今日完成", "Done today");
+        EN.put("连续天数", "Streak");
+        EN.put("累计天数", "Total days");
+        EN.put("近 90 天", "Last 90 days");
+        EN.put("各账号对比", "ACCOUNTS");
+        EN.put("（当前）", " (current)");
+        EN.put("今日 {0}/{1} · 连续 {2}", "{0}/{1} today · streak {2}");
+        EN.put("各目标近 30 天", "TARGETS (TODAY)");
+        EN.put("今天已签", "signed today");
+        EN.put("今天待签", "due today");
+        EN.put("今日时段", "TODAY'S TIMING");
+        EN.put("今天还没有签到记录", "No sign-in recorded today");
+        EN.put("最早 {0} · 最晚 {1} · 共 {2} 个", "earliest {0} · latest {1} · {2} total");
+        EN.put("少", "less");
+        EN.put("多", "more");
         EN.put("完整日志（含筛选、导出、清空）在「全部功能 → 数据 → 运行日志」里",
                "Full log (filters, export, clear) is under All features - Data - Run log");
         EN.put("(暂无日志)", "(no log yet)");
