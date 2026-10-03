@@ -8808,21 +8808,28 @@ public final class TGAutoSignCore {
         tv.setTextSize(Theme.TS_CAPTION);
         tv.setTextColor(Theme.termCyan(act));
         tv.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-        tv.setPadding(dp(2), dp(10), dp(2), dp(4));
+        tv.setTextColor(Theme.termCyan(act));
+        tv.setLetterSpacing(0.06f);
+        tv.setPadding(0, dp(14), 0, dp(6));
         tv.setText(s);
         return tv;
     }
 
     /** 一行：标签 + 进度条 + x/y。 */
     private LinearLayout statsBarRow(Activity act, String label, int hit, int span, int col) {
+        // 排版重做（2026-10-03）：第一版字号与间距都很挤，
+        // 进度条 6dp 在小屏上像一条粗线压在文字下面。
+        // 现在：标签用次要字号、数值同字号但加粗着色、
+        // 条降到 5dp 且左右留出与文字对齐的内边距，行距拉开。
         LinearLayout row = new LinearLayout(act);
         row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(dp(2), dp(4), dp(2), dp(6));
+        row.setPadding(0, dp(6), 0, dp(8));
         LinearLayout head = new LinearLayout(act);
         head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(android.view.Gravity.CENTER_VERTICAL);
         TextView l = new TextView(act);
         l.setTextSize(Theme.TS_SECOND);
-        l.setTextColor(Theme.termTxt(act));
+        l.setTextColor(Theme.termMuted(act));
         l.setTypeface(android.graphics.Typeface.MONOSPACE);
         l.setText(label);
         head.addView(l, new LinearLayout.LayoutParams(0, -2, 1f));
@@ -8833,30 +8840,33 @@ public final class TGAutoSignCore {
         v.setText(hit + "/" + span);
         head.addView(v, new LinearLayout.LayoutParams(-2, -2));
         row.addView(head);
-        LinearLayout bar = new LinearLayout(act);
-        bar.setOrientation(LinearLayout.HORIZONTAL);
+
+        // 进度条：用 FrameLayout 让"已填"部分有最小宽度（1 天也看得见）
+        android.widget.FrameLayout track = new android.widget.FrameLayout(act);
         android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
-        bg.setColor(Theme.withAlpha(Theme.termCyan(act), 0x22));
-        bg.setCornerRadius(dp(3));
-        bar.setBackground(bg);
-        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, dp(6));
-        blp.topMargin = dp(5);
+        bg.setColor(Theme.withAlpha(Theme.termCyan(act), 0x1A));
+        bg.setCornerRadius(dp(2));
+        track.setBackground(bg);
         if (hit > 0) {
-            View f = new View(act);
-            android.graphics.drawable.GradientDrawable fd = new android.graphics.drawable.GradientDrawable();
-            fd.setColor(col);
-            fd.setCornerRadius(dp(3));
-            f.setBackground(fd);
-            bar.addView(f, new LinearLayout.LayoutParams(0, dp(6), hit));
+            // 按比例算宽度（FrameLayout 里用不了权重）；
+            // 最小 2% 保证"只签了 1 天"也看得见一格
+            final float ratio = Math.max(0.02f, Math.min(1f, (float) hit / (float) span));
+            final android.widget.FrameLayout trackRef = track;
+            track.post(new Runnable() { @Override public void run() {
+                try {
+                    int w = (int) (trackRef.getWidth() * ratio);
+                    android.view.View f2 = new android.view.View(trackRef.getContext());
+                    android.graphics.drawable.GradientDrawable g2 = new android.graphics.drawable.GradientDrawable();
+                    g2.setColor(col);
+                    g2.setCornerRadius(dp(2));
+                    f2.setBackground(g2);
+                    trackRef.addView(f2, new android.widget.FrameLayout.LayoutParams(w, -1));
+                } catch (Throwable ignored) {}
+            } });
         }
-        if (span - hit > 0) {
-            View r = new View(act);
-            android.graphics.drawable.GradientDrawable rd = new android.graphics.drawable.GradientDrawable();
-            rd.setColor(0x00000000);
-            r.setBackground(rd);
-            bar.addView(r, new LinearLayout.LayoutParams(0, dp(6), span - hit));
-        }
-        row.addView(bar, blp);
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(-1, dp(5));
+        tlp.topMargin = dp(6);
+        row.addView(track, tlp);
         return row;
     }
 
@@ -8883,13 +8893,28 @@ public final class TGAutoSignCore {
         return row;
     }
 
-    /** Tab 按钮外观（选中=青色描边+浅底；未选=弱色）。 */
-    private void styleListTab(TextView btn, Context c, boolean on) {
+    /**
+     * Tab 外观（2026-10-03 重做）：文字 + 底部指示条。
+     *
+     * 旧版是"三个带边框的胶囊"，又重又占地方，且与下方筛选 chip 撞车
+     * （都是圆角描边块）。现在：
+     *   选中 = 青色文字 + 加粗 + 青色指示条
+     *   未选 = 弱色文字 + 透明指示条
+     * 去掉底框 —— 文字本身就能表达"可点"，多一层框只是噪音。
+     */
+    private void styleListTab(TextView title, View ind, Context c, boolean on) {
         try {
-            btn.setTextColor(on ? Theme.termCyan(c) : Theme.termMuted(c));
-            btn.setBackground(termBorder(c,
-                    on ? Theme.withAlpha(Theme.termCyan(c), 0x1E) : Theme.withAlpha(Theme.termMuted(c), 0x0A),
-                    on ? Theme.withAlpha(Theme.termCyan(c), 0xAA) : Theme.withAlpha(Theme.termMuted(c), 0x33)));
+            if (title != null) {
+                title.setTextColor(on ? Theme.termCyan(c) : Theme.termMuted(c));
+                title.setTypeface(android.graphics.Typeface.MONOSPACE,
+                        on ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
+            }
+            if (ind != null) {
+                android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+                g.setColor(on ? Theme.termCyan(c) : 0x00000000);
+                g.setCornerRadius(dp(1));
+                ind.setBackground(g);
+            }
         } catch (Throwable t) { noteSwallowed("styleListTab", t); }
     }
 
@@ -9036,53 +9061,56 @@ public final class TGAutoSignCore {
         // 「日志」这个 Tab 直接复用已有的日志页（原地内嵌，不再弹第二层对话框）。
         final LinearLayout tabHost = new LinearLayout(act);
         tabHost.setOrientation(LinearLayout.VERTICAL);
+        // 内容区先声明：Tab 点击闭包里要用它（见 rebuildTabHost）。
+        final LinearLayout tabBody = new LinearLayout(act);
+        tabBody.setOrientation(LinearLayout.VERTICAL);
         final LinearLayout tabBar = new LinearLayout(act);
         tabBar.setOrientation(LinearLayout.HORIZONTAL);
         tabBar.setPadding(dp(2), dp(2), dp(2), dp(6));
         final String[][] TABS = {{"target", "目标", "list"}, {"stats", "统计", "layers"}, {"log", "日志", "doc"}};
         final java.util.List<TextView> tabBtns = new java.util.ArrayList<TextView>();
+        final java.util.List<View> tabInds = new java.util.ArrayList<View>();
+        // Tab 样式重做（2026-10-03）：从"带边框的大胶囊"改成"文字 + 底部指示条"。
+        // 旧版三个胶囊既高又重，而且与下方筛选 chip 视觉撞车（都是圆角描边块）；
+        // 现在只有一行文字高度，选中靠"青色加粗 + 下方 2dp 指示条"表达，
+        // 未选就是弱色文字 —— 安静得多，也不抢筛选 chip 的注意力。
         for (final String[] tb : TABS) {
+            final LinearLayout col = new LinearLayout(act);
+            col.setOrientation(LinearLayout.VERTICAL);
+            col.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+
             final TextView btn = new TextView(act);
-            btn.setTextSize(Theme.TS_SECOND);
-            btn.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+            btn.setTextSize(Theme.TS_BODY);
+            btn.setTypeface(android.graphics.Typeface.MONOSPACE);
             btn.setGravity(android.view.Gravity.CENTER);
-            btn.setPadding(dp(6), dp(9), dp(6), dp(9));
+            btn.setPadding(dp(6), dp(8), dp(6), dp(5));
             btn.setText(Lang.tr(tb[1]));
-            styleListTab(btn, act, tb[0].equals(listTab));
-            android.graphics.drawable.Drawable td = Icons.d(act, tb[2], 12f,
-                    tb[0].equals(listTab) ? Theme.termCyan(act) : Theme.termMuted(act));
-            if (td != null) {
-                int tsz = dp(12);
-                td.setBounds(0, 0, tsz, tsz);
-                btn.setCompoundDrawables(td, null, null, null);
-                btn.setCompoundDrawablePadding(dp(5));
-            }
-            btn.setClickable(true);
+
+            final View ind = new View(act);
+            LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(dp(28), dp(2));
+            ilp.bottomMargin = dp(5);
+            ind.setLayoutParams(ilp);
+
+            col.addView(btn, new LinearLayout.LayoutParams(-2, -2));
+            col.addView(ind, ilp);
+            col.setClickable(true);
             final String key = tb[0];
-            btn.setOnClickListener(new View.OnClickListener() {
+            col.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) {
                     if (key.equals(listTab)) return;
                     listTab = key;
                     for (int i = 0; i < TABS.length; i++) {
                         boolean on = TABS[i][0].equals(listTab);
-                        styleListTab(tabBtns.get(i), act, on);
-                        android.graphics.drawable.Drawable d2 = Icons.d(act, TABS[i][2], 12f,
-                                on ? Theme.termCyan(act) : Theme.termMuted(act));
-                        if (d2 != null) {
-                            int s2 = dp(12);
-                            d2.setBounds(0, 0, s2, s2);
-                            tabBtns.get(i).setCompoundDrawables(d2, null, null, null);
-                        }
+                        styleListTab(tabBtns.get(i), tabInds.get(i), act, on);
                     }
-                    rebuildTabHost(tabHost, act);
+                    rebuildTabHost(tabBody, act);
                 }
             });
             tabBtns.add(btn);
-            tabBar.addView(btn, new LinearLayout.LayoutParams(0, -2, 1f));
+            tabInds.add(ind);
+            tabBar.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
         }
         tabHost.addView(tabBar);
-        final LinearLayout tabBody = new LinearLayout(act);
-        tabBody.setOrientation(LinearLayout.VERTICAL);
         tabHost.addView(tabBody);
         box.addView(tabHost);
         listTabBody = tabBody;      // 供原地重建（切 Tab / 刷新）
