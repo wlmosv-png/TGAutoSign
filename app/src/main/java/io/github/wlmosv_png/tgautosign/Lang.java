@@ -817,6 +817,22 @@ public final class Lang {
         EN.put("补签 · 原定 {0} · 稍后执行", "Make-up / planned {0} / queued");
         EN.put("补了一次", "Make-up sent");
         EN.put("不在签到时间，稍后自动执行", "Outside the signing window; will run later");
+        // ── 使用教程卡片标题（2026-10-03 重写教程；正文同旧版保持中文）──
+        EN.put("新手只看这段（30 秒）", "Start here (30 seconds)");
+        EN.put("1 · 面板怎么用", "1 - Using the panel");
+        EN.put("2 · 添加目标（三种方式）", "2 - Adding targets (three ways)");
+        EN.put("3 · bot 要先发指令才给面板？", "3 - Bot needs a command to show its panel?");
+        EN.put("4 · 用什么节奏签（设置）", "4 - Signing pace (Settings)");
+        EN.put("5 · 状态怎么看懂", "5 - Reading the status");
+        EN.put("6 · 补签列表", "6 - Make-up list");
+        EN.put("7 · 结果通知在哪看", "7 - Where results are sent");
+        EN.put("8 · 日志怎么读", "8 - Reading the log");
+        EN.put("9 · 多账号", "9 - Multiple accounts");
+        EN.put("10 · 自动学习是怎么工作的", "10 - How auto-learning works");
+        EN.put("11 · 临时不想签，或某个目标卡住了", "11 - Pausing, or a stuck target");
+        EN.put("12 · 出问题怎么办", "12 - Troubleshooting");
+        EN.put("13 · 换手机 / 备份", "13 - New phone / backup");
+        EN.put("14 · 更新与反馈", "14 - Updates & feedback");
         EN.put("该目标今天已签过，未重复发送", "Already signed today; not sent again");
         EN.put("该目标已发出，正在等回复", "Already sent; waiting for a reply");
         EN.put("该目标正在发送中，未重复发送", "Sending in progress; not sent again");
