@@ -398,8 +398,20 @@ public final class TGAutoSignCore {
                         recent.add(0, cand);
                     }
                 } else if (end > 0) {
-                    int f = Math.max(0, end - 4);
-                    for (int i = f; i < end; i++) recent.add(logBuffer.get(i));
+                    if (logPlain) {
+                        // 易懂档：向前找"翻译得出来"的行（与日志页同一判据），
+                        // 否则最后 4 行恰好都是内部条时首页会空着，
+                        // 而日志页却有一堆内容（用户实测的"外面有里面没有"反向版）。
+                        for (int i = end - 1; i >= 0 && recent.size() < 4; i--) {
+                            LogLine cand = logBuffer.get(i);
+                            if (isInternalLog(String.valueOf(cand.msg))) continue;
+                            if (plainLogParts(String.valueOf(cand.msg)) == null) continue;
+                            recent.add(0, cand);
+                        }
+                    } else {
+                        int f = Math.max(0, end - 4);
+                        for (int i = f; i < end; i++) recent.add(logBuffer.get(i));
+                    }
                 }
             }
             if (recent.isEmpty()) {
@@ -6735,8 +6747,18 @@ public final class TGAutoSignCore {
                 for (LogLine l : all) {
                     if (l.lv == LV_ERR) errs++;
                     else if (l.lv == LV_WARN) warns++;
-                    if (!logShowDebug && l.lv == LV_DEBUG) continue;
-                    if (l.lv < logFilter) continue;
+                    // 易懂档：**不按级别过滤**（2026-10-03 修"首页有、日志页没有"）。
+                    // 级别是给详细档的分档工具；易懂档的过滤靠 plainLogParts 的
+                    // 翻译结果（译不出来的返回 null，已在上面跳过）。
+                    // 若再按 LV_DEBUG 丢一遍，会误伤大量"用户该知道"的行 ——
+                    // 「跳过发送（今天已签）」这类为保证落盘就写成 LV_DEBUG。
+                    // 用户显式选了「只看重要/只看错误」时，那个更高阈值仍然生效。
+                    if (logPlain) {
+                        if (logFilter > LV_DEBUG && l.lv < logFilter) continue;
+                    } else {
+                        if (!logShowDebug && l.lv == LV_DEBUG) continue;
+                        if (l.lv < logFilter) continue;
+                    }
                     if (qq.length() > 0 && String.valueOf(l.msg).toLowerCase(Locale.US).indexOf(qq) < 0) continue;
                     // 易懂档：译不出人话的条目直接不参与分页（2026-10-03）。
                     // 以前只在渲染时 return，空条目照样占"已载入 N 条"的名额，
@@ -8602,6 +8624,27 @@ public final class TGAutoSignCore {
             if (s.contains("补签已执行"))
                 return new String[]{"repeat", Lang.tr("补了一次"), "ok"};
             return null;   // 补签截止/补签列表等设置层文案，不懂档不显示
+        }
+        // 窗口外跳过（定时模式下最常见的一条）：说明"现在不在签到时间"，
+        // 是对用户有用的状态解释。必须放在通用"跳过"分支之前 ——
+        // 否则会被那句 `s.contains("跳过")` 抢先译成笼统的"本次跳过"。
+        if (s.contains("窗口外") && s.contains("跳过"))
+            return new String[]{"clock", Lang.tr("不在签到时间，稍后自动执行"), "info",
+                    foldKey == null ? "\u0001D:offwin" : foldKey};
+        if (s.contains("跳过发送（") || s.contains("跳过发送(")) {
+            // 「跳过发送（今天已签）」= 模块**主动没重复发**，是正确行为。
+            // 用户手动再点一次时常会看到它 —— 那正是"没被重复发送"的证据，
+            // 所以不能吞掉；但也不能笼统写"本次跳过"（看着像出错了）。
+            // 按真实原因分档措辞（原因即 skipLabel 的后半段）。
+            if (s.contains("今天已签"))
+                return new String[]{"check", Lang.tr("该目标今天已签过，未重复发送"), "ok"};
+            if (s.contains("已发出待结论"))
+                return new String[]{"hourglass", Lang.tr("该目标已发出，正在等回复"), "info"};
+            if (s.contains("请求在途"))
+                return new String[]{"hourglass", Lang.tr("该目标正在发送中，未重复发送"), "info"};
+            if (s.contains("退避中") || s.contains("重试已用尽") || s.contains("次数已达上限"))
+                return new String[]{"pause", Lang.tr("该目标稍后自动重试"), "info"};
+            return new String[]{"pause", Lang.tr("本次跳过"), "info"};
         }
         if (s.contains("跳过") || s.contains("已暂停"))
             // 无目标键时也按天折叠：同一天几十条"跳过"讲的是同一件事

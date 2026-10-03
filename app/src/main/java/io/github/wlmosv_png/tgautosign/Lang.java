@@ -760,7 +760,6 @@ public final class Lang {
         EN.put("发现新的签到目标", "New target found");
         EN.put("有新的待添加目标", "New target waiting to be added");
         EN.put("设置已更新", "Settings updated");
-        EN.put("某目标", "a target");
 
         // 易懂 / 详细 切换
         EN.put("易懂", "Plain");
@@ -817,6 +816,12 @@ public final class Lang {
         EN.put("还没有签到目标", "No targets yet");
         EN.put("补签 · 原定 {0} · 稍后执行", "Make-up / planned {0} / queued");
         EN.put("补了一次", "Make-up sent");
+        EN.put("不在签到时间，稍后自动执行", "Outside the signing window; will run later");
+        EN.put("该目标今天已签过，未重复发送", "Already signed today; not sent again");
+        EN.put("该目标已发出，正在等回复", "Already sent; waiting for a reply");
+        EN.put("该目标正在发送中，未重复发送", "Sending in progress; not sent again");
+        EN.put("该目标稍后自动重试", "Will retry automatically later");
+        EN.put("某目标", "a target");
         EN.put("  /  补签至 {0}", "  /  make-up until {0}");
         EN.put("  /  补签 {0}", "  /  make-up {0}");
         EN.put("昨天 {0}/{1} 完成", "Yesterday {0}/{1} done");
@@ -825,7 +830,6 @@ public final class Lang {
         EN.put("你已忽略该目标（今天不再试）", "You ignored this target (no retry today)");
         EN.put("你已确认该目标签上了", "You confirmed this target as signed");
         EN.put("你点了重试，已重新发送", "You tapped retry; resent");
-        EN.put("某目标", "a target");
         EN_SHORT.put("今天已签", "Done");
         EN_SHORT.put("今天待签", "Due");
         EN_SHORT.put("今天未签", "Missed");
