@@ -49,26 +49,58 @@ final class StatsView {
      * @param animate 是否播放入场动画（首次进入 true；每 4 秒的刷新传 false，
      *                否则数字与柱子会不停重播，很吵）
      */
-    static View build(Activity act, StatsSnapshot s, boolean animate) {
+    /**
+     * 本次构建收集到的"待播动画"（2026-10-04）。
+     *
+     * 为什么要延迟到可见才播：
+     *   统计页比一屏长，原先所有动画在建树那一刻齐发 ——
+     *   等用户滚到下面（趋势 / 热力图 / 各目标），动画早跑完了，等于没看到。
+     *   现在把每个区块的"播放入口"连同它自己收集起来，
+     *   交给调用方（Core）在滚动时按可见性触发。
+     *
+     * 结构：每个元素是 Object[]{ View 锚点, Runnable 播放入口, int 延迟 }。
+     */
+    static final class Pending {
+        final List<Object[]> items = new java.util.ArrayList<Object[]>();
+        void add(View anchor, Runnable play, int delay) {
+            items.add(new Object[]{anchor, play, Integer.valueOf(delay)});
+        }
+        int size() { return items.size(); }
+    }
+
+    /**
+     * 构建统计页。
+     *
+     * @param animate true = 收集动画任务（由调用方按可见性触发）；
+     *                false = 直接落到终态（4 秒刷新用，避免重播）
+     * @param out     收集容器（animate=true 时使用）
+     */
+    static View build(Activity act, StatsSnapshot s, boolean animate, Pending out) {
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
         try {
-            box.addView(hero(act, s, animate));
+            View heroV = hero(act, s, animate, out);
+            box.addView(heroV);
             box.addView(sectionTitle(act, Lang.tr("近 30 天趋势")));
-            box.addView(trend(act, s, animate));
+            box.addView(trend(act, s, animate, out));
             box.addView(sectionTitle(act, Lang.tr("近 90 天打卡")));
-            box.addView(heat(act, s, animate));
+            box.addView(heat(act, s, animate, out));
             box.addView(sectionTitle(act, Lang.tr("各账号对比")));
-            box.addView(accounts(act, s, animate));
+            box.addView(accounts(act, s, animate, out));
             box.addView(sectionTitle(act, Lang.tr("星期分布")));
-            box.addView(weekday(act, s, animate));
+            box.addView(weekday(act, s, animate, out));
             box.addView(sectionTitle(act, Lang.tr("今日时段")));
-            box.addView(hours(act, s, animate));
+            box.addView(hours(act, s, animate, out));
             box.addView(sectionTitle(act, Lang.tr("各目标")));
-            box.addView(targetCards(act, s, animate));
+            box.addView(targetCards(act, s, animate, out));
             if (animate) box.setTag(TAG_ANIMATED);
         } catch (Throwable t) { swallow(t); }
         return box;
+    }
+
+    /** 兼容旧签名（不收集动画，直接终态）。 */
+    static View build(Activity act, StatsSnapshot s, boolean animate) {
+        return build(act, s, animate, null);
     }
 
     /** 该 View 是否已经播过入场动画。 */
@@ -82,7 +114,7 @@ final class StatsView {
 
     // ══════════════════════ ① 门面 ══════════════════════
 
-    private static View hero(Activity act, StatsSnapshot s, boolean animate) {
+    private static View hero(Activity act, StatsSnapshot s, boolean animate, Pending out) {
         LinearLayout card = new LinearLayout(act);
         card.setOrientation(LinearLayout.HORIZONTAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
@@ -102,16 +134,21 @@ final class StatsView {
         rd.setProgress(animate ? 0f : ratio);
         iv.setImageDrawable(rd);
         ring.addView(iv, new FrameLayout.LayoutParams(ringPx, ringPx));
-        if (animate) {
-            android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(0f, ratio);
-            va.setDuration(900);
-            va.setInterpolator(new android.view.animation.DecelerateInterpolator(1.5f));
-            va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
-                @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
-                    try { rd.setProgress((Float) a.getAnimatedValue()); } catch (Throwable ignored) {}
-                }
-            });
-            va.start();
+        if (animate && out != null) {
+            out.add(iv, new Runnable() { @Override public void run() {
+                try {
+                    android.animation.ValueAnimator va =
+                            android.animation.ValueAnimator.ofFloat(0f, ratio);
+                    va.setDuration(900);
+                    va.setInterpolator(new android.view.animation.DecelerateInterpolator(1.5f));
+                    va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                        @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                            try { rd.setProgress((Float) a.getAnimatedValue()); } catch (Throwable ignored) {}
+                        }
+                    });
+                    va.start();
+                } catch (Throwable ignored) {}
+            } }, 0);
         }
 
         LinearLayout center = new LinearLayout(act);
@@ -126,6 +163,11 @@ final class StatsView {
         num.setSingleLine(true);
         num.setText(s.todaySigned + "/" + s.todayTotal);
         center.addView(num, new LinearLayout.LayoutParams(inner, -2));
+        if (animate && out != null) {
+            out.add(num, new Runnable() { @Override public void run() {
+                countUp(num, s.todaySigned, s.todayTotal);
+            } }, 0);
+        }
         TextView sub = new TextView(act);
         sub.setTextSize(Theme.TS_CAPTION);
         sub.setTextColor(Theme.termMuted(act));
@@ -146,28 +188,29 @@ final class StatsView {
                 s.hits30 >= 25 ? Theme.termGreen(act) : Theme.termAmber(act)));
         card.addView(meta, new LinearLayout.LayoutParams(0, -2, 1f));
 
-        if (animate) countUp(num, s.todaySigned, s.todayTotal);
         // 门面卡顶部扫过一条细线：整块像刚被"扫描建立"。
         // ScanLineDrawable 已带渐变头尾，短促（420ms）不拖沓。
-        if (animate) {
+        if (animate && out != null) {
             FrameLayout holder = new FrameLayout(act);
             holder.addView(card, new FrameLayout.LayoutParams(-1, -2));
-            final ImageView scan = new ImageView(act);
-            scan.setImageDrawable(new StatsCharts.ScanLineDrawable(col));
-            FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(-1, dp(act, 2));
-            holder.addView(scan, slp);
-            final StatsCharts.ScanLineDrawable sd =
-                    (StatsCharts.ScanLineDrawable) ((ImageView) scan).getDrawable();
-            android.animation.ValueAnimator va =
-                    android.animation.ValueAnimator.ofFloat(0f, 1f);
-            va.setDuration(460);
-            va.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
-            va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
-                @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
-                    try { sd.setPos((Float) a.getAnimatedValue()); } catch (Throwable ignored) {}
-                }
-            });
-            va.start();
+            ImageView scan = new ImageView(act);
+            final StatsCharts.ScanLineDrawable sd = new StatsCharts.ScanLineDrawable(col);
+            scan.setImageDrawable(sd);
+            holder.addView(scan, new FrameLayout.LayoutParams(-1, dp(act, 2)));
+            out.add(holder, new Runnable() { @Override public void run() {
+                try {
+                    android.animation.ValueAnimator va =
+                            android.animation.ValueAnimator.ofFloat(0f, 1f);
+                    va.setDuration(460);
+                    va.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
+                    va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                        @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                            try { sd.setPos((Float) a.getAnimatedValue()); } catch (Throwable ignored) {}
+                        }
+                    });
+                    va.start();
+                } catch (Throwable ignored) {}
+            } }, 0);
             return holder;
         }
         return card;
@@ -212,7 +255,7 @@ final class StatsView {
 
     // ══════════════════════ ② 趋势 ══════════════════════
 
-    private static View trend(Activity act, StatsSnapshot s, boolean animate) {
+    private static View trend(Activity act, StatsSnapshot s, boolean animate, Pending out) {
         LinearLayout wrap = new LinearLayout(act);
         wrap.setOrientation(LinearLayout.VERTICAL);
         try {
@@ -227,17 +270,22 @@ final class StatsView {
             sd.setProgress(animate ? 0f : 1f);
             iv.setImageDrawable(sd);
             wrap.addView(iv, new LinearLayout.LayoutParams(-1, hPx));
-            if (animate) {
-                android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(0f, 1f);
-                va.setDuration(1100);
-                va.setStartDelay(220);
-                va.setInterpolator(new android.view.animation.DecelerateInterpolator(1.2f));
-                va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
-                    @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
-                        try { sd.setProgress((Float) a.getAnimatedValue()); } catch (Throwable ignored) {}
-                    }
-                });
-                va.start();
+            if (animate && out != null) {
+                out.add(iv, new Runnable() { @Override public void run() {
+                    try {
+                        android.animation.ValueAnimator va =
+                                android.animation.ValueAnimator.ofFloat(0f, 1f);
+                        va.setDuration(1100);
+                        va.setInterpolator(new android.view.animation.DecelerateInterpolator(1.2f));
+                        va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                            @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                                try { sd.setProgress((Float) a.getAnimatedValue()); }
+                                catch (Throwable ignored) {}
+                            }
+                        });
+                        va.start();
+                    } catch (Throwable ignored) {}
+                } }, 0);
             }
             int[] ht = StatsData.headTailHits(s.signDays, range, 7);
             String trendWord = ht[1] > ht[0] ? Lang.tr("在变好")
@@ -250,14 +298,13 @@ final class StatsView {
                     ht[0], ht[1], trendWord));
             tip.setPadding(0, dp(act, 4), 0, 0);
             wrap.addView(tip);
-            if (animate) fadeUp(iv, 620, 60);
         } catch (Throwable t) { swallow(t); }
         return wrap;
     }
 
     // ══════════════════════ ③ 热力图 ══════════════════════
 
-    private static View heat(Activity act, StatsSnapshot s, boolean animate) {
+    private static View heat(Activity act, StatsSnapshot s, boolean animate, Pending out) {
         LinearLayout outer = new LinearLayout(act);
         outer.setOrientation(LinearLayout.VERTICAL);
         try {
@@ -304,26 +351,29 @@ final class StatsView {
                 outer.addView(row);
             }
 
-            if (animate && !heatCells.isEmpty()) {
-                // 从最后一列往第一列点亮（最新 → 最旧），每列 22ms
+            if (animate && out != null && !heatCells.isEmpty()) {
                 final int total = heatCells.size();
-                android.animation.ValueAnimator va =
-                        android.animation.ValueAnimator.ofInt(0, cols);
-                va.setDuration(Math.min(900, cols * 26));
-                va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
-                    @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
-                        try {
-                            int done = (Integer) a.getAnimatedValue();
-                            // 点亮"最新的 done 列"
-                            for (int i = 0; i < total; i++) {
-                                int colIdx = i / ROWS;
-                                boolean lit = colIdx >= (cols - done);
-                                heatCells.get(i).setLit(lit ? 0f : 1f);
+                final int nCols = cols;
+                out.add(outer, new Runnable() { @Override public void run() {
+                    try {
+                        android.animation.ValueAnimator va =
+                                android.animation.ValueAnimator.ofInt(0, nCols);
+                        va.setDuration(Math.min(900, nCols * 26));
+                        va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                            @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                                try {
+                                    int done = (Integer) a.getAnimatedValue();
+                                    for (int i = 0; i < total; i++) {
+                                        int colIdx = i / ROWS;
+                                        boolean lit = colIdx >= (nCols - done);
+                                        heatCells.get(i).setLit(lit ? 0f : 1f);
+                                    }
+                                } catch (Throwable ignored) {}
                             }
-                        } catch (Throwable ignored) {}
-                    }
-                });
-                va.start();
+                        });
+                        va.start();
+                    } catch (Throwable ignored) {}
+                } }, 0);
             }
 
             LinearLayout legend = new LinearLayout(act);
@@ -360,7 +410,7 @@ final class StatsView {
 
     // ══════════════════════ ④ 多账号 ══════════════════════
 
-    private static View accounts(Activity act, StatsSnapshot s, boolean animate) {
+    private static View accounts(Activity act, StatsSnapshot s, boolean animate, Pending out) {
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
         int i = 0;
@@ -407,7 +457,14 @@ final class StatsView {
             FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(0, -1);
             track.addView(fill, flp);
             row.addView(track, tlp);
-            setBar(track, fill, a.hits30, a.span30, animate, i * 60);
+            if (animate && out != null) {
+                final int fi = i, fhit = a.hits30, fspan = a.span30;
+                out.add(track, new Runnable() { @Override public void run() {
+                    setBar(track, fill, fhit, fspan, true, fi * 60);
+                } }, 0);
+            } else {
+                setBar(track, fill, a.hits30, a.span30, false, 0);
+            }
 
             TextView pct = new TextView(act);
             pct.setTextSize(Theme.TS_CAPTION);
@@ -425,7 +482,7 @@ final class StatsView {
 
     // ══════════════════════ ⑤ 星期分布 ══════════════════════
 
-    private static View weekday(Activity act, StatsSnapshot s, boolean animate) {
+    private static View weekday(Activity act, StatsSnapshot s, boolean animate, Pending out) {
         LinearLayout wrap = new LinearLayout(act);
         wrap.setOrientation(LinearLayout.VERTICAL);
         try {
@@ -438,14 +495,15 @@ final class StatsView {
             bg2.setGrow(animate ? 0f : 1f);
             iv.setImageDrawable(bg2);
             wf.addView(iv, new FrameLayout.LayoutParams(-1, hPx));
-            if (animate) growUp(bg2, 460, 300);
+            if (animate && out != null) out.add(wf, new Runnable() { @Override public void run() {
+                growUp(bg2, 460, 0);
+            } }, 0);
             View base = new View(act);
             base.setBackgroundColor(Theme.withAlpha(Theme.termCyan(act), 0x33));
             FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(-1, dp(act, 1));
             blp.gravity = Gravity.BOTTOM;
             wf.addView(base, blp);
             wrap.addView(wf, new LinearLayout.LayoutParams(-1, hPx));
-            if (animate) fadeUp(wf, 420, 260);
             String[] WL = {Lang.tr("一"), Lang.tr("二"), Lang.tr("三"), Lang.tr("四"),
                     Lang.tr("五"), Lang.tr("六"), Lang.tr("日")};
             LinearLayout ax = new LinearLayout(act);
@@ -467,7 +525,7 @@ final class StatsView {
 
     // ══════════════════════ ⑥ 时段 ══════════════════════
 
-    private static View hours(Activity act, StatsSnapshot s, boolean animate) {
+    private static View hours(Activity act, StatsSnapshot s, boolean animate, Pending out) {
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
         try {
@@ -494,14 +552,15 @@ final class StatsView {
             hb.setGrow(animate ? 0f : 1f);
             iv.setImageDrawable(hb);
             wf.addView(iv, new FrameLayout.LayoutParams(-1, hPx));
-            if (animate) growUp(hb, 460, 200);
+            if (animate && out != null) out.add(wf, new Runnable() { @Override public void run() {
+                growUp(hb, 460, 0);
+            } }, 0);
             View base = new View(act);
             base.setBackgroundColor(Theme.withAlpha(Theme.termCyan(act), 0x33));
             FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(-1, dp(act, 1));
             blp.gravity = Gravity.BOTTOM;
             wf.addView(base, blp);
             box.addView(wf, new LinearLayout.LayoutParams(-1, hPx));
-            if (animate) fadeUp(wf, 420, 200);
             LinearLayout ax = new LinearLayout(act);
             ax.setOrientation(LinearLayout.HORIZONTAL);
             for (int i = 0; i < 6; i++) {
@@ -533,7 +592,7 @@ final class StatsView {
      *   左侧状态色点 · 中间名称 · 右侧状态文字 · 底部微进度条
      * 每张卡带错开的淡入上浮，扫过去有"逐条落位"的节奏。
      */
-    private static View targetCards(Activity act, StatsSnapshot s, boolean animate) {
+    private static View targetCards(Activity act, StatsSnapshot s, boolean animate, Pending out) {
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
         try {
@@ -587,7 +646,12 @@ final class StatsView {
                 st.setText(state);
                 card.addView(st, new LinearLayout.LayoutParams(-2, -2));
                 box.addView(card);
-                if (animate) fadeUp(card, 300, i * 40);
+                if (animate && out != null) {
+                    final View fc = card;
+                    out.add(fc, new Runnable() { @Override public void run() {
+                        fadeUp(fc, 300, 0);
+                    } }, 0);
+                }
                 i++;
             }
         } catch (Throwable t) { swallow(t); }

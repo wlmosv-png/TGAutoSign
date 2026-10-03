@@ -8822,18 +8822,74 @@ public final class TGAutoSignCore {
     /** 统计页**首次**是否已播入场动画（刷新时不重播）。 */
     private boolean statsAnimated = false;
 
-    /** 构建统计页（供 Tab 首次填充）。 */
+    /**
+     * 构建统计页（供 Tab 首次填充）。
+     *
+     * 动画不再在构建时齐发 —— 收集成 Pending，交给
+     * {@link #attachStatsAnim(View)} 在滚动到位时逐个触发。
+     */
     private LinearLayout buildStatsPage(Activity act) {
         LinearLayout wrap = new LinearLayout(act);
         wrap.setOrientation(LinearLayout.VERTICAL);
         try {
-            statsAnimated = false;                 // 每次打开面板重新播一次
-            View inner = StatsView.build(act, statsSnapshot(), true);
-            statsAnimated = true;
+            final StatsView.Pending pending = new StatsView.Pending();
+            View inner = StatsView.build(act, statsSnapshot(), true, pending);
             wrap.addView(inner, new LinearLayout.LayoutParams(-1, -2));
+            wrap.setTag(pending);
             statsHost = wrap;
         } catch (Throwable t) { noteSwallowed("buildStatsPage", t); }
         return wrap;
+    }
+
+    /**
+     * 给统计页挂"滚动到位才播"（2026-10-04）。
+     *
+     * 背景：统计页比一屏长，原先所有入场动画在建树那一刻齐发 ——
+     *   用户滚到下半部分（趋势/热力图/各目标）时动画早跑完了，等于没看到。
+     * 现在：每个区块注册一个播放入口，这里监听 ScrollView 滚动，
+     *   谁进入可视区（含 1 屏预读）就播谁，播完即从队列移除；
+     *   同时立即先检查一次（打开时就在视野内的那些）。
+     */
+    private void attachStatsAnim(final android.widget.ScrollView sv, View statsBox) {
+        try {
+            final Object tag = statsBox.getTag();
+            if (!(tag instanceof StatsView.Pending)) return;
+            final StatsView.Pending pend = (StatsView.Pending) tag;
+            final int[] fired = new int[pend.size()];
+            final Runnable check = new Runnable() {
+                @Override public void run() {
+                    try {
+                        if (sv.getHeight() <= 0) return;
+                        int top = sv.getScrollY();
+                        int bottom = top + sv.getHeight() + sv.getHeight();   // 预读一屏
+                        for (int i = 0; i < pend.size(); i++) {
+                            if (fired[i] == 1) continue;
+                            Object[] item = pend.items.get(i);
+                            View anchor = (View) item[0];
+                            if (anchor == null || anchor.getParent() == null) { fired[i] = 1; continue; }
+                            int[] loc = new int[2];
+                            anchor.getLocationInWindow(loc);
+                            int[] svLoc = new int[2];
+                            sv.getLocationInWindow(svLoc);
+                            int relTop = loc[1] - svLoc[1] + top;
+                            int relBottom = relTop + Math.max(anchor.getHeight(), 1);
+                            if (relBottom >= top && relTop <= bottom) {
+                                fired[i] = 1;
+                                ((Runnable) item[1]).run();
+                            }
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            };
+            sv.getViewTreeObserver().addOnScrollChangedListener(
+                    new android.view.ViewTreeObserver.OnScrollChangedListener() {
+                        @Override public void onScrollChanged() { check.run(); }
+                    });
+            // 打开时先跑一遍（首屏内的立即播），再延迟几帧复检（布局未完成时高度为 0）
+            sv.post(check);
+            sv.postDelayed(check, 120L);
+            sv.postDelayed(check, 320L);
+        } catch (Throwable t) { noteSwallowed("attachStatsAnim", t); }
     }
 
     /** 刷新统计内容（4 秒一次；animate=false 避免数字/柱子反复重播）。 */
@@ -8889,6 +8945,7 @@ public final class TGAutoSignCore {
                 final LinearLayout inner = buildStatsPage(act);
                 sv.addView(inner, new android.widget.ScrollView.LayoutParams(-1, -2));
                 tabBody.addView(sv, new LinearLayout.LayoutParams(-1, listContentHeight(act)));
+                attachStatsAnim(sv, inner);
                 // ── 实时刷新（2026-10-03 用户要求）──
                 // 统计是"看着它变"的东西：正在签到时会不断有目标从待签变已签，
                 // 打开时算一次就定住，用户会以为没更新。

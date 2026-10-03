@@ -101,16 +101,19 @@ final class StatsCharts {
                 cv.drawLine(tx, ty - k, tx, ty + k, mark);
 
                 // 端点扫描头 + 辉光
+                // 2026-10-04：光晕收到 stroke*1.15（原 2.6）——
+                // 原来那团比弧本身还粗，看着像一个糊掉的圆斑（用户截图）。
+                // 现在：外圈只比笔画略大一点做"光"的感觉，内点仍是实心小圆。
                 if (progress > 0.001f) {
                     double a0 = Math.toRadians(-90f + sweep);
                     float ex = (float) (cx + r * Math.cos(a0));
                     float ey = (float) (cy + r * Math.sin(a0));
-                    glow.setAlpha(60);
-                    cv.drawCircle(ex, ey, stroke * 2.6f, glow);
-                    glow.setAlpha(140);
-                    cv.drawCircle(ex, ey, stroke * 1.5f, glow);
+                    glow.setAlpha(50);
+                    cv.drawCircle(ex, ey, stroke * 1.15f, glow);   // 外晕：略大于笔画
+                    glow.setAlpha(170);
+                    cv.drawCircle(ex, ey, stroke * 0.78f, glow);   // 内晕
                     glow.setAlpha(255);
-                    cv.drawCircle(ex, ey, stroke * 0.62f, glow);
+                    cv.drawCircle(ex, ey, stroke * 0.44f, glow);   // 实心点
                 }
             } catch (Throwable ignored) {}
         }
