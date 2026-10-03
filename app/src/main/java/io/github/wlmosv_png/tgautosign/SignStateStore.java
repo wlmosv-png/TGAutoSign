@@ -154,13 +154,32 @@ public final class SignStateStore {
                 ed.remove(Keys.sentAt(prefix, id));
                 if (SignLogic.needsAttention(result)) {
                     ed.putBoolean(Keys.pendingCfm(prefix, id), true);
+                    // 同时记"哪天标的"：sweepStalePendingConfirm 靠它区分
+                    // 「今天刚标」与「隔天残留」。没有它就只能靠 sent_at_，
+                    // 而 sent_at_ 恰恰被这一步删掉了（13 次重复发送的根因）。
+                    ed.putString(Keys.pendingDay(prefix, id), today());
                     ed.putString(Keys.pendingResult(prefix, id), SignLogic.resultCode(result));
                 } else {
                     ed.remove(Keys.pendingCfm(prefix, id));
+                    ed.remove(Keys.pendingDay(prefix, id));
                     ed.remove(Keys.pendingResult(prefix, id));
                 }
             });
         } catch (Throwable t) { swallow("markResult", t); }
+    }
+
+    /**
+     * 「待确认」是否是**今天**标的。
+     *
+     * 老数据（pendcfm_ 有、pendcfm_day_ 无）返回 true —— 宁可留着，
+     * 也不能把用户真在等的处置吞掉；陈旧的那些由用户处置或跨天自然收敛。
+     */
+    public boolean pendingIsToday(String prefix, String id) {
+        try {
+            String d = store.s(Keys.pendingDay(prefix, id), "");
+            if (d.length() == 0) return true;      // 老数据：保守保留
+            return today().equals(d);
+        } catch (Throwable t) { return true; }
     }
 
     /** 读取归类码；无归类返回 -1。 */
@@ -189,6 +208,7 @@ public final class SignStateStore {
     public void clearResult(String prefix, String id) {
         try {
             store.tx(ed -> ed.remove(Keys.pendingCfm(prefix, id))
+                             .remove(Keys.pendingDay(prefix, id))
                              .remove(Keys.pendingResult(prefix, id)));
         } catch (Throwable t) { swallow("clearResult", t); }
     }
@@ -254,6 +274,7 @@ public final class SignStateStore {
             store.tx(ed -> ed
                     .remove(Keys.opt(prefix, id))
                     .remove(Keys.pendingCfm(prefix, id))
+                    .remove(Keys.pendingDay(prefix, id))
                     .remove(Keys.pendingNote(prefix, id))
                     .remove(Keys.pendingResult(prefix, id))
                     .remove(Keys.panelStale(prefix, id))

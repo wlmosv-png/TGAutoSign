@@ -1454,7 +1454,12 @@ public final class TGAutoSignCore {
                 for (Map<String, Object> m : list) {
                     String id = entryId(m);
                     if (today.equals(prefs.getString(kLast(prefix, id), ""))) continue;   // 已签
-                    if (prefs.getInt(kRetry(prefix, id), 0) >= RETRY_LIMIT) continue;      // 今日已放弃
+                    // 「今日已放弃」必须按天判（2026-10-03）：缺日期检查时，
+                    // 昨天用满重试的目标今天会被当成"已了结"，摘要提前发出。
+                    if (prefs.getInt(kRetry(prefix, id), 0) >= RETRY_LIMIT
+                            && today.equals(prefs.getString(kRetryDay(prefix, id), ""))) continue;
+                    // 发送次数已达上限：同样算"今天了结"（等用户处置，不再自动发）
+                    if (isSendAttemptsExhausted(prefix, id)) continue;
                     if (isPendingConfirm(prefix, id)) continue;                              // 待确认：已有归类
                     if (isSnoozed(prefix, id)) continue;                                   // 已顺延
                     pending = true;
@@ -2279,8 +2284,10 @@ public final class TGAutoSignCore {
      * v1.6.0 补齐了 v1.3.0 之后新增的全部状态键。
      */
     private static final String[] ENTRY_HEADS = {"learned_", "kind_", "did_", "data_", "hash_", "msg_id_",
-            "pre_", "loc_", "last_", "retry_", "retry_at_", "retry_day_", "sent_at_",
-            "frozen_", "snooze_", "pendcfm_", "title_", "fail_streak_", "fail_laststamp_", "fail_alert_",
+            "pre_", "loc_", "last_", "opt_", "retry_", "retry_at_", "retry_day_", "sent_at_", "answered_", "send_n_",
+            "signed_at_", "miss_at_", "peerkind_",
+            "frozen_", "snooze_", "pendcfm_", "pendcfm_day_", "pendcfm_note_", "pendcfm_result_", "title_",
+            "fail_streak_", "fail_laststamp_", "fail_alert_", "fail_date_",
             "timer_plan_", "unknown_reply", "sign_days", "streak", "last_sign_date",
             "panelstale_", "panelstale_day_", "silent_", "silent_day_",
             "fails_today_", "fails_day_", "permfail_"};
@@ -2466,11 +2473,16 @@ public final class TGAutoSignCore {
         return removed;
     }
 
-    /** 只有"必须挂在条目上才有意义"的键才参与孤儿清理；cfg_/daycap_ 这类账号级配置不能碰。 */
-    private static final String[] ORPHAN_HEADS = {"frozen_", "snooze_", "pendcfm_", "pendcfm_note_",
-            "title_", "fail_streak_", "fail_laststamp_", "fail_alert_", "sent_at_", "answered_", "answered_",
-            "panelstale_", "panelstale_day_", "silent_", "silent_day_",
-            "fails_today_", "fails_day_", "permfail_"};
+    /**
+     * 只有"必须挂在条目上才有意义"的键才参与孤儿清理；cfg_/daycap_ 这类账号级配置不能碰。
+     *
+     * 2026-10-03：**改为直接引用 Keys.ORPHAN_HEADS**，不再在本文件维护副本。
+     * 起因：两处各写一份，实际执行的是这一份，而它漏了 opt_ / send_n_ / signed_at_ /
+     * miss_at_ / fail_date_，还重复了两次 answered_ —— 结果删掉目标后这些键成了
+     * 永久残渣（实测 -4476076932 已删，opt_ / send_n_ / miss_at_ / signed_at_ 仍在）。
+     * 一份表两处维护必然漂移，改为单一真相源。
+     */
+    private static final String[] ORPHAN_HEADS = Keys.ORPHAN_HEADS;
 
     /** 每天第一次加载时提示一条汇总（之前是每次重启都弹两条，很吵） */
     private void bootToast() {
@@ -3966,6 +3978,12 @@ public final class TGAutoSignCore {
         // 于是切到被停用的账号后，任何触发源（进入窗口/打开聊天/事件补签/定时/排队）
         // 都会照常签到，停用开关形同虚设。判据收敛到这里，所有触发源共用。
         _gate.accountDisabled = !isAccountEnabled(account);
+        // 发送次数硬闸（2026-10-03 修 13 次重复发送）：
+        // 上面那条 pendingUnconfirmed 只在 pendcfm_ 还在时有效，而它会被
+        // sweepStalePendingConfirm 误清；本闸读 send_n_（按天记），
+        // 不受任何清理影响，是"发了没结论"这条路上的最后一道硬闸。
+        // manual（用户点重试/测试）仍放行 —— 与 retryExhausted 同语义。
+        _gate.sendAttemptsExhausted = isSendAttemptsExhausted(_pfx, id);
         int _skip = SignLogic.decideSign(_gate);
         if (_skip != SignLogic.SKIP_NONE) {
             logd("目标 " + id + " 跳过发送（" + SignLogic.skipLabel(_skip) + "）");
@@ -4271,6 +4289,7 @@ public final class TGAutoSignCore {
                                         // 现在改成「待确认」：不算成功、不算失败、**不再自动重试**，
                                         // 用户自己看一眼决定（手动点一次，或有回复了再判）。
                                         prefs.edit().putBoolean(kPendingConfirm(fPrefix, fId), true)
+                                             .putString(Keys.pendingDay(fPrefix, fId), todayStr())
                                              .putInt(kRetry(fPrefix, fId), 0)
                                              .remove(kRetryAt(fPrefix, fId))
                                              .remove(kRetryDay(fPrefix, fId))
@@ -4311,6 +4330,7 @@ public final class TGAutoSignCore {
                                              .putString(fPrefix + "silent_day_" + fId, todayStr()).apply();
                                         if (silentN >= 3) {
                                             prefs.edit().putBoolean(kPendingConfirm(fPrefix, fId), true)
+                                                 .putString(Keys.pendingDay(fPrefix, fId), todayStr())
                                                  .putInt(kRetry(fPrefix, fId), 0)
                                                  .remove(kRetryAt(fPrefix, fId))
                                                  .remove(kRetryDay(fPrefix, fId)).commit();
@@ -4599,6 +4619,8 @@ public final class TGAutoSignCore {
                 gate.pendingUnconfirmed = isPendingConfirm(prefix, id);
                 // 账号级停用：与 sendSign 同一判据（见那里的说明）。
                 gate.accountDisabled = !isAccountEnabled(account);
+                // 发送次数硬闸：与 sendSign 同一判据（见那里的说明）。
+                gate.sendAttemptsExhausted = isSendAttemptsExhausted(prefix, id);
                 int skip = SignLogic.decideSign(gate);
                 if (skip != SignLogic.SKIP_NONE) {
                     if (skip == SignLogic.SKIP_ALREADY_SIGNED) signed++;
@@ -8737,6 +8759,20 @@ public final class TGAutoSignCore {
      * 读当日发送次数。值形如 "yyyy-MM-dd|3"；跨天自动视为 0。
      * 见 SignLogic.MAX_SEND_ATTEMPTS 与 Keys.sendAttempts。
      */
+    /**
+     * 当日发送次数是否已达硬上限（MAX_SEND_ATTEMPTS）。
+     *
+     * 与"重试用尽"的区别：retry_ 只在**明确失败**时涨，而"发出去了、bot 没给结论"
+     * 既不算成功也不算失败 → retry_ 不涨 → 所有基于 retry_ 的闸全部失效。
+     * 这正是群目标被连发 13 次（10-02 实测）的原因。
+     * send_n_ 专门覆盖这一路，且按天记（跨天归零）。
+     */
+    private boolean isSendAttemptsExhausted(String prefix, String id) {
+        try {
+            return sendAttemptsToday(prefix, id) >= SignLogic.MAX_SEND_ATTEMPTS;
+        } catch (Throwable t) { return false; }
+    }
+
     private int sendAttemptsToday(String prefix, String id) {
         try {
             String v = prefs.getString(Keys.sendAttempts(prefix, id), "");
@@ -8768,14 +8804,34 @@ public final class TGAutoSignCore {
             // 判定集中在 SignLogic.shouldPromoteToPending（纯逻辑 + 单测覆盖）
             boolean signedToday = todayStr().equals(prefs.getString(kLast(prefix, id), ""));
             boolean alreadyPending = prefs.getBoolean(kPendingConfirm(prefix, id), false);
-            boolean retryExhausted = prefs.getInt(kRetry(prefix, id), 0) >= RETRY_LIMIT;
+            // 重试计数**按天**判定（2026-10-03 修）：原先不查 retry_day_，
+            // 昨天的计数在今天仍算"已用尽"，会让本方法错误地拒绝转换。
+            // 同文件 skipScheduling 早就带了日期检查，这里当时漏了。
+            boolean retryExhausted = prefs.getInt(kRetry(prefix, id), 0) >= RETRY_LIMIT
+                    && todayStr().equals(prefs.getString(kRetryDay(prefix, id), ""));
             boolean sentToday = stateStore.isOptimisticToday(prefix, id);
+            int attempts = sendAttemptsToday(prefix, id);
+
+            // ── 待确认安全网（2026-10-03）──
+            // 已经处于待确认时，这里本就没别的事可做（alreadyPending 会让下面所有
+            // 判据返回 false）。但历史数据里存在"send_n_ 已超限、pendcfm_ 却被
+            // 旧版 sweepStalePendingConfirm 误清"的组合 —— 那种情况下闸门只能靠
+            // send_n_ 拦，界面却看不到归类。这里把它补回待确认，收口一致。
+            if (alreadyPending) {
+                if (attempts < SignLogic.MAX_SEND_ATTEMPTS) return false;
+                if (findEntryById(id, accountOfPrefix(prefix)) == null) return false;
+                // 已有 pendcfm_，只补日期标注（缺了会被当"无日期老记录"）。
+                if (prefs.getString(Keys.pendingDay(prefix, id), "").length() == 0) {
+                    try { prefs.edit().putString(Keys.pendingDay(prefix, id), todayStr()).apply(); }
+                    catch (Throwable _ePD) { noteSwallowed("promote-pendingDay", _ePD); }
+                }
+                return false;
+            }
             long sent = prefs.getLong(prefix + "sent_at_" + id, 0L);
             long now = System.currentTimeMillis();
             if (!sentToday) return false;                      // 今天没发过，谈不上"发出后无结论"
             // 是否收到过回复：bot 表态了就早收工，别按"静默"久等（2026-10-01）
             boolean answered = todayStr().equals(prefs.getString(Keys.answered(prefix, id), ""));
-            int attempts = sendAttemptsToday(prefix, id);
             // 两个判据取「或」：
             //   ① 新判据 —— 发送次数硬上限 + 按"有无回复"分档的时间软闸
             //      （解决：V_UNKNOWN 不涨 retry，心跳每 45 秒重发、刷 13 条）
@@ -8791,6 +8847,11 @@ public final class TGAutoSignCore {
 
             prefs.edit()
                  .putBoolean(kPendingConfirm(prefix, id), true)
+                 // 关键（2026-10-03）：记下"哪天标的"。
+                 // 本方法删掉了 sent_at_ / opt_，而那是"今天发过"的唯一凭据；
+                 // 不写这个日期，sweepStalePendingConfirm 下次启动就会把
+                 // 今天刚标的待确认当成隔天残留清掉 → 闸放行 → 重发（实测 13 次）。
+                 .putString(Keys.pendingDay(prefix, id), todayStr())
                  .putInt(kRetry(prefix, id), 0)
                  .remove(kRetryAt(prefix, id))
                  .remove(kRetryDay(prefix, id))
@@ -8883,6 +8944,9 @@ public final class TGAutoSignCore {
                  .remove(prefix + "panelstale_" + id)
                  .remove(prefix + "panelstale_day_" + id)
                  .remove(Keys.pendingResult(prefix, id))
+                 // 当日发送次数也归零（2026-10-03）：用户明确要求"再试一次"，
+                 // 不清的话 send_n_ 仍在上限，非 manual 的后续轮次全被堵死。
+                 .remove(Keys.sendAttempts(prefix, id))
                  .putString(prefix + "pendcfm_note_" + id, todayStr() + "|用户点了重试")
                  .apply();
             Map<String, Object> m = findEntryById(id, accountOfPrefix(prefix));
@@ -8958,6 +9022,9 @@ public final class TGAutoSignCore {
             // sweepDue 会照样排任务（用户实测：点完忽略今天又冒出补签排期）。
             if (prefs.getInt(kRetry(prefix, id), 0) >= RETRY_LIMIT
                     && todayStr().equals(prefs.getString(kRetryDay(prefix, id), ""))) return true;
+            // 当日发送次数已达硬上限：不再排期，避免"排一次→发送被拒→再排"空转
+            //（2026-10-03）。sendSign 里还有同一道闸，这里只是提前收敛、少刷日志。
+            if (isSendAttemptsExhausted(prefix, id)) return true;
             // 今日熔断：失败达上限 or 命中确定性失败词 → 今天不再排期，明天自动恢复
             return isDailyBlocked(prefix, id) || isPermanentFailedToday(prefix, id);
         } catch (Throwable t) { return false; }
@@ -9048,24 +9115,41 @@ public final class TGAutoSignCore {
             SharedPreferences.Editor e = prefs.edit();
             for (String k : new ArrayList<String>(prefs.getAll().keySet())) {
                 if (!k.startsWith("acc") || !k.contains("_pendcfm_")) continue;
+                // 只处理「待确认」布尔键本身；pendcfm_day_ / pendcfm_note_ /
+                // pendcfm_result_ 是同族伴随键，由下面连带清理，不单独计数。
+                if (k.contains("_pendcfm_day_") || k.contains("_pendcfm_note_")
+                        || k.contains("_pendcfm_result_")) continue;
                 if (!Boolean.TRUE.equals(prefs.getAll().get(k))) continue;
-                // 该条目今天有没有发送记录？没有就是隔天残留
                 int us = k.indexOf('_');
                 String prefix = k.substring(0, us + 1);
                 String id = k.substring(k.indexOf("_pendcfm_") + "_pendcfm_".length());
-                String sentDay = "";
-                try {
-                    long sentAt = prefs.getLong(prefix + "sent_at_" + id, 0L);
-                    if (sentAt > 0L) sentDay = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date(sentAt));
-                } catch (Throwable ignored) {}
-                if (today.equals(sentDay)) continue;      // 今天发的，保留
-                // sent_at_ 缺失时 sentDay 为空 —— 旧逻辑会直接 remove，把"今天刚标的待确认"
-                // 也当成隔天残留清掉（界面上一会儿有一会儿没有）。宁可留着，由
-                // 「跨天」判据兜底：last_ 不是今天 且 没有今日 sent_at_ 才是真残留。
-                if (sentDay.length() == 0) {
-                    if (today.equals(prefs.getString(kLast(prefix, id), ""))) continue;
+
+                // ── 判据一（权威，2026-10-03 新增）：pendcfm_day_ 是不是今天 ──
+                // 这是唯一不依赖 sent_at_ 的判据。sent_at_ 在转待确认时就被删了，
+                // 旧逻辑据此判"隔天残留"，导致每次重启都把当天刚标的待确认清掉，
+                // 状态回到「待签」→ 闸放行 → 重发（实测群目标被刷 13 次）。
+                String markedDay = prefs.getString(prefix + "pendcfm_day_" + id, "");
+                if (today.equals(markedDay)) continue;            // 今天标的，保留
+                if (markedDay.length() > 0) {                     // 明确是旧日期 → 真残留
+                    e.remove(k);
+                    e.remove(prefix + "pendcfm_day_" + id);
+                    e.remove(prefix + "pendcfm_note_" + id);
+                    e.remove(prefix + "pendcfm_result_" + id);
+                    n++;
+                    continue;
                 }
-                e.remove(k); n++;
+
+                // ── 判据二（老数据兜底）：没有 pendcfm_day_ 的老记录 ──
+                // 保留原逻辑，但**先查今天已签**：已签还赖在待确认里就是残留。
+                if (today.equals(prefs.getString(kLast(prefix, id), ""))) {
+                    e.remove(k);
+                    e.remove(prefix + "pendcfm_note_" + id);
+                    e.remove(prefix + "pendcfm_result_" + id);
+                    n++;
+                    continue;
+                }
+                // 无日期标注的老记录：宁可留着（用户能看到处置入口），
+                // 不当"隔天残留"删 —— 删错会把正在等的处置吞掉。
             }
             if (n > 0) e.apply();
         } catch (Throwable t) { noteSwallowed("sweepStalePendingConfirm", t); }
@@ -9402,7 +9486,12 @@ public final class TGAutoSignCore {
                 } else {
                     long retryAt = prefs.getLong(kRetryAt(prefix, id), 0L);
                     if (System.currentTimeMillis() < retryAt) continue;
-                    if (prefs.getInt(kRetry(prefix, id), 0) >= RETRY_LIMIT) continue;
+                    // 重试计数按天判（2026-10-03 修）：原先不查 retry_day_，
+                    // 昨天用满的计数会让今天的补签直接不排 —— 少签一天且无提示。
+                    if (prefs.getInt(kRetry(prefix, id), 0) >= RETRY_LIMIT
+                            && todayStr().equals(prefs.getString(kRetryDay(prefix, id), ""))) continue;
+                    // 发送次数已达上限：今天不再补，等用户处置（与 sendSign 同一道闸）
+                    if (isSendAttemptsExhausted(prefix, id)) continue;
                     delayMs = 60000L + (long) (random.nextInt(240000));    // 窗口后：1~5 分钟随机补
                     tag = "[定时] 错过补签 " + m.get("text") + "（原计划 " + hhmm(fireMin) + "）约 " + (delayMs / 60000L) + " 分钟后触发";
                     // 记「这次是补签」：只在这一条路径写（另一条 win 分支是准点到点）。

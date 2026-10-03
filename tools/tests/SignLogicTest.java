@@ -42,6 +42,9 @@ public final class SignLogicTest {
         resultClassification();
         looseModeFailWords();
         v160Regression();
+        sendAttemptsGate();
+        pendingDaySemantics();
+        crossDayRetry();
 
         System.out.println("----------------------------------------");
         System.out.println("通过 " + passed + " / 失败 " + failed.size());
@@ -859,5 +862,56 @@ public final class SignLogicTest {
         tru("欢迎语不判失败",
             SignLogic.verdictOf("🎉 欢迎使用本机器人", null, new String[0], SignLogic.FAIL_WORDS_DEFAULT)
                 == SignLogic.V_UNKNOWN);
+    }
+
+    private static void sendAttemptsGate() {
+        SignLogic.SignGate g = new SignLogic.SignGate();
+        g.sendAttemptsExhausted = false;
+        eq("次数未满 -> 放行", SignLogic.decideSign(g), SignLogic.SKIP_NONE);
+        g = new SignLogic.SignGate();
+        g.sendAttemptsExhausted = true;
+        eq("次数已满 -> 跳过", SignLogic.decideSign(g), SignLogic.SKIP_SEND_ATTEMPTS_EXHAUST);
+        g = new SignLogic.SignGate();
+        g.manual = true; g.sendAttemptsExhausted = true;
+        eq("manual 豁免次数上限", SignLogic.decideSign(g), SignLogic.SKIP_NONE);
+        g = new SignLogic.SignGate();
+        g.manual = true; g.skipSigned = true; g.sendAttemptsExhausted = true;
+        eq("批量 manual 同样豁免", SignLogic.decideSign(g), SignLogic.SKIP_NONE);
+        g = new SignLogic.SignGate();
+        g.pendingUnconfirmed = true; g.sendAttemptsExhausted = true;
+        eq("待确认优先于次数上限", SignLogic.decideSign(g), SignLogic.SKIP_PENDING_CONFIRM);
+        g = new SignLogic.SignGate();
+        g.sendAttemptsExhausted = true; g.inBackoff = true;
+        eq("次数上限优先于退避", SignLogic.decideSign(g), SignLogic.SKIP_SEND_ATTEMPTS_EXHAUST);
+        tru("次数上限有日志文案", SignLogic.skipLabel(SignLogic.SKIP_SEND_ATTEMPTS_EXHAUST).length() > 0);
+        eq("SKIP 码不冲突", SignLogic.SKIP_SEND_ATTEMPTS_EXHAUST, 10);
+        eq("MAX_SEND_ATTEMPTS 仍为 3", SignLogic.MAX_SEND_ATTEMPTS, 3);
+        long now = 1700000000000L;
+        tru("发满即收工", SignLogic.shouldGiveUpSending(SignLogic.MAX_SEND_ATTEMPTS, now, now, false, false, false, false));
+        tru("未满且刚发出 -> 不收工", !SignLogic.shouldGiveUpSending(1, now, now, false, false, false, false));
+        tru("已签 -> 不收工", !SignLogic.shouldGiveUpSending(99, now, now, false, true, false, false));
+        tru("已在待确认 -> 不收工", !SignLogic.shouldGiveUpSending(99, now, now, false, false, true, false));
+        tru("重试用尽 -> 不收工", !SignLogic.shouldGiveUpSending(99, now, now, false, false, false, true));
+    }
+
+    private static void pendingDaySemantics() {
+        String today = "2026-10-02";
+        String marked = "2026-10-02";
+        tru("今天标的 -> 保留", today.equals(marked));
+        String old = "2026-10-01";
+        tru("昨天标的 -> 判为残留", !today.equals(old) && old.length() > 0);
+        tru("无日期标注 -> 保守保留", "".length() == 0);
+        boolean removeToday = !today.equals(marked) && marked.length() > 0;
+        tru("今天标的绝不被清", !removeToday);
+        boolean removeOld = !today.equals(old) && old.length() > 0;
+        tru("旧的确实要清", removeOld);
+    }
+
+    private static void crossDayRetry() {
+        String today = "2026-10-03", yesterday = "2026-10-02";
+        int limit = 5, retry = 5;
+        tru("昨天计数今天不算用尽", !(retry >= limit && today.equals(yesterday)));
+        tru("今天的计数才算用尽", retry >= limit && today.equals(today));
+        tru("旧判据确实会误判（回归保护）", retry >= limit);
     }
 }

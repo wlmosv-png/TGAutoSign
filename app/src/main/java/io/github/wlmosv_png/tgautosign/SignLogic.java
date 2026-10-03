@@ -673,6 +673,15 @@ public final class SignLogic {
     public static final int SKIP_ACCOUNT_DISABLED = 8; // 所在账号被用户停用（账号级，最高优先）
     /** 结果未知、等用户处置（「待确认」）—— 不得再自动重发。 */
     public static final int SKIP_PENDING_CONFIRM = 9;
+    /**
+     * 当日「发出后仍无结论」次数已达硬上限（MAX_SEND_ATTEMPTS）。
+     *
+     * 为什么需要独立一条（2026-10-03 修 13 次重复发送）：
+     *   MAX_SEND_ATTEMPTS 原本只被 promoteSilentToPending 读，而它开头有
+     *   `if (!sentToday) return false;` 的早退 —— opt_ 一旦被清就永远读不到，
+     *   计数涨到 13 也没人拦。现在把它接进**发送闸**，成为真正的硬闸。
+     */
+    public static final int SKIP_SEND_ATTEMPTS_EXHAUST = 10;
 
     /** 参数打包，避免调用方传一长串布尔。 */
     public static final class SignGate {
@@ -684,6 +693,15 @@ public final class SignLogic {
         public boolean inBackoff;           // now < retryAt
         public boolean disabled;            // 暂停/冻结/被排除（目标级）
         public boolean accountDisabled;     // 所在账号被停用（账号级，见 SKIP_ACCOUNT_DISABLED）
+        /**
+         * 当日「发出后仍无结论」次数已达上限（MAX_SEND_ATTEMPTS）。
+         *
+         * 语义与 retryExhausted 不同：retry_ 记的是**失败**次数，
+         * 而"发出去了、bot 没给结论"既不算失败也不算成功，retry_ 不涨 ——
+         * 这正是 13 次重复发送能穿过所有闸的原因。
+         * 本字段读 send_n_（Keys.sendAttempts），按天记，跨天自动归零。
+         */
+        public boolean sendAttemptsExhausted;
         /**
          * manual 时是否仍跳过「今天已签 / 已发出待结论」。
          *
@@ -732,6 +750,9 @@ public final class SignLogic {
             if (g.sentPendingFresh) return SKIP_SENT_PENDING;
             if (g.pendingUnconfirmed) return SKIP_PENDING_CONFIRM;
             if (g.retryExhausted) return SKIP_RETRY_EXHAUST;
+            // 发送次数硬闸：与 retryExhausted 并列，但覆盖"发了没结论"这一路。
+            // 放在退避之前 —— 它是当日总量上限，与"还要等多久"无关。
+            if (g.sendAttemptsExhausted) return SKIP_SEND_ATTEMPTS_EXHAUST;
             if (g.inBackoff) return SKIP_BACKOFF;
             if (g.disabled) return SKIP_DISABLED;
         } else {
@@ -758,6 +779,7 @@ public final class SignLogic {
             case SKIP_SEND_FAIL:      return "发送失败（会话数据取不到）";
             case SKIP_ACCOUNT_DISABLED: return "账号已停用";
             case SKIP_PENDING_CONFIRM: return "待确认（等用户处置）";
+            case SKIP_SEND_ATTEMPTS_EXHAUST: return "今日发送次数已达上限";
             default:                  return "";
         }
     }

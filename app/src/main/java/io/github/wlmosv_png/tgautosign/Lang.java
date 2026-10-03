@@ -804,11 +804,13 @@ public final class Lang {
         EN.put("今天未签", "Missed today");
         EN.put("今天未参与", "Not active today");
         EN.put("近 14 天", "Last 14 days");
+        EN.put("近 14 天 {0}", "Last 14 days {0}");
         EN_SHORT.put("今天已签", "Done");
         EN_SHORT.put("今天待签", "Due");
         EN_SHORT.put("今天未签", "Missed");
         EN_SHORT.put("今天未参与", "Idle");
         EN.put("今日操作次数已用尽，已停止重发", "Daily limit reached; stopped retrying");
+        EN.put("bot 说今日次数已用尽，今天不必再签", "The bot says today's quota is used up; no need to sign again");
         EN_SHORT.put("已用尽", "Used up");
         EN.put("bot 未回复", "Bot did not reply");
         EN.put("判定已关", "Judging off");

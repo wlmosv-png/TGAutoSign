@@ -63,6 +63,20 @@ public final class Keys {
     public static String frozen(String p, String id)    { return p + "frozen_" + id; }
     public static String learned(String p, String id)   { return p + "learned_" + id; }
     public static String pendingCfm(String p, String id){ return p + "pendcfm_" + id; }
+    /**
+     * 「待确认」是**哪一天**标的（yyyy-MM-dd）。
+     *
+     * 为什么必须有（2026-10-03 修 13 次重复发送）：
+     *   promoteSilentToPending 转待确认时删掉了 sent_at_ / opt_，
+     *   而这两个键是「今天发过」的**唯一凭据**。
+     *   于是 sweepStalePendingConfirm 在下次启动时读到 sent_at_ 为空，
+     *   误判成"隔天残留"把当天刚标的 pendcfm_ 清掉 → 闸全放行 → 重发。
+     *   实测 ExteraLess 上群目标被刷 13 次（10-02 重启 13 次，每次清一遍）。
+     *
+     * 本键与 pendcfm_ 同生共死：标待确认时一起写，用户处置时一起清。
+     * 判据只看"是不是今天标的"，与 sent_at_ 存不存在无关。
+     */
+    public static String pendingDay(String p, String id){ return p + "pendcfm_day_" + id; }
     public static String pendingNote(String p, String id){ return p + "pendcfm_note_" + id; }
     /**
      * **执行结果归类码**（resultCode 串）。
@@ -135,8 +149,9 @@ public final class Keys {
             "learned_", "kind_", "did_", "data_", "hash_", "msg_id_",
             "pre_", "loc_", "last_", "opt_", "retry_", "retry_at_", "retry_day_", "sent_at_", "answered_", "send_n_",
             "signed_at_", "miss_at_",
-            "frozen_", "snooze_", "pendcfm_", "pendcfm_note_", "pendcfm_result_", "title_",
+            "frozen_", "snooze_", "pendcfm_", "pendcfm_day_", "pendcfm_note_", "pendcfm_result_", "title_",
             "fail_streak_", "fail_laststamp_", "fail_alert_", "fail_date_",
+            "fails_today_", "fails_day_", "permfail_",
             "panelstale_", "panelstale_day_", "silent_", "silent_day_", "peerkind_"
     };
 
@@ -144,8 +159,10 @@ public final class Keys {
      * 孤儿清理只看"挂在条目上才有意义"的键；cfg_/enabled 这类账号级配置不能碰。
      */
     public static final String[] ORPHAN_HEADS = {
-            "frozen_", "snooze_", "pendcfm_", "pendcfm_note_",
+            "frozen_", "snooze_", "pendcfm_", "pendcfm_day_", "pendcfm_note_", "pendcfm_result_",
             "title_", "fail_streak_", "fail_laststamp_", "fail_alert_", "fail_date_",
-            "sent_at_", "signed_at_", "miss_at_", "opt_", "answered_", "send_n_", "panelstale_", "panelstale_day_", "silent_", "silent_day_"
+            "fails_today_", "fails_day_", "permfail_",
+            "sent_at_", "signed_at_", "miss_at_", "opt_", "answered_", "send_n_",
+            "panelstale_", "panelstale_day_", "silent_", "silent_day_"
     };
 }
