@@ -382,6 +382,7 @@ final class StatsCharts {
         private final java.util.Random rnd = new java.util.Random();
         private final int normalCol, flashCol;
         private final float textSize;
+        private float textPx = 12f;          // sp 换算后的像素值（绘制/测量都用它）
         private float progress = 1f;          // 0..1 整体进度
         private float scale = 1f;
         private boolean done;
@@ -403,7 +404,16 @@ final class StatsCharts {
             jitter = new float[glyphs.length];
             arrive = new float[glyphs.length];
             p.setTypeface(Typeface.MONOSPACE);
-            p.setTextSize(textSize);
+            // ⚠️ Paint.setTextSize 要的是**像素**，而调用方传进来的是 sp
+            //    （Theme.TS_SECOND = 12 这类）。直接传会得到 12px ≈ 4dp，
+            //    字小到看不清（用户截图实测）。
+            //    这里用 scaledDensity 做 sp→px，与 TextView 的默认行为一致。
+            float px = textSize;
+            try {
+                px = textSize * c.getResources().getDisplayMetrics().scaledDensity;
+            } catch (Throwable ignored) {}
+            this.textPx = px;
+            p.setTextSize(px);
             p.setFakeBoldText(true);
         }
 
@@ -418,7 +428,7 @@ final class StatsCharts {
                 local = Math.max(0f, Math.min(1f, local));
                 // 未就位 → 偏移随 local 收敛；就位后保留一点闪
                 float amp = (1f - local);
-                jitter[i] = amp * (rnd.nextFloat() * 2f - 1f) * textSize * 0.55f;
+                jitter[i] = amp * (rnd.nextFloat() * 2f - 1f) * textPx * 0.42f;
                 arrive[i] = local >= 1f ? Math.max(0f, arrive[i] - 0.12f) : 1f;
             }
             // 全部就位后来一次轻微合拢
@@ -429,7 +439,7 @@ final class StatsCharts {
 
         @Override protected void onMeasure(int wSpec, int hSpec) {
             int w = (int) p.measureText(text) + 4;
-            int h = (int) (textSize * 1.6f);
+            int h = (int) (textPx * 1.45f);
             setMeasuredDimension(Math.max(1, w), Math.max(1, h));
         }
 

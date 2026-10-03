@@ -8817,6 +8817,22 @@ public final class TGAutoSignCore {
         return s;
     }
 
+    /**
+     * 计算 v 相对 root 的纵向偏移（沿父链累加 getTop）。
+     * 比 getLocationInWindow 稳 —— 后者在对话框里会受窗口装饰影响。
+     */
+    private static int offsetIn(View v, View root) {
+        int y = 0;
+        View cur = v;
+        int guard = 0;
+        while (cur != null && cur != root && guard++ < 40) {
+            y += cur.getTop();
+            android.view.ViewParent p = cur.getParent();
+            cur = (p instanceof View) ? (View) p : null;
+        }
+        return y;
+    }
+
     /** 统计页内容容器（供 4 秒自刷新替换内容）。 */
     private LinearLayout statsHost;
     /** 统计页**首次**是否已播入场动画（刷新时不重播）。 */
@@ -8850,7 +8866,7 @@ public final class TGAutoSignCore {
      *   谁进入可视区（含 1 屏预读）就播谁，播完即从队列移除；
      *   同时立即先检查一次（打开时就在视野内的那些）。
      */
-    private void attachStatsAnim(final android.widget.ScrollView sv, View statsBox) {
+    private void attachStatsAnim(final android.widget.ScrollView sv, final View statsBox) {
         try {
             final Object tag = statsBox.getTag();
             if (!(tag instanceof StatsView.Pending)) return;
@@ -8867,11 +8883,11 @@ public final class TGAutoSignCore {
                             Object[] item = pend.items.get(i);
                             View anchor = (View) item[0];
                             if (anchor == null || anchor.getParent() == null) { fired[i] = 1; continue; }
-                            int[] loc = new int[2];
-                            anchor.getLocationInWindow(loc);
-                            int[] svLoc = new int[2];
-                            sv.getLocationInWindow(svLoc);
-                            int relTop = loc[1] - svLoc[1] + top;
+                            // ── 用"在 inner 内的累计 top"而不是窗口坐标 ──
+                            // getLocationInWindow 在对话框内会随窗口/装饰偏移出偏差，
+                            // 实测导致判断永远不成立、动画一次都不播（用户反馈"没看到特效"）。
+                            // 沿父链累加 getTop() 到 inner 为止 —— 与布局一一对应，稳。
+                            int relTop = offsetIn(anchor, statsBox);
                             int relBottom = relTop + Math.max(anchor.getHeight(), 1);
                             if (relBottom >= top && relTop <= bottom) {
                                 fired[i] = 1;
@@ -8887,8 +8903,10 @@ public final class TGAutoSignCore {
                     });
             // 打开时先跑一遍（首屏内的立即播），再延迟几帧复检（布局未完成时高度为 0）
             sv.post(check);
-            sv.postDelayed(check, 120L);
-            sv.postDelayed(check, 320L);
+            sv.postDelayed(check, 60L);
+            sv.postDelayed(check, 160L);
+            sv.postDelayed(check, 400L);
+            sv.postDelayed(check, 800L);
         } catch (Throwable t) { noteSwallowed("attachStatsAnim", t); }
     }
 
