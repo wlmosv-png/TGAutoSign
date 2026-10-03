@@ -842,6 +842,20 @@ public final class Lang {
         EN.put("  /  补签至 {0}", "  /  make-up until {0}");
         EN.put("  /  补签 {0}", "  /  make-up {0}");
         EN.put("昨天 {0}/{1} 完成", "Yesterday {0}/{1} done");
+        // ── 目标列表：相对时间 / 搜索 / 筛选（2026-10-03）──
+        EN.put("今天", "today");
+        EN.put("昨天", "yesterday");
+        EN.put("{0} 天前", "{0}d ago");
+        EN.put("上次 {0}", "Last {0}");
+        EN.put("失败 {0} 次", "{0} failures");
+        EN.put("搜索目标（名称 / 指令 / @用户名）", "Search targets (name / command / @username)");
+        EN.put("当前筛选（{0}）下没有目标", "No targets match the \"{0}\" filter");
+        EN.put("全部", "All");
+        EN.put("待签", "Due");
+        EN.put("已签", "Signed");
+        EN.put("需处理", "Needs attention");
+        EN.put("冻结", "Frozen");
+        EN.put("最近失败", "Recent failures");
         EN.put("今日 {0}", "Today {0}");
         EN.put("  /  补签 {0} 次", "  /  {0} make-ups");
         EN.put("你已忽略该目标（今天不再试）", "You ignored this target (no retry today)");

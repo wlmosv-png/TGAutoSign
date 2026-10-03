@@ -5117,6 +5117,39 @@ public final class TGAutoSignCore {
         return c;
     }
 
+    /**
+     * 目标列表的过滤判定（2026-10-03）。**纯渲染层**，不碰签到逻辑。
+     *
+     * @param st 已算好的状态串（复用 statusOf，避免重复计算）
+     */
+    private boolean listFilterMatch(Map<String, Object> m, String st, String today) {
+        try {
+            String id = entryId(m);
+            String pfx = accountPrefix();
+            String q = logTargetFilter == null ? "" : logTargetFilter.trim().toLowerCase(java.util.Locale.US);
+            if (q.length() > 0) {
+                String title = String.valueOf(entryTitle(m)).toLowerCase(java.util.Locale.US);
+                String cmd = String.valueOf(entryText(m)).toLowerCase(java.util.Locale.US);
+                String sub = "";
+                try { sub = String.valueOf(targetSubtitle(entryDid(m))).toLowerCase(java.util.Locale.US); } catch (Throwable ignored) {}
+                if (!title.contains(q) && !cmd.contains(q) && !sub.contains(q)) return false;
+            }
+            String f = listFilter == null ? "全部" : listFilter;
+            if ("全部".equals(f)) return true;
+            boolean signed = today.equals(prefs.getString(kLast(pfx, id), ""));
+            boolean frozen = isFrozen(pfx, id) || isBotBlocked(entryDid(m));
+            if ("冻结".equals(f)) return frozen;
+            if (frozen) return false;                   // 冻结的不混进其他分组
+            if ("已签".equals(f)) return signed;
+            if ("待签".equals(f)) return !signed && (st == null || st.contains("待签") || st.contains("已发送"));
+            if ("需处理".equals(f)) {
+                return st != null && (st.contains("按钮失效") || st.contains("回复判不出")
+                        || st.contains("结果未知") || st.contains("未回复") || st.contains("失败"));
+            }
+            return true;
+        } catch (Throwable t) { return true; }
+    }
+
     private List<Map<String, Object>> sortedTargets() {
         List<Map<String, Object>> l = targetsSnapshot();
         String today = todayStr();
@@ -5126,6 +5159,26 @@ public final class TGAutoSignCore {
                     int ia = isInactive(accountPrefix(), a) ? 1 : 0;
                     int ib = isInactive(accountPrefix(), b) ? 1 : 0;
                     if (ia != ib) return ia - ib;
+                    String na = botName(entryDid(a));
+                    String nb = botName(entryDid(b));
+                    if (na == null) na = "";
+                    if (nb == null) nb = "";
+                    return na.compareToIgnoreCase(nb);
+                }
+            });
+        } else if ("fails".equals(SORT_MODE)) {
+            // 最近失败优先（2026-10-03）：失败次数多的排前面。
+            // 用 failStreak_（连续失败天数）而不是当日 retry，因为"连续几天失败"
+            // 才是真正的信号 —— 单次失败多半是抖动，连续失败才需要处理。
+            java.util.Collections.sort(l, new java.util.Comparator<Map<String, Object>>() {
+                @Override public int compare(Map<String, Object> a, Map<String, Object> b) {
+                    int ia = isInactive(accountPrefix(), a) ? 1 : 0;
+                    int ib = isInactive(accountPrefix(), b) ? 1 : 0;
+                    if (ia != ib) return ia - ib;
+                    int fa = 0, fb = 0;
+                    try { fa = prefs.getInt(Keys.failStreak(accountPrefix(), entryId(a)), 0); } catch (Throwable ignored) {}
+                    try { fb = prefs.getInt(Keys.failStreak(accountPrefix(), entryId(b)), 0); } catch (Throwable ignored) {}
+                    if (fa != fb) return fb - fa;          // 失败多的在前
                     String na = botName(entryDid(a));
                     String nb = botName(entryDid(b));
                     if (na == null) na = "";
@@ -5468,13 +5521,18 @@ public final class TGAutoSignCore {
         String id = entryId(entry);
         boolean cb = KIND_CB.equals(entryKind(entry));
         String text = entryText(entry);
-        // 左侧色条：群=品红，bot=青，扫一眼即可分组
+        // ── 左侧色条：按**状态**上色（2026-10-03 重做）──
+        // 改前：色条只区分"群=品红 / bot=青"，再叠一个"已签=绿"。
+        //   实测问题：满屏"待签"时所有行都是同一条青色线，扫不出问题条目；
+        //   而"失败/需处理"这些真正要你动手的，反而没有颜色。
+        // 现在：颜色 = 状态语义，一眼能扫出哪里不正常。
+        //   绿 已签 · 青 待签 · 琥珀 需处理/失败 · 灰 冻结/排除 · 品红 群(/频道)
+        //   色调之外还保留"群"的区分：群用偏品红的绿/青（见 chatTint）
         String[] etype = entryTypeOf(entry);
         boolean isChat = !"bot".equals(etype[0]);
-        int accent = isChat ? Theme.termPink(c) : Theme.termCyan(c);
-        /* 已签目标：色条变绿（2026-09-29 增强视觉区分） */
         final boolean _isSignedRow = todayStr().equals(prefs.getString(kLast(accountPrefix(), id), ""));
-        if (_isSignedRow) accent = Theme.termGreen(c);
+        int accent = stateAccent(c, status, _isSignedRow, isChat);
+        final int accentFinal = accent;
         final boolean blocked = isBotBlocked(did);
         LinearLayout wrap = new LinearLayout(c);
         wrap.setOrientation(LinearLayout.HORIZONTAL);
@@ -5513,8 +5571,15 @@ public final class TGAutoSignCore {
         TextView t1 = new TextView(c); t1.setTextSize(Theme.TS_SUBTITLE); t1.setTextColor(Theme.termTxt(c)); t1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); t1.setText(mainTitle);
         t1.setSingleLine(true); t1.setEllipsize(android.text.TextUtils.TruncateAt.END);
         tl.addView(t1, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        tl.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,6), 1));
-        tl.addView(peerChip(c, entry));
+        // ── 类型 chip：只在**群 \/ 频道**时显示（2026-10-03）──
+        // 改前每行都挂 peerChip + typeChip 两个标签，而绝大多数是 bot ——
+        // 一行里两个 chip 都在说同一件事（"这是个 bot"），纯占地方。
+        // 现在：群 \/ 频道才显类型（那才是需要额外提示的情况），
+        //       省出的空间留给右侧的相对时间 \/ 失败次数。
+        if (isChat) {
+            tl.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,6), 1));
+            tl.addView(peerChip(c, entry));
+        }
         tl.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,4), 1));
         tl.addView(typeChip(c, cb));
         if (isFrozen(accountPrefix(), id)) {
@@ -5688,11 +5753,31 @@ public final class TGAutoSignCore {
         tx.setSingleLine(true); tx.setEllipsize(android.text.TextUtils.TruncateAt.END);
         tx.setText((cb ? "🔘 " : "⌨ ") + text);
         t2r.addView(tx, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        // ── 右侧：相对时间 + 失败次数（2026-10-03 重做）──
+        // 改前直接显示 last_ 的原文（"2026-10-03"）—— 用户看不出"这是哪天"，
+        // 得自己在脑子里跟今天做减法，而且失败的目标完全看不到失败次数。
+        // 现在：有失败优先说失败（那才是要你关注的），否则说"上次签到 N 天前"。
         String lastT = prefs.getString(kLast(accountPrefix(), id), "");
-        if (lastT.length() > 0) {
-            TextView lt = new TextView(c); lt.setTextSize(Theme.TS_CAPTION); lt.setTextColor(Theme.termFaint(c)); lt.setTypeface(Theme.text());
-            lt.setText(lastT); lt.setPadding(Theme.dp(c,6), 0, 0, 0);
-            t2r.addView(lt, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        {
+            int failN = 0;
+            try { failN = prefs.getInt(Keys.failStreak(accountPrefix(), id), 0); } catch (Throwable ignored) {}
+            String tail = null;
+            int tailCol = Theme.termFaint(c);
+            if (failN >= 2) {
+                tail = Lang.tf("失败 {0} 次", failN);
+                tailCol = Theme.termAmber(c);
+            } else if (lastT.length() > 0) {
+                tail = Lang.tf("上次 {0}", relDayLabel(lastT));
+            }
+            if (tail != null) {
+                TextView lt = new TextView(c);
+                lt.setTextSize(Theme.TS_CAPTION);
+                lt.setTextColor(tailCol);
+                lt.setTypeface(Theme.text());
+                lt.setText(tail);
+                lt.setPadding(Theme.dp(c,6), 0, 0, 0);
+                t2r.addView(lt, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+            }
         }
         col.addView(t2r);
         // ── 内联处置条已移除（2026-09-28）──
@@ -5725,6 +5810,66 @@ public final class TGAutoSignCore {
         parent.addView(wrap);
         return wrap;
     }
+
+    /**
+     * 把 yyyy-MM-dd 说成人话：今天/昨天/N 天前（2026-10-03）。
+     *
+     * 为什么不用绝对日期：列表右侧就一小块地方，"2026-09-28" 需要用户
+     * 自己在脑子里跟今天做减法；而"5 天前"直接就是结论。
+     * 超过 30 天不再数天数（"47 天前"没意义），退化成月份。
+     */
+    private String relDayLabel(String ymd) {
+        try {
+            if (ymd == null || ymd.length() != 10) return ymd == null ? "" : ymd;
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
+            java.util.Date d = f.parse(ymd);
+            if (d == null) return ymd;
+            long diff = System.currentTimeMillis() - d.getTime();
+            long days = diff / 86400000L;
+            if (days <= 0) return Lang.tr("今天");
+            if (days == 1) return Lang.tr("昨天");
+            if (days < 30) return Lang.tf("{0} 天前", days);
+            return new java.text.SimpleDateFormat("MM-dd", java.util.Locale.US).format(d);
+        } catch (Throwable t) { return ymd; }
+    }
+
+    /**
+     * 目标行左侧色条的颜色 = 状态语义（2026-10-03）。
+     *
+     * 设计取舍：
+     *   · 已签 → 绿（唯一"完成"的正面色）
+     *   · 需处理（失败\/按钮失效\/判不出\/待确认）→ 琥珀（要你动手）
+     *   · 待签 → 青（正常、会自己完成，不需要你看）
+     *   · 冻结\/排除 → 灰（不参与）
+     *   · 群/频道 → 在青绿基础上偏品红一档，保留"这是群"的辨识
+     *     （用 Theme.mix 往品红方向拉 35%，既有状态色又有类型区分）
+     *
+     * 用 String status 匹配而非引入新状态码：status 已经是这一层的真相源
+     * （由 statusOf() 统一产出），再加一层映射会多一处要同步的地方。
+     */
+    private int stateAccent(Context c, String status, boolean signed, boolean isChat) {
+        int col;
+        if (signed) {
+            col = Theme.termGreen(c);
+        } else if (status != null && (status.contains("按钮失效") || status.contains("回复判不出")
+                || status.contains("结果未知") || status.contains("未回复")
+                || status.contains("失败") || status.contains("放弃"))) {
+            col = Theme.termAmber(c);
+        } else if (status != null && (status.contains("冻结") || status.contains("排除")
+                || status.contains("判定已关") || status.contains("已暂停"))) {
+            col = Theme.termMuted(c);
+        } else {
+            col = Theme.termCyan(c);
+        }
+        // 群（频道）：往品红方向拉一点，保留"这是群"的辨识度
+        if (isChat) col = Theme.mix(col, Theme.termPink(c), 0.35f);
+        return col;
+    }
+
+    /** 目标列表的状态筛选（2026-10-03）：全部 / 待签 / 已签 / 需处理 / 冻结。 */
+    private String listFilter = "全部";
+    /** 目标列表的搜索词（匹配标题、指令、@用户名）。 */
+    private String logTargetFilter = "";
 
     private static long lastMainOpen = 0L;
     private boolean fastMainOpen = false;
@@ -8376,6 +8521,65 @@ public final class TGAutoSignCore {
             }
         } catch (Throwable _eNB) { noteSwallowed("showList(pendingBar)", _eNB); }
 
+        // ── 搜索 + 状态筛选（2026-10-03）──
+        // 目标一多，满屏"待签"找不着北。搜索按标题/指令/@用户名匹配，
+        // 筛选按状态分组，两者都是**纯渲染层过滤**，不碰任何签到逻辑。
+        final LinearLayout filterRow = new LinearLayout(act);
+        if (targets.size() > 0) {
+            filterRow.setOrientation(LinearLayout.VERTICAL);
+
+            final EditText qEd = new EditText(act);
+            qEd.setSingleLine(true);
+            qEd.setTextSize(Theme.TS_SECOND);
+            qEd.setHint(Lang.tr("搜索目标（名称 / 指令 / @用户名）"));
+            qEd.setTextColor(Theme.termTxt(act));
+            qEd.setHintTextColor(Theme.termFaint(act));
+            qEd.setTypeface(android.graphics.Typeface.MONOSPACE);
+            qEd.setText(logTargetFilter == null ? "" : logTargetFilter);
+            // 输入法回车即应用搜索（不逐字重建列表 —— 那会打断输入、丢焦点）。
+            qEd.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
+            qEd.setOnEditorActionListener(new TextView.OnEditorActionListener() {
+                @Override public boolean onEditorAction(TextView v, int actionId, android.view.KeyEvent ev) {
+                    logTargetFilter = String.valueOf(qEd.getText()).trim();
+                    dismissOne(listDialog);
+                    showList(lastActivity);
+                    return true;
+                }
+            });
+            filterRow.addView(qEd);
+
+            LinearLayout fbar = new LinearLayout(act);
+            fbar.setOrientation(LinearLayout.HORIZONTAL);
+            fbar.setPadding(dp(2), dp(4), dp(2), dp(2));
+            final String[] FILTERS = {"全部", "待签", "已签", "需处理", "冻结"};
+            for (final String f : FILTERS) {
+                boolean on = f.equals(listFilter);
+                TextView chip = new TextView(act);
+                chip.setTextSize(Theme.TS_CAPTION);
+                chip.setTypeface(android.graphics.Typeface.MONOSPACE);
+                chip.setPadding(dp(10), dp(5), dp(10), dp(5));
+                chip.setText(Lang.tr(f));
+                chip.setTextColor(on ? Theme.termCardDeep(act) : Theme.termMuted(act));
+                chip.setBackground(termBorder(act,
+                        on ? Theme.termCyan(act) : Theme.termCard(act),
+                        Theme.withAlpha(Theme.termCyan(act), on ? 0xAA : 0x33)));
+                LinearLayout.LayoutParams clp2 = new LinearLayout.LayoutParams(-2, -2);
+                clp2.setMargins(0, 0, dp(6), 0);
+                chip.setLayoutParams(clp2);
+                chip.setClickable(true);
+                chip.setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        listFilter = f;
+                        dismissOne(listDialog);
+                        showList(lastActivity);
+                    }
+                });
+                fbar.addView(chip);
+            }
+            filterRow.addView(fbar);
+            box.addView(filterRow);
+        }
+
         // 排序切换
         if (targets.size() > 0) {
             LinearLayout bar = new LinearLayout(act); bar.setOrientation(LinearLayout.HORIZONTAL); bar.setGravity(Gravity.CENTER_VERTICAL); bar.setPadding(dp(2), dp(2), dp(2), dp(6));
@@ -8383,11 +8587,21 @@ public final class TGAutoSignCore {
             bar.addView(lab);
             bar.addView(sortChip(act, "未签置顶", "unsigned"));
             bar.addView(sortChip(act, "按名称", "name"));
+            // 「最近失败」——上面代码注释里写着这个排序"计划后面加"，
+            // 现在补上：失败多的排前面，方便先处理真正有问题的目标。
+            bar.addView(sortChip(act, "最近失败", "fails"));
             box.addView(bar);
         }
         String today = todayStr();
+        int shownN = 0, filtN = 0;
         for (Map<String, Object> m : sortedTargets()) {
-            targetRow(box, m, statusOf(accountPrefix(), entryId(m), today), "more");
+            String st = statusOf(accountPrefix(), entryId(m), today);
+            if (!listFilterMatch(m, st, today)) { filtN++; continue; }
+            targetRow(box, m, st, "more");
+            shownN++;
+        }
+        if (shownN == 0 && filtN > 0) {
+            emptyView(box, Lang.tf("当前筛选（{0}）下没有目标", Lang.tr(listFilter)));
         }
         Object oldList = listDialog;
         listDialog = showDialog(act, Lang.tf("目标列表（{0}）", targets.size()), box, "关闭");
