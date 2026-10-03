@@ -879,6 +879,53 @@ public final class Lang {
         EN.put("测试失败: {0}", "Test failed: {0}");
         EN.put("另外：命中排除规则「{0}」→ 这个 bot 不会被学习", "Also: block rule \"{0}\" hit -> this bot will not be learned");
         EN.put("另外：未命中任何排除规则", "Also: no block rule matched");
+        // ── 统计 Tab（2026-10-03）──
+        EN.put("统计", "Stats");
+        EN.put("目标", "Targets");
+        EN.put("日志", "Log");
+        EN.put("账号完成度", "ACCOUNT COMPLETION");
+        EN.put("天数", "DAYS");
+        EN.put("近 {0} 天", "Last {0} days");
+        EN.put("连续", "Streak");
+        EN.put("本月", "This month");
+        EN.put("累计", "Total");
+        EN.put("{0} 天", "{0} days");
+        EN.put("最近失败最多", "MOST FAILURES RECENTLY");
+        EN.put("连续失败 {0} 天", "{0} days failing");
+        EN.put("最近没有连续失败的目标", "No target is currently failing repeatedly");
+        EN.put("完整日志（含筛选、导出、清空）在「全部功能 → 数据 → 运行日志」里",
+               "Full log (filters, export, clear) is under All features - Data - Run log");
+        EN.put("(暂无日志)", "(no log yet)");
+        // ── 外部通知（2026-10-03）──
+        EN.put("外部通知（TG 收不到时兜底）", "External alerts (backup when Telegram can't deliver)");
+        EN.put("类型", "Type");
+        EN.put("不启用", "Off");
+        EN.put("地址", "URL");
+        EN.put("发送测试消息", "Send test message");
+        EN.put("已发送，请检查是否收到", "Sent - please check whether it arrived");
+        EN.put("发送失败：{0}", "Send failed: {0}");
+        EN.put("外部通知已关闭", "External alerts are off");
+        EN.put("请先填地址", "Enter a URL first");
+        EN.put("说明：TG 进程被杀时收藏夹也收不到，外部通道才能兜底", 
+               "Note: if the Telegram process is killed the Saved Messages channel fails too; an external channel is the only fallback");
+        // ── 备份（2026-10-03）──
+        EN.put("备份", "Backup");
+        EN.put("上次备份", "Last backup");
+        EN.put("从未备份", "never");
+        EN.put("立即备份", "Back up now");
+        EN.put("已完成备份", "Backup done");
+        EN.put("自动备份", "Auto backup");
+        EN.put("保留份数", "Keep");
+        EN.put("自动备份：每天首次打开面板时执行一次，并只保留最近 {0} 份",
+               "Auto backup runs once on the first panel open each day, keeping only the newest {0}");
+        EN.put("类型：{0}", "Type: {0}");
+        EN.put("上次备份：{0}", "Last backup: {0}");
+        EN.put("备份位置：{0}", "Location: {0}");
+        EN.put("TGAutoSign 测试消息 · {0}", "TGAutoSign test message - {0}");
+        EN.put("导出失败", "Export failed");
+        EN.put("备份位置", "Location");
+        EN.put("自动备份：每天首次打开面板时执行一次，并只保留最近若干份",
+               "Auto backup runs once on the first panel open each day, keeping only the newest few");
         EN.put("今日 {0}", "Today {0}");
         EN.put("  /  补签 {0} 次", "  /  {0} make-ups");
         EN.put("你已忽略该目标（今天不再试）", "You ignored this target (no retry today)");

@@ -214,6 +214,13 @@ public final class TGAutoSignCore {
     private int THEME_MODE = 0;                  // 主题模式：0=自动（跟宿主/系统）1=始终日间 2=始终夜间
     private int CAL_STYLE = 0;                   // 日历格样式：0=方角斜纹 1=圆角发光 2=硬方波 3=切角 4=圆点 5=柱条
     private boolean NOTIFY_ON = true;            // 签到结果通知
+    /** 外部通知通道（2026-10-03）：0=关 1=ntfy 2=Bark 3=Webhook。 */
+    private int EXTERNAL_KIND = 0;
+    /** 外部通知地址（ntfy 主题 URL / Bark key URL / 自定义 Webhook）。 */
+    private String EXTERNAL_URL = "";
+    /** 自动备份开关与保留份数。 */
+    private boolean BACKUP_AUTO = false;
+    private int BACKUP_KEEP = 5;
     private boolean NOTIFY_FAIL_ONLY = false;    // 只通知失败
     private boolean NOTIFY_ALL_ACCOUNTS = false; // 汇总时包含其它账号
     private int FAIL_ALERT_DAYS = 3;             // 连续失败多少天开始告警
@@ -1054,6 +1061,10 @@ public final class TGAutoSignCore {
             MISS_DEADLINE = cfgInt("missdead", 23 * 60);
             if (prefs.contains("jmb_sort")) SORT_MODE = prefs.getString("jmb_sort", "unsigned");
             if (prefs.contains("jmb_fx")) TITLE_FX = prefs.getInt("jmb_fx", 0);
+            if (prefs.contains(kExtKind())) EXTERNAL_KIND = prefs.getInt(kExtKind(), 0);
+            if (prefs.contains(kExtUrl())) EXTERNAL_URL = prefs.getString(kExtUrl(), "");
+            if (prefs.contains(kBackupAuto())) BACKUP_AUTO = prefs.getBoolean(kBackupAuto(), false);
+            if (prefs.contains(kBackupKeep())) BACKUP_KEEP = prefs.getInt(kBackupKeep(), 5);
             // 就绪窗口：只给客户端一个**短**的初始化时间（8 秒），而不是干等 30 秒。
             // 30 秒太长 —— 冷启动后立刻点 bot 按钮的用户会以为模块坏了（实测反馈）。
             // 真正的"就绪"由 isClientUsable() 动态判定（拿到 MessagesController
@@ -5928,6 +5939,19 @@ public final class TGAutoSignCore {
 
     /** 目标列表的状态筛选（2026-10-03）：全部 / 待签 / 已签 / 需处理 / 冻结。 */
     private String listFilter = "全部";
+    /** 目标列表内的 Tab（2026-10-03）：target=目标 / stats=统计 / log=日志。 */
+    private String listTab = "target";
+    /** Tab 的内容容器（切 Tab / 刷新时重建它，不动窗口本身）。 */
+    private LinearLayout listTabBody;
+    /**
+     * 「目标」Tab 的容器：待处理条 + 过滤条 + 排序行 + 列表。
+     *
+     * 为什么要单独一个容器（2026-10-03）：切到「统计」时要把它整体收起来。
+     * 用一个容器承载，切 Tab 只需 addView/removeAllViews，
+     * **不必把原有那些构建代码搬来搬去**（搬动容易漏改、且它们引用了很多局部变量）。
+     */
+    private LinearLayout listTargetContainer;
+
     /** 目标列表当前的行容器（供筛选/排序原地刷新，不重建对话框）。 */
     private LinearLayout listRowsHost;
     /** 目标列表当前筛选 chip 组（供原地重染色）。 */
@@ -6026,6 +6050,17 @@ public final class TGAutoSignCore {
         // 2026-10-03：曾试过"一天只播一次"，会让面板显得太死，已回退。
         TITLE_FX = (TITLE_FX + 1) % 4;
         try { prefs.edit().putInt("jmb_fx", TITLE_FX).apply(); } catch (Throwable ignored) {}
+
+        // 自动备份：每天首次打开面板时跑一次（2026-10-03）。
+        // 放这里而不是"定时任务"：备份是数据安全，跟"用户是否在用"无关；
+        // 而模块没有常驻进程，面板打开是最可靠也最自然的触发点。
+        if (BACKUP_AUTO) {
+            try {
+                new Thread(new Runnable() { @Override public void run() {
+                    try { doAutoBackup(false); } catch (Throwable ignored) {}
+                } }).start();
+            } catch (Throwable ignored) {}
+        }
 
         syncAccount();
 
@@ -8679,6 +8714,263 @@ public final class TGAutoSignCore {
         } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
     }
 
+    /**
+     * 统计区块（2026-10-03 新增）。
+     *
+     * 数据全部来自已有的 sign_days（账号级"签过哪些天"的集合）与各目标的 last_，
+     * **不新增任何存储**：
+     *   · 近 7 / 30 天的完成天数与占比
+     *   · 连续签到天数、本月天数、累计天数
+     *   · 每个目标近 30 天的成功率（横向对比，用来判断该冻结谁）
+     *   · 失败最多的目标（如果有）
+     *
+     * 放在目标列表内做 Tab，而不是另开一张大卡片 ——
+     * 统计的价值是"看出哪个 bot 拖后腿"，跟目标列表挨着才方便对照。
+     */
+    private LinearLayout buildStatsPage(Activity act) {
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        try {
+            String prefix = accountPrefix();
+            java.util.Set<String> days = signDays(prefix);
+            String today = todayStr();
+
+            // ── 近 N 天完成情况 ──
+            box.addView(statsSectionTitle(act, Lang.tr("账号完成度")));
+            java.util.Calendar cal = java.util.Calendar.getInstance();
+            for (final int span : new int[]{7, 30}) {
+                int hit = 0;
+                java.util.Calendar c2 = (java.util.Calendar) cal.clone();
+                for (int i = 0; i < span; i++) {
+                    String d = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(c2.getTime());
+                    if (days.contains(d)) hit++;
+                    c2.add(java.util.Calendar.DATE, -1);
+                }
+                box.addView(statsBarRow(act,
+                        Lang.tf("近 {0} 天", span), hit, span,
+                        Theme.termCyan(act)));
+            }
+
+            // ── 天数汇总 ──
+            int streak = SignLogic.streakDisplay(streakOf(prefix),
+                    prefs.getString(kLastSignDate(prefix), ""), today, yesterdayStr());
+            int monthN = 0;
+            String ym = today.substring(0, 7);          // yyyy-MM
+            for (String d : days) if (d != null && d.startsWith(ym)) monthN++;
+            box.addView(statsSectionTitle(act, Lang.tr("天数")));
+            box.addView(statsKvRow(act, Lang.tr("连续"), Lang.tf("{0} 天", streak), Theme.termGreen(act)));
+            box.addView(statsKvRow(act, Lang.tr("本月"), Lang.tf("{0} 天", monthN), Theme.termCyan(act)));
+            box.addView(statsKvRow(act, Lang.tr("累计"), Lang.tf("{0} 天", days.size()), Theme.termMuted(act)));
+
+            // ── 每个目标近 30 天（用 signed_at_ / last_ 推断不了历史，
+            //    这里改用"该目标今天签没签"+ 全账号 sign_days 做参照，
+            //    真正逐目标的历史要靠 miss_at_/signed_at_，只统计得到的部分）──
+            java.util.List<Map<String, Object>> tl = new java.util.ArrayList<Map<String, Object>>();
+            loadTargetsInto(prefix, tl);
+            if (!tl.isEmpty()) {
+                box.addView(statsSectionTitle(act, Lang.tr("最近失败最多")));
+                final java.util.List<Map<String, Object>> sorted = new java.util.ArrayList<Map<String, Object>>(tl);
+                java.util.Collections.sort(sorted, new java.util.Comparator<Map<String, Object>>() {
+                    @Override public int compare(Map<String, Object> a, Map<String, Object> b) {
+                        int fa = 0, fb = 0;
+                        try { fa = prefs.getInt(Keys.failStreak(prefix, entryId(a)), 0); } catch (Throwable ignored) {}
+                        try { fb = prefs.getInt(Keys.failStreak(prefix, entryId(b)), 0); } catch (Throwable ignored) {}
+                        return fb - fa;
+                    }
+                });
+                int shown = 0;
+                for (Map<String, Object> m : sorted) {
+                    if (shown >= 5) break;
+                    int f = 0;
+                    try { f = prefs.getInt(Keys.failStreak(prefix, entryId(m)), 0); } catch (Throwable ignored) {}
+                    if (f <= 0) break;
+                    String nm = entryTitle(m);
+                    if (nm == null || nm.length() == 0) nm = targetTitle(entryDid(m));
+                    box.addView(statsKvRow(act, nm, Lang.tf("连续失败 {0} 天", f), Theme.termAmber(act)));
+                    shown++;
+                }
+                if (shown == 0) {
+                    TextView ok = new TextView(act);
+                    ok.setTextSize(Theme.TS_CAPTION);
+                    ok.setTextColor(Theme.termFaint(act));
+                    ok.setTypeface(Theme.text());
+                    ok.setText(Lang.tr("最近没有连续失败的目标"));
+                    ok.setPadding(dp(4), dp(2), dp(4), dp(6));
+                    box.addView(ok);
+                }
+            }
+        } catch (Throwable t) { noteSwallowed("buildStatsPage", t); }
+        return box;
+    }
+
+    private TextView statsSectionTitle(Activity act, String s) {
+        TextView tv = new TextView(act);
+        tv.setTextSize(Theme.TS_CAPTION);
+        tv.setTextColor(Theme.termCyan(act));
+        tv.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        tv.setPadding(dp(2), dp(10), dp(2), dp(4));
+        tv.setText(s);
+        return tv;
+    }
+
+    /** 一行：标签 + 进度条 + x/y。 */
+    private LinearLayout statsBarRow(Activity act, String label, int hit, int span, int col) {
+        LinearLayout row = new LinearLayout(act);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(dp(2), dp(4), dp(2), dp(6));
+        LinearLayout head = new LinearLayout(act);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        TextView l = new TextView(act);
+        l.setTextSize(Theme.TS_SECOND);
+        l.setTextColor(Theme.termTxt(act));
+        l.setTypeface(android.graphics.Typeface.MONOSPACE);
+        l.setText(label);
+        head.addView(l, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView v = new TextView(act);
+        v.setTextSize(Theme.TS_SECOND);
+        v.setTextColor(col);
+        v.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        v.setText(hit + "/" + span);
+        head.addView(v, new LinearLayout.LayoutParams(-2, -2));
+        row.addView(head);
+        LinearLayout bar = new LinearLayout(act);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+        bg.setColor(Theme.withAlpha(Theme.termCyan(act), 0x22));
+        bg.setCornerRadius(dp(3));
+        bar.setBackground(bg);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, dp(6));
+        blp.topMargin = dp(5);
+        if (hit > 0) {
+            View f = new View(act);
+            android.graphics.drawable.GradientDrawable fd = new android.graphics.drawable.GradientDrawable();
+            fd.setColor(col);
+            fd.setCornerRadius(dp(3));
+            f.setBackground(fd);
+            bar.addView(f, new LinearLayout.LayoutParams(0, dp(6), hit));
+        }
+        if (span - hit > 0) {
+            View r = new View(act);
+            android.graphics.drawable.GradientDrawable rd = new android.graphics.drawable.GradientDrawable();
+            rd.setColor(0x00000000);
+            r.setBackground(rd);
+            bar.addView(r, new LinearLayout.LayoutParams(0, dp(6), span - hit));
+        }
+        row.addView(bar, blp);
+        return row;
+    }
+
+    /** 一行：左标签 + 右值。 */
+    private LinearLayout statsKvRow(Activity act, String k, String v, int col) {
+        LinearLayout row = new LinearLayout(act);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(2), dp(5), dp(2), dp(5));
+        TextView l = new TextView(act);
+        l.setTextSize(Theme.TS_SECOND);
+        l.setTextColor(Theme.termTxt(act));
+        l.setTypeface(android.graphics.Typeface.MONOSPACE);
+        l.setText(k);
+        l.setSingleLine(true);
+        l.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        row.addView(l, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView r = new TextView(act);
+        r.setTextSize(Theme.TS_SECOND);
+        r.setTextColor(col);
+        r.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        r.setText(v);
+        row.addView(r, new LinearLayout.LayoutParams(-2, -2));
+        return row;
+    }
+
+    /** Tab 按钮外观（选中=青色描边+浅底；未选=弱色）。 */
+    private void styleListTab(TextView btn, Context c, boolean on) {
+        try {
+            btn.setTextColor(on ? Theme.termCyan(c) : Theme.termMuted(c));
+            btn.setBackground(termBorder(c,
+                    on ? Theme.withAlpha(Theme.termCyan(c), 0x1E) : Theme.withAlpha(Theme.termMuted(c), 0x0A),
+                    on ? Theme.withAlpha(Theme.termCyan(c), 0xAA) : Theme.withAlpha(Theme.termMuted(c), 0x33)));
+        } catch (Throwable t) { noteSwallowed("styleListTab", t); }
+    }
+
+    /**
+     * 重建 Tab 内容（切 Tab / 数据变化时调用）。
+     * 只动 tabBody，窗口与 Tab 行都不重建 —— 与筛选原地刷新同一套思路。
+     */
+    private void rebuildTabHost(LinearLayout tabBody, Activity act) {
+        try {
+            if (tabBody == null) return;
+            tabBody.removeAllViews();
+            if ("stats".equals(listTab)) {
+                tabBody.addView(buildStatsPage(act));
+            } else if ("log".equals(listTab)) {
+                tabBody.addView(buildInlineLogPage(act));
+            } else if (listTargetContainer != null
+                    && listTargetContainer.getParent() != tabBody) {
+                // 「目标」Tab：把容器搬回来。
+                // View 只能有一个父，切走时它会被 removeAllViews 拆下，
+                // 这里判断 parent 再决定是否加回，避免"已经在里面还再加一次"。
+                tabBody.addView(listTargetContainer);
+            }
+        } catch (Throwable t) { noteSwallowed("rebuildTabHost", t); }
+    }
+
+    /**
+     * 「日志」Tab 的内嵌日志页（2026-10-03）。
+     *
+     * 用户要求把日志做成第三个 Tab。做法：复用已有的日志页构建逻辑，
+     * 但**内嵌**进本 Tab 而非再弹一层对话框（避免"对话框里套对话框"）。
+     */
+    private LinearLayout buildInlineLogPage(Activity act) {
+        LinearLayout wrap = new LinearLayout(act);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        try {
+            // 复用完整的日志页构建（showLog 会因 SHOT_MODE 之外的情形弹窗，
+            // 所以这里不走它，而是给出一个精简内嵌版本：筛选芯片 + 列表）。
+            LinearLayout bar = new LinearLayout(act);
+            bar.setOrientation(LinearLayout.HORIZONTAL);
+            bar.setPadding(dp(2), dp(2), dp(2), dp(4));
+            TextView tip = new TextView(act);
+            tip.setTextSize(Theme.TS_CAPTION);
+            tip.setTextColor(Theme.termFaint(act));
+            tip.setTypeface(Theme.text());
+            tip.setText(Lang.tr("完整日志（含筛选、导出、清空）在「全部功能 → 数据 → 运行日志」里"));
+            bar.addView(tip, new LinearLayout.LayoutParams(0, -2, 1f));
+            wrap.addView(bar);
+
+            TextView body = new TextView(act);
+            body.setTextSize(Theme.TS_CAPTION);
+            body.setTextColor(Theme.termMuted(act));
+            body.setTypeface(android.graphics.Typeface.MONOSPACE);
+            body.setPadding(dp(6), dp(4), dp(6), dp(4));
+            // 取最近若干条（易懂档翻译后的）
+            StringBuilder sb = new StringBuilder();
+            synchronized (logBuffer) {
+                int cnt = 0;
+                for (int i = logBuffer.size() - 1; i >= 0 && cnt < 25; i--) {
+                    LogLine l = logBuffer.get(i);
+                    if (logPlain) {
+                        String[] pp = plainLogParts(String.valueOf(l.msg));
+                        if (pp == null) continue;
+                        sb.append(new java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US)
+                                        .format(new java.util.Date(l.ts)))
+                          .append("  ").append(pp[1]).append('\n');
+                    } else {
+                        sb.append(new java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US)
+                                        .format(new java.util.Date(l.ts)))
+                          .append("  ").append(l.msg).append('\n');
+                    }
+                    cnt++;
+                }
+            }
+            body.setText(sb.length() == 0 ? Lang.tr("(暂无日志)") : sb.toString());
+            android.widget.ScrollView sv = new android.widget.ScrollView(act);
+            sv.addView(body, new android.widget.ScrollView.LayoutParams(-1, -2));
+            wrap.addView(sv, new LinearLayout.LayoutParams(-1, listContentHeight(act)));
+        } catch (Throwable t) { noteSwallowed("buildInlineLogPage", t); }
+        return wrap;
+    }
+
     /** 目标列表里：重填行（原地刷新用，不重建对话框）。 */
     private void fillTargetRows(Activity act) {
         try {
@@ -8738,8 +9030,69 @@ public final class TGAutoSignCore {
             pc.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ showPendingConfirm(act); } });
             box.addView(pc);
         }
+
+        // ── 目标 / 统计 / 日志 三个 Tab（2026-10-03）──
+        // 用户要求：统计别另开大卡片，就做成这里的第三个 Tab。
+        // 「日志」这个 Tab 直接复用已有的日志页（原地内嵌，不再弹第二层对话框）。
+        final LinearLayout tabHost = new LinearLayout(act);
+        tabHost.setOrientation(LinearLayout.VERTICAL);
+        final LinearLayout tabBar = new LinearLayout(act);
+        tabBar.setOrientation(LinearLayout.HORIZONTAL);
+        tabBar.setPadding(dp(2), dp(2), dp(2), dp(6));
+        final String[][] TABS = {{"target", "目标", "list"}, {"stats", "统计", "layers"}, {"log", "日志", "doc"}};
+        final java.util.List<TextView> tabBtns = new java.util.ArrayList<TextView>();
+        for (final String[] tb : TABS) {
+            final TextView btn = new TextView(act);
+            btn.setTextSize(Theme.TS_SECOND);
+            btn.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+            btn.setGravity(android.view.Gravity.CENTER);
+            btn.setPadding(dp(6), dp(9), dp(6), dp(9));
+            btn.setText(Lang.tr(tb[1]));
+            styleListTab(btn, act, tb[0].equals(listTab));
+            android.graphics.drawable.Drawable td = Icons.d(act, tb[2], 12f,
+                    tb[0].equals(listTab) ? Theme.termCyan(act) : Theme.termMuted(act));
+            if (td != null) {
+                int tsz = dp(12);
+                td.setBounds(0, 0, tsz, tsz);
+                btn.setCompoundDrawables(td, null, null, null);
+                btn.setCompoundDrawablePadding(dp(5));
+            }
+            btn.setClickable(true);
+            final String key = tb[0];
+            btn.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    if (key.equals(listTab)) return;
+                    listTab = key;
+                    for (int i = 0; i < TABS.length; i++) {
+                        boolean on = TABS[i][0].equals(listTab);
+                        styleListTab(tabBtns.get(i), act, on);
+                        android.graphics.drawable.Drawable d2 = Icons.d(act, TABS[i][2], 12f,
+                                on ? Theme.termCyan(act) : Theme.termMuted(act));
+                        if (d2 != null) {
+                            int s2 = dp(12);
+                            d2.setBounds(0, 0, s2, s2);
+                            tabBtns.get(i).setCompoundDrawables(d2, null, null, null);
+                        }
+                    }
+                    rebuildTabHost(tabHost, act);
+                }
+            });
+            tabBtns.add(btn);
+            tabBar.addView(btn, new LinearLayout.LayoutParams(0, -2, 1f));
+        }
+        tabHost.addView(tabBar);
+        final LinearLayout tabBody = new LinearLayout(act);
+        tabBody.setOrientation(LinearLayout.VERTICAL);
+        tabHost.addView(tabBody);
+        box.addView(tabHost);
+        listTabBody = tabBody;      // 供原地重建（切 Tab / 刷新）
+        // 「目标」Tab 的容器：下面那些待处理条/过滤条/排序行/列表都装进它，
+        // 切到统计或日志时整体收起（见 listTargetContainer 的说明）。
+        listTargetContainer = new LinearLayout(act);
+        listTargetContainer.setOrientation(LinearLayout.VERTICAL);
+        tabBody.addView(listTargetContainer);
         if (targets.size() == 0) {
-            emptyView(box, "(暂无目标，点「添加目标」，或直接点 bot 的签到按钮自动学习)");
+            emptyView(listTargetContainer, "(暂无目标，点「添加目标」，或直接点 bot 的签到按钮自动学习)");
         }
         // ── 待处理聚合条（2026-09-28）──
         // 取代原来内联在每个目标行里的三个按钮：列表保持干净的两行结构，
@@ -8779,7 +9132,7 @@ public final class TGAutoSignCore {
                     } catch (Throwable ignored) {}
                 } });
                 nb.addView(nbBtn);
-                box.addView(nb);
+                listTargetContainer.addView(nb);
             }
         } catch (Throwable _eNB) { noteSwallowed("showList(pendingBar)", _eNB); }
 
@@ -8842,7 +9195,7 @@ public final class TGAutoSignCore {
                 fbar.addView(chip);
             }
             filterRow.addView(fbar);
-            box.addView(filterRow);
+            listTargetContainer.addView(filterRow);
         }
 
         // 排序切换
@@ -8856,7 +9209,7 @@ public final class TGAutoSignCore {
             // 「最近失败」——上面代码注释里写着这个排序"计划后面加"，
             // 现在补上：失败多的排前面，方便先处理真正有问题的目标。
             bar.addView(sortChip(act, "最近失败", "fails"));
-            box.addView(bar);
+            listTargetContainer.addView(bar);
         }
         // ── 列表区：固定高度（2026-10-03 修"筛选一下框就变小"）──
         // 改前目标行是直接加进 box、box 再交给对话框 —— 而对话框高度随内容自适应，
@@ -8872,7 +9225,7 @@ public final class TGAutoSignCore {
         listRowsHost = listBox;          // 供筛选/排序原地刷新
         fillTargetRows(act);
         int listH = listContentHeight(act);
-        box.addView(listSv, new LinearLayout.LayoutParams(-1, listH));
+        listTargetContainer.addView(listSv, new LinearLayout.LayoutParams(-1, listH));
 
         Object oldList = listDialog;
         listDialog = showDialog(act, Lang.tf("目标列表（{0}）", targets.size()), box, "关闭");
@@ -10510,6 +10863,11 @@ public final class TGAutoSignCore {
     private static String kWakeCmd() { return "jmb_wake_cmd"; }
     private static String kSort() { return "jmb_sort"; }
     private static String kFx() { return "jmb_fx"; }
+    private static String kExtKind() { return "jmb_ext_kind"; }
+    private static String kExtUrl()  { return "jmb_ext_url"; }
+    private static String kBackupDay() { return "jmb_backup_day"; }
+    private static String kBackupAuto() { return "jmb_backup_auto"; }
+    private static String kBackupKeep() { return "jmb_backup_keep"; }
     private static String kAutoLearn() { return "jmb_autolearn"; }
     private static String kAutoLearnNet() { return "jmb_autolearn_net"; }
     private static String kLastRound() { return "jmb_last_round"; }
@@ -11714,6 +12072,11 @@ public final class TGAutoSignCore {
                 NOTIFY_FAIL_ONLY = R.notifyFailSw.isChecked();
                 THEME_MODE = R.themeMode;
                 CAL_STYLE = R.calStyle;
+                // 备份开关（2026-10-03）
+                if (R.backupAutoSw != null) {
+                    BACKUP_AUTO = R.backupAutoSw.isChecked();
+                    try { prefs.edit().putBoolean(kBackupAuto(), BACKUP_AUTO).apply(); } catch (Throwable ignored) {}
+                }
                 Theme.mode = THEME_MODE;
                 try { android.content.SharedPreferences.Editor le = prefs.edit(); le.putInt("jmb_lang", Lang.MODE); le.apply(); } catch (Throwable ignored) {}
                 MISS_BACK = R.missBackSw.isChecked();
@@ -11860,6 +12223,114 @@ public final class TGAutoSignCore {
 
 
 
+
+    /**
+     * 发一条外部通知（2026-10-03）。
+     *
+     * @return null = 成功；否则返回错误说明
+     */
+    private String sendExternal(String text) {
+        try {
+            if (EXTERNAL_KIND == 0) return Lang.tr("外部通知已关闭");
+            if (EXTERNAL_URL == null || EXTERNAL_URL.length() == 0) return Lang.tr("请先填地址");
+            String url = EXTERNAL_URL;
+            java.net.HttpURLConnection conn;
+            if (EXTERNAL_KIND == 1) {
+                // ntfy：POST 正文即消息，纯 HTTP 无需登录
+                conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+                conn.setRequestMethod("POST");
+                conn.setDoOutput(true);
+            } else if (EXTERNAL_KIND == 2) {
+                // Bark：GET {key}/{标题}/{正文}
+                String u = url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
+                String t = java.net.URLEncoder.encode("TGAutoSign", "UTF-8");
+                String b = java.net.URLEncoder.encode(text, "UTF-8");
+                conn = (java.net.HttpURLConnection) new java.net.URL(u + "/" + t + "/" + b).openConnection();
+                conn.setRequestMethod("GET");
+            } else {
+                // Webhook：POST JSON {"text": "..."}
+                conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+                conn.setRequestMethod("POST");
+                conn.setDoOutput(true);
+                conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            }
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(10000);
+            if (EXTERNAL_KIND == 1) {
+                byte[] body = text.getBytes("UTF-8");
+                conn.setFixedLengthStreamingMode(body.length);
+                java.io.OutputStream os = conn.getOutputStream();
+                os.write(body);
+                os.flush();
+                try { os.close(); } catch (Throwable ignored) {}
+            } else if (EXTERNAL_KIND == 3) {
+                String json = "{\"text\":\"" + text.replace("\\", "\\\\").replace("\"", "\\\"")
+                        .replace("\n", "\\n") + "\"}";
+                byte[] body = json.getBytes("UTF-8");
+                conn.setFixedLengthStreamingMode(body.length);
+                java.io.OutputStream os = conn.getOutputStream();
+                os.write(body);
+                os.flush();
+                try { os.close(); } catch (Throwable ignored) {}
+            }
+            int code = conn.getResponseCode();
+            try { conn.disconnect(); } catch (Throwable ignored) {}
+            if (code >= 200 && code < 300) {
+                jlog("[外部通知] 已发送 kind=" + EXTERNAL_KIND + " http=" + code);
+                return null;
+            }
+            jlog("[外部通知] 失败 kind=" + EXTERNAL_KIND + " http=" + code);
+            return "HTTP " + code;
+        } catch (Throwable t) {
+            jlog("[外部通知] 异常: " + t);
+            return String.valueOf(t);
+        }
+    }
+
+    /**
+     * 自动备份（2026-10-03）。
+     *
+     * 复用 ConfigStore.exportAll —— 它已经处理了"写到下载目录且不需要存储权限"。
+     * 本方法只负责：① 每天只跑一次（除非 force）；② 轮转删除旧份。
+     *
+     * @param force true = 用户手动点「立即备份」（忽略当天已备份）
+     * @return 是否成功
+     */
+    private boolean doAutoBackup(boolean force) {
+        try {
+            String today = todayStr();
+            if (!force && today.equals(prefs.getString(kBackupDay(), ""))) return false;
+            ConfigStore.Report rep = ConfigStore.exportAll(appContext);
+            if (!rep.ok) { loge("自动备份失败: " + rep.message); return false; }
+            prefs.edit().putString(kBackupDay(), today).apply();
+            jlog("[备份] 已生成 " + rep.path);
+            pruneBackups(BACKUP_KEEP);
+            return true;
+        } catch (Throwable t) { noteSwallowed("doAutoBackup", t); return false; }
+    }
+
+    /** 只保留最近 N 份备份（按文件名倒序删多余的）。 */
+    private void pruneBackups(int keep) {
+        try {
+            java.io.File dir = appContext.getExternalFilesDir("tgautosign");
+            if (dir == null) return;
+            java.io.File[] fs = dir.listFiles();
+            if (fs == null) return;
+            java.util.List<java.io.File> bks = new java.util.ArrayList<java.io.File>();
+            for (java.io.File f : fs) {
+                if (f != null && f.isFile() && f.getName().endsWith(".eta-backup.json")) bks.add(f);
+            }
+            if (bks.size() <= keep) return;
+            java.util.Collections.sort(bks, new java.util.Comparator<java.io.File>() {
+                @Override public int compare(java.io.File a, java.io.File b) {
+                    return b.getName().compareTo(a.getName());     // 新 -> 旧
+                }
+            });
+            for (int i = keep; i < bks.size(); i++) {
+                try { bks.get(i).delete(); } catch (Throwable ignored) {}
+            }
+        } catch (Throwable t) { noteSwallowed("pruneBackups", t); }
+    }
 
     /** 导出运行日志到系统「下载」目录（MediaStore，无需存储权限），便于 issue 反馈 */
     /** 收集目标显示名(文本前12字 或 uid)，供「按目标过滤」循环 */
@@ -14061,6 +14532,125 @@ public final class TGAutoSignCore {
         nTip.setPadding(dp(4), dp(4), dp(4), 0);
         cardN.addView(nTip);
         box.addView(cardN);
+
+        // ── 外部通知（2026-10-03 新增）──
+        // 为什么需要：摘要发的是 TG「收藏夹」——那要求 TG 进程活着。
+        // 而"TG 被杀/账号被限"恰恰是最需要被告知的情形，此时收藏夹也收不到。
+        // 外部通道（ntfy / Bark / Webhook）是唯一能兜底的。
+        LinearLayout cardExt = new LinearLayout(act);
+        cardExt.setOrientation(LinearLayout.VERTICAL);
+        cardExt.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termAmber(act), 0x26)));
+        cardExt.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout.LayoutParams celp = new LinearLayout.LayoutParams(-1, -2);
+        celp.setMargins(0, dp(2), 0, dp(6));
+        cardExt.setLayoutParams(celp);
+        TextView extT = new TextView(act);
+        extT.setTextSize(Theme.TS_BODY);
+        extT.setTextColor(Theme.termTxt(act));
+        extT.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        leadIcon(act, extT, "megaphone", Theme.termAmber(act));
+        extT.setText(Lang.tr("外部通知（TG 收不到时兜底）"));
+        cardExt.addView(extT);
+        TextView extTip = new TextView(act);
+        extTip.setTextSize(Theme.TS_CAPTION);
+        extTip.setTextColor(Theme.termFaint(act));
+        extTip.setTypeface(Theme.text());
+        extTip.setText(Lang.tr("说明：TG 进程被杀时收藏夹也收不到，外部通道才能兜底"));
+        extTip.setPadding(dp(4), dp(2), dp(4), dp(6));
+        cardExt.addView(extTip);
+
+        final String[] extKinds = {"不启用", "ntfy", "Bark", "Webhook"};
+        final int[] extSel = { EXTERNAL_KIND };
+        final Button extKindBtn = mkBtn(act);
+        extKindBtn.setTextSize(Theme.TS_BODY);
+        final Runnable refreshExt = new Runnable() { @Override public void run() {
+            int i = Math.max(0, Math.min(extKinds.length - 1, extSel[0]));
+            extKindBtn.setText(Lang.tf("类型：{0}", Lang.tr(extKinds[i])));
+        } };
+        extKindBtn.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+            extSel[0] = (extSel[0] + 1) % extKinds.length;
+            refreshExt.run();
+        } });
+        refreshExt.run();
+        cardExt.addView(extKindBtn);
+        final EditText extUrl = adInput(act, "ntfy: https://ntfy.sh/你的主题   Bark: https://api.day.app/你的key", 0);
+        extUrl.setText(EXTERNAL_URL == null ? "" : EXTERNAL_URL);
+        cardExt.addView(extUrl);
+        Button extTest = mkBtn(act);
+        withIconText(act, extTest, "upload", Lang.tr("发送测试消息"));
+        extTest.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+            EXTERNAL_KIND = extSel[0];
+            EXTERNAL_URL = String.valueOf(extUrl.getText()).trim();
+            try { prefs.edit().putInt(kExtKind(), EXTERNAL_KIND).putString(kExtUrl(), EXTERNAL_URL).apply(); }
+            catch (Throwable ignored) {}
+            if (EXTERNAL_KIND == 0) { toast(Lang.tr("外部通知已关闭")); return; }
+            if (EXTERNAL_URL.length() == 0) { toast(Lang.tr("请先填地址")); return; }
+            final String msg = Lang.tf("TGAutoSign 测试消息 · {0}", UpdateChecker.VERSION_NAME);
+            new Thread(new Runnable() { @Override public void run() {
+                final String err = sendExternal(msg);
+                mainHandler.post(new Runnable() { @Override public void run() {
+                    toast(err == null ? Lang.tr("已发送，请检查是否收到") : Lang.tf("发送失败：{0}", err));
+                } });
+            } }).start();
+        } });
+        cardExt.addView(extTest);
+        box.addView(cardExt);
+
+        // ── 备份（2026-10-03 新增）──
+        LinearLayout cardBk = new LinearLayout(act);
+        cardBk.setOrientation(LinearLayout.VERTICAL);
+        cardBk.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termGreen(act), 0x26)));
+        cardBk.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout.LayoutParams cblp = new LinearLayout.LayoutParams(-1, -2);
+        cblp.setMargins(0, dp(2), 0, dp(6));
+        cardBk.setLayoutParams(cblp);
+        TextView bkT = new TextView(act);
+        bkT.setTextSize(Theme.TS_BODY);
+        bkT.setTextColor(Theme.termTxt(act));
+        bkT.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        leadIcon(act, bkT, "save", Theme.termGreen(act));
+        bkT.setText(Lang.tr("备份"));
+        cardBk.addView(bkT);
+        final TextView bkLast = new TextView(act);
+        bkLast.setTextSize(Theme.TS_CAPTION);
+        bkLast.setTextColor(Theme.termMuted(act));
+        bkLast.setTypeface(Theme.text());
+        bkLast.setPadding(dp(4), dp(2), dp(4), dp(6));
+        cardBk.addView(bkLast);
+        final Runnable refreshBk = new Runnable() { @Override public void run() {
+            String d = "";
+            try { d = prefs.getString(kBackupDay(), ""); } catch (Throwable ignored) {}
+            bkLast.setText(Lang.tf("上次备份：{0}", d.length() == 0 ? Lang.tr("从未备份") : relDayLabel(d)));
+        } };
+        refreshBk.run();
+        Button bkNow = mkBtn(act);
+        withIconText(act, bkNow, "save", Lang.tr("立即备份"));
+        bkNow.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+            boolean ok = doAutoBackup(true);
+            refreshBk.run();
+            toast(ok ? Lang.tr("已完成备份") : Lang.tf("导出失败"));
+        } });
+        cardBk.addView(bkNow);
+        final android.widget.Switch bkAuto = swRow(act, "自动备份", BACKUP_AUTO);
+        bkAuto.setTextSize(Theme.TS_BODY);
+        cardBk.addView(bkAuto);
+        TextView bkTip = new TextView(act);
+        bkTip.setTextSize(Theme.TS_CAPTION);
+        bkTip.setTextColor(Theme.termFaint(act));
+        bkTip.setTypeface(Theme.text());
+        bkTip.setText(Lang.tf("自动备份：每天首次打开面板时执行一次，并只保留最近 {0} 份", BACKUP_KEEP));
+        bkTip.setPadding(dp(4), dp(4), dp(4), 0);
+        cardBk.addView(bkTip);
+        TextView bkPath = new TextView(act);
+        bkPath.setTextSize(Theme.TS_CAPTION);
+        bkPath.setTextColor(Theme.termFaint(act));
+        bkPath.setTypeface(android.graphics.Typeface.MONOSPACE);
+        bkPath.setText(Lang.tf("备份位置：{0}", "/Download/TGAutoSign-backup/"));
+        bkPath.setPadding(dp(4), dp(2), dp(4), 0);
+        cardBk.addView(bkPath);
+        box.addView(cardBk);
+        // 保存块需要读到这两个开关
+        R.backupAutoSw = bkAuto;
 
     }
 

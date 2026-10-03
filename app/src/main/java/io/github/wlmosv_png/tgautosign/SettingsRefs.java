@@ -39,6 +39,7 @@ public final class SettingsRefs {
     public Switch looseSw;      // 宽松模式
     public Switch judgeSw;      // 自动判定成功/失败
     public Switch judgeCustomSw;// 使用自定义词
+    public Switch backupAutoSw; // 自动备份（2026-10-03）
 
     // 输入
     public EditText gapEd;      // 错开间隔
