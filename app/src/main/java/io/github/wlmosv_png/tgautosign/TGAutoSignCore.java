@@ -8796,7 +8796,9 @@ public final class TGAutoSignCore {
             // ── 左：环形 + 圆心数字（用 FrameLayout 叠）──
             android.widget.FrameLayout ring = new android.widget.FrameLayout(act);
             android.widget.ImageView iv = new android.widget.ImageView(act);
-            int ringPx = dp(96);
+            // 环加大到 108dp：原来 96dp 的内径只有约 77dp，
+            // 22sp 的 "11/11" 横向放不下，直接顶出圈外（用户截图可见）。
+            int ringPx = dp(108);
             iv.setImageDrawable(new Icons.RingStatDrawable(ringPx,
                     total <= 0 ? 0f : (float) signed / total, col,
                     Theme.withAlpha(col, 0x22)));
@@ -8804,21 +8806,26 @@ public final class TGAutoSignCore {
             LinearLayout center = new LinearLayout(act);
             center.setOrientation(LinearLayout.VERTICAL);
             center.setGravity(android.view.Gravity.CENTER);
+            // 圆心区域只占环的内径（0.62 是环内可用比例），超出会压到环上
+            int innerPx = (int) (ringPx * 0.62f);
             TextView num = new TextView(act);
-            num.setTextSize(22);
+            num.setTextSize(18);          // 22 -> 18，配合内径更合适
             num.setTextColor(col);
             num.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
             num.setGravity(android.view.Gravity.CENTER);
+            num.setSingleLine(true);
             num.setText(signed + "/" + total);
-            center.addView(num);
+            center.addView(num, new LinearLayout.LayoutParams(innerPx, -2));
             TextView sub = new TextView(act);
             sub.setTextSize(Theme.TS_CAPTION);
             sub.setTextColor(Theme.termMuted(act));
             sub.setTypeface(Theme.text());
             sub.setGravity(android.view.Gravity.CENTER);
+            sub.setSingleLine(true);
             sub.setText(Lang.tr("今日完成"));
-            center.addView(sub);
-            ring.addView(center, new android.widget.FrameLayout.LayoutParams(-1, -1));
+            center.addView(sub, new LinearLayout.LayoutParams(innerPx, -2));
+            ring.addView(center, new android.widget.FrameLayout.LayoutParams(innerPx, -2,
+                    android.view.Gravity.CENTER));
             card.addView(ring);
 
             // ── 右：三项次要指标 ──
@@ -9022,49 +9029,98 @@ public final class TGAutoSignCore {
         LinearLayout outer = new LinearLayout(act);
         outer.setOrientation(LinearLayout.VERTICAL);
         try {
-            final int CELL = 12;                       // dp
             final int COLS = 7;
             int rows = (span + COLS - 1) / COLS;
-            java.util.Calendar c = java.util.Calendar.getInstance();
-            // 从 (span-1) 天前开始，到 today 结束
-            java.util.List<String> list = new java.util.ArrayList<String>();
-            java.util.Calendar c2 = (java.util.Calendar) c.clone();
+            // ── 从"固定 12dp 格子"改成"按可用宽度自适应"（2026-10-03）──
+            // 截图问题：格子固定 12dp，7 列只占屏幕左侧三分之一，
+            // 右边一大片空白；同时格与格挨得太近，像一坨。
+            // 现在：先让单元格充满可用宽度，格间距按比例；格子本身也变大，
+            // 整块与上方图表同宽，视觉不再"半边空"。
+            int availW = act.getResources().getDisplayMetrics().widthPixels
+                    - dp(56);              // 减去对话框左右内边距与星期标签列
+            int gap = Math.max(dp(2), availW / 90);
+            int cell = Math.max(dp(8), (availW - gap * (COLS - 1) - dp(20)) / COLS);
+
+            java.util.Calendar c2 = java.util.Calendar.getInstance();
             c2.add(java.util.Calendar.DATE, -(span - 1));
             java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
-            for (int i = 0; i < span; i++) {
-                list.add(f.format(c2.getTime()));
-                c2.add(java.util.Calendar.DATE, 1);
-            }
+            java.util.List<String> list = new java.util.ArrayList<String>();
+            for (int i = 0; i < span; i++) { list.add(f.format(c2.getTime())); c2.add(java.util.Calendar.DATE, 1); }
             String todayS = todayStr();
             int CY = Theme.termCyan(act);
+
+            // ── 月份标签行（对齐到每列首次出现的月份）──
+            String[] WL = {Lang.tr("一"), Lang.tr("二"), Lang.tr("三"), Lang.tr("四"),
+                    Lang.tr("五"), Lang.tr("六"), Lang.tr("日")};
+            LinearLayout monthRow = new LinearLayout(act);
+            monthRow.setOrientation(LinearLayout.HORIZONTAL);
+            monthRow.setPadding(0, 0, 0, dp(3));
+            String lastMon = "";
+            for (int col = 0; col < COLS; col++) {
+                final TextView mt = new TextView(act);
+                mt.setTextSize(Theme.TS_CAPTION);
+                mt.setTextColor(Theme.termFaint(act));
+                mt.setTypeface(android.graphics.Typeface.MONOSPACE);
+                // 该列第一格的月份
+                String mon = "";
+                for (int r = 0; r < rows; r++) {
+                    int idx = r * COLS + col;
+                    if (idx < list.size()) {
+                        String d = list.get(idx);
+                        if (d.length() >= 7) { mon = d.substring(5, 7); break; }
+                    }
+                }
+                if (mon.length() > 0 && !mon.equals(lastMon) && col > 0) {
+                    mt.setText(Integer.parseInt(mon) + Lang.tr("月"));
+                    lastMon = mon;
+                }
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(cell, -2);
+                lp.setMargins(0, 0, gap, 0);
+                monthRow.addView(mt, lp);
+            }
+            outer.addView(monthRow);
+
+            // ── 网格：每行左侧带星期标签 ──
             for (int r = 0; r < rows; r++) {
                 LinearLayout row = new LinearLayout(act);
                 row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+                // 左标签（只标一/三/五，避免拥挤）
+                TextView wl = new TextView(act);
+                wl.setTextSize(Theme.TS_CAPTION);
+                wl.setTextColor(Theme.termFaint(act));
+                wl.setTypeface(android.graphics.Typeface.MONOSPACE);
+                wl.setGravity(android.view.Gravity.CENTER_VERTICAL);
+                wl.setText(r == 0 ? WL[0] : r == 2 ? WL[2] : r == 4 ? WL[4] : "");
+                LinearLayout.LayoutParams wlp = new LinearLayout.LayoutParams(dp(18), cell);
+                row.addView(wl, wlp);
                 for (int col = 0; col < COLS; col++) {
                     int idx = r * COLS + col;
                     android.widget.ImageView iv = new android.widget.ImageView(act);
                     boolean on = idx < list.size() && days.contains(list.get(idx));
                     boolean isToday = idx < list.size() && todayS.equals(list.get(idx));
-                    iv.setImageDrawable(new Icons.HeatDrawable(dp(CELL), CY, on ? 4 : 0, isToday));
-                    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(CELL), dp(CELL));
-                    lp.setMargins(0, 0, dp(3), dp(3));
+                    iv.setImageDrawable(new Icons.HeatDrawable(cell, CY, on ? 4 : 0, isToday));
+                    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(cell, cell);
+                    lp.setMargins(0, 0, gap, gap);
                     row.addView(iv, lp);
                 }
                 outer.addView(row);
             }
-            // 图例：少 → 多
+
+            // ── 图例 + 统计 ──
             LinearLayout legend = new LinearLayout(act);
             legend.setOrientation(LinearLayout.HORIZONTAL);
             legend.setGravity(android.view.Gravity.CENTER_VERTICAL);
-            legend.setPadding(0, dp(6), 0, 0);
+            legend.setPadding(dp(18), dp(6), 0, 0);
             TextView a = new TextView(act);
             a.setTextSize(Theme.TS_CAPTION); a.setTextColor(Theme.termFaint(act));
             a.setTypeface(Theme.text()); a.setText(Lang.tr("少"));
             legend.addView(a);
             for (int lv = 0; lv <= 4; lv++) {
                 android.widget.ImageView iv = new android.widget.ImageView(act);
-                iv.setImageDrawable(new Icons.HeatDrawable(dp(CELL), CY, lv, false));
-                LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(dp(CELL), dp(CELL));
+                iv.setImageDrawable(new Icons.HeatDrawable(Math.max(dp(8), cell / 2), CY, lv, false));
+                LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(
+                        Math.max(dp(8), cell / 2), Math.max(dp(8), cell / 2));
                 lp2.setMargins(dp(3), 0, 0, 0);
                 legend.addView(iv, lp2);
             }
@@ -9073,6 +9129,15 @@ public final class TGAutoSignCore {
             b.setTypeface(Theme.text()); b.setText(Lang.tr("多"));
             b.setPadding(dp(4), 0, 0, 0);
             legend.addView(b);
+            legend.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(0, 1, 1f));
+            int hitN = 0;
+            for (String d : list) if (days.contains(d)) hitN++;
+            TextView cnt = new TextView(act);
+            cnt.setTextSize(Theme.TS_CAPTION);
+            cnt.setTextColor(Theme.termMuted(act));
+            cnt.setTypeface(Theme.text());
+            cnt.setText(Lang.tf("{0} 天有记录", hitN));
+            legend.addView(cnt);
             outer.addView(legend);
         } catch (Throwable t) { noteSwallowed("heatGrid", t); }
         return outer;
@@ -9350,9 +9415,31 @@ public final class TGAutoSignCore {
                 // 对话框高度随内容自适应，统计页内容比目标列表短，
                 // 不包定高就会缩回去 —— 这正是用户反复反馈的"老毛病"。
                 android.widget.ScrollView sv = new android.widget.ScrollView(act);
-                LinearLayout inner = buildStatsPage(act);
+                final LinearLayout inner = buildStatsPage(act);
                 sv.addView(inner, new android.widget.ScrollView.LayoutParams(-1, -2));
                 tabBody.addView(sv, new LinearLayout.LayoutParams(-1, listContentHeight(act)));
+                // ── 实时刷新（2026-10-03 用户要求）──
+                // 统计是"看着它变"的东西：正在签到时会不断有目标从待签变已签，
+                // 打开时算一次就定住，用户会以为没更新。
+                // 每 4 秒重建一次内容（与「最近动态」同节奏）；
+                // 用 inner.isShown() 自停 —— 切走或关面板就停，不会空转。
+                final Activity sAct = act;
+                mainHandler.postDelayed(new Runnable() { @Override public void run() {
+                    try {
+                        if (inner == null || !inner.isShown()) return;
+                        if (!"stats".equals(listTab)) return;      // 已切走
+                        android.view.ViewParent par = inner.getParent();
+                        if (!(par instanceof View) || tabBody.indexOfChild((View) par) < 0) return;
+                        inner.removeAllViews();
+                        LinearLayout fresh = buildStatsPage(sAct);
+                        while (fresh.getChildCount() > 0) {
+                            View v = fresh.getChildAt(0);
+                            fresh.removeViewAt(0);
+                            inner.addView(v);
+                        }
+                        mainHandler.postDelayed(this, 4000L);
+                    } catch (Throwable ignored) {}
+                } }, 4000L);
             } else if ("log".equals(listTab)) {
                 tabBody.addView(buildInlineLogPage(act));
             } else if (listTargetContainer != null
@@ -9554,6 +9641,11 @@ public final class TGAutoSignCore {
         if (targets.size() == 0) {
             emptyView(listTargetContainer, "(暂无目标，点「添加目标」，或直接点 bot 的签到按钮自动学习)");
         }
+        // ⚠️ 重建必须放在**容器创建之后**（2026-10-03 修 tab 与内容不一致）。
+        // 此前它写在上面那段之前 —— 重建时 listTargetContainer 还是上一轮的旧对象，
+        // 于是：切到「统计」没问题（不吃这个容器），但**下次打开面板时**
+        // 顶栏显示统计、内容却是目标列表，或反过来（用户实测就是这个现象）。
+        if (!"target".equals(listTab)) rebuildTabHost(tabBody, act);
         // ── 待处理聚合条（2026-09-28）──
         // 取代原来内联在每个目标行里的三个按钮：列表保持干净的两行结构，
         // 需要处置的集中在顶部一个入口（像通知，不打扰，想处理时点进去）。

@@ -913,6 +913,8 @@ public final class Lang {
         EN.put("近 30 天趋势", "30-DAY TREND");
         EN.put("近 90 天打卡", "90-DAY ACTIVITY");
         EN.put("星期分布", "WEEKDAY PATTERN");
+        EN.put("{0} 天有记录", "{0} days recorded");
+        EN.put("月", "/");
         EN.put("各目标", "TARGETS");
         EN.put("近 30 天", "last 30d");
         EN.put("天", "d");
