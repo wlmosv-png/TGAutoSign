@@ -6024,9 +6024,12 @@ public final class TGAutoSignCore {
         floatRow.addOnAttachStateChangeListener(new android.view.View.OnAttachStateChangeListener() {
             @Override public void onViewAttachedToWindow(android.view.View vv) {
                 th.removeCallbacks(fx);
-                // 15 秒内重复打开（切页面返回）→ 不重播开场动画，直接定格。
-                // 以前每次 attach 都重新起一整套循环，反复进出就是反复闪。
-                if (fastMainOpen) { settleTitle(chs, cyanC); return; }
+                // 每次打开都完整播放（2026-10-03 用户要求）。
+                // 之前 15 秒内重复打开会走 fastMainOpen 分支直接定格 ——
+                // 而 settleTitle 定的是**青色**，于是"紧接着再打开"永远看到
+                // 同一个深青色静态标题，轮换等于失效（用户实测反馈）。
+                // 现在无条件播放：面板每次都是活的，四个特效应有尽有。
+                settleTitle(chs, cyanC);      // 先复位，避免上一轮残留的位移/高亮
                 th.postDelayed(fx, 0L);
             }
             @Override public void onViewDetachedFromWindow(android.view.View vv) { th.removeCallbacks(fx); }
@@ -6046,7 +6049,6 @@ public final class TGAutoSignCore {
         head.addView(sweep, 0);
         sweep.addOnAttachStateChangeListener(new android.view.View.OnAttachStateChangeListener() {
             @Override public void onViewAttachedToWindow(android.view.View vv) {
-                if (fastMainOpen) { sweep.setVisibility(View.GONE); return; }
                 vv.post(new Runnable() { @Override public void run() {
                     int w = head.getWidth();
                     sweep.setVisibility(View.VISIBLE);
@@ -6087,13 +6089,16 @@ public final class TGAutoSignCore {
             }
         };
         final Runnable[] typer = new Runnable[1];
+        // 打字进度必须是**外部可变状态**：
+        // 原先写在匿名类的 int ti 里，第二次打开时它已是"打完"的值，
+        // 于是重置了文本却再也不会逐字打出（只有第一次能看到打字效果）。
+        final int[] typePos = { 0 };
         typer[0] = new Runnable() {
-            int ti = 0;
             @Override public void run() {
                 if (!sv.isShown()) { th.removeCallbacks(this); return; }
-                if (ti <= fullCmd.length()) {
-                    sv.setText(fullCmd.substring(0, ti));
-                    ti++;
+                if (typePos[0] <= fullCmd.length()) {
+                    sv.setText(fullCmd.substring(0, typePos[0]));
+                    typePos[0]++;
                     // 45ms/字（原 80ms）：整行约 1.3 秒打完，与标题动效同一拍收尾。
                     // 原来打完要 2.4 秒，节奏明显拖在标题后面。
                     th.postDelayed(this, 45L);
@@ -6105,8 +6110,14 @@ public final class TGAutoSignCore {
         };
         svRow.addOnAttachStateChangeListener(new android.view.View.OnAttachStateChangeListener() {
             @Override public void onViewAttachedToWindow(android.view.View vv) {
-                if (fastMainOpen) { sv.setText(fullCmd); cur.setVisibility(View.VISIBLE); th.postDelayed(blink, 300L); }
-                else { th.postDelayed(typer[0], 200L); }
+                // 每次打开都从头逐字打出（用户要求；原来 15 秒内重开会直接全文显示）
+                th.removeCallbacks(typer[0]);
+                th.removeCallbacks(blink);
+                typePos[0] = 0;               // 打字进度归零，否则第二次不会再打
+                blinkLeft[0] = 6;             // 闪烁次数归零，否则第二次光标不再闪
+                sv.setText("");
+                cur.setVisibility(View.VISIBLE);
+                th.postDelayed(typer[0], 200L);
             }
             @Override public void onViewDetachedFromWindow(android.view.View vv) { th.removeCallbacks(typer[0]); th.removeCallbacks(blink); }
         });
