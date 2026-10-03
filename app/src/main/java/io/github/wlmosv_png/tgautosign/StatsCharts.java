@@ -39,6 +39,319 @@ final class StatsCharts {
         return Math.max(0, target - Theme.dp(c, 28));
     }
 
+    // ══════════════════════════════════════════════════════════════
+    //  主题化动效构件（2026-10-04）
+    //  模块是终端/赛博风（青绿品红琥珀 + 深底 + 等宽字），
+    //  因此动效也用同一套语汇：**扫描线、十字准星、数据流、辉光**，
+    //  而不是通用的"淡入淡出"。
+    //  全部 Canvas 程序绘制，零资源依赖。
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 环形进度（可动画版）：外圈带**扫描角标**与**端点辉光**。
+     *
+     * 与旧版区别：旧版只是一段静止圆弧；现在
+     *   · progress 可逐帧推进（扫过动画）；
+     *   · 弧的末端画一个亮点 + 外发光 —— 像扫描头停在当前位置；
+     *   · 起始处画一个小十字准星，呼应终端风。
+     */
+    static final class RingScanDrawable extends Drawable {
+        private final Paint base = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint arc = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint glow = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint mark = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF oval;
+        private final float size, cx, cy, r, stroke;
+        private final int col;
+        private float progress;     // 0..1
+        RingScanDrawable(int sizePx, int col, int baseCol) {
+            this.col = col;
+            this.size = sizePx;
+            this.cx = sizePx / 2f;
+            this.cy = sizePx / 2f;
+            this.stroke = sizePx * 0.105f;
+            this.r = sizePx / 2f - stroke * 1.6f;
+            oval = new RectF(cx - r, cy - r, cx + r, cy + r);
+            base.setStyle(Paint.Style.STROKE);
+            base.setStrokeWidth(stroke);
+            base.setStrokeCap(Paint.Cap.ROUND);
+            base.setColor(baseCol);
+            arc.setStyle(Paint.Style.STROKE);
+            arc.setStrokeWidth(stroke);
+            arc.setStrokeCap(Paint.Cap.ROUND);
+            arc.setColor(col);
+            glow.setStyle(Paint.Style.FILL);
+            glow.setColor(col);
+            mark.setStyle(Paint.Style.STROKE);
+            mark.setStrokeWidth(Math.max(1.2f, sizePx * 0.018f));
+            mark.setStrokeCap(Paint.Cap.ROUND);
+            mark.setColor(withA(col, 0x88));
+        }
+        void setProgress(float p) { this.progress = Math.max(0f, Math.min(1f, p)); invalidateSelf(); }
+        @Override public void draw(Canvas cv) {
+            try {
+                cv.drawArc(oval, -90f, 360f, false, base);
+                float sweep = 360f * progress;
+                if (sweep > 0.5f) cv.drawArc(oval, -90f, sweep, false, arc);
+
+                // 起始准星（12 点方向的小十字）
+                float tx = cx, ty = cy - r;
+                float k = size * 0.035f;
+                cv.drawLine(tx - k, ty, tx + k, ty, mark);
+                cv.drawLine(tx, ty - k, tx, ty + k, mark);
+
+                // 端点扫描头 + 辉光
+                if (progress > 0.001f) {
+                    double a0 = Math.toRadians(-90f + sweep);
+                    float ex = (float) (cx + r * Math.cos(a0));
+                    float ey = (float) (cy + r * Math.sin(a0));
+                    glow.setAlpha(60);
+                    cv.drawCircle(ex, ey, stroke * 2.6f, glow);
+                    glow.setAlpha(140);
+                    cv.drawCircle(ex, ey, stroke * 1.5f, glow);
+                    glow.setAlpha(255);
+                    cv.drawCircle(ex, ey, stroke * 0.62f, glow);
+                }
+            } catch (Throwable ignored) {}
+        }
+        @Override public void setAlpha(int a) {}
+        @Override public void setColorFilter(ColorFilter cf) {}
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
+    /**
+     * 趋势折线（可动画版）：**逐段生长** + 末端数据点脉冲。
+     *
+     * 用 PathMeasure 按进度取部分路径 —— 线条像被"画"出来，
+     * 比整条淡入更像扫描仪在绘图。末端点带一圈呼吸光环。
+     */
+    static final class SparkGrowDrawable extends Drawable {
+        private final Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint dot = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint halo = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final float[] vals;
+        private final int col;
+        private final Path full = new Path();
+        private Path seg;
+        private float progress = 0f;
+        SparkGrowDrawable(float[] values, int col, int wPx, int hPx) {
+            this.vals = values;
+            this.col = col;
+            line.setStyle(Paint.Style.STROKE);
+            line.setStrokeWidth(Math.max(1.8f, hPx * 0.022f));
+            line.setStrokeCap(Paint.Cap.ROUND);
+            line.setStrokeJoin(Paint.Join.ROUND);
+            line.setColor(col);
+            fill.setStyle(Paint.Style.FILL);
+            dot.setStyle(Paint.Style.FILL);
+            dot.setColor(col);
+            halo.setStyle(Paint.Style.FILL);
+            halo.setColor(withA(col, 0x55));
+            build(wPx, hPx);
+        }
+        private void build(int w, int h) {
+            full.reset();
+            if (vals == null || vals.length == 0 || w <= 0 || h <= 0) return;
+            float padY = h * 0.14f, usable = h - padY * 2f;
+            int n = vals.length;
+            float dx = n > 1 ? (float) w / (n - 1) : w;
+            for (int i = 0; i < n; i++) {
+                float v = Math.max(0f, Math.min(1f, vals[i]));
+                float x = i * dx, y = padY + (1f - v) * usable;
+                if (i == 0) full.moveTo(x, y); else full.lineTo(x, y);
+            }
+        }
+        void setProgress(float p) {
+            progress = Math.max(0f, Math.min(1f, p));
+            try {
+                android.graphics.PathMeasure pm = new android.graphics.PathMeasure(full, false);
+                seg = new Path();
+                pm.getSegment(0f, pm.getLength() * progress, seg, true);
+            } catch (Throwable t) { seg = full; }
+            invalidateSelf();
+        }
+        @Override public void draw(Canvas cv) {
+            try {
+                int w = getBounds().width(), h = getBounds().height();
+                if (w <= 0 || h <= 0 || vals == null || vals.length == 0) return;
+                Path use = (seg != null) ? seg : full;
+                // 面积（渐变淡），随进度一致生长
+                Path area = new Path(use);
+                area.lineTo(measureEndX(w), h);
+                area.lineTo(0, h);
+                area.close();
+                android.graphics.LinearGradient lg = new android.graphics.LinearGradient(
+                        0, 0, 0, h,
+                        new int[]{withA(col, 0x4D), withA(col, 0x14), withA(col, 0x00)},
+                        new float[]{0f, 0.45f, 1f},
+                        android.graphics.Shader.TileMode.CLAMP);
+                fill.setShader(lg);
+                cv.drawPath(area, fill);
+                cv.drawPath(use, line);
+                // 末端脉冲点
+                float[] pos = new float[2];
+                try {
+                    android.graphics.PathMeasure pm = new android.graphics.PathMeasure(full, false);
+                    pm.getPosTan(pm.getLength() * progress, pos, null);
+                } catch (Throwable ignored) {}
+                if (pos[0] > 0f || pos[1] > 0f) {
+                    cv.drawCircle(pos[0], pos[1], h * 0.075f, halo);
+                    cv.drawCircle(pos[0], pos[1], h * 0.032f, dot);
+                }
+            } catch (Throwable ignored) {}
+        }
+        private float measureEndX(int w) {
+            try {
+                android.graphics.PathMeasure pm = new android.graphics.PathMeasure(full, false);
+                float[] p = new float[2];
+                pm.getPosTan(pm.getLength() * progress, p, null);
+                return p[0];
+            } catch (Throwable t) { return w; }
+        }
+        @Override public void setAlpha(int a) {}
+        @Override public void setColorFilter(ColorFilter cf) {}
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
+    /**
+     * 柱状（可动画版）：**逐根升起**（底部对齐生长）+ 顶部亮点。
+     */
+    static final class BarsGrowDrawable extends Drawable {
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint tip = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final int[] vals;
+        private final int col;
+        private final int max;
+        private float grow = 1f;      // 0..1 整体生长
+        BarsGrowDrawable(int[] values, int col) {
+            this.vals = values;
+            this.col = col;
+            int m = 1;
+            if (values != null) for (int v : values) if (v > m) m = v;
+            this.max = m;
+            tip.setStyle(Paint.Style.FILL);
+        }
+        void setGrow(float g) { grow = Math.max(0f, Math.min(1f, g)); invalidateSelf(); }
+        @Override public void draw(Canvas cv) {
+            try {
+                int w = getBounds().width(), h = getBounds().height();
+                if (w <= 0 || h <= 0 || vals == null || vals.length == 0) return;
+                int n = vals.length;
+                float slot = (float) w / n;
+                float bw = slot * 0.26f;
+                float gap = slot - bw;
+                float r = Math.min(bw * 0.22f, h * 0.16f);
+                for (int i = 0; i < n; i++) {
+                    float x = i * (bw + gap) + gap / 2f;
+                    if (vals[i] <= 0) {
+                        p.setColor(withA(col, 0x33));
+                        cv.drawRoundRect(new RectF(x, h - Math.max(2f, h * 0.04f), x + bw, h), r, r, p);
+                        continue;
+                    }
+                    float ratio = vals[i] / (float) max;
+                    float bh = Math.max(h * 0.10f, h * ratio * grow);
+                    int alpha = 0x77 + (int) (ratio * 0x88);
+                    p.setColor(withA(col, Math.min(0xFF, alpha)));
+                    float top = h - bh;
+                    cv.drawRoundRect(new RectF(x, top, x + bw, h), r, r, p);
+                    // 顶部亮点：只在超过 1 格时画，避免空柱也发光
+                    if (ratio > 0f && grow > 0.35f) {
+                        tip.setColor(withA(col, (int) (0xCC * grow)));
+                        cv.drawCircle(x + bw / 2f, top + bw * 0.30f, bw * 0.22f, tip);
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+        @Override public void setAlpha(int a) {}
+        @Override public void setColorFilter(ColorFilter cf) {}
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
+    /**
+     * 热力格（可点亮版）：单格可带"刚点亮"的高亮光环。
+     */
+    static final class HeatLitDrawable extends Drawable {
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final int sizePx, col, level;
+        private final boolean today;
+        private float lit = 0f;    // 0..1 点亮程度
+        HeatLitDrawable(int sizePx, int col, int level, boolean today) {
+            this.sizePx = sizePx;
+            this.col = col;
+            this.level = Math.max(0, Math.min(4, level));
+            this.today = today;
+            ring.setStyle(Paint.Style.STROKE);
+            ring.setStrokeWidth(Math.max(1f, sizePx * 0.10f));
+        }
+        void setLit(float v) { lit = Math.max(0f, Math.min(1f, v)); invalidateSelf(); }
+        @Override public void draw(Canvas cv) {
+            try {
+                float pad = sizePx * 0.09f, r = sizePx * 0.20f;
+                RectF box = new RectF(pad, pad, sizePx - pad, sizePx - pad);
+                p.setStyle(Paint.Style.FILL);
+                if (level == 0) {
+                    p.setStyle(Paint.Style.STROKE);
+                    p.setStrokeWidth(Math.max(1f, sizePx * 0.06f));
+                    p.setColor(withA(col, lit > 0f ? (int) (0x33 + 0x55 * lit) : 0x33));
+                } else {
+                    int alpha = 0x55 + (int) ((level - 1) / 3f * 0xAA);
+                    if (lit > 0f) alpha = Math.min(0xFF, alpha + (int) (0x66 * lit));
+                    p.setColor(withA(col, Math.min(0xFF, alpha)));
+                }
+                cv.drawRoundRect(box, r, r, p);
+                // 点亮瞬间的光环
+                if (lit > 0.02f && lit < 1f) {
+                    ring.setColor(withA(col, (int) (0xFF * (1f - lit) * 0.8f)));
+                    cv.drawRoundRect(box, r, r, ring);
+                }
+                if (today) {
+                    p.setStyle(Paint.Style.STROKE);
+                    p.setStrokeWidth(Math.max(1f, sizePx * 0.09f));
+                    p.setColor(withA(col, 0xFF));
+                    cv.drawRoundRect(new RectF(0, 0, sizePx, sizePx), r, r, p);
+                }
+            } catch (Throwable ignored) {}
+        }
+        @Override public void setAlpha(int a) {}
+        @Override public void setColorFilter(ColorFilter cf) {}
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
+    /**
+     * 扫描条：一条水平细线 + 头尾渐隐，从 0 扫到满宽。
+     * 用于"卡片被扫描一遍"的入场感（终端风的核心语汇）。
+     */
+    static final class ScanLineDrawable extends Drawable {
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final int col;
+        private float pos = -1f;     // -1 = 未开始
+        ScanLineDrawable(int col) {
+            this.col = col;
+            p.setStrokeWidth(1.6f);
+        }
+        void setPos(float v) { pos = v; invalidateSelf(); }
+        @Override public void draw(Canvas cv) {
+            if (pos < 0f) return;
+            try {
+                int w = getBounds().width(), h = getBounds().height();
+                if (w <= 0) return;
+                float x = pos * w;
+                android.graphics.LinearGradient lg = new android.graphics.LinearGradient(
+                        x - w * 0.18f, 0, x + w * 0.02f, 0,
+                        new int[]{withA(col, 0x00), withA(col, 0xDD)},
+                        null, android.graphics.Shader.TileMode.CLAMP);
+                p.setShader(lg);
+                p.setColor(col);
+                cv.drawLine(Math.max(0, x - w * 0.18f), 0, Math.min(w, x), 0, p);
+            } catch (Throwable ignored) {}
+        }
+        @Override public void setAlpha(int a) {}
+        @Override public void setColorFilter(ColorFilter cf) {}
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
     /** 给颜色换 alpha（本地副本，避免依赖 Icons 的包内可见性）。 */
     static int withA(int c, int a) {
         return ((c & 0x00FFFFFF) | ((a & 0xFF) << 24));

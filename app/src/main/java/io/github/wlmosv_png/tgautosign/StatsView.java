@@ -94,10 +94,25 @@ final class StatsView {
         FrameLayout ring = new FrameLayout(act);
         int ringPx = dp(act, 108);
         ImageView iv = new ImageView(act);
-        float ratio = s.todayTotal <= 0 ? 0f : (float) s.todaySigned / s.todayTotal;
-        iv.setImageDrawable(new StatsCharts.RingStatDrawable(ringPx, ratio, col,
-                Theme.withAlpha(col, 0x22)));
+        final float ratio = s.todayTotal <= 0 ? 0f : (float) s.todaySigned / s.todayTotal;
+        // 换用 RingScanDrawable：弧末端有**扫描头 + 辉光**、起点有十字准星 ——
+        // 与终端主题同语汇（旧版只是一段静止圆弧，太素）。
+        final StatsCharts.RingScanDrawable rd =
+                new StatsCharts.RingScanDrawable(ringPx, col, Theme.withAlpha(col, 0x22));
+        rd.setProgress(animate ? 0f : ratio);
+        iv.setImageDrawable(rd);
         ring.addView(iv, new FrameLayout.LayoutParams(ringPx, ringPx));
+        if (animate) {
+            android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(0f, ratio);
+            va.setDuration(900);
+            va.setInterpolator(new android.view.animation.DecelerateInterpolator(1.5f));
+            va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                    try { rd.setProgress((Float) a.getAnimatedValue()); } catch (Throwable ignored) {}
+                }
+            });
+            va.start();
+        }
 
         LinearLayout center = new LinearLayout(act);
         center.setOrientation(LinearLayout.VERTICAL);
@@ -132,6 +147,29 @@ final class StatsView {
         card.addView(meta, new LinearLayout.LayoutParams(0, -2, 1f));
 
         if (animate) countUp(num, s.todaySigned, s.todayTotal);
+        // 门面卡顶部扫过一条细线：整块像刚被"扫描建立"。
+        // ScanLineDrawable 已带渐变头尾，短促（420ms）不拖沓。
+        if (animate) {
+            FrameLayout holder = new FrameLayout(act);
+            holder.addView(card, new FrameLayout.LayoutParams(-1, -2));
+            final ImageView scan = new ImageView(act);
+            scan.setImageDrawable(new StatsCharts.ScanLineDrawable(col));
+            FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(-1, dp(act, 2));
+            holder.addView(scan, slp);
+            final StatsCharts.ScanLineDrawable sd =
+                    (StatsCharts.ScanLineDrawable) ((ImageView) scan).getDrawable();
+            android.animation.ValueAnimator va =
+                    android.animation.ValueAnimator.ofFloat(0f, 1f);
+            va.setDuration(460);
+            va.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
+            va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                    try { sd.setPos((Float) a.getAnimatedValue()); } catch (Throwable ignored) {}
+                }
+            });
+            va.start();
+            return holder;
+        }
         return card;
     }
 
@@ -181,11 +219,26 @@ final class StatsView {
             List<String> range = StatsData.dateRange(s.today, 30, false);
             float[] daily = StatsData.dailyHits(s.signDays, range);
             float[] smooth = StatsData.movingAvg(daily, 7);
-            ImageView iv = new ImageView(act);
+                ImageView iv = new ImageView(act);
             int hPx = dp(act, 72);
-            iv.setImageDrawable(new StatsCharts.SparkDrawable(smooth, Theme.termCyan(act),
-                    dp(act, 280), hPx));
+            // 逐段生长：线像被"画"出来，末端带脉冲点（旧版整条淡入，没有过程感）
+            final StatsCharts.SparkGrowDrawable sd = new StatsCharts.SparkGrowDrawable(
+                    smooth, Theme.termCyan(act), dp(act, 280), hPx);
+            sd.setProgress(animate ? 0f : 1f);
+            iv.setImageDrawable(sd);
             wrap.addView(iv, new LinearLayout.LayoutParams(-1, hPx));
+            if (animate) {
+                android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(0f, 1f);
+                va.setDuration(1100);
+                va.setStartDelay(220);
+                va.setInterpolator(new android.view.animation.DecelerateInterpolator(1.2f));
+                va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                    @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                        try { sd.setProgress((Float) a.getAnimatedValue()); } catch (Throwable ignored) {}
+                    }
+                });
+                va.start();
+            }
             int[] ht = StatsData.headTailHits(s.signDays, range, 7);
             String trendWord = ht[1] > ht[0] ? Lang.tr("在变好")
                     : ht[1] < ht[0] ? Lang.tr("在变差") : Lang.tr("持平");
@@ -219,6 +272,9 @@ final class StatsView {
 
             String[] WL = {Lang.tr("一"), Lang.tr("二"), Lang.tr("三"), Lang.tr("四"),
                     Lang.tr("五"), Lang.tr("六"), Lang.tr("日")};
+            // 逐列点亮：从最旧一列扫到最新（像在被"回放"）
+            final java.util.List<StatsCharts.HeatLitDrawable> heatCells =
+                    new java.util.ArrayList<StatsCharts.HeatLitDrawable>();
             for (int r = 0; r < ROWS; r++) {
                 LinearLayout row = new LinearLayout(act);
                 row.setOrientation(LinearLayout.HORIZONTAL);
@@ -236,13 +292,38 @@ final class StatsView {
                     String d = in ? list.get(idx) : "";
                     boolean on = in && s.signDays.contains(d);
                     boolean isToday = in && s.today.equals(d);
-                    iv.setImageDrawable(new StatsCharts.HeatDrawable(cell, CY, on ? 4 : 0, isToday));
+                    StatsCharts.HeatLitDrawable hd =
+                            new StatsCharts.HeatLitDrawable(cell, CY, on ? 4 : 0, isToday);
+                    hd.setLit(animate ? 1f : 0f);
+                    iv.setImageDrawable(hd);
+                    heatCells.add(hd);
                     LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(cell, cell);
                     lp.setMargins(0, 0, gap, gap);
                     row.addView(iv, lp);
-                    if (animate) fadeIn(iv, 180, col * 8);
                 }
                 outer.addView(row);
+            }
+
+            if (animate && !heatCells.isEmpty()) {
+                // 从最后一列往第一列点亮（最新 → 最旧），每列 22ms
+                final int total = heatCells.size();
+                android.animation.ValueAnimator va =
+                        android.animation.ValueAnimator.ofInt(0, cols);
+                va.setDuration(Math.min(900, cols * 26));
+                va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                    @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                        try {
+                            int done = (Integer) a.getAnimatedValue();
+                            // 点亮"最新的 done 列"
+                            for (int i = 0; i < total; i++) {
+                                int colIdx = i / ROWS;
+                                boolean lit = colIdx >= (cols - done);
+                                heatCells.get(i).setLit(lit ? 0f : 1f);
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+                });
+                va.start();
             }
 
             LinearLayout legend = new LinearLayout(act);
@@ -352,8 +433,12 @@ final class StatsView {
             FrameLayout wf = new FrameLayout(act);
             ImageView iv = new ImageView(act);
             int hPx = dp(act, 40);
-            iv.setImageDrawable(new StatsCharts.BarsDrawable(cnt, Theme.termCyan(act), true));
+            final StatsCharts.BarsGrowDrawable bg2 =
+                    new StatsCharts.BarsGrowDrawable(cnt, Theme.termCyan(act));
+            bg2.setGrow(animate ? 0f : 1f);
+            iv.setImageDrawable(bg2);
             wf.addView(iv, new FrameLayout.LayoutParams(-1, hPx));
+            if (animate) growUp(bg2, 460, 300);
             View base = new View(act);
             base.setBackgroundColor(Theme.withAlpha(Theme.termCyan(act), 0x33));
             FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(-1, dp(act, 1));
@@ -404,8 +489,12 @@ final class StatsView {
             FrameLayout wf = new FrameLayout(act);
             ImageView iv = new ImageView(act);
             int hPx = dp(act, 44);
-            iv.setImageDrawable(new StatsCharts.BarsDrawable(buckets, Theme.termCyan(act), true));
+            final StatsCharts.BarsGrowDrawable hb =
+                    new StatsCharts.BarsGrowDrawable(buckets, Theme.termCyan(act));
+            hb.setGrow(animate ? 0f : 1f);
+            iv.setImageDrawable(hb);
             wf.addView(iv, new FrameLayout.LayoutParams(-1, hPx));
+            if (animate) growUp(hb, 460, 200);
             View base = new View(act);
             base.setBackgroundColor(Theme.withAlpha(Theme.termCyan(act), 0x33));
             FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(-1, dp(act, 1));
@@ -559,6 +648,22 @@ final class StatsView {
                 va.start();
             } catch (Throwable ignored) {}
         } });
+    }
+
+    /** 柱子升起（底部对齐生长）。 */
+    private static void growUp(final StatsCharts.BarsGrowDrawable d, int duration, int delay) {
+        try {
+            android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(0f, 1f);
+            va.setDuration(duration);
+            va.setStartDelay(delay);
+            va.setInterpolator(new android.view.animation.DecelerateInterpolator(1.5f));
+            va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                    try { d.setGrow((Float) a.getAnimatedValue()); } catch (Throwable ignored) {}
+                }
+            });
+            va.start();
+        } catch (Throwable ignored) {}
     }
 
     /** 淡入 + 轻微上浮。 */
