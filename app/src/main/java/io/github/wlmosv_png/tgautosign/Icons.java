@@ -159,9 +159,13 @@ final class Icons {
         private final int[] vals;
         private final int col;
         private final int max;
-        BarsDrawable(int[] values, int col) {
+        /** true = 细胶囊样式（统计页用）；false = 旧粗柱。 */
+        private final boolean slim;
+        BarsDrawable(int[] values, int col) { this(values, col, false); }
+        BarsDrawable(int[] values, int col, boolean slim) {
             this.vals = values;
             this.col = col;
+            this.slim = slim;
             int m = 1;
             if (values != null) for (int v : values) if (v > m) m = v;
             this.max = m;
@@ -173,11 +177,13 @@ final class Icons {
                 int n = vals.length;
                 // 柱太宽太满（2026-10-03）：上一版 3.5% 间隙、柱子几乎占满一格，
                 // 七根粗柱像七块砖。现在加宽间隙、收窄柱体，露出呼吸感。
-                float gap = w / (n * 0.55f);
-                float bw = (w - gap * (n - 1)) / n;
-                float r = Math.min(bw * 0.32f, h * 0.10f);
+                // slim 模式（统计页）柱宽只占约 42%，圆角拉满 = 胶囊观感。
+                float slot = (float) w / n;
+                float bw = slim ? slot * 0.42f : slot * 0.62f;
+                float gap = slot - bw;
+                float r = slim ? bw * 0.5f : Math.min(bw * 0.32f, h * 0.10f);
                 for (int i = 0; i < n; i++) {
-                    float x = i * (bw + gap);
+                    float x = i * (bw + gap) + gap / 2f;
                     if (vals[i] <= 0) {
                         // 空桶：一条底线，表示"这个时段没有"
                         p.setColor(withA(col, 0x33));

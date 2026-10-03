@@ -8935,10 +8935,23 @@ public final class TGAutoSignCore {
                     cnt[idx]++;
                 } catch (Throwable ignored) {}
             }
+            // 2026-10-03：改成"细胶囊 + 弱亮色 + 基线"。
+            // 上一版是 7 根绿色实心方块（用户原话"像绿砖，不圆润"）。
+            // 现在：柱更细（靠 BarsDrawable 内部收窄 + 这里降低高度）、
+            // 用青色（与统计页主色一致，绿色留给"已完成"语义）、
+            // 顶部圆角拉大、底部加一条基线让"从哪长出来"看得见。
+            android.widget.FrameLayout wf = new android.widget.FrameLayout(act);
             android.widget.ImageView iv = new android.widget.ImageView(act);
-            int hPx = dp(56);
-            iv.setImageDrawable(new Icons.BarsDrawable(cnt, Theme.termGreen(act)));
-            wrap.addView(iv, new LinearLayout.LayoutParams(-1, hPx));
+            int hPx = dp(48);
+            iv.setImageDrawable(new Icons.BarsDrawable(cnt, Theme.termCyan(act), true));
+            wf.addView(iv, new android.widget.FrameLayout.LayoutParams(-1, hPx));
+            View base = new View(act);
+            base.setBackgroundColor(Theme.withAlpha(Theme.termCyan(act), 0x33));
+            android.widget.FrameLayout.LayoutParams blp2 = new android.widget.FrameLayout.LayoutParams(
+                    -1, dp(1));
+            blp2.gravity = android.view.Gravity.BOTTOM;
+            wf.addView(base, blp2);
+            wrap.addView(wf, new LinearLayout.LayoutParams(-1, hPx));
             String[] WL = {Lang.tr("一"), Lang.tr("二"), Lang.tr("三"), Lang.tr("四"),
                     Lang.tr("五"), Lang.tr("六"), Lang.tr("日")};
             LinearLayout ax = new LinearLayout(act);
@@ -9043,11 +9056,17 @@ public final class TGAutoSignCore {
                     (availW - sidePad - gap * (cols - 1)) / cols);
 
             java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
+            // ── 日期范围：**必须以今天结尾往前推**（2026-10-03 修）──
+            // 上一版从"span 天前的周一"往后铺 total 格，于是范围是
+            // 07-02…09-30 —— 最后一格停在 09-30，**根本没到今天**（今天 10-04）。
+            // 用户看到"今天是周日"却找不到对应的格，完全看不懂。
+            // 正确做法：先定位本周一（今天所在那列的周一），
+            // 再往前推 (cols-1) 周，终点正好是今天。
             java.util.Calendar c2 = java.util.Calendar.getInstance();
-            // 起点对齐到"整周前的周一"，这样每行正好一周、列正好一星期几
             int dow = c2.get(java.util.Calendar.DAY_OF_WEEK);          // 1=周日
-            int toMon = (dow + 5) % 7;                                  // 距本周一的天数
-            c2.add(java.util.Calendar.DATE, -(span - 1) - toMon);
+            int toMon = (dow + 5) % 7;                                  // 距本周一的天数(0=周一)
+            c2.add(java.util.Calendar.DATE, -toMon);                    // 先回到本周一
+            c2.add(java.util.Calendar.DATE, -(cols - 1) * 7);           // 再往前 (cols-1) 周
             java.util.List<String> list = new java.util.ArrayList<String>();
             int total = cols * ROWS;
             for (int i = 0; i < total; i++) { list.add(f.format(c2.getTime())); c2.add(java.util.Calendar.DATE, 1); }
@@ -9232,7 +9251,11 @@ public final class TGAutoSignCore {
                 try { fs = prefs.getInt(Keys.failStreak(pfx, id), 0); } catch (Throwable ignored) {}
                 boolean doneToday = today.equals(prefs.getString(kLast(pfx, id), ""));
                 String nm = entryTitle(m);
-                if (nm == null || nm.length() == 0) nm = targetTitle(entryDid(m));
+                // 主标题同列表页：自定义标题为空则回退到 bot 显示名。
+                // 上一版这里直接 String.valueOf(null) 得到 "null" 或空串，
+                // 行渲染出来是空白（用户截图里「各目标」下面是空的）。
+                if (nm == null || nm.length() == 0 || "null".equals(nm)) nm = targetTitle(entryDid(m));
+                if (nm == null || nm.length() == 0 || "null".equals(nm)) nm = String.valueOf(entryDid(m));
                 if (nm != null && nm.length() > 14) nm = nm.substring(0, 14) + "…";
                 int col = fs >= 2 ? Theme.termAmber(act)
                         : doneToday ? Theme.termGreen(act) : Theme.termMuted(act);
