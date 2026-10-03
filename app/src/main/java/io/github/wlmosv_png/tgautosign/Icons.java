@@ -179,9 +179,14 @@ final class Icons {
                 // 七根粗柱像七块砖。现在加宽间隙、收窄柱体，露出呼吸感。
                 // slim 模式（统计页）柱宽只占约 42%，圆角拉满 = 胶囊观感。
                 float slot = (float) w / n;
-                float bw = slim ? slot * 0.42f : slot * 0.62f;
+                // slim：柱宽只占 26%（上一版 42% 太胖），
+                // 圆角另算 —— 见下面 r 的计算
+                float bw = slim ? slot * 0.26f : slot * 0.62f;
                 float gap = slot - bw;
-                float r = slim ? bw * 0.5f : Math.min(bw * 0.32f, h * 0.10f);
+                // 圆角只占柱宽 22%：是"圆角矩形柱"，不是胶囊。
+                // 上一版用 bw*0.5 = 圆角等于半宽 → 直接变药丸（用户截图）。
+                float r = slim ? Math.min(bw * 0.22f, h * 0.16f)
+                               : Math.min(bw * 0.32f, h * 0.10f);
                 for (int i = 0; i < n; i++) {
                     float x = i * (bw + gap) + gap / 2f;
                     if (vals[i] <= 0) {

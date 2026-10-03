@@ -8942,7 +8942,10 @@ public final class TGAutoSignCore {
             // 顶部圆角拉大、底部加一条基线让"从哪长出来"看得见。
             android.widget.FrameLayout wf = new android.widget.FrameLayout(act);
             android.widget.ImageView iv = new android.widget.ImageView(act);
-            int hPx = dp(48);
+            // 高度降到 40dp、柱宽占 26%：上一版圆角拉到柱宽一半 = 药丸形，
+            // 看着不像"柱状图"而像一排胶囊（用户截图）。现在圆角只占柱宽 22%，
+            // 是"圆角矩形柱"而不是胶囊。
+            int hPx = dp(40);
             iv.setImageDrawable(new Icons.BarsDrawable(cnt, Theme.termCyan(act), true));
             wf.addView(iv, new android.widget.FrameLayout.LayoutParams(-1, hPx));
             View base = new View(act);
@@ -9049,11 +9052,17 @@ public final class TGAutoSignCore {
             // 格子只有 ~15dp，整块高度约 110dp，一屏足够；宽度自然铺满。
             final int ROWS = 7;
             int cols = (span + ROWS - 1) / ROWS;      // 90 天 → 13 列
-            int availW = act.getResources().getDisplayMetrics().widthPixels;
-            int sidePad = dp(44);                     // 对话框内边距 + 星期标签列
-            int gap = Math.max(dp(2), availW / 200);
-            int cell = Math.max(dp(6),
+            // ── 宽度基准必须用「对话框可用宽」，不能用屏幕宽（2026-10-04 修）──
+            // showDialog 把对话框限制为 min(屏宽*0.92, 400dp)，
+            // 而卡片自己还有 12dp*2 的内边距。我上一版直接拿屏宽算，
+            // 导致整块比对话框宽 74px —— 右边被裁掉（用户截图里
+            // "17 天有记录"只剩半截就是这个）。
+            int availW = dialogContentWidth(act) - dp(2);
+            int sidePad = dp(20);                     // 星期标签列
+            int gap = Math.max(dp(2), availW / 130);
+            int cell = Math.max(dp(5),
                     (availW - sidePad - gap * (cols - 1)) / cols);
+            if (cell > dp(18)) cell = dp(18);         // 上限，避免大屏格子过大
 
             java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
             // ── 日期范围：**必须以今天结尾往前推**（2026-10-03 修）──
@@ -9357,6 +9366,22 @@ public final class TGAutoSignCore {
             box.addView(span);
         } catch (Throwable t) { noteSwallowed("todayHourBars", t); }
         return box;
+    }
+
+    /**
+     * 对话框内容区可用宽度（px）。
+     *
+     * 与 showDialog 里的 `min(屏宽*0.92, 400dp)` 保持一致，
+     * 再减去卡片自身左右各 12dp 的内边距，并留 4dp 余量。
+     * 凡是"要按宽度算格子尺寸"的地方都该用它 ——
+     * 直接拿屏幕宽算必然溢出（统计页热力图踩过这个坑）。
+     */
+    private int dialogContentWidth(Activity act) {
+        int w = 0;
+        try { w = act.getResources().getDisplayMetrics().widthPixels; } catch (Throwable ignored) {}
+        if (w <= 0) w = 1080;
+        int wTarget = Math.min((int) (w * 0.92f), Theme.dp(act, 400));
+        return Math.max(0, wTarget - dp(28));
     }
 
     /** 一行：左标签 + 右值。 */
