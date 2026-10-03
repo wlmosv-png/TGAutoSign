@@ -6281,8 +6281,11 @@ public final class TGAutoSignCore {
             int aAct = activeTargetCount(accountPrefix(), targets);
             int aSig = activeSignedCount(accountPrefix(), targets, today);
             int aOut = Math.max(0, aAll - aAct);
+            // 2026-10-03 UI 评审：「已签 x/y」原先在这里和进度条各出现一次，
+            // 同一屏同一信息重复两遍。现在标题只说账号与规模，
+            // 进度数字交给下面那根进度条（改带数字，见 progressBarWithLabel）。
             st1.setText("\u25B8 " + accountLabel(currentAccount()) + "  ·  "
-                    + Lang.tf("目标 {0} · 已签 {1}/{2}", aAll, aSig, aAct)
+                    + Lang.tf("目标 {0}", aAll)
                     + (aOut > 0 ? Lang.tf("（{0} 个不参与）", aOut) : ""));
         }
         statCard.addView(st1);
@@ -6318,7 +6321,21 @@ public final class TGAutoSignCore {
                 r.setBackground(rd);
                 pbar.addView(r, new LinearLayout.LayoutParams(0, dp(6), pendN));
             }
-            statCard.addView(pbar);
+            // 2026-10-03：进度条上叠数字（「已签 x/y」）。
+            // 之前数字只在标题行、条本身是纯色块，评审建议"给进度条加数字" ——
+            // 条与数字在同一视觉单元里，扫一眼就知道进度而不是两处对着看。
+            android.widget.FrameLayout pwrap = new android.widget.FrameLayout(act);
+            pwrap.addView(pbar, new android.widget.FrameLayout.LayoutParams(-1, dp(12)));
+            TextView plab = new TextView(act);
+            plab.setTextSize(Theme.TS_CAPTION);
+            plab.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+            plab.setTextColor(Theme.termTxt(act));
+            plab.setText(Lang.tf("已签 {0}/{1}", sigN, actN));
+            plab.setGravity(android.view.Gravity.CENTER);
+            pwrap.addView(plab, new android.widget.FrameLayout.LayoutParams(-1, dp(12)));
+            LinearLayout.LayoutParams plp2 = new LinearLayout.LayoutParams(-1, dp(12));
+            plp2.topMargin = dp(8);
+            statCard.addView(pwrap, plp2);
         } catch (Throwable ignored) {}
         // 2026-09-30：原此处单独一行「连续签到 N 天 · 最近 14 天」，
         // 与紧邻的日历摘要（连续 N 天 / N/14）信息完全重复，两个数字还容易看岔。
@@ -6414,29 +6431,48 @@ public final class TGAutoSignCore {
                 termBody.postDelayed(this, 4000L);
             } catch (Throwable ignored) {}
         } }, 4000L);
-        // 快捷命令行
-        LinearLayout quick = new LinearLayout(act); quick.setOrientation(LinearLayout.HORIZONTAL); quick.setPadding(0, dp(8), 0, 0);
-        // 图标放文字右侧：4 个 chip 等宽，把图标塞在左侧会把最长那项挤到折行
-        String[][] QK = {{"sign", "\u7acb\u5373\u7b7e\u5230", "bolt"}, {"list", "\u76ee\u6807", "list"},
-                         {"log", "\u65e5\u5fd7", "doc"}, {"diag", "\u81ea\u68c0", "pulse"}};
-        for (final String[] q : QK) {
-            TextView qb = new TextView(act); qb.setText(Lang.trShort(q[1])); qb.setTextSize(Theme.TS_CAPTION); qb.setTypeface(android.graphics.Typeface.MONOSPACE);
-            qb.setTextColor(Theme.termCyan(act)); qb.setClickable(true);
-            qb.setGravity(android.view.Gravity.CENTER);
-            qb.setSingleLine(false); qb.setMaxLines(2);   // 英文比中文长：允许两行，不挤压布局
-            android.graphics.drawable.Drawable qd = Icons.d(act, q[2], 12f, Theme.termCyan(act));
+        // ── 主按钮：立即签到（2026-10-03 UI 评审）──
+        // 改前这里是一条 4 格快捷胶囊（立即签到 / 目标 / 日志 / 自检），
+        // 与下方 8 个大卡片、底部「全部功能」分类栏**三层指向同一批功能**。
+        // 三个里砍掉两个的一半：快捷条整条删（4 项全被卡片覆盖），
+        // 但把其中唯一"动作型"的入口提级成主按钮 ——
+        // 它是这页唯一"点一下就干活"的东西，值得比导航项更重。
+        LinearLayout quick = new LinearLayout(act);
+        quick.setOrientation(LinearLayout.HORIZONTAL);
+        quick.setPadding(0, dp(10), 0, 0);
+        {
+            Button mainBtn = mkBtnPrimary(act);
+            withIconText(act, mainBtn, "bolt", Lang.tr("立即签到"));
+            mainBtn.setTextSize(Theme.TS_BODY);
+            mainBtn.setPadding(dp(14), dp(12), dp(14), dp(12));
+            mainBtn.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { runAction(act, "sign"); }
+            });
+            quick.addView(mainBtn, new android.widget.LinearLayout.LayoutParams(0, -2, 1f));
+            // 右侧挂一个轻量入口：自检（原来快捷条里的"自检"在卡片里没有）
+            TextView diagBtn = new TextView(act);
+            diagBtn.setText(Lang.trShort("自检"));
+            diagBtn.setTextSize(Theme.TS_CAPTION);
+            diagBtn.setTypeface(android.graphics.Typeface.MONOSPACE);
+            diagBtn.setTextColor(Theme.termCyan(act));
+            diagBtn.setGravity(android.view.Gravity.CENTER);
+            diagBtn.setPadding(dp(12), dp(10), dp(12), dp(10));
+            diagBtn.setBackground(termBorder(act, Theme.withAlpha(Theme.termCyan(act), 0x12),
+                    Theme.withAlpha(Theme.termCyan(act), 0x59)));
+            android.graphics.drawable.Drawable qd = Icons.d(act, "pulse", 12f, Theme.termCyan(act));
             if (qd != null) {
                 int qsz = Theme.dp(act, 12);
                 qd.setBounds(0, 0, qsz, qsz);
-                qb.setCompoundDrawables(null, null, qd, null);
-                qb.setCompoundDrawablePadding(Theme.dp(act, 4));
+                diagBtn.setCompoundDrawables(qd, null, null, null);
+                diagBtn.setCompoundDrawablePadding(Theme.dp(act, 4));
             }
-            qb.setPadding(dp(4), dp(7), dp(4), dp(7));
-            qb.setBackground(termBorder(act, Theme.withAlpha(Theme.termCyan(act), 0x12), Theme.withAlpha(Theme.termCyan(act), 0x59)));
-            // 英文比中文长：给足两行的最小高度，避免折行后第二行被裁
-            if (Lang.isEnglish()) { qb.setMinHeight(dp(46)); qb.setGravity(android.view.Gravity.CENTER); }
-            qb.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ runAction(act, q[0]); } });
-            quick.addView(qb, new android.widget.LinearLayout.LayoutParams(0, -2, 1f));
+            diagBtn.setClickable(true);
+            diagBtn.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { runAction(act, "diag"); }
+            });
+            LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(-2, -2);
+            dlp.setMargins(dp(6), 0, 0, 0);
+            quick.addView(diagBtn, dlp);
         }
         head.addView(quick);
         root.addView(head);
@@ -6445,7 +6481,8 @@ public final class TGAutoSignCore {
         android.widget.GridLayout g1 = new android.widget.GridLayout(act); g1.setColumnCount(2); root.addView(g1);
         addTile(g1, act, "list", "目标列表", "查看·测试·编辑", "list");
         addTile(g1, act, "calendar", "补签列表", "今日待补·已补·跳过", "misslist");
-        addTile(g1, act, "bolt", "立即签到", "当前账号", "sign");
+        // 「立即签到」已提级为顶部主按钮，不再重复出现在卡片区（2026-10-03）
+        addTile(g1, act, "clock", "今日计划", "几点签·补签", "misslist");
         addTile(g1, act, "doc", "运行日志", "搜索·筛选·清空", "log");
         addTile(g1, act, "sliders", "设置", "定时·窗口·间隔", "settings");
         addTile(g1, act, "trash", "排除管理", "规则·排除 bot·待添加", "exclude");

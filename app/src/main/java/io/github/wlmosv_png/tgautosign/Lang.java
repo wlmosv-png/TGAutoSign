@@ -856,6 +856,8 @@ public final class Lang {
         EN.put("需处理", "Needs attention");
         EN.put("冻结", "Frozen");
         EN.put("最近失败", "Recent failures");
+        EN.put("已签 {0}/{1}", "Signed {0}/{1}");
+        EN.put("目标 {0}", "{0} targets");
         EN.put("今日 {0}", "Today {0}");
         EN.put("  /  补签 {0} 次", "  /  {0} make-ups");
         EN.put("你已忽略该目标（今天不再试）", "You ignored this target (no retry today)");
