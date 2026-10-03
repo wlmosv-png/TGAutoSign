@@ -1,12 +1,15 @@
 package io.github.wlmosv_png.tgautosign;
 
+import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.ColorFilter;
+import android.graphics.Typeface;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
+import android.view.View;
 
 /**
  * 统计页专用图表（2026-10-04 分层重构）。
@@ -353,6 +356,124 @@ final class StatsCharts {
         @Override public void setAlpha(int a) {}
         @Override public void setColorFilter(ColorFilter cf) {}
         @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
+    /**
+     * 「数据流拼装」文字视图（2026-10-04）。
+     *
+     * 用户要的效果：名字像被字符流"拼"出来 —— 左右错位、闪动、然后归位。
+     * 这是终端/赛博风最标志性的观感（矩阵雨 / 解码）。
+     *
+     * 实现：自定义 View，用 Canvas 逐字绘制。
+     *   · 每个字有独立的"就位时间" t_i = i / n（从左到右）;
+     *   · 未就位时：显示随机字符 + 随机水平偏移（幅度随时间收敛）+ 高亮色;
+     *   · 就位瞬间：一次白色闪（flash），随后回到正常色;
+     *   · 全部就位后：整体一次轻微"合拢"（scale 1.03 → 1）。
+     *
+     * 不用 TextView.setText 逐帧改（会产生大量布局/重绘），
+     * 而是在 onDraw 里 drawText —— 一次绘制、零布局。
+     */
+    static final class DecodeTextView extends View {
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final String text;
+        private final char[] glyphs;          // 逐字拆开（代理对安全）
+        private final float[] jitter;         // 每个字当前的横向偏移
+        private final float[] arrive;         // 每个字就位后的残留闪动
+        private final java.util.Random rnd = new java.util.Random();
+        private final int normalCol, flashCol;
+        private final float textSize;
+        private float progress = 1f;          // 0..1 整体进度
+        private float scale = 1f;
+        private boolean done;
+
+        DecodeTextView(Context c, String text, float textSize, int normalCol, int flashCol) {
+            super(c);
+            this.text = text == null ? "" : text;
+            this.textSize = textSize;
+            this.normalCol = normalCol;
+            this.flashCol = flashCol;
+            java.util.List<Character> cs = new java.util.ArrayList<Character>();
+            for (int i = 0; i < this.text.length(); ) {
+                int cp = this.text.codePointAt(i);
+                cs.add(Character.valueOf((char) cp));
+                i += Character.charCount(cp);
+            }
+            glyphs = new char[cs.size()];
+            for (int i = 0; i < glyphs.length; i++) glyphs[i] = cs.get(i).charValue();
+            jitter = new float[glyphs.length];
+            arrive = new float[glyphs.length];
+            p.setTypeface(Typeface.MONOSPACE);
+            p.setTextSize(textSize);
+            p.setFakeBoldText(true);
+        }
+
+        /** 0..1 整体进度（外部逐帧驱动）。 */
+        void setProgress(float v) {
+            progress = Math.max(0f, Math.min(1f, v));
+            int n = glyphs.length;
+            // 每个字按位置稍晚就位：最右的字最后拼好
+            for (int i = 0; i < n; i++) {
+                float ti = n <= 1 ? 0f : (i / (float) n) * 0.55f;
+                float local = (progress - ti) / Math.max(0.001f, 1f - ti);
+                local = Math.max(0f, Math.min(1f, local));
+                // 未就位 → 偏移随 local 收敛；就位后保留一点闪
+                float amp = (1f - local);
+                jitter[i] = amp * (rnd.nextFloat() * 2f - 1f) * textSize * 0.55f;
+                arrive[i] = local >= 1f ? Math.max(0f, arrive[i] - 0.12f) : 1f;
+            }
+            // 全部就位后来一次轻微合拢
+            if (progress >= 0.999f && !done) { done = true; scale = 1.03f; }
+            if (done && scale > 1f) scale = Math.max(1f, scale - 0.006f);
+            invalidate();
+        }
+
+        @Override protected void onMeasure(int wSpec, int hSpec) {
+            int w = (int) p.measureText(text) + 4;
+            int h = (int) (textSize * 1.6f);
+            setMeasuredDimension(Math.max(1, w), Math.max(1, h));
+        }
+
+        @Override protected void onDraw(Canvas cv) {
+            try {
+                int n = glyphs.length;
+                if (n == 0) return;
+                cv.save();
+                cv.scale(scale, scale, 0, getHeight() / 2f);
+                float x = 0f;
+                for (int i = 0; i < n; i++) {
+                    String g = String.valueOf(glyphs[i]);
+                    float dx = jitter[i];
+                    // 未就位：偶尔替换成随机字符（看不出原字，像解码中）
+                    if (Math.abs(dx) > 0.6f && rnd.nextInt(3) == 0) {
+                        g = String.valueOf((char) ('a' + rnd.nextInt(26)));
+                    }
+                    if (arrive[i] > 0.05f) {
+                        // 就位闪：向白色插值
+                        int col = blend(flashCol, normalCol, 1f - arrive[i]);
+                        p.setColor(col);
+                    } else if (Math.abs(dx) > 0.6f) {
+                        p.setColor(normalCol);
+                        p.setAlpha(140 + rnd.nextInt(80));
+                    } else {
+                        p.setColor(normalCol);
+                        p.setAlpha(255);
+                    }
+                    cv.drawText(g, x + dx, getHeight() * 0.72f, p);
+                    x += p.measureText(g);
+                }
+                cv.restore();
+            } catch (Throwable ignored) {}
+        }
+
+        private static int blend(int a, int b, float r) {
+            r = Math.max(0f, Math.min(1f, r));
+            int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
+            int br = (b >> 16) & 0xFF, bg = (b >> 8) & 0xFF, bb = b & 0xFF;
+            return 0xFF000000
+                    | ((int) (ar + (br - ar) * r) << 16)
+                    | ((int) (ag + (bg - ag) * r) << 8)
+                    | (int) (ab + (bb - ab) * r);
+        }
     }
 
     /** 给颜色换 alpha（本地副本，避免依赖 Icons 的包内可见性）。 */

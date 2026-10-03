@@ -78,24 +78,52 @@ final class StatsView {
     static View build(Activity act, StatsSnapshot s, boolean animate, Pending out) {
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
-        try {
-            View heroV = hero(act, s, animate, out);
-            box.addView(heroV);
-            box.addView(sectionTitle(act, Lang.tr("近 30 天趋势")));
-            box.addView(trend(act, s, animate, out));
-            box.addView(sectionTitle(act, Lang.tr("近 90 天打卡")));
-            box.addView(heat(act, s, animate, out));
-            box.addView(sectionTitle(act, Lang.tr("各账号对比")));
-            box.addView(accounts(act, s, animate, out));
-            box.addView(sectionTitle(act, Lang.tr("星期分布")));
-            box.addView(weekday(act, s, animate, out));
-            box.addView(sectionTitle(act, Lang.tr("今日时段")));
-            box.addView(hours(act, s, animate, out));
-            box.addView(sectionTitle(act, Lang.tr("各目标")));
-            box.addView(targetCards(act, s, animate, out));
-            if (animate) box.setTag(TAG_ANIMATED);
-        } catch (Throwable t) { swallow(t); }
+        // ⚠️ **每块独立 try**（2026-10-04 修"下面整段没有"）：
+        // 原先一个大 try 包住全部，任何一块抛异常 → 后面的区块全不渲染，
+        // 表现为"内容到某处就断了"（用户截图：到「各账号对比」就没了）。
+        // 分块后一块失败只丢它自己，其余照常。
+        try { box.addView(hero(act, s, animate, out)); } catch (Throwable t) { swallow(t); }
+        addSafe(box, act, Lang.tr("近 30 天趋势"), new Block() {
+            @Override public View make() { return trend(act, s, animate, out); }
+        });
+        addSafe(box, act, Lang.tr("近 90 天打卡"), new Block() {
+            @Override public View make() { return heat(act, s, animate, out); }
+        });
+        addSafe(box, act, Lang.tr("各账号对比"), new Block() {
+            @Override public View make() { return accounts(act, s, animate, out); }
+        });
+        addSafe(box, act, Lang.tr("星期分布"), new Block() {
+            @Override public View make() { return weekday(act, s, animate, out); }
+        });
+        addSafe(box, act, Lang.tr("今日时段"), new Block() {
+            @Override public View make() { return hours(act, s, animate, out); }
+        });
+        addSafe(box, act, Lang.tr("各目标"), new Block() {
+            @Override public View make() { return targetCards(act, s, animate, out); }
+        });
+        if (animate) box.setTag(TAG_ANIMATED);
         return box;
+    }
+
+    /** 区块工厂（供 addSafe 调用）。 */
+    private interface Block { View make(); }
+
+    /**
+     * 先加一个区块，失败就跳过它自己（不影响后续），
+     * 并在失败时留一行可读提示 —— 比"整段消失"更容易排查。
+     */
+    private static void addSafe(LinearLayout box, Activity act, String title, Block b) {
+        View content;
+        try {
+            content = b.make();
+        } catch (Throwable t) {
+            swallow(t);
+            content = null;
+        }
+        // 标题也只在有内容时才加（避免出现"只有标题没内容"的空段）
+        if (content == null) return;
+        try { box.addView(sectionTitle(act, title)); } catch (Throwable ignored) {}
+        try { box.addView(content); } catch (Throwable ignored) {}
     }
 
     /** 兼容旧签名（不收集动画，直接终态）。 */
@@ -109,7 +137,14 @@ final class StatsView {
     }
 
     private static void swallow(Throwable t) {
-        try { android.util.Log.w("TGAutoSign", "[统计] " + t); } catch (Throwable ignored) {}
+        try {
+            android.util.Log.w("TGAutoSign", "[统计构件失败] " + t);
+            // 打类名栈头，便于定位是哪一块（分块 try 后每块的异常都会到这里）
+            StackTraceElement[] st = t.getStackTrace();
+            for (int i = 0; i < Math.min(4, st.length); i++) {
+                android.util.Log.w("TGAutoSign", "[统计构件失败]   at " + st[i]);
+            }
+        } catch (Throwable ignored) {}
     }
 
     // ══════════════════════ ① 门面 ══════════════════════
@@ -628,13 +663,11 @@ final class StatsView {
                 dot.setBackground(dg);
                 card.addView(dot, new LinearLayout.LayoutParams(dp(act, 8), dp(act, 8)));
 
-                TextView nm = new TextView(act);
-                nm.setTextSize(Theme.TS_SECOND);
-                nm.setTextColor(Theme.termTxt(act));
-                nm.setTypeface(Typeface.MONOSPACE);
-                nm.setSingleLine(true);
-                nm.setEllipsize(android.text.TextUtils.TruncateAt.END);
-                nm.setText(t.name);
+                // 名字用「数据流拼装」效果（DecodeTextView）：
+                // 未就位时显示随机字符 + 左右抖动，就位瞬间白闪后归位。
+                final StatsCharts.DecodeTextView nm =
+                        new StatsCharts.DecodeTextView(act, t.name,
+                                Theme.TS_SECOND, Theme.termTxt(act), 0xFFFFFFFF);
                 nm.setPadding(dp(act, 10), 0, dp(act, 8), 0);
                 card.addView(nm, new LinearLayout.LayoutParams(0, -2, 1f));
 
@@ -648,8 +681,10 @@ final class StatsView {
                 box.addView(card);
                 if (animate && out != null) {
                     final View fc = card;
+                    final StatsCharts.DecodeTextView fnm = nm;
+                    final boolean fromLeft = (i % 2 == 0);
                     out.add(fc, new Runnable() { @Override public void run() {
-                        fadeUp(fc, 300, 0);
+                        slideInDecode(fc, fnm, fromLeft);
                     } }, 0);
                 }
                 i++;
@@ -712,6 +747,36 @@ final class StatsView {
                 va.start();
             } catch (Throwable ignored) {}
         } });
+    }
+
+    /**
+     * 目标卡入场：**左右交替滑入 + 名字解码拼装**（2026-10-04 用户要求）。
+     *
+     * 观感：卡片从左侧或右侧（按索引奇偶交替）带透明滑到位置，
+     * 同时名字里的字符还在"乱码 → 就位"地拼装、闪动。
+     * 两者节奏对齐（约 620ms），读起来像"目标被逐条解析出来"。
+     */
+    private static void slideInDecode(final View card, final StatsCharts.DecodeTextView name,
+                                      boolean fromLeft) {
+        try {
+            Context c = card.getContext();
+            float dist = Theme.dp(c, 42) * (fromLeft ? -1f : 1f);
+            card.setAlpha(0f);
+            card.setTranslationX(dist);
+            card.animate().alpha(1f).translationX(0f)
+                    .setDuration(340)
+                    .setInterpolator(new android.view.animation.DecelerateInterpolator(1.5f))
+                    .start();
+            if (name == null) return;
+            android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(0f, 1f);
+            va.setDuration(620);                    // 比滑动长一点：卡到位后文字还在拼
+            va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                    try { name.setProgress((Float) a.getAnimatedValue()); } catch (Throwable ignored) {}
+                }
+            });
+            va.start();
+        } catch (Throwable ignored) {}
     }
 
     /** 柱子升起（底部对齐生长）。 */

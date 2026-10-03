@@ -8944,7 +8944,12 @@ public final class TGAutoSignCore {
                 android.widget.ScrollView sv = new android.widget.ScrollView(act);
                 final LinearLayout inner = buildStatsPage(act);
                 sv.addView(inner, new android.widget.ScrollView.LayoutParams(-1, -2));
-                tabBody.addView(sv, new LinearLayout.LayoutParams(-1, listContentHeight(act)));
+                // 统计页比其它 Tab 长得多（实测内容约 1364dp）——
+                // 用 64% 屏高只能看到前四块，用户反馈"往下就没有了"。
+                // 单独给它更高：屏高的 78%（对话框上限是 72%，这里靠 ScrollView
+                // 自身滚动承接，视觉上就是"统计页占满对话框"）。
+                int statsH = (int) (act.getResources().getDisplayMetrics().heightPixels * 0.78f);
+                tabBody.addView(sv, new LinearLayout.LayoutParams(-1, statsH));
                 attachStatsAnim(sv, inner);
                 // ── 实时刷新（2026-10-03 用户要求）──
                 // 统计是"看着它变"的东西：正在签到时会不断有目标从待签变已签，
