@@ -5349,6 +5349,25 @@ public final class TGAutoSignCore {
     }
 
     /** 列表排序切换 chip，当前项高亮 */
+    /** 重染排序 chip（原地刷新用）。顺序与 SORT_MODES 一致。 */
+    private void refreshSortChips(Context c) {
+        try {
+            String[] MODES = {"unsigned", "name", "fails"};
+            for (int i = 0; i < listSortChips.size() && i < MODES.length; i++) {
+                styleSortChip(listSortChips.get(i), c, MODES[i].equals(SORT_MODE));
+            }
+        } catch (Throwable t) { noteSwallowed("refreshSortChips", t); }
+    }
+
+    private void styleSortChip(TextView chip, Context c, boolean on) {
+        try {
+            chip.setTextColor(on ? Theme.termTxt(c) : Theme.termMuted(c));
+            chip.setBackground(termBorder(c,
+                    on ? Theme.withAlpha(Theme.termCyan(c), 0x1E) : Theme.withAlpha(Theme.termMuted(c), 0x0D),
+                    on ? Theme.withAlpha(Theme.termCyan(c), 0x66) : Theme.withAlpha(Theme.termMuted(c), 0x33)));
+        } catch (Throwable t) { noteSwallowed("styleSortChip", t); }
+    }
+
     private View sortChip(Activity act, String label, String mode) {
         boolean on = mode.equals(SORT_MODE);
         TextView chip = new TextView(act);
@@ -5357,13 +5376,16 @@ public final class TGAutoSignCore {
         chip.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
         chip.setGravity(android.view.Gravity.CENTER);
         chip.setPadding(dp(10), dp(5), dp(10), dp(5));
-        chip.setTextColor(on ? Theme.termTxt(act) : Theme.termMuted(act));
-        chip.setBackground(termBorder(act, on ? Theme.withAlpha(Theme.termCyan(act), 0x1E) : Theme.withAlpha(Theme.termMuted(act), 0x0D), on ? Theme.withAlpha(Theme.termCyan(act), 0x66) : Theme.withAlpha(Theme.termMuted(act), 0x33)));
+        styleSortChip(chip, act, on);
+        if (!listSortChips.contains(chip)) listSortChips.add(chip);
         chip.setClickable(true);
         chip.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
+            // 同样原地刷新（见筛选 chip 的说明）：切排序也不该重建窗口。
+            if (mode.equals(SORT_MODE)) return;
             SORT_MODE = mode;
             try { prefs.edit().putString("jmb_sort", mode).apply(); } catch (Throwable ignored) {}
-            showList(act);
+            refreshSortChips(act);
+            fillTargetRows(act);
         } });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
         lp.setMargins(dp(3), 0, dp(3), 0);
@@ -5906,6 +5928,12 @@ public final class TGAutoSignCore {
 
     /** 目标列表的状态筛选（2026-10-03）：全部 / 待签 / 已签 / 需处理 / 冻结。 */
     private String listFilter = "全部";
+    /** 目标列表当前的行容器（供筛选/排序原地刷新，不重建对话框）。 */
+    private LinearLayout listRowsHost;
+    /** 目标列表当前筛选 chip 组（供原地重染色）。 */
+    private final java.util.List<TextView> listFilterChips = new ArrayList<TextView>();
+    /** 目标列表当前排序 chip 组（供原地重染色）。 */
+    private final java.util.List<TextView> listSortChips = new ArrayList<TextView>();
     /** 目标列表的搜索词（匹配标题、指令、@用户名）。 */
     private String logTargetFilter = "";
 
@@ -8591,6 +8619,47 @@ public final class TGAutoSignCore {
         } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
     }
 
+    /** 目标列表里：重填行（原地刷新用，不重建对话框）。 */
+    private void fillTargetRows(Activity act) {
+        try {
+            if (listRowsHost == null) return;
+            listRowsHost.removeAllViews();
+            String today = todayStr();
+            int shownN = 0, filtN = 0;
+            for (Map<String, Object> m : sortedTargets()) {
+                String st = statusOf(accountPrefix(), entryId(m), today);
+                if (!listFilterMatch(m, st, today)) { filtN++; continue; }
+                targetRow(listRowsHost, m, st, "more");
+                shownN++;
+            }
+            if (shownN == 0) {
+                emptyView(listRowsHost, filtN > 0
+                        ? Lang.tf("当前筛选（{0}）下没有目标", Lang.tr(listFilter))
+                        : Lang.tr("(暂无目标，点「添加目标」，或直接点 bot 的签到按钮自动学习)"));
+            }
+        } catch (Throwable t) { noteSwallowed("fillTargetRows", t); }
+    }
+
+    /** 重染筛选 chip（原地刷新用）。顺序与 FILTERS 一致。 */
+    private void refreshFilterChips(Context act) {
+        try {
+            String[] FILTERS = {"全部", "待签", "已签", "需处理", "冻结"};
+            for (int i = 0; i < listFilterChips.size() && i < FILTERS.length; i++) {
+                styleFilterChip(listFilterChips.get(i), act, FILTERS[i].equals(listFilter));
+            }
+        } catch (Throwable t) { noteSwallowed("refreshFilterChips", t); }
+    }
+
+    /** 筛选 chip 的选中/未选中外观（一处定义，原地刷新与首次构建共用）。 */
+    private void styleFilterChip(TextView chip, Context c, boolean on) {
+        try {
+            chip.setTextColor(on ? Theme.termCardDeep(c) : Theme.termMuted(c));
+            chip.setBackground(termBorder(c,
+                    on ? Theme.termCyan(c) : Theme.termCard(c),
+                    Theme.withAlpha(Theme.termCyan(c), on ? 0xAA : 0x33)));
+        } catch (Throwable t) { noteSwallowed("styleFilterChip", t); }
+    }
+
     private void showList(Activity act) {
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -8685,28 +8754,31 @@ public final class TGAutoSignCore {
             fbar.setOrientation(LinearLayout.HORIZONTAL);
             fbar.setPadding(dp(2), dp(4), dp(2), dp(2));
             final String[] FILTERS = {"全部", "待签", "已签", "需处理", "冻结"};
+            listFilterChips.clear();
             for (final String f : FILTERS) {
-                boolean on = f.equals(listFilter);
-                TextView chip = new TextView(act);
+                final TextView chip = new TextView(act);
                 chip.setTextSize(Theme.TS_CAPTION);
                 chip.setTypeface(android.graphics.Typeface.MONOSPACE);
                 chip.setPadding(dp(10), dp(5), dp(10), dp(5));
                 chip.setText(Lang.tr(f));
-                chip.setTextColor(on ? Theme.termCardDeep(act) : Theme.termMuted(act));
-                chip.setBackground(termBorder(act,
-                        on ? Theme.termCyan(act) : Theme.termCard(act),
-                        Theme.withAlpha(Theme.termCyan(act), on ? 0xAA : 0x33)));
+                styleFilterChip(chip, act, f.equals(listFilter));
                 LinearLayout.LayoutParams clp2 = new LinearLayout.LayoutParams(-2, -2);
                 clp2.setMargins(0, 0, dp(6), 0);
                 chip.setLayoutParams(clp2);
                 chip.setClickable(true);
                 chip.setOnClickListener(new View.OnClickListener() {
                     @Override public void onClick(View v) {
+                        // ── 原地刷新（2026-10-03 修"切筛选会一闪"）──
+                        // 改前：dismissOne + showList —— 关掉整个对话框再重建，
+                        //   观感是"窗口闪一下又长出来"，用户反馈"不平滑不圆润"。
+                        // 现在：只重填列表区 + 重染色 chip，窗口本身不动。
+                        if (f.equals(listFilter)) return;
                         listFilter = f;
-                        dismissOne(listDialog);
-                        showList(lastActivity);
+                        refreshFilterChips(act);
+                        fillTargetRows(act);
                     }
                 });
+                listFilterChips.add(chip);
                 fbar.addView(chip);
             }
             filterRow.addView(fbar);
@@ -8718,6 +8790,7 @@ public final class TGAutoSignCore {
             LinearLayout bar = new LinearLayout(act); bar.setOrientation(LinearLayout.HORIZONTAL); bar.setGravity(Gravity.CENTER_VERTICAL); bar.setPadding(dp(2), dp(2), dp(2), dp(6));
             TextView lab = new TextView(act); lab.setText(Lang.tr("排序")); lab.setTextSize(Theme.TS_CAPTION); lab.setTextColor(Theme.termMuted(act)); lab.setTypeface(android.graphics.Typeface.MONOSPACE); lab.setPadding(0, 0, dp(8), 0);
             bar.addView(lab);
+            listSortChips.clear();          // 重建前清空，避免旧对话框的引用累积
             bar.addView(sortChip(act, "未签置顶", "unsigned"));
             bar.addView(sortChip(act, "按名称", "name"));
             // 「最近失败」——上面代码注释里写着这个排序"计划后面加"，
@@ -8736,19 +8809,8 @@ public final class TGAutoSignCore {
         listBox.setOrientation(LinearLayout.VERTICAL);
         listSv.addView(listBox, new android.widget.ScrollView.LayoutParams(-1, -2));
 
-        String today = todayStr();
-        int shownN = 0, filtN = 0;
-        for (Map<String, Object> m : sortedTargets()) {
-            String st = statusOf(accountPrefix(), entryId(m), today);
-            if (!listFilterMatch(m, st, today)) { filtN++; continue; }
-            targetRow(listBox, m, st, "more");
-            shownN++;
-        }
-        if (shownN == 0) {
-            emptyView(listBox, filtN > 0
-                    ? Lang.tf("当前筛选（{0}）下没有目标", Lang.tr(listFilter))
-                    : Lang.tr("(暂无目标，点「添加目标」，或直接点 bot 的签到按钮自动学习)"));
-        }
+        listRowsHost = listBox;          // 供筛选/排序原地刷新
+        fillTargetRows(act);
         int listH = listContentHeight(act);
         box.addView(listSv, new LinearLayout.LayoutParams(-1, listH));
 
