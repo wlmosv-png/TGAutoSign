@@ -17,16 +17,45 @@ tgas_need "$TGAS_LIBXPOSED"        "libxposed api jar"
 tgas_need "$TGAS_R8"               "r8.jar"
 
 # 资源守卫：改了 res/ 或 resources.arsc 就别走本机链
-if [ -n "${TGAS_BASE_REF:-}" ] && command -v git >/dev/null 2>&1 && [ -d "$TGAS_SRC/.git" ]; then
-  changed=$(cd "$TGAS_SRC" && git diff --name-only "$TGAS_BASE_REF"...HEAD -- app/src/main/res app/src/main/AndroidManifest.xml 2>/dev/null || true)
+# 2026-10-04 修订：旧版只有在设了 TGAS_BASE_REF 时才检查，否则只打 WARN ——
+#   实际出包时从没人设过它，守卫等于不存在。后果：改了图标与模块描述，
+#   却一直走「只换 dex」的链，res/ 与 resources.arsc 原样沿用 donor，
+#   图标与描述**根本没进包**，而且全程没有任何报错（用户实测反馈）。
+#   现在无论如何都要查一遍：先按基线 diff（若给了），再叠加「工作区未提交改动」。
+#   TGAS_SKIP_RES_GUARD=1 可临时跳过（不推荐）。
+if [ "${TGAS_SKIP_RES_GUARD:-0}" = 1 ]; then
+  echo "WARN: 已按 TGAS_SKIP_RES_GUARD=1 跳过资源守卫" >&2
+elif command -v git >/dev/null 2>&1 && [ -d "$TGAS_SRC/.git" ]; then
+  res_paths="app/src/main/res app/src/main/AndroidManifest.xml"
+  changed=""
+  if [ -n "${TGAS_BASE_REF:-}" ]; then
+    changed=$(cd "$TGAS_SRC" && git diff --name-only "$TGAS_BASE_REF"...HEAD -- $res_paths 2>/dev/null || true)
+  fi
+  # 叠加工作区未提交改动（含未跟踪的新资源）
+  dirty=$(cd "$TGAS_SRC" && (git status --porcelain -- $res_paths 2>/dev/null || true) | awk '{print $NF}')
+  if [ -n "$dirty" ]; then
+    changed=$(printf '%s\n%s\n' "$changed" "$dirty" | sed '/^$/d' | sort -u)
+  fi
   if [ -n "$changed" ]; then
-    echo "FATAL: 相对 $TGAS_BASE_REF 有资源/清单改动，本机手工链无法重编资源表，交给有 aapt2 的环境：" >&2
+    echo "FATAL: 存在 res/ 或 AndroidManifest 改动，本机手工链**无法重编资源表**：" >&2
     echo "$changed" | sed 's/^/  /' >&2
+    echo "" >&2
+    echo "  请改走资源重编链（有 aapt2 的环境）：" >&2
+    echo "    aapt2 compile --dir app/src/main/res -o flat.zip" >&2
+    echo "    aapt2 link --manifest app/src/main/AndroidManifest.xml -I <android.jar> \\" >&2
+    echo "             --min-sdk-version 26 --target-sdk-version 36 \\" >&2
+    echo "             --version-code N --version-name X.Y.Z -o res.apk flat.zip" >&2
+    echo "    合流 res.apk 内的 res/ AndroidManifest.xml resources.arsc 进 repack/" >&2
+    echo "    python3 pack_repack.py   # 整目录打包 + 4 字节对齐" >&2
+    echo "" >&2
+    echo "  出包后必须过产物校验：" >&2
+    echo "    python3 tools/check-res-sync.py <apk>            # manifest 属性 + 资源名" >&2
+    echo "    sh tools/check-res-sync-device.sh <apk>          # 逐字节内容比对（Android 侧）" >&2
     exit 1
   fi
-  echo "资源守卫通过（$TGAS_BASE_REF 起 res/manifest 无改动）"
+  echo "资源守卫通过（res/manifest 无改动）"
 else
-  echo "WARN: 未设 TGAS_BASE_REF，跳过资源守卫 —— 请自己确认没新增资源" >&2
+  echo "WARN: 无 git，跳过资源守卫 —— 请自行确认 res/ 与 manifest 无改动" >&2
 fi
 
 # ── i18n 门禁：UI 文案漏翻译 / 字典缺条目 → 构建失败（方案见 i18n/README.md）──
