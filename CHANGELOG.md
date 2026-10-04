@@ -1,5 +1,131 @@
 # 更新日志
 
+## 1.6.3 (129) — 2026-10-05
+
+> 这一版有两件事：**把「按钮学习时灵时不灵」的真正原因挖出来了**，
+> 以及**把界面从"到处都是框"重做成一套有层次的语言**。
+>
+> 前者是个藏了很久的坑：模块能挂上 hook、日志里一切正常，
+> 但用户真点按钮时判定悄悄失败 —— 因为类型名比对的**大小写**对不上。
+> 后者来自一轮轮截图反馈：从「条目操作」到「设置页」，
+> 每个页面都重新想过一遍"这里到底该不该有边框"。
+
+### 修复 · Fixed
+
+- **按钮学习失效（本版最重要）——类型判据大小写敏感**
+  *Button learning was broken: the type check was case-sensitive.*
+  声明类型是 `TL_keyboard$KeyboardButton`（大写 K），运行时实例却是
+  `TL_keyboard$TL_keyboardButtonCallback_layer228`（小写 k）——
+  于是 hook 装得上、界面一切正常，用户真点按钮时却取不到按钮对象，**静默不学习**。
+  现有 `isKeyboardButtonType()`：不分大小写，并沿父类/接口链再找一层。
+- **气泡内按钮的回调类在官方版里已不存在**
+  *The in-bubble button callback class no longer exists in official Telegram.*
+  实测官方 12.10.6（21570 个类）：`org.telegram.ui.ChatActivity` 与
+  `ChatMessageCellDelegate` **整个类都不在**、字符串 `didPressBotButton` **0 命中**——
+  旧实现按名字精确匹配，必然失效。现改为多候选 + 结构匹配；类不存在降为 info，不再刷错误。
+- **`/help` 是句空话**
+  *`/help` was promised but never implemented.*
+  首次启用的引导提示写着「/help 查看教程」，而代码里只实现了 `/jmb`，用户照发毫无反应。已补上。
+- **按钮点了没反应且零日志**
+  *Tapping a button could do nothing, with no log at all.*
+  `MessageObject` 取不到时整段静默返回；现补可诊断日志。
+- **群目标当天重发 13 次**
+  *A group target was re-sent 13 times in one day.*
+  「已发出」凭据被自己删掉，下一轮又当作没发过。
+- **群聊重复发送 / 未识别「今日用尽」**
+  *Duplicate sends in groups; the bot's "used up today" reply was not recognised.*
+  现能识别该回复，并给发送次数加硬闸。
+- **「请求发出」被当成「签到成功」**
+  *"Request sent" was counted as "signed successfully".*
+  实测某目标按钮全程点不动，当天仍被标记已签。现在成功只由命中成功词产生。
+- **漏签根因：判定与落盘不同源**
+  *The missed-check-in root cause: two different data sources.*
+- **无限递归导致 Telegram 卡死（ANR）**
+  *Infinite recursion froze Telegram (ANR).*
+  模块自发请求触发了自己的 hook，业务层递归。
+- **每日摘要永远发不出**
+  *The daily summary could never be sent.*
+  唯一触发点是「签到轮次结束」，窗口结束后不再有新轮次就再也不检查；现复用已有心跳。
+- **文字冒出「1970-01-01」**
+  *Logs showed a fabricated 1970-01-01 timestamp.*
+  解析失败时会编造时间；现直接标注解析失败。
+- **列表「少一行」与「整块空白」**
+  *"One row missing" and "an entire section blank".*
+  真因是没滚到底 / 循环体无单行保护（任一目标抛异常即中断整段渲染）。
+- **统计页静默丢条目、各处尺寸被裁**
+  *The stats page silently dropped entries; sections were clipped.*
+  宽度基准曾误用屏幕宽，热力图爆高、柱过宽、账号行截断。
+- **开关看起来全是关的**
+  *Every switch looked off.*
+  原生 Switch 取系统默认色，深色主题下「开」与「关」几乎无法区分。
+- **切 Tab 后面板消失（严重）**
+  *Switching tabs made the whole panel disappear.*
+- **易懂档日志顺序倒置、「首页有、日志页没有」**
+  *Plain-mode log order was inverted; the home page showed entries the log page did not.*
+- **日历摘要连签虚高、今日状态不可达**
+  *Calendar streak was inflated; the "not signed today" state was unreachable.*
+- **代码通读发现的四类问题**（空指针保护、边界、计数口径、状态清理）
+  *Four classes of issues found in a full code read-through.*
+
+### 变更 · Changed
+
+- **界面整体重做：从「到处是框」改为「靠底色分层」**
+  *Full visual rework: from outlines everywhere to layering by surface tone.*
+  起因是用户反复反馈「一屏数出十一个框，眼睛没有落点」。
+  现确立三级圆角（容器 14dp / 控件 8dp / 徽章药丸）与三档底色
+  `surface(0/1/2)`，边界改由**底色明度差**表达而非描边。
+- **`termBorder` 本体改为忽略描边参数**
+  *`termBorder` itself no longer draws a border.*
+  全项目 45 处调用一次到位；确需描边的少数位置改用新增的 `outlinedBg`。
+  改本体而非逐处改，是因为上一轮逐个改时漏过一批 —— 且回退只需改这一个函数。
+- **按钮分四级**
+  *Buttons now have four levels.*
+  实心主操作（仅「保存/确认」）· 安静（测试/自检/查看，无实心）· 幽灵（主界面「立即签到」）· 普通浅底。
+- **日间色调转暖，浅色模式改用实色分层**
+  *The light theme is warmer; light mode now uses solid colours instead of translucent overlays.*
+  卡片改纯白、卡内嵌转暖中性、主色加深。半透明叠浅底必然发灰——这是此前"日间不好看"的根因。
+- **设置页：多卡折叠 → 顶部锚点条 + 单卡**
+  *Settings: from stacked collapsible cards to an anchor bar plus one scrollable card.*
+  折叠态四张卡占一屏却只有四行信息，且展开一张会把上面几张挤出屏幕。
+- **条目操作菜单：分组卡片 + 唯一主操作**
+  *The entry action menu now uses grouped cards with a single primary action.*
+- **编辑目标：标签外置 + 模板 chip 按宽度自动折行**
+  *Edit target: labels moved outside the fields; template chips now wrap.*
+  旧版把整句话塞进 hint，窄屏折三行且输入后即消失；模板 chip 曾单行排七个，第四个起被裁掉。
+- **排除管理：改为 ①②③④ 四步工作流**
+  *Exclusion manager rebuilt as a four-step workflow.*
+  原四段结构一模一样、没有自解释。现每步一句用途 + 子卡片，并新增**规则条数实时计数**。
+- **最近动态：时间定宽左列 + 图标槽 + 单行截断**
+  *Recent activity: fixed-width time column, icon slot, single-line truncation.*
+  旧版时间与正文拼成一串、超长硬截断后由 TextView 折行，一个位变两行。
+- **统计页重做**（全部 Canvas 手绘，无图片资源）
+  *The stats page was rebuilt, drawn entirely on Canvas — no image assets.*
+  环形进度（按净空反算字号）· 90 天热力图 · 趋势折线 · 星期分布 · 多账号对比 · 各目标卡片化 · 滚动到位才播的入场动效。
+- **账号一览改版**
+  *Account overview redesigned.*
+  每个账号一行：实时进度条、末端扫描头、「正在处理」条整条呼吸脉动；1 秒轮询，窗口关闭自停。
+- **主面板减法**
+  *The main panel was simplified.*
+  砍掉三层重复入口，「立即签到」提级为主按钮。
+
+### 新增 · Added
+
+- **规则测试器**
+  *Rule tester.*
+  粘贴一段机器人回复，用**和实际签到完全相同**的判定链看它会被判成什么，并额外告知是否命中排除规则。
+- **Turrit 适配**（`org.telegram.group`）
+  *Turrit support.*
+  实测 1.9.0.4.2：7 dex / 57774 类、未加固，全部 hook 锚点核验通过。
+  该客户端**未做全量 R8 混淆**，类名完整，比官方版更好适配。
+- **外部通知**（ntfy / Bark）与**自动备份**（每天首次打开面板执行，保留最近 5 份）
+  *External notifications (ntfy / Bark) and automatic backups.*
+- **`/help` 命令** —— 打开与 `/jmb` 同一份使用教程。
+  *The `/help` command opens the same guide as `/jmb`.*
+- **教程全面重写**：按板块折叠，内容按当前实现逐条校对。
+  *The guide was rewritten section by section and re-checked against the implementation.*
+- **界面主题跟随修复**：开场动画由常驻循环改为一次性，并给用户选择权。
+  *The opening animation no longer loops forever, and the user can choose.*
+
 ## 1.6.2 (128) — 2026-09-29
 
 > 本版把签到语义统一到用户视角：**发出**与**成功**严格分开，

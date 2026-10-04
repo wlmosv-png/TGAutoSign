@@ -8904,6 +8904,10 @@ public final class TGAutoSignCore {
     private String shotBaseName(String pageTitle) {
         if ("设置".equals(pageTitle)) return "settings";
         if ("目标列表".equals(pageTitle)) return "targets";
+        if ("条目操作".equals(pageTitle)) return "actions";
+        if ("排除管理".equals(pageTitle)) return "exclude";
+        if ("账号一览".equals(pageTitle)) return "accounts";
+        if ("使用教程".equals(pageTitle)) return "guide";
         return "main";
     }
 
@@ -8924,8 +8928,13 @@ public final class TGAutoSignCore {
         shotNameMap.clear(); shotNameSeq = 0;
         try { synchronized (logBuffer) { SHOT_LOG_CUTOFF = logBuffer.size(); } } catch (Throwable ignored) {}
         shotTable = shotScrubTable();   // 先建脱敏表，再截断日志
-        final String[] PAGES = { "TGAutoSign · 管理", "目标列表", "设置" };
-        jlog("[导出] 开始：3 页 × 深浅色，密度 " + scale + "x");
+        // 2026-10-04：从 3 页扩到 7 页。
+        //   起因：1.6.3 这轮把界面整体重做（菜单分组卡片、编辑目标外置标签、
+        //   设置页锚点条、排除管理四步工作流、账号一览、统计页），
+        //   而导出只覆盖 主菜单/目标列表/设置 —— README 与发布页缺图。
+        //   新增页面全部走同一套脱敏（真实 bot 名 -> Demo Bot NN）。
+        final String[] PAGES = SHOT_PAGES;
+        jlog("[导出] 开始：" + PAGES.length + " 页 × 深浅色，密度 " + scale + "x");
         toast(Lang.tr("正在导出界面图…"));
 
         new Thread(new Runnable() { @Override public void run() {
@@ -9002,9 +9011,25 @@ public final class TGAutoSignCore {
     }
 
     /** 按标题打开对应页面 —— 复用 runAction 那一套，不另写构建代码。 */
+    /** 界面图导出的页面清单（顺序即导出顺序）。 */
+    private static final String[] SHOT_PAGES = {
+            "TGAutoSign · 管理", "目标列表", "条目操作", "设置",
+            "排除管理", "账号一览", "使用教程"
+    };
+
     private void buildPageByTitle(Activity act, String title) {
         if ("设置".equals(title)) { showSettings(act); return; }
         if ("目标列表".equals(title)) { showList(act); return; }
+        if ("排除管理".equals(title)) { showExcludeManager(act); return; }
+        if ("账号一览".equals(title)) { showAccountOverview(act); return; }
+        if ("使用教程".equals(title)) { showTutorial(act); return; }
+        if ("条目操作".equals(title)) {
+            // 条目操作菜单需要一条目标数据才能构建；导出时取快照里的第一条。
+            // 没有目标就退回主菜单（不至于导出空白页）。
+            java.util.List<Map<String, Object>> snap = targetsSnapshot();
+            if (snap != null && !snap.isEmpty()) { showEntryActions(act, snap.get(0)); return; }
+            showMainMenu(act); return;
+        }
         showMainMenu(act);
     }
 

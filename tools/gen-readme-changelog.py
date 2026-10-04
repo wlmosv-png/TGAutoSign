@@ -34,6 +34,7 @@ FULL_LINK = 'https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md'
 
 CJK = re.compile(r'[\u4e00-\u9fff]')
 SEC_EN = {'新增': 'New', '界面': 'UI', '修复': 'Fixed', '诊断': 'Diagnostics',
+          '变更': 'Changed', '改进': 'Improved', '移除': 'Removed',
           '可靠性': 'Reliability', '兼容': 'Compatibility',
           '架构更新': 'Architecture', '工具': 'Tooling', '文档': 'Docs',
           '维护范围': 'Supported clients'}
@@ -59,10 +60,22 @@ def _en_from_block(body, start_idx, stop_idx):
         if st.startswith('- **') or st.startswith('### ') or st.startswith('## '):
             break
         block.append(l)
-    # 找英文正文起点
+    # 找英文正文起点。
+    # 2026-10-04 修：CHANGELOG 的英文译行写成 `  *English sentence.*`（两空格缩进 + 斜体），
+    #   旧判据直接看 st[0] 是不是 ASCII 大写字母 —— 碰上 `*` 就永远找不到起点，
+    #   于是退化成把正文里任何含 ASCII 的中文行当英文（1.6.2 段的英文摘要就是这样被污染的）。
+    #   现在先剥掉 Markdown 标记（* _ ` 与首尾空白）再判。
+    def _strip_md(x):
+        t = x.strip()
+        while t and t[0] in '*_`':
+            t = t[1:].lstrip()
+        while t and t[-1] in '*_`':
+            t = t[:-1].rstrip()
+        return t
+
     en_start = None
     for i, l in enumerate(block):
-        st = l.strip()
+        st = _strip_md(l)
         if not st:
             continue
         if st[0].isupper() and st[0].isascii() and not CJK.search(st):
@@ -74,7 +87,7 @@ def _en_from_block(body, start_idx, stop_idx):
     # 拼接时按行保留，遇到空行或新句起点即停。
     parts = []
     for x in block[en_start:]:
-        st = x.strip()
+        st = _strip_md(x)
         if not st:
             if parts:
                 break
