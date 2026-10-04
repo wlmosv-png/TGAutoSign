@@ -2753,7 +2753,7 @@ public final class TGAutoSignCore {
             if (data==null){
                 LinearLayout r2=new LinearLayout(act); r2.setOrientation(LinearLayout.HORIZONTAL);
                 TextView tt=new TextView(act); tt.setTextSize(Theme.TS_SUBTITLE); tt.setTextColor(android.graphics.Color.parseColor(txtSub(act)));
-                tt.setText("\u26a0\ufe0f "+text+Lang.tr("（文本/链接按钮，不能绑定回调）"));
+                tt.setText("⚠️ "+text+Lang.tr("（文本/链接按钮，不能绑定回调）"));
                 r2.addView(tt,new LinearLayout.LayoutParams(0,-2,1f));
                 r2.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ toast(Lang.tr("这类按钮无法用回调模拟；文本键盘类请用「文本指令」目标（文本=按钮文字）")); } });
                 box.addView(r2);
@@ -7579,7 +7579,7 @@ public final class TGAutoSignCore {
             t.setCompoundDrawables(dd, null, null, null);
             t.setCompoundDrawablePadding(Theme.dp(act, 8));
         } else {
-            t.setText((ok ? "\u2705 " : "\u26a0\ufe0f ") + Lang.tr(label));
+            t.setText((ok ? "✅ " : "⚠️ ") + Lang.tr(label));
         }
         box.addView(t);
     }
@@ -8794,21 +8794,35 @@ public final class TGAutoSignCore {
 
             // ── 各目标（全列，不再截断）──
             for (Map<String, Object> m : tl) {
+                // ── 失败不能静默弃条（2026-10-04）──
+                // 旧写法整条 catch(ignored)：哪怕一个字段取不到，
+                // 这个目标就从快照里**彻底消失** ——
+                // 于是「各目标」显示 6 个而列表 8 个，
+                // 用户看不出哪里差了。现在：
+                //   ① 逐字段独立保护（一个字段失败不带走整条）；
+                //   ② 名字最后兑底到 id，保证总有名字；
+                //   ③ 真出了异常就打日志，不再静默。
+                StatsSnapshot.Target t = new StatsSnapshot.Target();
+                String id = "";
                 try {
-                    StatsSnapshot.Target t = new StatsSnapshot.Target();
-                    String id = entryId(m);
-                    String nm = entryTitle(m);
-                    if (nm == null || nm.length() == 0 || "null".equals(nm)) nm = targetTitle(entryDid(m));
-                    if (nm == null || nm.length() == 0 || "null".equals(nm)) nm = String.valueOf(entryDid(m));
-                    t.name = nm;
-                    t.signedToday = s.today.equals(prefs.getString(kLast(prefix, id), ""));
+                    id = entryId(m);
+                    t.name = String.valueOf(id);
+                    try {
+                        String nm = entryTitle(m);
+                        if (nm == null || nm.length() == 0 || "null".equals(nm)) nm = targetTitle(entryDid(m));
+                        if (nm == null || nm.length() == 0 || "null".equals(nm)) nm = String.valueOf(entryDid(m));
+                        if (nm != null && nm.length() > 0) t.name = nm;
+                    } catch (Throwable _nm) { noteSwallowed("stats-name", _nm); }
+                    try { t.signedToday = s.today.equals(prefs.getString(kLast(prefix, id), "")); } catch (Throwable ignored) {}
                     try { t.failStreak = prefs.getInt(Keys.failStreak(prefix, id), 0); } catch (Throwable ignored) {}
-                    t.signedAtMs = stateStore.signedAtMs(prefix, id);
-                    t.pending = isPendingConfirm(prefix, id);
-                    t.frozen = isFrozen(prefix, id) || isBotBlocked(entryDid(m));
-                    if (t.signedAtMs > 0L) s.todayTimes.add(Long.valueOf(t.signedAtMs));
-                    s.targets.add(t);
-                } catch (Throwable ignored) {}
+                    try { t.signedAtMs = stateStore.signedAtMs(prefix, id); } catch (Throwable ignored) {}
+                    try { t.pending = isPendingConfirm(prefix, id); } catch (Throwable ignored) {}
+                    try { t.frozen = isFrozen(prefix, id) || isBotBlocked(entryDid(m)); } catch (Throwable ignored) {}
+                } catch (Throwable _row) {
+                    logw("[统计] 条目快照失败，已降级保留: " + id + " —— " + _row);
+                }
+                try { if (t.signedAtMs > 0L) s.todayTimes.add(Long.valueOf(t.signedAtMs)); } catch (Throwable ignored) {}
+                s.targets.add(t);
             }
             // 失败多的排前面
             final String fp = prefix;
@@ -9424,15 +9438,29 @@ public final class TGAutoSignCore {
         // 旧写法无条件 0.64 屏：列表短时留一大片空白，
         // 列表长时最后一行被截在屏幕外 ——
         // 用户数到 8 以为少了一个（实际 9 条，没滚到底）。
-        int listMax = listContentHeight(act);
-        int listH = listMax;
-        try {
-            int want = 0;
-            if (listSv.getChildCount() > 0) want = listSv.getChildAt(0).getMeasuredHeight();
-            if (want <= 0) want = Math.max(1, listBox.getChildCount()) * dp(58) + dp(8);
-            if (want > 0 && want < listMax) listH = want;
-        } catch (Throwable ignored) {}
-        listTargetContainer.addView(listSv, new LinearLayout.LayoutParams(-1, listH));
+        final int listMax = listContentHeight(act);
+        // ── 高度「够用就好」（2026-10-04 第三轮）──
+        // 旧写法无条件 0.64 屏：列表长时最后一行被截在屏幕外。
+        // 上一版读 getMeasuredHeight() 但**当时还没 layout**，
+        // 拿到 0 就退回估算值（dp(58)*行数）——
+        // 估算比真实行高**偏小**，于是仍然被截。
+        // 现在：先用上限占位，首帧 layout 完成后再用**实测高**
+        // 重设一次（只在实测 < 上限时收窄）。
+        final android.widget.ScrollView fListSv = listSv;
+        final LinearLayout fListBox = listBox;
+        final LinearLayout.LayoutParams listLp = new LinearLayout.LayoutParams(-1, listMax);
+        listTargetContainer.addView(listSv, listLp);
+        listSv.post(new Runnable() { @Override public void run() {
+            try {
+                int want = 0;
+                if (fListSv.getChildCount() > 0) want = fListSv.getChildAt(0).getMeasuredHeight();
+                if (want <= 0) want = fListBox.getChildCount() * dp(62);
+                if (want > 0 && want < listMax) {
+                    listLp.height = want;
+                    fListSv.setLayoutParams(listLp);
+                }
+            } catch (Throwable ignored) {}
+        } });
 
         Object oldList = listDialog;
         listDialog = showDialog(act, Lang.tf("目标列表（{0}）", targets.size()), box, "关闭");
@@ -9996,7 +10024,7 @@ public final class TGAutoSignCore {
         // 启动横幅（其余 4 行已在 isInternalLog 里滤掉）→ 压成一条。
         // 按天折叠：一天重启十几次，逐条列出只是噪音，合并成"×N"才说明问题。
         if (s.startsWith("=== TGAutoSign") && s.contains("已加载"))
-            return new String[]{"bot", Lang.tr("已启动"), "info", "\u0001D:boot"};
+            return new String[]{"bot", Lang.tr("已启动"), "info", "D:boot"};
 
         // 兜底：去技术前缀，遮住裸 ID
         String r = s;
@@ -11206,7 +11234,7 @@ public final class TGAutoSignCore {
             if (dropped > 0) {
                 arr = kept;
                 prefs.edit().putString(key, arr.toString()).commit();
-                jlog("[\u5b9a\u65f6] \u5df2\u6e05\u7406 " + dropped + " \u4e2a\u5df2\u5220\u9664\u7684\u9648\u65e7\u6392\u671f");
+                jlog("[定时] 已清理 " + dropped + " 个已删除的陈旧排期");
             }
 
             // 当前未签且未冻结、且不在表内的
