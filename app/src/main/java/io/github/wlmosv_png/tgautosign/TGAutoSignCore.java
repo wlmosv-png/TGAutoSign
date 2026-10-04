@@ -1087,7 +1087,11 @@ public final class TGAutoSignCore {
         try { sweepStalePendingConfirm(); } catch (Throwable ignored) {} // 清掉跨天残留的「待确认」
         registerNetworkReceiver();
         registerActivityListener();
-        mainHandler.postDelayed(() -> { try { jlog("=== 启动补签 ==="); timerHook("启动"); } catch (Throwable ignored) {} }, 10000L);
+        mainHandler.postDelayed(() -> {
+            try { jlog("=== 启动补签 ==="); timerHook("启动"); } catch (Throwable ignored) {}
+            // 启动时排一次服务器提醒（幂等：已排过同一时刻就直接返回）
+            try { ensureReminderScheduled(); } catch (Throwable ignored) {}
+        }, 10000L);
         schedulePoll();
         scheduleTickLoop();   // 心跳常驻：正常签到与补签都靠它兜底
         mainHandler.postDelayed(new Runnable(){ @Override public void run(){ try { syncNow(); } catch (Throwable ignored) {} } }, 12000L);
@@ -2644,7 +2648,19 @@ public final class TGAutoSignCore {
      *  不用 emoji（用户硬性要求），纯文本前缀就够唯一。 */
     private static final String REMINDER_MARK = "[TGAutoSign] 定时提醒";
 
-    private static String kReminderDate() { return "jmb_reminder_date"; }
+    private static String kReminderSlot() { return "jmb_reminder_slot"; }
+
+    /**
+     * 自发请求重入闸（2026-10-04 紧急修）。
+     *
+     * 事故：模块自己发的请求会再次进入本模块的
+     * sendRequest hook，hook 里又去调 timerHook → kickSchedule →
+     * 又去发提醒 → 无限递归 → main 线程被拖死 → TG 卡死（ANR）。
+     *
+     * 解法：自发期间置位，onSendRequest 见到就直接放过 ——
+     * 不学习、不判定、不触发调度。自己发的东西不需要自己再处理一遍。
+     */
+    private volatile boolean selfSending = false;
 
     /**
      * 用 TG 的定时发送，给「收藏夹」排一条每日提醒（2026-10-04）。
@@ -2666,11 +2682,17 @@ public final class TGAutoSignCore {
     private void ensureReminderScheduled() {
         try {
             if (!TIMER_ENABLED) return;
-            String today = todayStr();
-            if (today.equals(prefs.getString(kReminderDate(), ""))) return;
             int[] any = SignLogic.windowRangeAny(WINDOW);
             if (any == null) return;
             int startMin = SignLogic.wrapMinute(any[0] - 5);
+            String slot = String.format("%02d:%02d", startMin / 60, startMin % 60);
+            // ── 只在「意图时刻变了」时重排（2026-10-04）──
+            // repeat=86400 本身就会每天自动重投；
+            // 若再按“每天”去排一次，服务端会累积出 N 条重复的
+            // 周期任务（每月 30 条 → 收藏夹每天被刷 30 次）。
+            if (slot.equals(prefs.getString(kReminderSlot(), ""))) return;
+            // 先记上再做事：避免 peer 拿不到时每轮心跳都重试。
+            prefs.edit().putString(kReminderSlot(), slot).apply();
             java.util.Calendar c = java.util.Calendar.getInstance();
             c.set(java.util.Calendar.HOUR_OF_DAY, startMin / 60);
             c.set(java.util.Calendar.MINUTE, startMin % 60);
@@ -2682,7 +2704,6 @@ public final class TGAutoSignCore {
             Object peer = savedMessagesPeer(acc);
             if (peer == null) { logd("[定时] 收藏夹 peer 获取失败，提醒未排"); return; }
             sendTextScheduled(peer, acc, REMINDER_MARK, (int) (at / 1000L), 86400);
-            prefs.edit().putString(kReminderDate(), today).apply();
         } catch (Throwable t) { noteSwallowed("ensureReminderScheduled", t); }
     }
 
@@ -2705,6 +2726,20 @@ public final class TGAutoSignCore {
      */
     private void sendTextScheduled(Object peer, int account, String msg,
                                    int scheduleAtSec, int repeatSec) throws Exception {
+        // 置位重入闸：本次请求不得再被自己的 hook 处理。
+        // finally 里复位 —— sendRequest 是异步的，但 hook 是在
+        // 同一个调用栈上同步触发的，因此这个窗口足够。
+        boolean prev = selfSending;
+        selfSending = true;
+        try {
+            sendTextScheduledInner(peer, account, msg, scheduleAtSec, repeatSec);
+        } finally {
+            selfSending = prev;
+        }
+    }
+
+    private void sendTextScheduledInner(Object peer, int account, String msg,
+                                        int scheduleAtSec, int repeatSec) throws Exception {
         Class<?> sendCls = classEx("org.telegram.tgnet.TLRPC$TL_messages_sendMessage");
         Object req = newTlObject(sendCls);
         setFieldVal(req, "peer", peer);
@@ -11430,7 +11465,6 @@ public final class TGAutoSignCore {
     /** 统一调度入口：巡检 + 排期。设置变更 / 触发源 / 签到完成后都走这里。串行化防重排。 */
     private void kickSchedule() {
         synchronized (SCHED_LOCK) {
-            try { ensureReminderScheduled(); } catch (Throwable ignored) {}
             try { sweepDue(); } catch (Throwable ignored) {}
             try { scheduleTimerPlan(); } catch (Throwable ignored) {}
         }
@@ -13496,6 +13530,12 @@ public final class TGAutoSignCore {
     public boolean onSendRequest(Object[] args, Object connObj) {
         Object req0 = args != null && args.length > 0 ? args[0] : null;
         if (req0 == null) return false;
+        // ── 自发请求直接放过（2026-10-04 紧急修）──
+        // 没这一步会无限递归：
+        //   ensureReminderScheduled → sendTextScheduled → sendRequest
+        //   → 本 hook → timerHook → kickSchedule → ensureReminderScheduled → ...
+        // 实测将 main 线程拖死 5 秒以上 → TG 输入分发超时（ANR）。
+        if (selfSending) return false;
         String rn0 = req0.getClass().getName();
         if (!rn0.contains("TL_messages_sendMessage") && !rn0.contains("TL_messages_getBotCallbackAnswer")
                 && !rn0.contains("TL_messages_sendWebViewData") && !rn0.contains("TL_messages_sendMedia")
@@ -13506,9 +13546,15 @@ public final class TGAutoSignCore {
         try {
             if (rn0.contains("TL_messages_sendMessage")) {
                 Object m0 = getFieldVal(req0, "message");
-                if (m0 != null && isJmbCommand(String.valueOf(m0))) {
-                    handleCommand(String.valueOf(m0));
-                    return true;
+                if (m0 != null) {
+                    String ms0 = String.valueOf(m0);
+                    if (isJmbCommand(ms0)) {
+                        handleCommand(ms0);
+                        return true;
+                    }
+                    // 自己排的服务器提醒：既不是签到信号，也不需要学习，吞掉。
+                    // （否则它会以为“发给 bot 的指令”去解析，又一条死路。）
+                    if (ms0.startsWith(REMINDER_MARK)) return true;
                 }
             }
         } catch (Throwable ignored) {}
@@ -14401,6 +14447,10 @@ public final class TGAutoSignCore {
             try {
                 prefs.edit().remove(kTimerPlan(accountPrefix(), todayStr())).apply();
                 scheduleWindowWake();
+                // 窗口可能变了 → 重算服务器提醒的时刻（2026-10-04）。
+                // 只在这里与启动时调，不挂到 kickSchedule（高频）上 ——
+                // 否则“每次发送都去发一次新请求”，是递归的温床。
+                try { ensureReminderScheduled(); } catch (Throwable ignored) {}
                 if (TIMER_ENABLED && (inWindow() || inMissBackTime())) kickSchedule();
             } catch (Throwable _eA) { noteSwallowed("applyConfigFrom(重排)", _eA); }
         } catch (Throwable t) { logException("[同步] 配置应用", t); }
