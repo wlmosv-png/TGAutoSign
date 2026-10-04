@@ -2584,7 +2584,16 @@ public final class TGAutoSignCore {
         Object o = m.get("title");
         if (o == null) return null;
         String v = String.valueOf(o);
-        return ("null".equals(v) || v.isEmpty()) ? null : v;
+        if ("null".equals(v) || v.isEmpty()) return null;
+        // 2026-10-04 导出打码补漏：
+        //   entryDisplayName() 查到群名后会 cacheEntryTitle() 回写条目的 "title"，
+        //   于是 targetRow 里 entryTitle() 直接拿到**真实群名**，
+        //   绕过了 targetTitle() 的 SHOT_MASK 分支 —— 导出图里泄漏真名。
+        //   这里补一道：导出打码期，条目名一律换占位名（建表时 SHOT_RAW=true，不受影响）。
+        if (SHOT_MASK && !SHOT_RAW) {
+            try { return shotAlias(entryDid(m), false); } catch (Throwable ignored) {}
+        }
+        return v;
     }
 
     private Map<String, Object> findEntryById(String id) {
@@ -5745,6 +5754,9 @@ public final class TGAutoSignCore {
     }
 
     private String botName(long did) {
+        // 2026-10-04 导出打码：所有目标名最终都汇聚到这里，
+        //   在源头短路比在每个调用点补更可靠（曾漏：排除管理页的 blockedNames 直取 botName）。
+        if (SHOT_MASK && !SHOT_RAW) return shotAlias(did, false);
         // 只缓存**取到的**名字：以前无论成功失败都 put，导致第一次取不到时
         // 把 null 缓存住，之后永远显示数字 ID（用户反馈"排除列表只能获取一次名字"）。
         String cached = nameCache.get(did);
@@ -5783,6 +5795,7 @@ public final class TGAutoSignCore {
 
     /** bot 的 @username（可读、能猜用途）。没有则返回 null。 */
     private String botUsername(long did) {
+        if (SHOT_MASK && !SHOT_RAW) return String.valueOf(shotAlias(did, true)).substring(1);
         try {
             Object u = getUserObject(did);
             if (u == null) return null;
