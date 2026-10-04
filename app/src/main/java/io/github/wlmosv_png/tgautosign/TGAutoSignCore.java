@@ -7096,7 +7096,7 @@ public final class TGAutoSignCore {
                     String[] pp = plainLogParts(String.valueOf(l.msg));
                     String fk = (pp != null && pp.length > 3) ? pp[3] : null;
                     if (fk == null) { out.add(l); continue; }
-                    // \u0001D: 前缀 = 按天折叠（跨天重新计数，避免"×90"失去时间感）
+                    // D: 前缀 = 按天折叠（跨天重新计数，避免"×90"失去时间感）
                     if (fk.length() > 2 && fk.charAt(0) == '\u0001' && fk.charAt(1) == 'D') {
                         fk = fk.substring(2) + "@" + dayFmt.format(new java.util.Date(l.ts));
                     }
@@ -9420,7 +9420,18 @@ public final class TGAutoSignCore {
 
         listRowsHost = listBox;          // 供筛选/排序原地刷新
         fillTargetRows(act);
-        int listH = listContentHeight(act);
+        // ── 高度「够用就好」（2026-10-04）──
+        // 旧写法无条件 0.64 屏：列表短时留一大片空白，
+        // 列表长时最后一行被截在屏幕外 ——
+        // 用户数到 8 以为少了一个（实际 9 条，没滚到底）。
+        int listMax = listContentHeight(act);
+        int listH = listMax;
+        try {
+            int want = 0;
+            if (listSv.getChildCount() > 0) want = listSv.getChildAt(0).getMeasuredHeight();
+            if (want <= 0) want = Math.max(1, listBox.getChildCount()) * dp(58) + dp(8);
+            if (want > 0 && want < listMax) listH = want;
+        } catch (Throwable ignored) {}
         listTargetContainer.addView(listSv, new LinearLayout.LayoutParams(-1, listH));
 
         Object oldList = listDialog;
@@ -11176,9 +11187,29 @@ public final class TGAutoSignCore {
                 int m = o.optInt("min", -1);
                 if (m > maxMin) maxMin = m;
             }
-            // 当前未签且未冻结、且不在表内的
             List<Map<String, Object>> list = new ArrayList<Map<String, Object>>();
             loadTargetsInto(prefix, list);
+
+            // ── 先剔除陈旧条目（2026-10-04 修「删了还排」）──
+            // 上一版只**补**不**删**：删掉的目标永远留在表里，
+            // 到点还被排期。用户实测：已删除的两条仍在表中。
+            java.util.Set<String> alive = new java.util.HashSet<String>();
+            for (Map<String, Object> m : list) alive.add(entryId(m));
+            org.json.JSONArray kept = new org.json.JSONArray();
+            int dropped = 0;
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                if (alive.contains(o.optString("id"))) kept.put(o);
+                else dropped++;
+            }
+            if (dropped > 0) {
+                arr = kept;
+                prefs.edit().putString(key, arr.toString()).commit();
+                jlog("[\u5b9a\u65f6] \u5df2\u6e05\u7406 " + dropped + " \u4e2a\u5df2\u5220\u9664\u7684\u9648\u65e7\u6392\u671f");
+            }
+
+            // 当前未签且未冻结、且不在表内的
             List<Map<String, Object>> missing = new ArrayList<Map<String, Object>>();
             for (Map<String, Object> m : list) {
                 String id = entryId(m);
