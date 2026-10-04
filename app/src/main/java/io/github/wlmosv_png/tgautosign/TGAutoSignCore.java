@@ -2640,6 +2640,111 @@ public final class TGAutoSignCore {
     private String entryLoc(Map<String,Object> m){ Object o=m.get("loc"); return o==null ? entryText(m) : String.valueOf(o); }
     private List<String> cbPres(Map<String,Object> m){ List<String> l=entryPre(m); if (l.isEmpty() && WAKE_CMD!=null && WAKE_CMD.length()>0) l.add(WAKE_CMD); return l; }
 
+    /** 服务器提醒标记。收到它 = 自己排的定时提醒到点了。
+     *  不用 emoji（用户硬性要求），纯文本前缀就够唯一。 */
+    private static final String REMINDER_MARK = "[TGAutoSign] 定时提醒";
+
+    private static String kReminderDate() { return "jmb_reminder_date"; }
+
+    /**
+     * 用 TG 的定时发送，给「收藏夹」排一条每日提醒（2026-10-04）。
+     *
+     * 这是**漏签的正解**：
+     *   消息交给 Telegram 服务器持有，到点由服务器投递 ——
+     *   本机进程没在跑、被 ColorOS 冻结、被杀，也会收到推送。
+     *   模块 hook 到这条消息（见 onUpdateProcessed）就能把进程唤醒过来、
+     *   跑一轮巡检 —— 完全不依赖本机定时器。
+     *
+     * 为什么是「收藏夹」：
+     *   peer 就是自己，不会打扰任何人；而且收藏夹消息也会走
+     *   push 通道，同样能把进程唤醒。
+     *
+     * 排在窗口开始前 5 分钟：醒来正好赶上开工。
+     * repeat=86400 让服务器每天同一时刻自动重发 ——
+     * 本机不用再管，也不用担心重装/清数据后丢失。
+     */
+    private void ensureReminderScheduled() {
+        try {
+            if (!TIMER_ENABLED) return;
+            String today = todayStr();
+            if (today.equals(prefs.getString(kReminderDate(), ""))) return;
+            int[] any = SignLogic.windowRangeAny(WINDOW);
+            if (any == null) return;
+            int startMin = SignLogic.wrapMinute(any[0] - 5);
+            java.util.Calendar c = java.util.Calendar.getInstance();
+            c.set(java.util.Calendar.HOUR_OF_DAY, startMin / 60);
+            c.set(java.util.Calendar.MINUTE, startMin % 60);
+            c.set(java.util.Calendar.SECOND, 0);
+            c.set(java.util.Calendar.MILLISECOND, 0);
+            long at = c.getTimeInMillis();
+            if (at <= System.currentTimeMillis()) at += 86400000L;
+            int acc = currentAccount();
+            Object peer = savedMessagesPeer(acc);
+            if (peer == null) { logd("[定时] 收藏夹 peer 获取失败，提醒未排"); return; }
+            sendTextScheduled(peer, acc, REMINDER_MARK, (int) (at / 1000L), 86400);
+            prefs.edit().putString(kReminderDate(), today).apply();
+        } catch (Throwable t) { noteSwallowed("ensureReminderScheduled", t); }
+    }
+
+    /**
+     * 定时发送（TG 原生排程，2026-10-04 新增）。
+     *
+     * 为什么要走这条通道（漏签根治）：
+     *   模块现有的定时签到全部压在 mainHandler.postDelayed +
+     *   心跳（45s~15min）上——**只要进程没了，排期就全丢**（全项目
+     *   0 处 AlarmManager）。用户反馈的「偶尔漏签、没规律」就是这个来源。
+     *
+     * 现在改用 TG 自己的定时发送（反编译确认 SendMessageParams 有
+     *   scheduleDate:I 与 scheduleRepeatPeriod:I 两个公开字段）：
+     *   消息交给**服务器**持有，到点由 Telegram 投递 ——
+     *   本机进程没在跑、断网、被杀，照样发得出去。
+     *
+     * @param scheduleAtSec unix 秒（非 0）。传 0 等于立即发。
+     * @param repeatSec     周期（秒），0 = 不重复。传 86400 则每天同一时刻自动重发
+     *                      （服务器端持久，不需本机参与）。
+     */
+    private void sendTextScheduled(Object peer, int account, String msg,
+                                   int scheduleAtSec, int repeatSec) throws Exception {
+        Class<?> sendCls = classEx("org.telegram.tgnet.TLRPC$TL_messages_sendMessage");
+        Object req = newTlObject(sendCls);
+        setFieldVal(req, "peer", peer);
+        setFieldVal(req, "message", msg);
+        setFieldVal(req, "random_id", random.nextLong());
+        if (scheduleAtSec != 0) {
+            // flags 位 0x400 = schedule_date 存在（反编译：
+            //   const/16 v2, 0x400 → hasFlag(flags, 0x400) → writeInt32(schedule_date)）。
+            // 不置位的话序列化时字段被略过，定时就不生效。
+            try {
+                Object old = getFieldVal(req, "flags");
+                int f = (old instanceof Number) ? ((Number) old).intValue() : 0;
+                setFieldVal(req, "flags", Integer.valueOf(f | 0x400));
+            } catch (Throwable _ef) { noteSwallowed("sendTextScheduled-flags", _ef); }
+            setFieldVal(req, "schedule_date", Integer.valueOf(scheduleAtSec));
+            if (repeatSec > 0) {
+                // flags 位 0x1000000 = schedule_repeat_period 存在
+                // （反编译：const/high16 v2, 0x1000000 → hasFlag → writeInt32）。
+                // 字段名实测是 schedule_repeat_period，不是 repeat_period。
+                try {
+                    Object o2 = getFieldVal(req, "flags");
+                    int f2 = (o2 instanceof Number) ? ((Number) o2).intValue() : 0;
+                    setFieldVal(req, "flags", Integer.valueOf(f2 | 0x1000000));
+                } catch (Throwable _er) { noteSwallowed("sendTextScheduled-repeat-flag", _er); }
+                setFieldVal(req, "schedule_repeat_period", Integer.valueOf(repeatSec));
+            }
+        }
+        Object cm = staticInvoke(classEx("org.telegram.tgnet.ConnectionsManager"), "getInstance",
+                new Class<?>[]{int.class}, new Object[]{account});
+        Object delegate = Proxy.newProxyInstance(classEx("org.telegram.tgnet.RequestDelegate").getClassLoader(),
+                new Class<?>[]{classEx("org.telegram.tgnet.RequestDelegate")},
+                new InvocationHandler() { @Override public Object invoke(Object p, Method mm, Object[] a) { return null; } });
+        invoke(cm, "sendRequest",
+                new Class<?>[]{classEx("org.telegram.tgnet.TLObject"), classEx("org.telegram.tgnet.RequestDelegate")},
+                new Object[]{req, delegate});
+        jlog("[定时] 已交 TG 服务器排程: " + msg
+                + "（在 " + hhmm(scheduleAtSec / 60) + "，周期 "
+                + (repeatSec > 0 ? (repeatSec / 3600) + "h" : "无") + "）");
+    }
+
     private void sendText(Object peer, int account, String msg) throws Exception {
         Class<?> sendCls = classEx("org.telegram.tgnet.TLRPC$TL_messages_sendMessage");
         Object req = newTlObject(sendCls);
@@ -11325,6 +11430,7 @@ public final class TGAutoSignCore {
     /** 统一调度入口：巡检 + 排期。设置变更 / 触发源 / 签到完成后都走这里。串行化防重排。 */
     private void kickSchedule() {
         synchronized (SCHED_LOCK) {
+            try { ensureReminderScheduled(); } catch (Throwable ignored) {}
             try { sweepDue(); } catch (Throwable ignored) {}
             try { scheduleTimerPlan(); } catch (Throwable ignored) {}
         }
@@ -11811,6 +11917,13 @@ public final class TGAutoSignCore {
                 TextView cell = new TextView(act);
                 cell.setTextSize(Theme.TS_CAPTION);
                 cell.setTypeface(Theme.text());
+                // 关掉字体自带的上下留白（2026-10-04）。
+                // 用户反馈：同一个界面，他手机上日历格的字偏一点，自己手机正常。
+                // 根因：TextView 默认 setIncludeFontPadding(true) 把字体自带的
+                //   ascent/descent 留白算进行高，而不同设备默认字体
+                //   的留白不同 —— 数字字形对称看不出，
+                //   中文「今」上下不对称，于是就“偏”了。
+                cell.setIncludeFontPadding(false);
                 // 圆点/柱条样式把图形放在下半格，文字改靠上排，避免互相遮挡
                 if (Icons.cellTextTop(CAL_STYLE)) {
                     cell.setGravity(android.view.Gravity.TOP | android.view.Gravity.CENTER_HORIZONTAL);
@@ -13682,6 +13795,22 @@ public final class TGAutoSignCore {
             // 在这种情形下不成立 → 模块自己发的「每日汇总」被当成 bot 回复重新处理，
             // 日志出现「跳过重复信号 8526734916|⚠️ TGAutoSign 今日 0/9 已签…」。
             // 所以"排除自己发的"必须在两种分支上都做。
+            // ── 服务器定时提醒（2026-10-04）──
+            // 这条消息是**模块自己排给自己的**（收藏夹），所以必须在
+            // 下面那个「自己发的一律不处理」之**前**拦截。
+            // 它是唯一能在进程被杀后把模块叫醒的通道 ——
+            // 没它就只能等用户自己打开 TG，那就是漏签。
+            try {
+                Object _rm = getFieldVal(msg, "message");
+                String _body = _rm == null ? "" : String.valueOf(_rm);
+                if (_body.startsWith(REMINDER_MARK)) {
+                    jlog("[定时] 收到服务器提醒，立即巡检");
+                    mainHandler.post(new Runnable() { @Override public void run() {
+                        try { timerHook("服务器提醒"); } catch (Throwable ignored) {}
+                    } });
+                    continue;
+                }
+            } catch (Throwable _eR) { noteSwallowed("onUpdateProcessed-reminder", _eR); }
             boolean isGroupPeer = peerUid < 0;
             long selfId = accountSelfId(ctrlAcc >= 0 ? ctrlAcc : currentAccount());
             if (selfId > 0 && fromUid == selfId) continue;   // 自己发的（含收藏夹汇总、群指令）一律不处理
@@ -14626,6 +14755,13 @@ public final class TGAutoSignCore {
                 TextView cell = new TextView(act);
                 cell.setTextSize(Theme.TS_CAPTION);
                 cell.setTypeface(Theme.text());
+                // 关掉字体自带的上下留白（2026-10-04）。
+                // 用户反馈：同一个界面，他手机上日历格的字偏一点，自己手机正常。
+                // 根因：TextView 默认 setIncludeFontPadding(true) 把字体自带的
+                //   ascent/descent 留白算进行高，而不同设备默认字体
+                //   的留白不同 —— 数字字形对称看不出，
+                //   中文「今」上下不对称，于是就“偏”了。
+                cell.setIncludeFontPadding(false);
                 if (Icons.cellTextTop(R.calStyle)) {
                     cell.setGravity(android.view.Gravity.TOP | android.view.Gravity.CENTER_HORIZONTAL);
                     cell.setPadding(0, dp(3), 0, 0);
