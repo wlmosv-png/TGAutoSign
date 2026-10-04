@@ -478,6 +478,7 @@ final class StatsView {
         box.setOrientation(LinearLayout.VERTICAL);
         int i = 0;
         for (StatsSnapshot.Account a : s.accounts) {
+          try {   // 逐账号独立（2026-10-04）：一个账号异常不应把其余都带走
             LinearLayout row = new LinearLayout(act);
             row.setOrientation(LinearLayout.VERTICAL);
             row.setPadding(0, dp(act, 6), 0, dp(act, 6));
@@ -539,6 +540,7 @@ final class StatsView {
             row.addView(pct);
             box.addView(row);
             i++;
+          } catch (Throwable _one) { swallow(_one); }
         }
         return box;
     }
@@ -665,6 +667,10 @@ final class StatsView {
             }
             int i = 0;
             for (StatsSnapshot.Target t : s.targets) {
+              // ── 逐项独立 try（2026-10-04）──
+              // 旧写法循环体无保护，只有最外层一个 try：
+              // 任何一个目标抛异常 → 循环中断 → **整个「各目标」区空白**（用户实测）。
+              try {
                 int col;
                 String state;
                 if (t.frozen) { col = Theme.termMuted(act); state = Lang.tr("已冻结"); }
@@ -716,6 +722,10 @@ final class StatsView {
                     } }, 0);
                 }
                 i++;
+              } catch (Throwable _one) {
+                // 单个目标失败只丢它自己，不影响其余
+                swallow(_one);
+              }
             }
         } catch (Throwable t) { swallow(t); }
         return box;

@@ -9106,10 +9106,29 @@ public final class TGAutoSignCore {
             String today = todayStr();
             int shownN = 0, filtN = 0;
             for (Map<String, Object> m : sortedTargets()) {
-                String st = statusOf(accountPrefix(), entryId(m), today);
-                if (!listFilterMatch(m, st, today)) { filtN++; continue; }
-                targetRow(listRowsHost, m, st, "more");
-                shownN++;
+                // ── 逐行独立 try（2026-10-04 修「列表少一行」）──
+                // 旧写法只有最外层一个 try：任何一行渲染时抛异常
+                // （targetRow 内部有大量反射 \/ prefs \/ 对话名查询），
+                // 循环直接中断 → **它后面的所有行都不画**。
+                // 表现：标题写着「目标列表（12）」而实际只列 11 行；
+                // 用户看到的「列表 8 \/ 主页 9」正是这种。
+                // 这是统计页修过的**同一类 bug**，当时列表这条链漏了。
+                try {
+                    String st = statusOf(accountPrefix(), entryId(m), today);
+                    if (!listFilterMatch(m, st, today)) { filtN++; continue; }
+                    targetRow(listRowsHost, m, st, "more");
+                    shownN++;
+                } catch (Throwable _row) {
+                    // 失败的行不静默消失，画一行降级提示 ——
+                    // 用户能看见“这里有个目标”，而不是莫名少一条。
+                    try {
+                        shownN++;
+                        fallbackRow(listRowsHost, m, _row);
+                    } catch (Throwable ignored) {}
+                    noteSwallowed("fillTargetRows-row", _row);
+                    logw("[目标列表] 行渲染失败，已降级显示: "
+                            + entryId(m) + " —— " + _row);
+                }
             }
             if (shownN == 0) {
                 emptyView(listRowsHost, filtN > 0
@@ -9117,6 +9136,29 @@ public final class TGAutoSignCore {
                         : Lang.tr("(暂无目标，点「添加目标」，或直接点 bot 的签到按钮自动学习)"));
             }
         } catch (Throwable t) { noteSwallowed("fillTargetRows", t); }
+    }
+
+    /**
+     * 行渲染失败时的降级行（2026-10-04）。
+     *
+     * 为什么要有它：逐行 try 保住了其他行，但失败那行若直接丢弃，
+     * 用户会看到“标题 12、列表 11”的对不上。给一行可读提示，
+     * 数量对得上，也能直接看出哪个目标出了问题。
+     */
+    private void fallbackRow(LinearLayout parent, Map<String, Object> m, Throwable err) {
+        try {
+            Context c = parent.getContext();
+            TextView tv = new TextView(c);
+            tv.setTextSize(Theme.TS_CAPTION);
+            tv.setTextColor(Theme.termAmber(c));
+            tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+            tv.setPadding(dp(10), dp(10), dp(10), dp(10));
+            tv.setText(Lang.tf("目标 {0} 渲染失败（可删除后重新添加）",
+                    entryId(m)));
+            tv.setBackground(termBorder(c, Theme.termCard(c),
+                    Theme.withAlpha(Theme.termAmber(c), 0x55)));
+            parent.addView(tv, new LinearLayout.LayoutParams(-1, -2));
+        } catch (Throwable ignored) {}
     }
 
     /** 重染筛选 chip（原地刷新用）。顺序与 FILTERS 一致。 */

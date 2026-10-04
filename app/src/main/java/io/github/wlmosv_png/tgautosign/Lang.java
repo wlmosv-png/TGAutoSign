@@ -238,6 +238,7 @@ public final class Lang {
         EN.put("模拟已关", "Simulation off");
         EN.put("添加目标", "Add target");
         EN.put("清空配置", "Clear config");
+        EN.put("目标 {0} 渲染失败（可删除后重新添加）", "Target {0} failed to render (delete and re-add)");
         EN.put("目标列表", "Targets");
         EN.put("目标管理", "Target manager");
         EN.put("目标过滤", "Target filter");
