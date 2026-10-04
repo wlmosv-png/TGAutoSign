@@ -61,62 +61,117 @@ final class StatsCharts {
     static final class RingScanDrawable extends Drawable {
         private final Paint base = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint arc = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint tail = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint glow = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint mark = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF oval;
         private final float size, cx, cy, r, stroke;
         private final int col;
+        /** 分格数（= 今日总目标数）。底环按它画成虚线，1..36 以外不分格。 */
+        private final int ticks;
+        private final Path circle = new Path();
         private float progress;     // 0..1
+
         RingScanDrawable(int sizePx, int col, int baseCol) {
+            this(sizePx, col, baseCol, 0);
+        }
+
+        RingScanDrawable(int sizePx, int col, int baseCol, int tickCount) {
             this.col = col;
+            this.ticks = (tickCount >= 1 && tickCount <= 36) ? tickCount : 0;
             this.size = sizePx;
             this.cx = sizePx / 2f;
             this.cy = sizePx / 2f;
-            this.stroke = sizePx * 0.105f;
-            this.r = sizePx / 2f - stroke * 1.6f;
+            this.stroke = sizePx * 0.093f;             // 细一点，上一版 0.105 偏傻
+            this.r = sizePx / 2f - stroke * 2.1f;      // 留出扫描头的外扰空间
             oval = new RectF(cx - r, cy - r, cx + r, cy + r);
+            circle.addArc(oval, -90f, 360f);           // 起点 12 点，与进度弧对齐
+
             base.setStyle(Paint.Style.STROKE);
-            base.setStrokeWidth(stroke);
-            base.setStrokeCap(Paint.Cap.ROUND);
+            base.setStrokeWidth(stroke * 0.72f);
+            base.setStrokeCap(Paint.Cap.BUTT);
             base.setColor(baseCol);
+            // 底环分格：占空比固定，数目少时缺口略窄更像「格」
+            if (this.ticks > 0) {
+                float c = (float) (2 * Math.PI * r);
+                float seg = c / this.ticks;
+                float gapR = this.ticks <= 6 ? 0.22f : 0.30f;
+                base.setPathEffect(new android.graphics.DashPathEffect(
+                        new float[]{seg * (1f - gapR), seg * gapR}, 0f));
+            }
+
             arc.setStyle(Paint.Style.STROKE);
             arc.setStrokeWidth(stroke);
             arc.setStrokeCap(Paint.Cap.ROUND);
             arc.setColor(col);
+
+            tail.setStyle(Paint.Style.STROKE);
+            tail.setStrokeCap(Paint.Cap.ROUND);
+            tail.setColor(col);
+
             glow.setStyle(Paint.Style.FILL);
-            glow.setColor(col);
+
             mark.setStyle(Paint.Style.STROKE);
-            mark.setStrokeWidth(Math.max(1.2f, sizePx * 0.018f));
+            mark.setStrokeWidth(Math.max(1.2f, sizePx * 0.016f));
             mark.setStrokeCap(Paint.Cap.ROUND);
-            mark.setColor(withA(col, 0x88));
+            mark.setColor(withA(col, 0x99));
         }
+
         void setProgress(float p) { this.progress = Math.max(0f, Math.min(1f, p)); invalidateSelf(); }
+
         @Override public void draw(Canvas cv) {
             try {
-                cv.drawArc(oval, -90f, 360f, false, base);
+                // ① 底环（分格虚线）—— 让「3/12」看得出是十二格里亮了三格
+                cv.drawPath(circle, base);
+
                 float sweep = 360f * progress;
+
+                // ② 彗尾：沿进度弧往回扫 26°，逐段降 alpha + 收窄
+                //    —— 上一版只有一个硬边圆斑，像糊在一起的三个圈（用户截图）。
+                if (sweep > 8f) {
+                    final int N = 9;
+                    float span = 26f;
+                    for (int i = 0; i < N; i++) {
+                        float f = i / (float) N;                 // 0 = 最靠近扫描头
+                        float segLen = span / N;
+                        float st = -90f + sweep - (f + 1f) * segLen + segLen;
+                        tail.setAlpha((int) (0xCE * (1f - f) * (1f - f)));   // 平方衰减，更像彗尾
+                        tail.setStrokeWidth(stroke * (1f - f * 0.30f));
+                        cv.drawArc(oval, st - segLen, segLen * 1.25f, false, tail);
+                    }
+                }
+
+                // ③ 主弧
                 if (sweep > 0.5f) cv.drawArc(oval, -90f, sweep, false, arc);
 
-                // 起始准星（12 点方向的小十字）
+                // ④ 起点准星（比上一版长一点，否则被弧盖住看不见）
                 float tx = cx, ty = cy - r;
-                float k = size * 0.035f;
-                cv.drawLine(tx - k, ty, tx + k, ty, mark);
-                cv.drawLine(tx, ty - k, tx, ty + k, mark);
+                float k = size * 0.052f;
+                cv.drawLine(tx - k, ty, tx - k * 0.34f, ty, mark);
+                cv.drawLine(tx + k * 0.34f, ty, tx + k, ty, mark);
+                cv.drawLine(tx, ty - k, tx, ty - k * 0.34f, mark);
+                cv.drawLine(tx, ty + k * 0.34f, tx, ty + k, mark);
 
-                // 端点扫描头 + 辉光
-                // 2026-10-04：光晕收到 stroke*1.15（原 2.6）——
-                // 原来那团比弧本身还粗，看着像一个糊掉的圆斑（用户截图）。
-                // 现在：外圈只比笔画略大一点做"光"的感觉，内点仍是实心小圆。
+                // ⑤ 扫描头：**半径渐变幻光** + 实心点
+                //    之前用三个同心硬边圆叠加，边缘硬、比弧还宽，
+                //    看起来就是一团方块状的糊斑。现在用 RadialGradient 真正的光。
                 if (progress > 0.001f) {
                     double a0 = Math.toRadians(-90f + sweep);
                     float ex = (float) (cx + r * Math.cos(a0));
                     float ey = (float) (cy + r * Math.sin(a0));
-                    glow.setAlpha(50);
-                    cv.drawCircle(ex, ey, stroke * 1.15f, glow);   // 外晕：略大于笔画
-                    glow.setAlpha(170);
-                    cv.drawCircle(ex, ey, stroke * 0.78f, glow);   // 内晕
-                    glow.setAlpha(255);
-                    cv.drawCircle(ex, ey, stroke * 0.44f, glow);   // 实心点
+                    float gr = stroke * 3.0f;
+                    try {
+                        android.graphics.RadialGradient rg = new android.graphics.RadialGradient(
+                                ex, ey, gr,
+                                new int[]{withA(col, 0xB0), withA(col, 0x48), withA(col, 0x00)},
+                                new float[]{0f, 0.34f, 1f},
+                                android.graphics.Shader.TileMode.CLAMP);
+                        glow.setShader(rg);
+                        cv.drawCircle(ex, ey, gr, glow);
+                        glow.setShader(null);
+                    } catch (Throwable ignored) {}
+                    glow.setColor(col);
+                    cv.drawCircle(ex, ey, stroke * 0.40f, glow);
                 }
             } catch (Throwable ignored) {}
         }
