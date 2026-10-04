@@ -1481,6 +1481,7 @@ public final class TGAutoSignCore {
         if ("org.telegram.messenger.web".equals(pkg)) return en ? "Official (web)" : "官方版(官网直连)";
         if ("fork.risin42.nagramx".equals(pkg)) return "Nagram XF";
         if ("com.exteraless.app".equals(pkg)) return "ExteraLess";
+        if ("org.telegram.group".equals(pkg)) return "Turrit";
         if (pkg.startsWith("nu.gpu.nagram") || "xyz.nextalone.nagram".equals(pkg)) return "Nagram";
         int i = pkg.lastIndexOf('.');
         return i > 0 ? pkg.substring(i + 1) : pkg;

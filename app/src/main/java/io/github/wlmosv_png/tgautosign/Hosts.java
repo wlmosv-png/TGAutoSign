@@ -38,7 +38,11 @@ public final class Hosts {
             "com.exteraless.app",  // ExteraLess（ExteraGram fork，12.10.1-feae791 实测标志类齐全）
             "xyz.nextalone.nagram", // NextAlone Nagram（12.10.1，标志类齐全）
             "tw.nekomimi.nekogram",      // Nekogram
-            "it.belloworld.mercurygram"  // Mercurygram
+            "it.belloworld.mercurygram", // Mercurygram
+            // Turrit（SEASTAR FUTURE；1.9.0.4.2 / 40427 实测：7 dex / 57774 类，
+            // 未加固，且**类名未被 R8 混淆** —— ChatActivity、ChatMessageCellDelegate、
+            // didPressedBotButton 全部按原名校验通过，比官方 12.10.6 更好适配。）
+            "org.telegram.group"
     )));
 
     /** 三者齐全才认定是 Telegram-Android 血统 */
