@@ -608,6 +608,105 @@ final class StatsCharts {
         }
     }
 
+    /**
+     * 账号进度条（2026-10-04，账号一览改版专用）。
+     *
+     * 为什么单独做一个：
+     *   既有的 BarsDrawable 是“多根柱”语义，而这里要的是
+     *   **单条、可逐帧推进、能表达“正在进行”** 的进度条。
+     *   用户需求：点「签全部账号」后能当场看到哪个账号在走、走到哪。
+     *
+     * 视觉：
+     *   · 底槽：暗色圆角条；
+     *   · 已完成部分：实色圆角条，末端带扫描头（实心点 + 光晕）；
+     *   · 「进行中」时：整条带**呼吸脉动**（透明度在 0.65~1.0 之间往返）；
+     *   · 未开始：只画底槽 + 一道浅浅的扫描线，表示“还没动”。
+     */
+    static final class AccProgressDrawable extends Drawable {
+        private final Paint track = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint bar = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint glow = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint sweep = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private int col;
+        private float ratio = 0f;      // 0..1 已完成比例
+        private float pulse = 0f;      // 0..1 呼吸相位（仅 running 时由外部驱动）
+        private boolean running = false;
+        private boolean done = false;
+
+        AccProgressDrawable(int col) {
+            this.col = col;
+            track.setStyle(Paint.Style.FILL);
+            bar.setStyle(Paint.Style.FILL);
+            glow.setStyle(Paint.Style.FILL);
+            sweep.setStyle(Paint.Style.FILL);
+        }
+
+        void setCol(int c) { this.col = c; invalidateSelf(); }
+        void setRatio(float r) {
+            r = Math.max(0f, Math.min(1f, r));
+            if (Math.abs(r - ratio) > 0.001f) { ratio = r; invalidateSelf(); }
+        }
+        void setRunning(boolean b) { if (running != b) { running = b; invalidateSelf(); } }
+        void setDone(boolean b) { if (done != b) { done = b; invalidateSelf(); } }
+        void setPulse(float p) { this.pulse = Math.max(0f, Math.min(1f, p)); invalidateSelf(); }
+
+        @Override public void draw(Canvas cv) {
+            try {
+                int w = getBounds().width(), h = getBounds().height();
+                if (w <= 0 || h <= 0) return;
+                float r = h / 2f;
+
+                // 底槽
+                track.setColor(withA(col, done ? 0x2E : 0x1F));
+                cv.drawRoundRect(new RectF(0, 0, w, h), r, r, track);
+
+                // 呼吸：仅 running 时整体透明度往返
+                int a = 0xFF;
+                if (running) a = (int) (0xB4 + 0x4B * Math.abs(1f - 2f * pulse));
+
+                if (ratio > 0.001f) {
+                    float bw = Math.max(h, w * ratio);
+                    bar.setColor(withA(col, a));
+                    cv.drawRoundRect(new RectF(0, 0, bw, h), r, r, bar);
+
+                    // 扫描头 + 光晕（终端语汇）
+                    float ex = Math.min(w - r, bw - r);
+                    float gr = h * 1.15f;
+                    try {
+                        android.graphics.RadialGradient rg = new android.graphics.RadialGradient(
+                                ex, h / 2f, gr,
+                                new int[]{withA(col, (int) (0xA8 * a / 255f)),
+                                          withA(col, 0x00)},
+                                new float[]{0f, 1f},
+                                android.graphics.Shader.TileMode.CLAMP);
+                        glow.setShader(rg);
+                        cv.drawCircle(ex, h / 2f, gr, glow);
+                        glow.setShader(null);
+                    } catch (Throwable ignored) {}
+                } else if (running) {
+                    // 还没进度但在跑：一道来回扫的细光，明确「已开始、正在处理」
+                    float px = (float) ((Math.sin(pulse * Math.PI * 2) * 0.5 + 0.5) * (w - h)) + h / 2f;
+                    sweep.setColor(withA(col, 0x66));
+                    cv.drawRoundRect(new RectF(Math.max(0, px - h), 0, Math.min(w, px + h), h),
+                            r, r, sweep);
+                }
+
+                if (done) {
+                    // 完成：描一圈更亮的边，收束感
+                    Paint p2 = track;
+                    p2.setStyle(Paint.Style.STROKE);
+                    p2.setStrokeWidth(Math.max(1f, h * 0.14f));
+                    p2.setColor(withA(col, 0xCC));
+                    cv.drawRoundRect(new RectF(0, 0, w, h), r, r, p2);
+                    p2.setStyle(Paint.Style.FILL);
+                }
+            } catch (Throwable ignored) {}
+        }
+        @Override public void setAlpha(int a) {}
+        @Override public void setColorFilter(ColorFilter cf) {}
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
     /** 给颜色换 alpha（本地副本，避免依赖 Icons 的包内可见性）。 */
     static int withA(int c, int a) {
         return ((c & 0x00FFFFFF) | ((a & 0xFF) << 24));

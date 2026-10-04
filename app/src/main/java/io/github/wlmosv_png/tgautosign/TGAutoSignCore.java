@@ -800,104 +800,329 @@ public final class TGAutoSignCore {
     }
 
     /** 账号一览：所有已激活账号的概况，当前账号高亮。 */
+    /**
+     * 账号一览（2026-10-04 改版）。
+     *
+     * 用户需求：点「签全部账号」后，**当场看到每个账号的进度在走**，
+     * 不用切来切去确认到底签没签上。
+     *
+     * 做法：
+     *   · 每个账号一行：名称 + 状态徽章 + 进度条 + 计数 + 当前目标；
+     *   · 进度条由 AccProgressDrawable 程序绘制，末端扫描头、
+     *     「进行中」呼吸脉动；
+     *   · 1 秒轮询刷新；窗口不在前台或已关闭则自停（不空转）；
+     *   · 底部一行总体进度 + 耗时。
+     */
+    /** 账号一览的实时刷新状态（窗口关闭后自停）。 */
+    private Runnable accOverviewTick;
+    private long accOverviewStartMs;
+    private final java.util.Map<Integer, StatsCharts.AccProgressDrawable> accBars =
+            new java.util.HashMap<Integer, StatsCharts.AccProgressDrawable>();
+
     private void showAccountOverview(final Activity act) {
         try {
-            final int cur = currentAccount();
-            // 真实槽位（用户反馈「账号3 显示没有目标」的根因：
-            // 用 0..activatedAccounts()-1 遍历时，非连续槽位（如 7）压根访问不到，
-            // 显示的是空分区 acc2_，真数据在 acc7_ 里）
             final int[] slots = accountSlots();
             final int count = Math.max(1, slots.length);
+
             LinearLayout box = new LinearLayout(act);
             box.setOrientation(LinearLayout.VERTICAL);
 
-            TextView head = new TextView(act);
-            head.setTextSize(Theme.TS_CAPTION); head.setTextColor(Theme.termMuted(act));
-            head.setTypeface(android.graphics.Typeface.MONOSPACE);
-            head.setText(count <= 1 ? Lang.tr("当前只有 1 个登录账号") : Lang.tf("共 {0} 个登录账号（切换 Telegram 账号即切换目标集）", count));
+            LinearLayout head = new LinearLayout(act);
+            head.setOrientation(LinearLayout.HORIZONTAL);
+            head.setGravity(Gravity.CENTER_VERTICAL);
+            TextView h1 = new TextView(act);
+            h1.setTextSize(Theme.TS_CAPTION);
+            h1.setTextColor(Theme.termMuted(act));
+            h1.setTypeface(android.graphics.Typeface.MONOSPACE);
+            h1.setText(count <= 1 ? Lang.tr("\u5f53\u524d\u53ea\u6709 1 \u4e2a\u767b\u5f55\u8d26\u53f7")
+                                  : Lang.tf("\u5171 {0} \u4e2a\u767b\u5f55\u8d26\u53f7", count));
+            head.addView(h1, new LinearLayout.LayoutParams(0, -2, 1f));
+            final TextView overall = new TextView(act);
+            overall.setTextSize(Theme.TS_CAPTION);
+            overall.setTextColor(Theme.termCyan(act));
+            overall.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+            head.addView(overall, new LinearLayout.LayoutParams(-2, -2));
             head.setPadding(dp(4), 0, dp(4), dp(8));
             box.addView(head);
 
+            // 第一次建行时把句柄存起来，后续刷新只改文字与进度，不重建树
+            accBars.clear();
+            final java.util.List<TextView> nameTv = new java.util.ArrayList<TextView>();
+            final java.util.List<TextView> statTv = new java.util.ArrayList<TextView>();
+            final java.util.List<TextView> curTv = new java.util.ArrayList<TextView>();
+            final java.util.List<Button> toggleBtns = new java.util.ArrayList<Button>();
+            final java.util.List<View> divs = new java.util.ArrayList<View>();
+
             for (int i : slots) {
                 final int acc = i;
-                int[] st = accountStats(i);
-                LinearLayout row = new LinearLayout(act);
-                row.setOrientation(LinearLayout.VERTICAL);
-                boolean isCur = (i == cur);
-                int accent = isCur ? Theme.termGreen(act) : Theme.termCyan(act);
-                row.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(accent, isCur ? 0x4D : 0x26)));
-                row.setPadding(dp(12), dp(10), dp(12), dp(10));
-                LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
-                rlp.setMargins(0, dp(3), 0, dp(3));
-                row.setLayoutParams(rlp);
+                LinearLayout card = new LinearLayout(act);
+                card.setOrientation(LinearLayout.VERTICAL);
+                card.setPadding(dp(12), dp(10), dp(12), dp(10));
+                LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
+                clp.setMargins(0, dp(3), 0, dp(3));
+                card.setLayoutParams(clp);
+                card.setBackground(termBorder(act, Theme.termCard(act),
+                        Theme.withAlpha(Theme.termCyan(act), 0x26)));
 
-                LinearLayout line1 = new LinearLayout(act); line1.setOrientation(LinearLayout.HORIZONTAL); line1.setGravity(Gravity.CENTER_VERTICAL);
-                TextView nm = new TextView(act); nm.setTextSize(Theme.TS_SUBTITLE); nm.setTextColor(Theme.termTxt(act));
+                LinearLayout line1 = new LinearLayout(act);
+                line1.setOrientation(LinearLayout.HORIZONTAL);
+                line1.setGravity(Gravity.CENTER_VERTICAL);
+                TextView nm = new TextView(act);
+                nm.setTextSize(Theme.TS_SUBTITLE);
+                nm.setTextColor(Theme.termTxt(act));
                 nm.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-                nm.setText((isCur ? "● " : "○ ") + accountLabel(i) + (isCur ? Lang.tr("（当前）") : ""));
                 line1.addView(nm, new LinearLayout.LayoutParams(0, -2, 1f));
-                if (st[2] == 1) {
-                    TextView tchip = badgeChip(act, " 定时", Theme.termCyan(act), false);
-                    line1.addView(tchip);
-                }
-                if (!isAccountEnabled(i)) {
-                    TextView dchip = badgeChip(act, " 已停用", Theme.termMuted(act), false);
-                    line1.addView(dchip);
-                }
-                row.addView(line1);
+                TextView stt = new TextView(act);
+                stt.setTextSize(Theme.TS_CAPTION);
+                stt.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+                line1.addView(stt, new LinearLayout.LayoutParams(-2, -2));
+                card.addView(line1);
 
-                TextView line2 = new TextView(act); line2.setTextSize(Theme.TS_CAPTION); line2.setTextColor(Theme.termMuted(act));
-                line2.setTypeface(android.graphics.Typeface.MONOSPACE);
-                if (st[0] == 0) line2.setText(Lang.tr("（还没有目标）"));
-                else line2.setText(Lang.tf("目标 {0} · 今日已签 {1} · 待签 {2}", st[0], st[1], st[0] - st[1]));
-                line2.setPadding(dp(1), dp(2), 0, 0);
-                row.addView(line2);
+                android.widget.ImageView bar = new android.widget.ImageView(act);
+                StatsCharts.AccProgressDrawable d = new StatsCharts.AccProgressDrawable(
+                        Theme.termCyan(act));
+                bar.setImageDrawable(d);
+                accBars.put(Integer.valueOf(acc), d);
+                LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, dp(7));
+                blp.topMargin = dp(7);
+                card.addView(bar, blp);
+
+                TextView sub = new TextView(act);
+                sub.setTextSize(Theme.TS_CAPTION);
+                sub.setTextColor(Theme.termMuted(act));
+                sub.setTypeface(android.graphics.Typeface.MONOSPACE);
+                sub.setPadding(dp(1), dp(4), 0, 0);
+                card.addView(sub);
+
+                TextView cur = new TextView(act);
+                cur.setTextSize(Theme.TS_CAPTION);
+                cur.setTextColor(Theme.termFaint(act));
+                cur.setTypeface(Theme.text());
+                cur.setPadding(dp(1), dp(2), 0, 0);
+                cur.setSingleLine(true);
+                card.addView(cur);
 
                 if (count > 1) {
-                    final boolean en = isAccountEnabled(i);
                     Button tg = mkBtn(act);
-                    withIconText(act, tg, en ? "pause" : "check", en ? "停用该账号（不参与自动签到）" : "启用该账号");
-                    tg.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
-                        setAccountEnabled(acc, !en);
-                        toast(en ? Lang.tf("已停用 {0}", accountLabel(acc)) : Lang.tf("已启用 {0}", accountLabel(acc)));
-                        showAccountOverview(act);
-                    } });
-                    LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
-                    clp.topMargin = dp(6);
-                    row.addView(tg, clp);
+                    tg.setOnClickListener(new View.OnClickListener() {
+                        @Override public void onClick(View v) {
+                            boolean en = isAccountEnabled(acc);
+                            setAccountEnabled(acc, !en);
+                            toast(en ? Lang.tf("\u5df2\u505c\u7528 {0}", accountLabel(acc))
+                                     : Lang.tf("\u5df2\u542f\u7528 {0}", accountLabel(acc)));
+                            refreshAccOverview(act, slots);
+                        }
+                    });
+                    LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(-1, -2);
+                    tl.topMargin = dp(6);
+                    card.addView(tg, tl);
+                    toggleBtns.add(tg);
+                } else {
+                    toggleBtns.add(null);
                 }
-                if (!isCur && st[0] == 0) {
-                    Button cp = mkBtn(act); withIconText(act, cp, "copy", "复制本账号目标到该账号");
-                    cp.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
-                        List<Map<String, Object>> mine = targetsSnapshot();
-                        if (mine.isEmpty()) { toast("当前账号还没有目标"); return; }
-                        copyTargetsTo(acc, currentAccount(), mine);
-                        toast(Lang.tf("已复制到 {0}", accountLabel(acc)));
-                        showAccountOverview(act);
-                    } });
-                    LinearLayout.LayoutParams clp2 = new LinearLayout.LayoutParams(-1, -2);
-                    clp2.topMargin = dp(6);
-                    row.addView(cp, clp2);
-                }
-                box.addView(row);
+
+                nameTv.add(nm);
+                statTv.add(sub);
+                curTv.add(cur);
+                box.addView(card);
             }
 
             if (count > 1) {
                 TextView tip = new TextView(act);
-                tip.setTextSize(Theme.TS_CAPTION); tip.setTextColor(Theme.termFaint(act)); tip.setTypeface(Theme.text());
-                tip.setText(Lang.tr("「签全部账号」会依次签每个账号；定时签到跟随当前账号。切换 Telegram 账号后，本面板显示的目标集会随之切换。"));
+                tip.setTextSize(Theme.TS_CAPTION);
+                tip.setTextColor(Theme.termFaint(act));
+                tip.setTypeface(Theme.text());
+                tip.setText(Lang.tr("\u70b9\u4e0b\u65b9\u6309\u94ae\u540e\u8fd9\u91cc\u4f1a\u5b9e\u65f6\u8d70\u8fdb\u5ea6\uff1b\u5b9a\u65f6\u7b7e\u5230\u8ddf\u968f\u5f53\u524d\u8d26\u53f7\u3002"));
                 tip.setPadding(dp(4), dp(8), dp(4), dp(2));
                 box.addView(tip);
             }
 
-            Button all = mkBtnPrimary(act); withIconText(act, all, "globe", "签全部账号");
-            all.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ signAllAccounts(); toast(Lang.tr("已对全部启用账号发起签到，结果见日志")); } });
+            Button all = mkBtnPrimary(act);
+            withIconText(act, all, "globe", "\u7b7e\u5168\u90e8\u8d26\u53f7");
+            all.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    // 已全部签完：直接提示，不重跑（2026-10-04）
+                    if (allAccountsAllSigned()) {
+                        toast(Lang.tr("\u5168\u90e8\u8d26\u53f7\u4eca\u5929\u5df2\u7b7e\u5b8c\uff0c\u65e0\u9700\u91cd\u590d\u7b7e\u5230"));
+                        jlog("[\u5168\u8d26\u53f7] \u4eca\u5929\u5df2\u5168\u90e8\u7b7e\u5b8c\uff0c\u672c\u6b21\u70b9\u51fb\u5df2\u5ffd\u7565");
+                        return;
+                    }
+                    accOverviewStartMs = System.currentTimeMillis();
+                    signAllAccounts();
+                    startAccOverviewTick(act, slots, overall);
+                    startAccPulse();
+                }
+            });
             LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(-1, -2);
             alp.topMargin = dp(8);
             box.addView(all, alp);
 
-            showDialog(act, Lang.tf("账号一览（{0}）", count), box, "关闭");
-        } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
+            accNameTv = nameTv; accStatTv = statTv; accCurTv = curTv; accToggleBtns = toggleBtns;
+            // 首次填充
+            paintAccOverview(act, slots, nameTv, statTv, curTv, toggleBtns, overall);
+
+            showDialog(act, Lang.tf("\u8d26\u53f7\u4e00\u89c8\uff08{0}\uff09", count), box, "\u5173\u95ed");
+        } catch (Throwable t) { toast(Lang.tf("\u6253\u5f00\u5931\u8d25: {0}", t)); }
+    }
+
+    /** 刷新一次（重建整个账号一览，用于停用/启用后）。 */
+    private void refreshAccOverview(Activity act, int[] slots) {
+        try {
+            stopAccOverviewTick();
+            showAccountOverview(act);
+        } catch (Throwable ignored) {}
+    }
+
+    /** 按当前状态重绘各行文字与进度条。 */
+    private void paintAccOverview(Activity act, int[] slots,
+                                  java.util.List<TextView> nameTv,
+                                  java.util.List<TextView> statTv,
+                                  java.util.List<TextView> curTv,
+                                  java.util.List<Button> toggleBtns,
+                                  TextView overall) {
+        int totalAll = 0, signedAll = 0, doneAcc = 0, runningAcc = 0;
+        for (int k = 0; k < slots.length; k++) {
+            int i = slots[k];
+            int[] st = accountStats(i);
+            int tot = st[0], sig = st[1];
+            totalAll += tot; signedAll += sig;
+            boolean isCur = (i == currentAccount());
+            boolean en = isAccountEnabled(i);
+            boolean finished = tot > 0 && sig >= tot;
+            if (tot > 0 && finished) doneAcc++;
+            if (tot > 0 && !finished && en) runningAcc++;
+
+            if (k < nameTv.size() && nameTv.get(k) != null) {
+                nameTv.get(k).setText((isCur ? "\u25cf " : "\u25cb ") + accountLabel(i)
+                        + (isCur ? Lang.tr("\uff08\u5f53\u524d\uff09") : ""));
+                nameTv.get(k).setTextColor(Theme.termTxt(act));
+            }
+            StatsCharts.AccProgressDrawable d = accBars.get(Integer.valueOf(i));
+            if (d != null) {
+                float r = tot <= 0 ? 0f : (float) sig / tot;
+                d.setRatio(r);
+                d.setDone(tot > 0 && finished);
+                d.setRunning(en && tot > 0 && !finished);
+                int col;
+                if (!en) col = Theme.termMuted(act);
+                else if (tot > 0 && finished) col = Theme.termGreen(act);
+                else col = Theme.termCyan(act);
+                d.setCol(col);
+            }
+            if (k < statTv.size() && statTv.get(k) != null) {
+                statTv.get(k).setText(tot == 0
+                        ? Lang.tr("\uff08\u8fd8\u6ca1\u6709\u76ee\u6807\uff09")
+                        : Lang.tf("\u76ee\u6807 {0} \u00b7 \u4eca\u65e5\u5df2\u7b7e {1} \u00b7 \u5f85\u7b7e {2}", tot, sig, tot - sig));
+                statTv.get(k).setTextColor(!en ? Theme.termMuted(act)
+                        : (tot > 0 && finished ? Theme.termGreen(act) : Theme.termMuted(act)));
+            }
+            if (k < curTv.size() && curTv.get(k) != null) {
+                String line;
+                if (!en) line = Lang.tr("\u5df2\u505c\u7528\uff08\u4e0d\u53c2\u4e0e\u81ea\u52a8\u7b7e\u5230\uff09");
+                else if (tot == 0) line = "";
+                else if (finished) line = Lang.tr("\u2713 \u5168\u90e8\u5b8c\u6210");
+                else if (allAccRunning && allAccCurrent == i) line = Lang.tr("\u27f3 \u6b63\u5728\u7b7e\u5230\u2026");
+                else if (allAccRunning) line = Lang.tr("\u23f3 \u6392\u961f\u7b49\u5f85");
+                else line = Lang.tf("\u23f3 \u5f85\u7b7e {0} \u4e2a", tot - sig);
+                curTv.get(k).setText(line);
+                boolean isNow = allAccRunning && allAccCurrent == i;
+                curTv.get(k).setTextColor(finished ? Theme.termGreen(act)
+                        : (isNow ? Theme.termCyan(act) : Theme.termFaint(act)));
+            }
+            if (k < toggleBtns.size() && toggleBtns.get(k) != null) {
+                boolean en2 = isAccountEnabled(i);
+                withIconText(act, toggleBtns.get(k), en2 ? "pause" : "check",
+                        en2 ? "\u505c\u7528\u8be5\u8d26\u53f7\uff08\u4e0d\u53c2\u4e0e\u81ea\u52a8\u7b7e\u5230\uff09" : "\u542f\u7528\u8be5\u8d26\u53f7");
+            }
+        }
+        if (overall != null) {
+            long cost = accOverviewStartMs > 0 ? (System.currentTimeMillis() - accOverviewStartMs) : 0L;
+            overall.setText(Lang.tf("\u603b {0}/{1}", signedAll, totalAll)
+                    + (cost > 0 ? Lang.tf(" \u00b7 {0}s", cost / 1000L) : ""));
+        }
+    }
+
+    /** 启动 1 秒轮询（窗口关闭或切走自停）。 */
+    private void startAccOverviewTick(final Activity act, final int[] slots, final TextView overall) {
+        stopAccOverviewTick();
+        final Runnable[] self = new Runnable[1];
+        final int[] ticks = new int[1];
+        self[0] = new Runnable() {
+            @Override public void run() {
+                try {
+                    if (act == null || act.isFinishing()) { accOverviewTick = null; return; }
+                    // 窗口已关：check 关闭后的句柄不再所属任何番窗
+                    if (listDialog != null) {
+                        try {
+                            Object shown = call(listDialog, "isShowing", new Class<?>[0], new Object[0]);
+                            if (Boolean.FALSE.equals(shown)) { accOverviewTick = null; return; }
+                        } catch (Throwable ignored) {}
+                    }
+                    // 重绘各行（句柄存在实例字段中，这里只能重取一次）
+                    paintAccOverviewCurrent(act, slots, overall);
+                    // 跑完就停：没有账号在处理时不再空转
+                    if (!allAccRunning && allAccCurrent < 0) {
+                        stopAccPulse();
+                        mainHandler.postDelayed(self[0], 1500L);   // 再看一款确认终态后收尾
+                        ticks[0]++;
+                        if (ticks[0] > 2) { accOverviewTick = null; return; }
+                    } else {
+                        mainHandler.postDelayed(self[0], 700L);
+                    }
+                } catch (Throwable ignored) { accOverviewTick = null; }
+            }
+        };
+        accOverviewTick = self[0];
+        accOverviewStartMs = System.currentTimeMillis();
+        mainHandler.postDelayed(self[0], 1000L);
+    }
+
+    private void stopAccOverviewTick() {
+        try {
+            if (accOverviewTick != null) mainHandler.removeCallbacks(accOverviewTick);
+        } catch (Throwable ignored) {}
+        accOverviewTick = null;
+    }
+
+    /** 账号进度条的呼吸驱动（仅有账号在跑时起效）。 */
+    /** 账号进度条的呼吸驱动（仅「正在处理」那条）。 */
+    private android.animation.ValueAnimator accPulseAnim;
+    private void startAccPulse() {
+        stopAccPulse();
+        try {
+            android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(0f, 1f);
+            va.setDuration(1400);
+            va.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+            va.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+            va.setInterpolator(new android.view.animation.LinearInterpolator());
+            va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                    try {
+                        float p = (Float) a.getAnimatedValue();
+                        int cur = allAccCurrent;
+                        for (java.util.Map.Entry<Integer, StatsCharts.AccProgressDrawable> e : accBars.entrySet()) {
+                            StatsCharts.AccProgressDrawable d = e.getValue();
+                            if (d == null) continue;
+                            d.setPulse(e.getKey().intValue() == cur ? p : 0f);
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            });
+            va.start();
+            accPulseAnim = va;
+        } catch (Throwable ignored) {}
+    }
+    private void stopAccPulse() {
+        try { if (accPulseAnim != null) accPulseAnim.cancel(); } catch (Throwable ignored) {}
+        accPulseAnim = null;
+    }
+
+    // 上一次建行的句柄，供轮询重绘
+    private java.util.List<TextView> accNameTv, accStatTv, accCurTv;
+    private java.util.List<Button> accToggleBtns;
+    private void paintAccOverviewCurrent(Activity act, int[] slots, TextView overall) {
+        if (accNameTv == null) return;
+        paintAccOverview(act, slots, accNameTv, accStatTv, accCurTv, accToggleBtns, overall);
     }
 
     private void showCopyTargets(final Activity act) {
@@ -4771,36 +4996,103 @@ public final class TGAutoSignCore {
 
 
     /** v1.3.0：一键签全部账号（每个账号独立目标集，各自发各自的） */
-    public void signAllAccounts() {
-            // 遍历**真实槽位**（accountSlots），不是 0..activatedAccounts()-1：
-            // 部分客户端（Nagram 实测）槽位不连续，用连续区间会漏签/错位。
-            int[] slots = accountSlots();
-            int count = slots.length;
-            jlog("=== 全账号签到开始，共 " + count + " 个账号 ===");
-            StringBuilder rep = new StringBuilder();
-            int seq = 0;
-            for (int i : slots) {
-                seq++;
-                try {
-                    if (!isAccountEnabled(i)) {
-                        jlog(accountLabel(i) + " 已停用，跳过");
-                        if (rep.length() > 0) rep.append('\n');
-                        rep.append(accountLabel(i) + "：已停用，跳过");
-                        continue;
-                    }
-                    // skipSigned=true：批量只签未签的（用户反馈：已签的被重发了一遍）
-                    trySignAllFor("全账号(" + seq + "/" + count + ")", true, i, true);
-                    String one = lastRound;
-                    if (one == null) one = accountLabel(i) + "：本轮跳过（60 秒内刚跑过，或没网）";
-                    if (rep.length() > 0) rep.append('\n');
-                    rep.append(one);
-                } catch (Throwable t) {
-                    loge("账号 " + (i + 1) + " 签到异常: " + t);
+    /**
+     * 全部**启用**账号是否今天都已签完（2026-10-04）。
+     *
+     * 用途：用户已经签完全部账号后再次点「签全部账号」时，
+     * 直接提示「已全部签完」而不重跑 —— 避免用户以为没生效而反复点。
+     *
+     * 口径与 isAllSignedToday 一致（冻结／排除的不算），
+     * 但遍历**全部启用槽位**而非当前账号。
+     */
+    private boolean allAccountsAllSigned() {
+        try {
+            String today = todayStr();
+            int slotsWithTarget = 0;
+            for (int slot : accountSlots()) {
+                if (!isAccountEnabled(slot)) continue;
+                String pfx = accountPrefix(slot);
+                java.util.List<Map<String, Object>> l = new java.util.ArrayList<Map<String, Object>>();
+                loadTargetsInto(pfx, l);
+                for (Map<String, Object> m : l) {
+                    String id = entryId(m);
+                    if (isFrozen(pfx, id)) continue;
+                    if (isBotBlocked(entryDid(m))) continue;
+                    slotsWithTarget++;
+                    if (!today.equals(prefs.getString(kLast(pfx, id), ""))) return false;
                 }
             }
-            jlog("=== 全账号签到结束 ===");
-            if (rep.length() > 0) toastOnce("allacc|" + todayStr() + "|" + rep.length(), Lang.tf("全账号签到\n{0}", rep));
-        }
+            return slotsWithTarget > 0;
+        } catch (Throwable t) { return false; }
+    }
+
+    /** 全账号签到进行中的账号索引（-1 = 未开始），供账号一览显示。 */
+    private volatile int allAccCurrent = -1;
+    /** 全账号签到是否在跑。 */
+    private volatile boolean allAccRunning = false;
+
+    /**
+     * 签全部账号（2026-10-04 改为后台执行）。
+     *
+     * 为什么不能在主线程跑：
+     *   原写法在主线程同步遍历全部账号调 trySignAllFor，
+     *   一次跑完才返回 —— 期间 UI 线程被占，进度条根本刷新不了。
+     *   用户需求是「能看到进度在走」，所以必须放到后台。
+     *
+     * 账号之间加 600~900ms 停顿：
+     *   ① 让 UI 有机会刷新，进度可见；
+     *   ② 降低被 TG 风控的概率（原本是突发连发）。
+     */
+    public void signAllAccounts() {
+        if (allAccRunning) { jlog("[全账号] 已在进行中，本次请求忽略"); return; }
+        allAccRunning = true;
+        final int[] slots = accountSlots();
+        final int count = slots.length;
+        jlog("=== 全账号签到开始，共 " + count + " 个账号 ===");
+        Thread th = new Thread(new Runnable() {
+            @Override public void run() {
+                StringBuilder rep = new StringBuilder();
+                try {
+                    int seq = 0;
+                    for (int i : slots) {
+                        seq++;
+                        allAccCurrent = i;
+                        try {
+                            if (!isAccountEnabled(i)) {
+                                jlog(accountLabel(i) + " 已停用，跳过");
+                                if (rep.length() > 0) rep.append('\n');
+                                rep.append(accountLabel(i) + "：已停用，跳过");
+                                continue;
+                            }
+                            // skipSigned=true：批量只签未签的
+                            trySignAllFor("全账号(" + seq + "/" + count + ")", true, i, true);
+                            String one = lastRound;
+                            if (one == null) one = accountLabel(i) + "：本轮跳过（60 秒内刚跑过，或没网）";
+                            if (rep.length() > 0) rep.append('\n');
+                            rep.append(one);
+                        } catch (Throwable t) {
+                            loge("账号 " + accountLabel(i) + " 签到异常: " + t);
+                        }
+                        // 账号之间停一下：让 UI 刷新 + 降低风控
+                        try { Thread.sleep(600L + (long) (Math.random() * 300)); } catch (Throwable ignored) {}
+                    }
+                } finally {
+                    allAccRunning = false;
+                    allAccCurrent = -1;
+                    jlog("=== 全账号签到结束 ===");
+                    if (rep.length() > 0) {
+                        final String rp = rep.toString();
+                        mainHandler.post(new Runnable() { @Override public void run() {
+                            try { toastOnce("allacc|" + todayStr() + "|" + rp.length(),
+                                    Lang.tf("全账号签到\n{0}", rp)); } catch (Throwable ignored) {}
+                        } });
+                    }
+                }
+            }
+        }, "tgas-sign-all");
+        try { th.setDaemon(true); } catch (Throwable ignored) {}
+        th.start();
+    }
 
     public void enqueueTry(String reason) {
         // 排队去重（1.6.1）：多个触发源会在同一时间各排一个任务，
@@ -10020,7 +10312,11 @@ public final class TGAutoSignCore {
             return new String[]{"check", Lang.tr("签到成功"), "ok"};
         if (s.contains("签到成功") || s.startsWith("已签") || s.contains("已记录签到日")
                 || s.contains("标记今日已签") || s.contains("已记为今日已签"))
-            return new String[]{"check", Lang.tr("签到成功")};
+            // ── 必须带第三个元素（2026-10-04）──
+            // 渲染时 d用 pp[2] 作为语义色（plainColor）。
+            // 旧写法只返回两个元素 → sem 为 null → 落到 termMuted（灰白），
+            // 于是「签到成功」这条唯一该绿的日志变成了灰色。
+            return new String[]{"check", Lang.tr("签到成功"), "ok"};
 
         // 发出/等待
         if (s.contains("文本指令已发出") || s.contains("已发出，等待"))
