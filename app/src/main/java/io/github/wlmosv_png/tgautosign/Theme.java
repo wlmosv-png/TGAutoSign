@@ -371,6 +371,14 @@ final class Theme {
     static final int SP_MD = 12;
     static final int SP_LG = 16;
 
+    // 【圆角标尺】三级（2026-10-04 定）。
+    //   背景：改造前**所有东西都是 14dp 圆角** —— 输入框、按钮、chip、卡片全一样。
+    //   圆角一致不等于语言一致，反而让"容器 / 控件 / 徽章"的层级差异消失。
+    //   现在按角色分三级，任何新控件都必须挂到其中一级。
+    static final int R_CONTAINER = 14;   // 对话框、折叠卡片（大容器）
+    static final int R_CONTROL   = 8;    // 按钮、输入框、chip（可直接点的东西）
+    static final int R_BADGE     = 999;  // 药丸：类型 chip、状态点（用高度一半也行）
+
     // 【字体分工】数字/ID/时间/指令用等宽保留终端味；中文说明用系统默认字体（等宽遇中文会 fallback，行高不匀）
     static android.graphics.Typeface mono() {
         return android.graphics.Typeface.MONOSPACE;
@@ -393,14 +401,52 @@ final class Theme {
     //   termMuted / termFaint = 纯辅助文字，不承载状态语义
 
     // ---- 终端风色板（v1.5.1 起：日间浅底适配，暗色配色不变） ----
-    static int termCard(Context c)      { return dark(c) ? 0xFF101726 : 0xFFF2F5FA; }
+    // 2026-10-04 日间色调优化：旧值偏冷（#F2F5FA 蓝味重），在白屏上显脏；
+    //   改暖中性，且与 surface(1) 的纯白卡形成明确层次。
+    static int termCard(Context c)      { return dark(c) ? 0xFF101726 : 0xFFFFFFFF; }
     static int termCardDeep(Context c)  { return dark(c) ? 0xFF0A0F1A : 0xFFE8EDF5; }
-    static int termCardInput(Context c) { return dark(c) ? 0xFF0D1424 : 0xFFEDF1F8; }
+    static int termCardInput(Context c) { return dark(c) ? 0xFF0D1424 : 0xFFF5F6F8; }
     static int termTxt(Context c)       { return dark(c) ? 0xFFE6F1FF : 0xFF1F2A3D; }
     static int termMuted(Context c)     { return dark(c) ? 0xFF8B98B8 : 0xFF5A6B85; }
     static int termFaint(Context c)     { return dark(c) ? 0xFF5A6A8A : 0xFF7A8AA3; }
-    static int termCyan(Context c)      { return dark(c) ? 0xFF00E5FF : 0xFF007C91; }
+    static int termCyan(Context c)      { return dark(c) ? 0xFF00E5FF : 0xFF006E84; }
     static int termGreen(Context c)     { return dark(c) ? 0xFF00FF9C : 0xFF00796B; }
     static int termPink(Context c)      { return dark(c) ? 0xFFFF5A76 : 0xFFC2185B; }
     static int termAmber(Context c)     { return dark(c) ? 0xFFFFB84D : 0xFFB26A00; }
+
+    // ── 面板底色三档（2026-10-04 新增）────────────────────────────────
+    // 为什么要有这个：日间模式的"发灰"根因是**在浅底上再叠半透明**。
+    //   半透明叠浅色 = 只会更灰更脏（色彩学上无法避免）。
+    //   正解是改用**实色分层**：靠三层明度差表达层次。
+    // 明暗两套策略不同：
+    //   夜间 —— 深底上半透明叠加效果好，沿用叠色；
+    //   日间 —— 直接给三档实色，其中 level1 是纯白卡（白卡 + 微灰底 = 天然层次）。
+    // level: 0 = 页面底 / 1 = 卡片（默认） / 2 = 卡片内嵌（输入框、次级块）
+    static int surface(Context c, int level) {
+        boolean d = dark(c);
+        if (level <= 0) return d ? 0xFF070B14 : 0xFFF4F5F7;   // 日间：暖中性，替代旧的冷灰 #EDF1F7
+        if (level == 1) return d ? 0xFF131A2A : 0xFFFFFFFF;   // 日间：纯白卡
+        return d ? 0xFF0E1424 : 0xFFF7F8FA;                   // 日间：卡内嵌（输入框等）
+    }
+
+    /**
+     * 主操作实心底色：**全屏最多出现一个**，只留给「保存 / 确认」这类提交动作。
+     *
+     * 2026-10-04 二次调整（用户反馈"绿色有点亮"）：
+     *   初版 #00B87C 在深色底上饱和度过高，而且当时的 mkBtnPrimary 把所有主按钮
+     *   都改成了实心 —— 一屏出现「测试」「保存」两个亮绿块，主次反而糊了。
+     *   现在明度各降一档，并明确：可重复执行的动作（测试/自检/查看）一律不用实心。
+     */
+    static int primaryFill(Context c) { return dark(c) ? 0xFF0E9F6E : 0xFF0E8F63; }
+
+    /** 主操作上的文字色。亮底上配**深色字**对比更清（配白字反而发灰）。 */
+    static int onPrimary(Context c)   { return dark(c) ? 0xFF06231A : 0xFFFFFFFF; }
+
+    /** 安静动作（Quiet）：无底 + 主色字。用于测试、自检、查看这类可重复操作。 */
+    static int quietText(Context c)   { return dark(c) ? 0xFF35D6C4 : 0xFF007A8C; }
+
+    /** 淡底控件块（无描边）：普通按钮、开关轨道。alpha 由调用方给。 */
+    static int softFill(Context c, int base, int alpha) {
+        return withAlpha(base, alpha);
+    }
 }

@@ -173,7 +173,7 @@ final class StatsView {
 
         // 环形 + 圆心数字（数字带滚动动画）
         FrameLayout ring = new FrameLayout(act);
-        int ringPx = dp(act, 108);
+        int ringPx = dp(act, 124);   // 2026-10-04：108 → 124，给圈内数字留出呼吸空间
         ImageView iv = new ImageView(act);
         final float ratio = s.todayTotal <= 0 ? 0f : (float) s.todaySigned / s.todayTotal;
         // 换用 RingScanDrawable：弧末端有**扫描头 + 辉光**、起点有十字准星 ——
@@ -204,14 +204,27 @@ final class StatsView {
         LinearLayout center = new LinearLayout(act);
         center.setOrientation(LinearLayout.VERTICAL);
         center.setGravity(Gravity.CENTER);
-        int inner = (int) (ringPx * 0.62f);
+        // 圆内可用宽度（2026-10-04 修）。
+        //   旧值 0.62*108 ≈ 67dp，而 "14/15" 在 23sp 等宽字体下约 69dp —— 数字顶到圈上，
+        //   视觉上"圈和文字打架"（用户实测反馈）。现在：
+        //   ① 中心可用宽度提到 0.70；
+        //   ② 数字字号按**实际字符数与等宽字宽**反算，长数字自动缩小，绝不越过内圈。
+        // RingScanDrawable: stroke = size*0.093, r = size/2 - stroke*1.9
+        //   → 内缘直径 ≈ size - stroke*2*1.9 - stroke，再乘 0.90 留呼吸余量。
+        //   旧实现写死 0.62~0.70 的比例，实际净空只有约 60dp，
+        //   而 23sp 的 "14/15" 要 69dp —— 数字顶死在圆环内壁上（用户实测反馈）。
+        float strokeDp = ringPx * 0.093f;
+        int inner = (int) ((ringPx - strokeDp * 2f * 1.9f - strokeDp) * 0.90f);
         TextView num = new TextView(act);
-        num.setTextSize(23);
+        String numText = s.todaySigned + "/" + s.todayTotal;
+        // 等宽字体数字/斜杠宽约 0.62em；留 0.92 的安全系数避免贴边
+        float fitSp = inner / Math.max(1, numText.length()) / 0.62f * 0.95f;
+        num.setTextSize(Math.min(20f, Math.max(11f, fitSp)));
         num.setTextColor(col);
         num.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         num.setGravity(Gravity.CENTER);
         num.setSingleLine(true);
-        num.setText(s.todaySigned + "/" + s.todayTotal);
+        num.setText(numText);
         center.addView(num, new LinearLayout.LayoutParams(inner, -2));
         if (animate && out != null) {
             out.add(num, new Runnable() { @Override public void run() {

@@ -239,13 +239,45 @@ public final class TGAutoSignEntry extends XposedModule {
      * 可信赖），就认它是按钮点击候选。不限制静态/实例、不限制参数个数、不看方法名。
      * 这样能覆盖各客户端 R8 混淆后的任意形态（g / h / f / didPressedBotButton ...）。
      */
+    /**
+     * 类型名是否是按钮类型。
+     *
+     * 2026-10-04 修（关键）：旧判据 `contains("KeyboardButton")` **大小写敏感**。
+     *   声明类型是抽象父类 `TL_keyboard$KeyboardButton`（含大写 KeyboardButton），
+     *   但运行时实例是 `TL_keyboard$TL_keyboardButtonCallback_layer228`
+     *   （`keyboardButton`，小写 k）—— 于是 hook 装得上（看声明类型），
+     *   用户真点按钮时却取不到按钮对象（看实例类型）→ 直接不学习。
+     *   这就是「按钮学习有时能、有时不能」的机制来源。
+     *   现在：不分大小写，并沿父类/接口链再找一层。
+     */
+    private static boolean isKeyboardButtonType(Class<?> c) {
+        if (c == null) return false;
+        try {
+            for (Class<?> k = c; k != null; k = k.getSuperclass()) {
+                if (containsIgnoreCase(k.getName(), "keyboardbutton")) return true;
+                Class<?>[] ifs = k.getInterfaces();
+                if (ifs != null) {
+                    for (Class<?> i : ifs) {
+                        if (i != null && containsIgnoreCase(i.getName(), "keyboardbutton")) return true;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    private static boolean containsIgnoreCase(String s, String sub) {
+        try { return s != null && s.toLowerCase(java.util.Locale.US).contains(sub); }
+        catch (Throwable t) { return false; }
+    }
+
+    /** hook 安装期：参数里任意一个是按钮类型即认定为按钮点击候选（可跨客户端兼容混淆名）。 */
     private static boolean looksLikeBotButtonMethod(Method m) {
         try {
             Class<?>[] ps = m.getParameterTypes();
             if (ps == null) return false;
             for (Class<?> p : ps) {
-                String n = p.getName();
-                if (n != null && n.contains("KeyboardButton")) return true;
+                if (isKeyboardButtonType(p)) return true;
             }
             return false;
         } catch (Throwable t) { return false; }
@@ -256,8 +288,7 @@ public final class TGAutoSignEntry extends XposedModule {
         if (args == null) return null;
         for (Object a : args) {
             if (a == null) continue;
-            String n = a.getClass().getName();
-            if (n != null && n.contains("KeyboardButton")) return a;
+            if (isKeyboardButtonType(a.getClass())) return a;
         }
         return null;
     }
@@ -273,15 +304,40 @@ public final class TGAutoSignEntry extends XposedModule {
         return null;
     }
 
-    // 触发源 1b：ChatActivity$ChatMessageCellDelegate.didPressBotButton（UI 按钮学习）
+    // 触发源 1b：气泡内按钮点击（UI 按钮学习）
+    //
+    // 2026-10-04 修：旧实现只按名字 "didPressBotButton" 精确匹配，且只认一个类
+    //   org.telegram.ui.ChatActivity$ChatMessageCellDelegate。
+    //   实测官方 12.10.6（21570 类）里：
+    //     · org.telegram.ui.ChatActivity            —— 不存在（被 R8 改名，实际是 org.telegram.ui.vn）
+    //     · ChatActivity$ChatMessageCellDelegate    —— 不存在
+    //     · 字符串 "didPressBotButton"              —— 0 命中
+    //   于是这整条触发源在官方版/新 Nagram 上完全失效（LSPosed 日志反复打 hook failed）。
+    //   现在改为：多候选类 + **结构匹配**（参数含按钮类型即认），与 EnterView 同一套判据。
     private void hookBotButtonCell() {
+        String[] classNames = {
+                "org.telegram.ui.ChatActivity$ChatMessageCellDelegate",
+                "org.telegram.ui.Cells.n1",           // 官方 12.10.6 气泡按钮回调接口（vn 实现它）
+        };
+        int total = 0;
+        for (String cn : classNames) {
+            total += hookCellCandidate(cn);
+        }
+        if (total > 0) logInfo("hooked ChatMessageCellDelegate.didPressBotButton（匹配 " + total + " 个方法）");
+        else logInfo("气泡按钮回调类未命中（该宿主走 EnterView / 网络层兜底，不视为错误）");
+    }
+
+    /** 尝试挂一个候选类；返回挂上的方法数（类不存在或无可挂方法返回 0，不报错）。 */
+    private int hookCellCandidate(String cn) {
         try {
-            Class<?> cls = loadClass("org.telegram.ui.ChatActivity$ChatMessageCellDelegate");
+            Class<?> cls = loadClass(cn);
+            if (cls == null) return 0;
             Method[] ms = cls.getDeclaredMethods();
             int hooked = 0;
             for (Method m : ms) {
-                if (!"didPressBotButton".equals(m.getName())) continue;
-                String key = "cellDelegate#didPressBotButton#" + m.toGenericString();
+                boolean isNamed = "didPressBotButton".equals(m.getName());
+                if (!isNamed && !looksLikeBotButtonMethod(m)) continue;
+                String key = "cellDelegate#" + m.toGenericString();
                 synchronized (HOOKED_METHODS) {
                     if (HOOKED_METHODS.contains(key)) continue;
                     HOOKED_METHODS.add(key);
@@ -302,10 +358,12 @@ public final class TGAutoSignEntry extends XposedModule {
                     hooked++;
                 } catch (Throwable ignored) {}
             }
-            logInfo("hooked ChatActivity$ChatMessageCellDelegate.didPressBotButton（匹配 " + hooked + " 个方法）");
-            if (hooked == 0) logError("未找到 " + "ChatMessageCellDelegate.didPressBotButton" + "，该触发源在此宿主上无效", null);
+            if (hooked > 0) logInfo("hooked 气泡按钮回调 " + cls.getName() + "（匹配 " + hooked + " 个方法）");
+            return hooked;
         } catch (Throwable t) {
-            logError("hook didPressBotButton failed", t);
+            // 类不存在是常态（各客户端混淆名不同），降为 info 不再刷 error
+            logInfo("气泡按钮回调类 " + cn + " 不可用（" + t.getClass().getSimpleName() + "），跳过");
+            return 0;
         }
     }
 

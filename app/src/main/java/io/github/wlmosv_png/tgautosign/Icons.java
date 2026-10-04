@@ -35,7 +35,9 @@ final class Icons {
             "hourglass", "gap", "key", "save", "x", "calendar", "bolt", "bell",
             "boltfill", "ring",
             // 今日状态（2026-10-01）：日历摘要行用，与 DayCell 的六种样式解耦
-            "today-done", "today-wait", "today-miss", "today-idle"));
+            "today-done", "today-wait", "today-miss", "today-idle",
+            // 小圆点（2026-10-04）：账号一览 / 列表选中态用，替代 ● \u25cf / \u00b7
+            "dot-fill", "dot-line"));
 
     static boolean has(String name) {
         return name != null && NAMES.contains(name);
@@ -342,6 +344,15 @@ final class Icons {
                 // 圆环 + 中心短横：错过态要"落空"但不吓人（不用叉，叉太像报错）
                 circle(s, 12f, 12f, 8.4f);
                 poly(s, new float[]{8.6f, 12f, 15.4f, 12f}, false);
+                break;
+            // ── 小圆点（2026-10-04）──
+            // 实心："当前 / 选中"；空心："其它 / 未选"。
+            // 半径 3.4 是「小圆点」观感 —— 与 14px 尺寸搭配时不至于糊成一坨。
+            case "dot-fill":
+                dot(f, 12f, 12f, 3.4f);
+                break;
+            case "dot-line":
+                circle(s, 12f, 12f, 3.4f);
                 break;
             case "today-idle":
                 // 圆环 + 两短竖（暂停符）：不参与态，与「暂停」语义一致
