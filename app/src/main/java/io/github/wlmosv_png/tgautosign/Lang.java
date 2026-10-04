@@ -165,6 +165,7 @@ public final class Lang {
         EN.put("已加入", "Added");
         EN.put("已发出", "Sent");
         EN.put("已忽略", "Skipped");
+        EN.put("已学会「{0}」，以后不用再勾", "Learned \"{0}\" — no need to confirm again");
         EN.put("已排除", "Blocked");
         EN.put("已放弃", "Gave up");
         EN.put("已跳过", "Skipped");

@@ -1,5 +1,72 @@
 # 更新日志
 
+## 1.6.4 (130) — 2026-10-05
+
+> 这一版做了一件新事：**把「认不出的回复」变成可学习的**。
+>
+> 之前机器人回复了、但内置词表认不出结果时，模块只能记一条日志，
+> 用户第二天遇到同样的措辞仍然判不出，只能天天手动确认。
+> 现在会把这些回复沉淀成池子，用户在「未识别回复」页确认一次，
+> 模块就学会一条判定词，以后同类回复自动生效。
+>
+> 顺带修掉一批「bot 明明回复了却显示未回复」的判定错误，
+> 以及若干界面尺寸问题。
+
+### 新增 · Added
+
+- **未识别回复自学习页**
+  *A review page that turns unrecognised bot replies into learned judge words.*
+  判定链认不出结果的回复会沉淀进池子（每目标独立配额、上限 200 条），
+  页面按归一化模式聚类展示，用户点「算成功 / 算失败 / 忽略」即写入判定词，
+  也可在页内直接增删判定词。学会的词立即参与判定，不必每天重复确认。
+- **确认已签 = 永久学会**
+  *Confirming "signed" now teaches the word permanently.*
+  在待处理里点「确认已签」时，除了标记今日已签，
+  还会把该目标最近一条未识别回复学成判定词，避免明天再遇到同样措辞。
+- **对话框淡入淡出**
+  *Dialogs now fade in and out.*
+  「待处理」窗关闭/重开不再硬切，改为 alpha 过渡（120ms 出、160ms 入）。
+
+### 修复 · Fixed
+
+- **群聊场景下 bot 的回复被整批丢弃**
+  *In groups, the bot's reply could be dropped together with the whole update batch.*
+  同一批 update 里排在前面的是非目标消息时用了 `return`，把后面目标 bot 的
+  回复一起丢掉了，表现为「提示已发出、bot 明明回了、却没判成功」。
+- **bot 回复了却显示「bot 未回复」**
+  *A bot that did reply could be reported as "no reply".*
+  超时归类分支硬编码了「未回复」，从不检查是否收到过回复；
+  现按实际有无回复区分「回复判不出」与「bot 未回复」。
+- **学到的判定词被内置词抢先命中**
+  *User judge words were shadowed by the built-in tables.*
+  内置失败表排在自定义词之前，用户确认过的词永远没有机会命中。
+  现在用户自定义词优先于内置词。
+- **词与回复差一个空格就失配**
+  *A single space between word and reply broke the match.*
+  提词时走了归一化（空格被删），匹配用的是原文（含空格）。
+  现在匹配前两侧空白都会归并。
+- **学到的是欢迎语而不是待确认的那一句**
+  *The learned word could come from an unrelated greeting.*
+  学词原来取「该 bot 池子里最新一条」，现改为按目标精确取
+  「该目标最后一条判不出的回复」。
+- **广告/欢迎语被学成判定词**
+  *Adverts and greetings could be learned as judge words.*
+  提词前先过滤明显不是签到结论的内容，且不再用「截前 8 字」兜底——
+  提不出有判别力的词就不学。
+- **池子上限被单个 bot 打满**
+  *One bot could exhaust the pool quota.*
+  限频从「按 bot」改为「按目标」并放宽到 8 条，同一 bot 下多个目标不再互相挤占。
+- **目标列表与统计页窗口高度失真**
+  *Target list and stats window heights were wrong.*
+  内容高度上限被重复扣减，条目多时窗口反而更矮；统计页还多扣了一条 Tab 栏。
+  现改为「内容少则贴合内容、内容多则撑到上限」。
+- **列表底部被按钮遮住一半**
+  *The last row of the list was half-covered by the button bar.*
+  底部占位估算不足，已按实测加大。
+- **打开页面时窗口会跳一下**
+  *Opening a page caused the dialog to visibly jump.*
+  原先先给一个高度、布局后又改成另一个高度，两次不等即产生跳动。现只算一次。
+
 ## 1.6.3 (129) — 2026-10-05
 
 > 这一版有两件事：**把「按钮学习时灵时不灵」的真正原因挖出来了**，

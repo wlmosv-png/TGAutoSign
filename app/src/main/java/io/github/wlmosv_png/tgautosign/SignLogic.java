@@ -558,6 +558,38 @@ public final class SignLogic {
      * 以前只返回一个码，"为什么这么判"完全查不到 —— 排障只能猜。
      * 返回 {Integer 判定码, String 命中词}。
      */
+    /**
+     * 判定，但**用户自定义词优先**。
+     *
+     * 为什么需要（2026-10-04 实测事故）：
+     *   内置表里 FAIL_WORDS_DEFAULT 含「未绑定」，而判定顺序是
+     *   FAIL → PERM_FAIL → EXHAUSTED → DUP → OK。
+     *   用户在自学习页把「您都还没有绑定囡囡呢」显式判成**成功**后，
+     *   下次同样的回复仍先命中内置的 FAIL「未绑定」→ 判失败 → 用户看到
+     *   「我明明学过了，还是判不出」。
+     *
+     * 原则：**用户显式表态 > 内置假设**。用户亲自点过「算成功 / 算失败」，
+     *   说明他确认过这句话的真实语义，应当直接生效。
+     *
+     * 顺序：userFail → userOk → （落回原 verdictDetail 的完整判定链）
+     *   注意 userFail 仍排在 userOk 前：否定词常内嵌在肯定词里
+     *   （「没有签到成功」既含「签到成功」又是否定），失败优先与本文件既有约定一致。
+     */
+    public static Object[] verdictDetailCustom(String reply, String[] dup, String[] ok,
+                                               String[] fail, String[] userOk, String[] userFail) {
+        if (reply == null || reply.length() == 0) return new Object[]{Integer.valueOf(V_UNKNOWN), ""};
+        String lower = reply.toLowerCase();
+        if (userFail != null && userFail.length > 0) {
+            String m = matched(lower, userFail);
+            if (m != null) return new Object[]{Integer.valueOf(V_FAILED), m};
+        }
+        if (userOk != null && userOk.length > 0) {
+            String m = matched(lower, userOk);
+            if (m != null) return new Object[]{Integer.valueOf(V_SIGNED), m};
+        }
+        return verdictDetail(reply, dup, ok, fail);
+    }
+
     public static Object[] verdictDetail(String reply, String[] dup, String[] ok, String[] fail) {
         if (reply == null || reply.length() == 0) return new Object[]{Integer.valueOf(V_UNKNOWN), ""};
         String lower = reply.toLowerCase();
@@ -630,10 +662,18 @@ public final class SignLogic {
     /** 返回命中的第一条词；没命中返回 null。 */
     private static String matched(String lower, String[] words) {
         if (words == null) return null;
+        // 2026-10-04 修「学了词还是判不出」：词与回复的空格不一致会失配。
+        // 实测：词表「💢您都还没有绑」（提词走了归一化，空格被删），
+        // 而 bot 回「💢 您都还没有绑定囡囡呢」（💢 后有空格）→ contains 不中。
+        // 这里把两边空白都去掉再比：对原本无空格的词（签到成功等）行为不变。
+        String flat = lower.replace(" ", "").replace("\u3000", "");
         for (String w : words) {
             if (w == null) continue;
             String t = w.trim().toLowerCase();
-            if (t.length() > 0 && lower.contains(t)) return t;
+            if (t.length() == 0) continue;
+            if (lower.contains(t)) return t;
+            String ft = t.replace(" ", "").replace("\u3000", "");
+            if (ft.length() > 0 && flat.contains(ft)) return t;
         }
         return null;
     }
