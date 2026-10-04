@@ -435,6 +435,16 @@ public final class TGAutoSignEntry extends XposedModule {
                                 CORE.setHostActivity((Activity) thiz);
                             }
                         } catch (Throwable ignored) {}
+                        // ── 打开 TG = 一次即时巡检（2026-10-04）──
+                        // 为什么放这里：进程重启或被冻结恢复后，
+                        //   模块唯一入口是启动 10 秒后的 timerHook("启动")；
+                        //   若那一刻在窗口外，就得等下一次心跳
+                        //   （窗口外 15 分钟、窗口内 45 秒）。
+                        //   而“用户打开 TG”本身就是最可靠的信号 ——
+                        //   他在用手机、网络一定通。
+                        // 安全性：enqueueTry 自带 90 秒去重 + 窗口内随机延迟，
+                        //   且定时模式下会自动转交时刻表调度 —— 不会窗口外签到。
+                        try { CORE.enqueueTry("打开TG"); } catch (Throwable ignored) {}
                         return chain.proceed();
                     });
             logInfo("hooked LaunchActivity.onResume (jmb host)");

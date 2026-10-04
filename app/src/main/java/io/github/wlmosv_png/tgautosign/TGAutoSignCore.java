@@ -1089,8 +1089,6 @@ public final class TGAutoSignCore {
         registerActivityListener();
         mainHandler.postDelayed(() -> {
             try { jlog("=== 启动补签 ==="); timerHook("启动"); } catch (Throwable ignored) {}
-            // 启动时排一次服务器提醒（幂等：已排过同一时刻就直接返回）
-            try { ensureReminderScheduled(); } catch (Throwable ignored) {}
         }, 10000L);
         schedulePoll();
         scheduleTickLoop();   // 心跳常驻：正常签到与补签都靠它兜底
@@ -2644,141 +2642,8 @@ public final class TGAutoSignCore {
     private String entryLoc(Map<String,Object> m){ Object o=m.get("loc"); return o==null ? entryText(m) : String.valueOf(o); }
     private List<String> cbPres(Map<String,Object> m){ List<String> l=entryPre(m); if (l.isEmpty() && WAKE_CMD!=null && WAKE_CMD.length()>0) l.add(WAKE_CMD); return l; }
 
-    /** 服务器提醒标记。收到它 = 自己排的定时提醒到点了。
-     *  不用 emoji（用户硬性要求），纯文本前缀就够唯一。 */
-    private static final String REMINDER_MARK = "[TGAutoSign] 定时提醒";
 
-    private static String kReminderSlot() { return "jmb_reminder_slot"; }
 
-    /**
-     * 自发请求重入闸（2026-10-04 紧急修）。
-     *
-     * 事故：模块自己发的请求会再次进入本模块的
-     * sendRequest hook，hook 里又去调 timerHook → kickSchedule →
-     * 又去发提醒 → 无限递归 → main 线程被拖死 → TG 卡死（ANR）。
-     *
-     * 解法：自发期间置位，onSendRequest 见到就直接放过 ——
-     * 不学习、不判定、不触发调度。自己发的东西不需要自己再处理一遍。
-     */
-    private volatile boolean selfSending = false;
-
-    /**
-     * 用 TG 的定时发送，给「收藏夹」排一条每日提醒（2026-10-04）。
-     *
-     * 这是**漏签的正解**：
-     *   消息交给 Telegram 服务器持有，到点由服务器投递 ——
-     *   本机进程没在跑、被 ColorOS 冻结、被杀，也会收到推送。
-     *   模块 hook 到这条消息（见 onUpdateProcessed）就能把进程唤醒过来、
-     *   跑一轮巡检 —— 完全不依赖本机定时器。
-     *
-     * 为什么是「收藏夹」：
-     *   peer 就是自己，不会打扰任何人；而且收藏夹消息也会走
-     *   push 通道，同样能把进程唤醒。
-     *
-     * 排在窗口开始前 5 分钟：醒来正好赶上开工。
-     * repeat=86400 让服务器每天同一时刻自动重发 ——
-     * 本机不用再管，也不用担心重装/清数据后丢失。
-     */
-    private void ensureReminderScheduled() {
-        try {
-            if (!TIMER_ENABLED) return;
-            int[] any = SignLogic.windowRangeAny(WINDOW);
-            if (any == null) return;
-            int startMin = SignLogic.wrapMinute(any[0] - 5);
-            String slot = String.format("%02d:%02d", startMin / 60, startMin % 60);
-            // ── 只在「意图时刻变了」时重排（2026-10-04）──
-            // repeat=86400 本身就会每天自动重投；
-            // 若再按“每天”去排一次，服务端会累积出 N 条重复的
-            // 周期任务（每月 30 条 → 收藏夹每天被刷 30 次）。
-            if (slot.equals(prefs.getString(kReminderSlot(), ""))) return;
-            // 先记上再做事：避免 peer 拿不到时每轮心跳都重试。
-            prefs.edit().putString(kReminderSlot(), slot).apply();
-            java.util.Calendar c = java.util.Calendar.getInstance();
-            c.set(java.util.Calendar.HOUR_OF_DAY, startMin / 60);
-            c.set(java.util.Calendar.MINUTE, startMin % 60);
-            c.set(java.util.Calendar.SECOND, 0);
-            c.set(java.util.Calendar.MILLISECOND, 0);
-            long at = c.getTimeInMillis();
-            if (at <= System.currentTimeMillis()) at += 86400000L;
-            int acc = currentAccount();
-            Object peer = savedMessagesPeer(acc);
-            if (peer == null) { logd("[定时] 收藏夹 peer 获取失败，提醒未排"); return; }
-            sendTextScheduled(peer, acc, REMINDER_MARK, (int) (at / 1000L), 86400);
-        } catch (Throwable t) { noteSwallowed("ensureReminderScheduled", t); }
-    }
-
-    /**
-     * 定时发送（TG 原生排程，2026-10-04 新增）。
-     *
-     * 为什么要走这条通道（漏签根治）：
-     *   模块现有的定时签到全部压在 mainHandler.postDelayed +
-     *   心跳（45s~15min）上——**只要进程没了，排期就全丢**（全项目
-     *   0 处 AlarmManager）。用户反馈的「偶尔漏签、没规律」就是这个来源。
-     *
-     * 现在改用 TG 自己的定时发送（反编译确认 SendMessageParams 有
-     *   scheduleDate:I 与 scheduleRepeatPeriod:I 两个公开字段）：
-     *   消息交给**服务器**持有，到点由 Telegram 投递 ——
-     *   本机进程没在跑、断网、被杀，照样发得出去。
-     *
-     * @param scheduleAtSec unix 秒（非 0）。传 0 等于立即发。
-     * @param repeatSec     周期（秒），0 = 不重复。传 86400 则每天同一时刻自动重发
-     *                      （服务器端持久，不需本机参与）。
-     */
-    private void sendTextScheduled(Object peer, int account, String msg,
-                                   int scheduleAtSec, int repeatSec) throws Exception {
-        // 置位重入闸：本次请求不得再被自己的 hook 处理。
-        // finally 里复位 —— sendRequest 是异步的，但 hook 是在
-        // 同一个调用栈上同步触发的，因此这个窗口足够。
-        boolean prev = selfSending;
-        selfSending = true;
-        try {
-            sendTextScheduledInner(peer, account, msg, scheduleAtSec, repeatSec);
-        } finally {
-            selfSending = prev;
-        }
-    }
-
-    private void sendTextScheduledInner(Object peer, int account, String msg,
-                                        int scheduleAtSec, int repeatSec) throws Exception {
-        Class<?> sendCls = classEx("org.telegram.tgnet.TLRPC$TL_messages_sendMessage");
-        Object req = newTlObject(sendCls);
-        setFieldVal(req, "peer", peer);
-        setFieldVal(req, "message", msg);
-        setFieldVal(req, "random_id", random.nextLong());
-        if (scheduleAtSec != 0) {
-            // flags 位 0x400 = schedule_date 存在（反编译：
-            //   const/16 v2, 0x400 → hasFlag(flags, 0x400) → writeInt32(schedule_date)）。
-            // 不置位的话序列化时字段被略过，定时就不生效。
-            try {
-                Object old = getFieldVal(req, "flags");
-                int f = (old instanceof Number) ? ((Number) old).intValue() : 0;
-                setFieldVal(req, "flags", Integer.valueOf(f | 0x400));
-            } catch (Throwable _ef) { noteSwallowed("sendTextScheduled-flags", _ef); }
-            setFieldVal(req, "schedule_date", Integer.valueOf(scheduleAtSec));
-            if (repeatSec > 0) {
-                // flags 位 0x1000000 = schedule_repeat_period 存在
-                // （反编译：const/high16 v2, 0x1000000 → hasFlag → writeInt32）。
-                // 字段名实测是 schedule_repeat_period，不是 repeat_period。
-                try {
-                    Object o2 = getFieldVal(req, "flags");
-                    int f2 = (o2 instanceof Number) ? ((Number) o2).intValue() : 0;
-                    setFieldVal(req, "flags", Integer.valueOf(f2 | 0x1000000));
-                } catch (Throwable _er) { noteSwallowed("sendTextScheduled-repeat-flag", _er); }
-                setFieldVal(req, "schedule_repeat_period", Integer.valueOf(repeatSec));
-            }
-        }
-        Object cm = staticInvoke(classEx("org.telegram.tgnet.ConnectionsManager"), "getInstance",
-                new Class<?>[]{int.class}, new Object[]{account});
-        Object delegate = Proxy.newProxyInstance(classEx("org.telegram.tgnet.RequestDelegate").getClassLoader(),
-                new Class<?>[]{classEx("org.telegram.tgnet.RequestDelegate")},
-                new InvocationHandler() { @Override public Object invoke(Object p, Method mm, Object[] a) { return null; } });
-        invoke(cm, "sendRequest",
-                new Class<?>[]{classEx("org.telegram.tgnet.TLObject"), classEx("org.telegram.tgnet.RequestDelegate")},
-                new Object[]{req, delegate});
-        jlog("[定时] 已交 TG 服务器排程: " + msg
-                + "（在 " + hhmm(scheduleAtSec / 60) + "，周期 "
-                + (repeatSec > 0 ? (repeatSec / 3600) + "h" : "无") + "）");
-    }
 
     private void sendText(Object peer, int account, String msg) throws Exception {
         Class<?> sendCls = classEx("org.telegram.tgnet.TLRPC$TL_messages_sendMessage");
@@ -11172,8 +11037,13 @@ public final class TGAutoSignCore {
     private void ensureTimerPlan(String prefix) {
         try {
             String key = timerPlanKey(prefix);
-        /* 跨天刷新（2026-09-29）：plan key 已随日期自变，如存在即今天；判断也够 */
-            if (prefs.contains(key)) return;
+        /* 跨天刷新（2026-09-29）：plan key 已随日期自变，如存在即今天。
+         * 2026-10-04 修漏签：旧写法“存在就 return”，表一旦生成当天再不动 ——
+         * 今天签完一部分后**新增的目标**永远排不进去，
+         * 日志表现为「无计划 / 未排进今日时刻表」→ 漏签。
+         * 现在：表已存在时，只把**缺失的目标补排**进尚未过去的剩余时段，
+         * 不推倒重来（重排会打乱已签部分的节奏）。 */
+            if (prefs.contains(key)) { topUpTimerPlan(prefix, key); return; }
             // 支持跨天窗口（如 22:00-02:00）：展开成 [1320, 1560] 的分钟轴，
             // 排完期再折回 0..1439。旧写法遇到跨天直接 return，定时模式整晚不工作。
             int[] any = SignLogic.windowRangeAny(WINDOW);
@@ -11238,6 +11108,80 @@ public final class TGAutoSignCore {
         } catch (Throwable t) {
             logException("[定时] 生成时刻表", t);
         }
+    }
+
+    /**
+     * 时刻表补排（2026-10-04）。
+     *
+     * 为什么：旧版「表存在就不再生成」，今天中途新增的目标永远排不进去 ——
+     * 用户看到的就是漏签（而且无规律：只有中途加目标才会触发）。
+     *
+     * 做法：比对表内 id 与当前未签目标，把缺失的那些
+     * 补进**从现在往后**的剩余时段；已过去的时段不动。
+     */
+    private void topUpTimerPlan(String prefix, String key) {
+        try {
+            String cur = prefs.getString(key, "");
+            org.json.JSONArray arr = (cur == null || cur.isEmpty())
+                    ? new org.json.JSONArray() : new org.json.JSONArray(cur);
+            // 表内已有的 id
+            java.util.Set<String> has = new java.util.HashSet<String>();
+            int maxMin = -1;
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                has.add(o.optString("id"));
+                int m = o.optInt("min", -1);
+                if (m > maxMin) maxMin = m;
+            }
+            // 当前未签且未冻结、且不在表内的
+            List<Map<String, Object>> list = new ArrayList<Map<String, Object>>();
+            loadTargetsInto(prefix, list);
+            List<Map<String, Object>> missing = new ArrayList<Map<String, Object>>();
+            for (Map<String, Object> m : list) {
+                String id = entryId(m);
+                if (todayStr().equals(prefs.getString(kLast(prefix, id), ""))) continue;
+                if (isFrozen(prefix, id)) continue;
+                if (has.contains(id)) continue;
+                missing.add(m);
+            }
+            if (missing.isEmpty()) return;
+
+            int[] any = SignLogic.windowRangeAny(WINDOW);
+            if (any == null) return;
+            int[] spanAxis = SignLogic.windowSpanAny(any);
+            int r0 = spanAxis[0], r1 = spanAxis[1];
+            java.util.Calendar c = java.util.Calendar.getInstance();
+            int nowMin = c.get(java.util.Calendar.HOUR_OF_DAY) * 60 + c.get(java.util.Calendar.MINUTE);
+            // 剩余区间：从 now 到窗口结束；不足 5 分钟就不补了
+            int lo = Math.max(r0, nowMin + 1);
+            int hi = r1 - 1;
+            if (hi - lo < 5) {
+                logd("[定时] 今日剩余时段不足，" + missing.size() + " 个新目标交给补签通道");
+                return;
+            }
+            int n = missing.size();
+            int idx = 0;
+            for (Map<String, Object> m : missing) {
+                int s0 = lo + (int) ((long) (hi - lo) * idx / n);
+                int s1 = lo + (int) ((long) (hi - lo) * (idx + 1) / n) - 1;
+                if (s1 < s0) s1 = s0;
+                int min = s0 + (s1 > s0 ? random.nextInt(s1 - s0 + 1) : 0);
+                try {
+                    org.json.JSONObject o = new org.json.JSONObject();
+                    o.put("id", entryId(m));
+                    o.put("did", entryDid(m));
+                    o.put("kind", entryKind(m));
+                    o.put("text", entryText(m));
+                    o.put("min", SignLogic.wrapMinute(min));
+                    arr.put(o);
+                } catch (Throwable _eTO) { noteSwallowed("topUpTimerPlan", _eTO); }
+                idx++;
+            }
+            prefs.edit().putString(key, arr.toString()).commit();
+            jlog("[定时] 已补排 " + n + " 个新目标进剩余时段（"
+                    + hhmm(SignLogic.wrapMinute(lo)) + "-" + hhmm(SignLogic.wrapMinute(hi)) + "）");
+        } catch (Throwable t) { noteSwallowed("topUpTimerPlan", t); }
     }
 
     /** 读取当日时刻表 → [{id,did,kind,text,min}] */
@@ -11571,16 +11515,30 @@ public final class TGAutoSignCore {
     }
 
     /** 当前账号是否还有今天没签的目标 */
+    /**
+     * 是否还有未签目标（决定心跳档位）。
+     *
+     * 2026-10-04 修：旧版**只看当前账号** ——
+     *   而心跳的活跃度（45 秒档 vs 10 分钟档）就由本函数决定。
+     *   非当前账号有未签目标时，心跳被降级 → 那些账号
+     *   可能整段窗口都没被巡检到 → 漏签。
+     *   （该函数下面本就有正确的全槽位遍历，只是这一步被卡住了。）
+     *
+     * 现在遍历全部启用槽位；只要任一账号还有未签，
+     * 就维持高频心跳，保证每个账号都能被及时巡检。
+     */
     private boolean hasUnsignedTarget() {
         try {
-            // 停用账号一律视为「已签完」：心跳据此降到 10 分钟档，不再 45 秒空转。
-            if (!isAccountEnabled(currentAccount())) return false;
-            String prefix = accountPrefix();
             String today = todayStr();
-            List<Map<String, Object>> l = new ArrayList<>();
-            loadTargetsInto(prefix, l);
-            for (Map<String, Object> m : l) {
-                if (!today.equals(prefs.getString(kLast(prefix, entryId(m)), ""))) return true;
+            for (int slot : accountSlots()) {
+                if (!isAccountEnabled(slot)) continue;          // 停用账号不算
+                String pfx = accountPrefix(slot);
+                List<Map<String, Object>> l = new ArrayList<>();
+                loadTargetsInto(pfx, l);
+                for (Map<String, Object> m : l) {
+                    if (isInactive(pfx, m)) continue;            // 冻结/排除不算
+                    if (!today.equals(prefs.getString(kLast(pfx, entryId(m)), ""))) return true;
+                }
             }
         } catch (Throwable ignored) {}
         return false;
@@ -11992,8 +11950,11 @@ public final class TGAutoSignCore {
                 draws[i] = d;
                 cell.setBackground(d);
 
+                // 高度随字体缩放（2026-10-04）：字体调大后 30dp 装不下 11sp，
+                // 会裁字或把两行格子挤得对不齐。上限 42dp。
                 android.widget.LinearLayout.LayoutParams lp =
-                        new android.widget.LinearLayout.LayoutParams(0, dp(30), 1f);
+                        new android.widget.LinearLayout.LayoutParams(0,
+                                Math.min(Theme.textBoxPx(act, 30), dp(42)), 1f);
                 lp.setMargins(dp(2), dp(2), dp(2), dp(2));
                 (i < 7 ? row1 : row2).addView(cell, lp);
             }
@@ -13530,12 +13491,6 @@ public final class TGAutoSignCore {
     public boolean onSendRequest(Object[] args, Object connObj) {
         Object req0 = args != null && args.length > 0 ? args[0] : null;
         if (req0 == null) return false;
-        // ── 自发请求直接放过（2026-10-04 紧急修）──
-        // 没这一步会无限递归：
-        //   ensureReminderScheduled → sendTextScheduled → sendRequest
-        //   → 本 hook → timerHook → kickSchedule → ensureReminderScheduled → ...
-        // 实测将 main 线程拖死 5 秒以上 → TG 输入分发超时（ANR）。
-        if (selfSending) return false;
         String rn0 = req0.getClass().getName();
         if (!rn0.contains("TL_messages_sendMessage") && !rn0.contains("TL_messages_getBotCallbackAnswer")
                 && !rn0.contains("TL_messages_sendWebViewData") && !rn0.contains("TL_messages_sendMedia")
@@ -13552,9 +13507,6 @@ public final class TGAutoSignCore {
                         handleCommand(ms0);
                         return true;
                     }
-                    // 自己排的服务器提醒：既不是签到信号，也不需要学习，吞掉。
-                    // （否则它会以为“发给 bot 的指令”去解析，又一条死路。）
-                    if (ms0.startsWith(REMINDER_MARK)) return true;
                 }
             }
         } catch (Throwable ignored) {}
@@ -13841,22 +13793,6 @@ public final class TGAutoSignCore {
             // 在这种情形下不成立 → 模块自己发的「每日汇总」被当成 bot 回复重新处理，
             // 日志出现「跳过重复信号 8526734916|⚠️ TGAutoSign 今日 0/9 已签…」。
             // 所以"排除自己发的"必须在两种分支上都做。
-            // ── 服务器定时提醒（2026-10-04）──
-            // 这条消息是**模块自己排给自己的**（收藏夹），所以必须在
-            // 下面那个「自己发的一律不处理」之**前**拦截。
-            // 它是唯一能在进程被杀后把模块叫醒的通道 ——
-            // 没它就只能等用户自己打开 TG，那就是漏签。
-            try {
-                Object _rm = getFieldVal(msg, "message");
-                String _body = _rm == null ? "" : String.valueOf(_rm);
-                if (_body.startsWith(REMINDER_MARK)) {
-                    jlog("[定时] 收到服务器提醒，立即巡检");
-                    mainHandler.post(new Runnable() { @Override public void run() {
-                        try { timerHook("服务器提醒"); } catch (Throwable ignored) {}
-                    } });
-                    continue;
-                }
-            } catch (Throwable _eR) { noteSwallowed("onUpdateProcessed-reminder", _eR); }
             boolean isGroupPeer = peerUid < 0;
             long selfId = accountSelfId(ctrlAcc >= 0 ? ctrlAcc : currentAccount());
             if (selfId > 0 && fromUid == selfId) continue;   // 自己发的（含收藏夹汇总、群指令）一律不处理
@@ -14447,10 +14383,6 @@ public final class TGAutoSignCore {
             try {
                 prefs.edit().remove(kTimerPlan(accountPrefix(), todayStr())).apply();
                 scheduleWindowWake();
-                // 窗口可能变了 → 重算服务器提醒的时刻（2026-10-04）。
-                // 只在这里与启动时调，不挂到 kickSchedule（高频）上 ——
-                // 否则“每次发送都去发一次新请求”，是递归的温床。
-                try { ensureReminderScheduled(); } catch (Throwable ignored) {}
                 if (TIMER_ENABLED && (inWindow() || inMissBackTime())) kickSchedule();
             } catch (Throwable _eA) { noteSwallowed("applyConfigFrom(重排)", _eA); }
         } catch (Throwable t) { logException("[同步] 配置应用", t); }
@@ -14827,8 +14759,10 @@ public final class TGAutoSignCore {
                 cell.setTextColor(tc);
                 cell.setBackground(new Icons.DayCellDrawable(
                         dp(28), signed, today, dark, ac, muted, R.calStyle));
+                // 同主面板：高度随字体缩放（2026-10-04）
                 LinearLayout.LayoutParams lp =
-                        new LinearLayout.LayoutParams(0, dp(28), 1f);
+                        new LinearLayout.LayoutParams(0,
+                                Math.min(Theme.textBoxPx(act, 28), dp(40)), 1f);
                 lp.setMargins(dp(2), 0, dp(2), 0);
                 prev.addView(cell, lp);
             }

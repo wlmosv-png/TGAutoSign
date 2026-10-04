@@ -381,7 +381,18 @@ final class StatsView {
                 wl.setTextColor(Theme.termFaint(act));
                 wl.setTypeface(Typeface.MONOSPACE);
                 wl.setText(WL[r]);
-                row.addView(wl, new LinearLayout.LayoutParams(dp(act, 16), cell));
+                // 列宽自适应（2026-10-04）：原写死 16dp，而内容是 12.5sp 中文。
+                // 用户把系统字体调大 → 文字比格子宽 → 被裁或挤成两行。
+                // 现按实际文字测量取宽，上限 28dp 避免占掉热力图。
+                int wlW = dp(act, 16);
+                try {
+                    android.graphics.Paint mp = wl.getPaint();
+                    wlW = (int) Math.min(dp(act, 28), Math.ceil(mp.measureText(WL[r])) + dp(act, 4));
+                    wlW = Math.max(wlW, dp(act, 12));
+                } catch (Throwable ignored) {}
+                wl.setGravity(Gravity.CENTER);
+                wl.setSingleLine(true);
+                row.addView(wl, new LinearLayout.LayoutParams(wlW, cell));
                 for (int col = 0; col < cols; col++) {
                     int idx = col * ROWS + r;
                     ImageView iv = new ImageView(act);

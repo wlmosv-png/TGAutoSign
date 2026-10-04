@@ -7,6 +7,31 @@ import android.util.TypedValue;
 
 final class Theme {
     private Theme() {}
+    /**
+     * 字体缩放系数（2026-10-04）。
+     *
+     * 为什么需要：用户在系统里调大字体后，sp 会变大，
+     * 而模块里大量的**定高**容器（日历格 30dp、热力图标签列 16dp）
+     * 不会跟着变 → 文字被裁或被挤成两行。
+     * 这是最典型的“换个手机就不对”的 UI 错误。
+     */
+    static float fontScale(Context c) {
+        try {
+            float f = c.getResources().getConfiguration().fontScale;
+            if (f >= 0.5f && f <= 3f) return f;
+        } catch (Throwable ignored) {}
+        return 1f;
+    }
+
+    /**
+     * “能装下 v 行文字”的容器高度（px）。
+     * 基础值 baseDp 不变，但会按字体缩放系数拉高 ——
+     * 保证“字变大了，格子也跟着变大”，而不是把字裁掉。
+     */
+    static int textBoxPx(Context c, float baseDp) {
+        return (int) (dp(c, baseDp) * Math.max(1f, fontScale(c)) + 0.5f);
+    }
+
     static int dp(Context c, float v) {
         return Math.max(1, (int) (TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, c.getResources().getDisplayMetrics()) + 0.5f));
     }
