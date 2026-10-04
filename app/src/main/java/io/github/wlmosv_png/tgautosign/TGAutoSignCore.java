@@ -2114,6 +2114,30 @@ public final class TGAutoSignCore {
         synchronized (TLOCK) { return new ArrayList<Map<String, Object>>(targets); }
     }
 
+    /**
+     * 按**当前账号现场读**目标列表（2026-10-04）。
+     *
+     * 为什么不能用 targetsSnapshot()：
+     *   那是 lastAccount 的内存缓存，只在启动与「切号被侦测到」时刷新。
+     *   而下面那些调用方**隐含假设它是当前账号的** ——
+     *   一旦切号后缓存未及时刷新就会：
+     *     · 查不到条目 → 不发 \/ 误报「获取不到签到目标」 → **漏签**
+     *     · 列表与统计口径不一致
+     *     · 序号算错 → id 冲突
+     * 现场读保证与 accountPrefix() 同源。
+     */
+    private List<Map<String, Object>> targetsNow() {
+        List<Map<String, Object>> l = new ArrayList<Map<String, Object>>();
+        try { loadTargetsInto(accountPrefix(), l); } catch (Throwable ignored) {}
+        java.util.Collections.sort(l, new java.util.Comparator<Map<String, Object>>() {
+            @Override public int compare(Map<String, Object> a, Map<String, Object> b) {
+                int c = Long.compare(entryDid(a), entryDid(b));
+                return c != 0 ? c : entryId(a).compareTo(entryId(b));
+            }
+        });
+        return l;
+    }
+
     /** 判定「这条目标正在发送中」的有效窗口。
      *  必须与回复判定侧的撤销窗口对齐：那边特意放宽到 30 分钟等慢 bot 回复，
      *  这里若只有 90 秒，3 分钟后才回话的 bot 会因为 pending 已被清掉而走不到撤销逻辑，
@@ -2261,7 +2285,7 @@ public final class TGAutoSignCore {
     }
 
     private Map<String, Object> findTextEntry(long did, String text) {
-        for (Map<String, Object> m : targetsSnapshot()) {
+        for (Map<String, Object> m : targetsNow()) {
             if (entryDid(m) == did && KIND_TEXT.equals(entryKind(m)) && entryText(m).equals(String.valueOf(text))) return m;
         }
         return null;
@@ -2269,7 +2293,7 @@ public final class TGAutoSignCore {
 
     private Map<String, Object> findCbEntry(long did, byte[] data) {
         if (data == null) return null;
-        for (Map<String, Object> m : targetsSnapshot()) {
+        for (Map<String, Object> m : targetsNow()) {
             if (entryDid(m) == did && KIND_CB.equals(entryKind(m)) && Arrays.equals(entryData(m), data)) return m;
         }
         return null;
@@ -2279,7 +2303,7 @@ public final class TGAutoSignCore {
     private String nextEntryId(long did, String kind) {
         int maxSeq = 0;
         String prefix = did + (KIND_CB.equals(kind) ? "_cb" : "_");
-        for (Map<String, Object> m : targetsSnapshot()) {
+        for (Map<String, Object> m : targetsNow()) {
             String id = entryId(m);
             if (id.startsWith(prefix)) {
                 try { maxSeq = Math.max(maxSeq, Integer.parseInt(id.substring(prefix.length()))); } catch (Throwable ignored) {}
@@ -5208,7 +5232,8 @@ public final class TGAutoSignCore {
     }
 
     private List<Map<String, Object>> sortedTargets() {
-        List<Map<String, Object>> l = targetsSnapshot();
+        // 现场读（2026-10-04）：列表与筛选\/搜索的数据源必须是当前账号
+        List<Map<String, Object>> l = targetsNow();
         String today = todayStr();
         if ("name".equals(SORT_MODE)) {
             java.util.Collections.sort(l, new java.util.Comparator<Map<String, Object>>() {
@@ -5966,6 +5991,9 @@ public final class TGAutoSignCore {
      * **不必把原有那些构建代码搬来搬去**（搬动容易漏改、且它们引用了很多局部变量）。
      */
     private LinearLayout listTargetContainer;
+    /** 目标页根容器与 tab 行（供高度动态计算）。 */
+    private LinearLayout listRootBoxRef;
+    private LinearLayout listTabBarRef;
 
     /** 目标列表当前的行容器（供筛选/排序原地刷新，不重建对话框）。 */
     private LinearLayout listRowsHost;
@@ -7811,6 +7839,53 @@ public final class TGAutoSignCore {
      */
     private static final float LIST_H_RATIO = 0.64f;
 
+    /**
+     * 为内层滚动区算出「不会被裁」的高度（2026-10-04）。
+     *
+     * 对话框内容上限 = 屏高 * 0.72（1080x2376 下 = 1711px）。
+     * 列表原自设 0.64 屏 = 1520px，而 tab行 + 搜索 + 筛选 + 排序 约 400px，
+     * 合计 1920px > 1711px —— showDialog 检测到「内容含滚动控件」就**不包
+     * 外层 ScrollView**，CapBox 直接把超出部分裁掉；而列表滚动条是按
+     * 1520px 算的 —— **滚到底也看不到被裁的那段**。
+     * 这就是「搜索能命中、列表却不显示」与「统计只显示部分」的直接原因。
+     *
+     * 现在：用**实测高度**算出“其它部分占了多少”，剩下的才给列表，
+     * 保证不超上限 → 不被裁 → 自身滚动能到底。
+     */
+    private int listFitHeight(Activity act) {
+        int maxH = listContentHeight(act);
+        try {
+            int chrome = Theme.dp(act, 112);          // 对话框标题栏 + 分隔 + 底部按钮
+            if (listRootBoxRef != null) {
+                for (int i = 0; i < listRootBoxRef.getChildCount(); i++) {
+                    View ch = listRootBoxRef.getChildAt(i);
+                    if (ch == null) continue;
+                    // 跳过含列表/统计的那棵子树
+                    if (isAncestorOf(ch, listTargetContainer) && listTargetContainer != null) continue;
+                    if (isAncestorOf(ch, statsHost) && statsHost != null) continue;
+                    chrome += ch.getHeight();
+                }
+            }
+            int h = maxH - chrome;
+            int min = Math.min(Theme.dp(act, 260), maxH);
+            if (h < min) h = min;
+            if (h > maxH) h = maxH;
+            return h;
+        } catch (Throwable t) { return maxH; }
+    }
+
+    /** a 是否是 b 的祖先。 */
+    private static boolean isAncestorOf(View a, View b) {
+        if (a == null || b == null || a == b) return false;
+        android.view.ViewParent p = b.getParent();
+        int guard = 0;
+        while (p instanceof View && guard++ < 30) {
+            if (p == a) return true;
+            p = ((View) p).getParent();
+        }
+        return false;
+    }
+
     /** 列表类页面的统一内容高度（像素）。 */
     private int listContentHeight(Activity act) {
         int h = 0;
@@ -8759,7 +8834,13 @@ public final class TGAutoSignCore {
             s.yesterday = yesterdayStr();
             s.signDays = signDays(prefix);
 
-            List<Map<String, Object>> tl = targetsSnapshot();
+            // ── 必须按 prefix 现场读，不能用内存快照（2026-10-04）──
+            // targetsSnapshot() 返回的是 lastAccount 的缓存，而 prefix 是
+            // currentAccount()。切号瞬间两者错位 → 后面所有 prefs 查询用错前缀：
+            //   · 已签被当未签 → 重复发；未签被当已签 → **漏签**
+            //   · 统计数字与列表对不上
+            List<Map<String, Object>> tl = new ArrayList<Map<String, Object>>();
+            try { loadTargetsInto(prefix, tl); } catch (Throwable ignored) {}
             s.todayTotal = activeTargetCount(prefix, tl);
             s.todaySigned = activeSignedCount(prefix, tl, s.today);
             s.streak = SignLogic.streakDisplay(streakOf(prefix),
@@ -8940,8 +9021,9 @@ public final class TGAutoSignCore {
                             if (relBottom >= top && relTop <= bottom) {
                                 fired[i] = true;
                                 try { ((Runnable) item[1]).run(); } catch (Throwable ignored) {}
-                                logd("[统计] 动画 #" + i + " 进视区并播放 (top=" + relTop
-                                        + " scroll=" + top + " vh=" + vh + ")");
+                                // 逐区块日志已移除（2026-10-04 降噪）：
+                                // 一个统计页 20 条，叠加 4 秒刷新与反复开关面板，
+                                // 会把运行日志刷满、淹掉真正有用的排障信息。
                             } else {
                                 all = false;
                             }
@@ -9021,8 +9103,19 @@ public final class TGAutoSignCore {
                 // 用 64% 屏高只能看到前四块，用户反馈"往下就没有了"。
                 // 单独给它更高：屏高的 78%（对话框上限是 72%，这里靠 ScrollView
                 // 自身滚动承接，视觉上就是"统计页占满对话框"）。
-                int statsH = (int) (act.getResources().getDisplayMetrics().heightPixels * 0.78f);
-                tabBody.addView(sv, new LinearLayout.LayoutParams(-1, statsH));
+                // 同上：不再自设高度（原 0.78 屏 = 1853px > 1711px 上限，被裁）。
+                // 交给统计自身的 ScrollView 自适应，对话框 CapBox 负责钳高。
+                // 同目标列表：按「上限 - 其它部分实际占高」动态算。
+                // 原 0.78 屏 = 1853px > 1711px 上限，超出部分被裁掉。
+                final android.widget.ScrollView fSv2 = sv;
+                final LinearLayout.LayoutParams statLp = new LinearLayout.LayoutParams(-1, 600);
+                tabBody.addView(sv, statLp);
+                fSv2.post(new Runnable() { @Override public void run() {
+                    try {
+                        statLp.height = listFitHeight(act);
+                        fSv2.setLayoutParams(statLp);
+                    } catch (Throwable ignored) {}
+                } });
                 attachStatsAnim(sv, inner);
                 // ── 实时刷新（2026-10-03 用户要求）──
                 // 统计是"看着它变"的东西：正在签到时会不断有目标从待签变已签，
@@ -9278,6 +9371,8 @@ public final class TGAutoSignCore {
         tabHost.addView(tabBar);
         tabHost.addView(tabBody);
         box.addView(tabHost);
+        listRootBoxRef = box;
+        listTabBarRef = tabBar;
         listTabBody = tabBody;      // 供原地重建（切 Tab / 刷新）
         // 「目标」Tab 的容器：下面那些待处理条/过滤条/排序行/列表都装进它，
         // 切到统计或日志时整体收起（见 listTargetContainer 的说明）。
@@ -9438,30 +9533,26 @@ public final class TGAutoSignCore {
         // 旧写法无条件 0.64 屏：列表短时留一大片空白，
         // 列表长时最后一行被截在屏幕外 ——
         // 用户数到 8 以为少了一个（实际 9 条，没滚到底）。
+        // ── 不再自设高度（2026-10-04 第四轮，根治「被裁」）──
+        // 量化（1080x2376 @480dpi）：
+        //   对话框内容上限 1711px；列表原自设 1520px；
+        //   tab + 搜索 + 筛选 + 排序 ≈ 400px  →  合计 1920px 超限。
+        // showDialog 见「内容里有滚动控件」就不包外层 ScrollView，
+        // CapBox 把超出部分**直接裁掉**，而列表滚动条按 1520px 算 ——
+        // 滚到底也看不到被裁的那段。这就是「搜到却不显示」的根因。
+        // 现在交给列表自身的 ScrollView 自适应：内容多高就多高，
+        // 由对话框的 CapBox 钳高，滚动由列表自己承接。
         final int listMax = listContentHeight(act);
-        // ── 高度「够用就好」（2026-10-04 第三轮）──
-        // 旧写法无条件 0.64 屏：列表长时最后一行被截在屏幕外。
-        // 上一版读 getMeasuredHeight() 但**当时还没 layout**，
-        // 拿到 0 就退回估算值（dp(58)*行数）——
-        // 估算比真实行高**偏小**，于是仍然被截。
-        // 现在：先用上限占位，首帧 layout 完成后再用**实测高**
-        // 重设一次（只在实测 < 上限时收窄）。
-        final android.widget.ScrollView fListSv = listSv;
-        final LinearLayout fListBox = listBox;
         final LinearLayout.LayoutParams listLp = new LinearLayout.LayoutParams(-1, listMax);
         listTargetContainer.addView(listSv, listLp);
-        listSv.post(new Runnable() { @Override public void run() {
+        // 布局完成后按实测公式重算（见 listFitHeight）
+        final android.widget.ScrollView fListSv = listSv;
+        fListSv.post(new Runnable() { @Override public void run() {
             try {
-                int want = 0;
-                if (fListSv.getChildCount() > 0) want = fListSv.getChildAt(0).getMeasuredHeight();
-                if (want <= 0) want = fListBox.getChildCount() * dp(62);
-                if (want > 0 && want < listMax) {
-                    listLp.height = want;
-                    fListSv.setLayoutParams(listLp);
-                }
+                listLp.height = listFitHeight(act);
+                fListSv.setLayoutParams(listLp);
             } catch (Throwable ignored) {}
         } });
-
         Object oldList = listDialog;
         listDialog = showDialog(act, Lang.tf("目标列表（{0}）", targets.size()), box, "关闭");
         scheduleDismiss(oldList);
@@ -12348,6 +12439,20 @@ public final class TGAutoSignCore {
         s.setText(Lang.tr(label)); s.setTextSize(Theme.TS_BODY); s.setTextColor(Theme.termTxt(c)); s.setTypeface(android.graphics.Typeface.MONOSPACE); s.setChecked(on);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, Theme.dp(c,6), 0, Theme.dp(c,6)); s.setLayoutParams(lp);
         s.setPadding(Theme.dp(c,4), Theme.dp(c,10), Theme.dp(c,4), Theme.dp(c,10));
+        // ── 显式着色（2026-10-04 修「开关看起来全是关的」）──
+        // 原生 Switch 取系统默认 track/thumb 色：深色主题下
+        // 「开(浅灰轨道)」与「关(深灰轨道)」几乎无法区分 ——
+        // 实测 prefs 里 4 个开关全是 true，界面却看着全关，用户必然误读。
+        try {
+            int onCol = Theme.termCyan(c);
+            int offCol = Theme.termFaint(c);
+            s.setThumbTintList(new android.content.res.ColorStateList(
+                    new int[][]{ new int[]{ android.R.attr.state_checked }, new int[]{} },
+                    new int[]{ onCol, Theme.termMuted(c) }));
+            s.setTrackTintList(new android.content.res.ColorStateList(
+                    new int[][]{ new int[]{ android.R.attr.state_checked }, new int[]{} },
+                    new int[]{ Theme.withAlpha(onCol, 0x99), Theme.withAlpha(offCol, 0x3D) }));
+        } catch (Throwable _tint) { noteSwallowed("swRow-tint", _tint); }
         return s;
     }
 
@@ -12402,10 +12507,24 @@ public final class TGAutoSignCore {
                 String lg = Lang.MODE == 0 ? Lang.tr("跟随系统") : (Lang.MODE == 1 ? "中文" : "English");
                 ((TextView) c2[3]).setText(th + " · " + lg); } catch (Throwable ignored) {}
             try {
+                // ── 摘要口径必须与卡片内容一致（2026-10-04 修）──
+                // 旧写法数的是 AUTO_LEARN / AUTO_LEARN_NET /
+                // JUDGE_ENABLED / LOOSE_MODE，而卡片里放的开关是
+                // 按钮学习 / 网络学习 / 网络学习需确认 / 忽略导航按钮
+                // —— 两批不是同一组，用户看到「开关全开却写 3/4」必然困惑。
+                // 现在只数卡片里真正存在的那四个，并点名哪几个开着。
                 int on = 0;
-                if (AUTO_LEARN) on++; if (AUTO_LEARN_NET) on++;
-                if (JUDGE_ENABLED) on++; if (LOOSE_MODE) on++;
-                ((TextView) c3[3]).setText(Lang.tf("已开 {0}/4", on)); } catch (Throwable ignored) {}
+                StringBuilder names = new StringBuilder();
+                if (AUTO_LEARN) { on++; names.append(Lang.tr("按钮学习")).append(' '); }
+                if (AUTO_LEARN_NET) { on++; names.append(Lang.tr("网络学习")).append(' '); }
+                if (AUTO_LEARN_NET_CONFIRM) { on++; names.append(Lang.tr("需确认")).append(' '); }
+                if (LEARN_SKIP_NAV) { on++; names.append(Lang.tr("忽略导航")).append(' '); }
+                ((TextView) c3[3]).setText(on == 0
+                        ? Lang.tr("全部已关")
+                        : Lang.tf("已开 {0}/4", on));
+                ((TextView) c3[3]).setSingleLine(false);
+                ((TextView) c3[3]).setMaxWidth(dp(220));
+            } catch (Throwable ignored) {}
             try { ((TextView) c4[3]).setText(NOTIFY_ON ? (NOTIFY_FAIL_ONLY ? Lang.tr("仅失败") : Lang.tr("全部")) : Lang.tr("关闭")); } catch (Throwable ignored) {}
 
             // ── 操作 ──
@@ -12449,6 +12568,13 @@ public final class TGAutoSignCore {
                 AUTO_LEARN = R.autoLearnSw.isChecked();
                 AUTO_LEARN_NET = R.autoLearnNetSw.isChecked();
                 AUTO_LEARN_NET_CONFIRM = R.autoLearnNetCfmSw.isChecked();
+                // ── 同步内存（2026-10-04 修）──
+                // 旧写法只把它写进 prefs（见下方 putBoolean），
+                // **内存 LEARN_SKIP_NAV 从未更新** ——
+                // 保存后到重启前，learnDenyReason 读到的仍是旧值，
+                // 表现为「关了没用，重启才生效」。
+                // 其余三个开关都同步了，只有它漏了。
+                if (R.skipNavSw != null) LEARN_SKIP_NAV = R.skipNavSw.isChecked();
                 JUDGE_ENABLED = R.judgeSw.isChecked();
                 LOOSE_MODE = R.looseSw.isChecked();
                 JUDGE_USE_CUSTOM = R.judgeCustomSw.isChecked();

@@ -461,10 +461,14 @@ final class StatsCharts {
     static final class DecodeTextView extends View {
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final String text;
-        private final char[] glyphs;          // 逐字拆开（代理对安全）
+        private final String[] parts;         // 逐**代码点**拆开（emoji 也能完整保留）
         private final float[] jitter;         // 每个字当前的横向偏移
         private final float[] arrive;         // 每个字就位后的残留闪动
         private final java.util.Random rnd = new java.util.Random();
+        private final android.graphics.Typeface mono =
+                android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE,
+                        android.graphics.Typeface.NORMAL);
+        private final android.graphics.Typeface prop = android.graphics.Typeface.DEFAULT;
         private final int normalCol, flashCol;
         private final float textSize;
         private float textPx = 12f;          // sp 换算后的像素值（绘制/测量都用它）
@@ -478,17 +482,28 @@ final class StatsCharts {
             this.textSize = textSize;
             this.normalCol = normalCol;
             this.flashCol = flashCol;
-            java.util.List<Character> cs = new java.util.ArrayList<Character>();
+            // ── 按代码点拆（2026-10-04 修「名字后面出现方块」）──
+            // 旧写法 `cs.add((char) cp)` 把代码点强转 char：
+            //   U+1F600 这类被截成孤立的低代理 → 渲染成方块；
+            //   而且 charCount(cp)=2 却只存了 1 个 char，长度也对不上。
+            // 现在直接存“每个代码点对应的字符串”，emoji 完整保留。
+            java.util.List<String> cs = new java.util.ArrayList<String>();
             for (int i = 0; i < this.text.length(); ) {
                 int cp = this.text.codePointAt(i);
-                cs.add(Character.valueOf((char) cp));
-                i += Character.charCount(cp);
+                int cc = Character.charCount(cp);
+                cs.add(this.text.substring(i, Math.min(this.text.length(), i + cc)));
+                i += cc;
             }
-            glyphs = new char[cs.size()];
-            for (int i = 0; i < glyphs.length; i++) glyphs[i] = cs.get(i).charValue();
-            jitter = new float[glyphs.length];
-            arrive = new float[glyphs.length];
-            p.setTypeface(Typeface.MONOSPACE);
+            parts = new String[cs.size()];
+            for (int i = 0; i < parts.length; i++) parts[i] = cs.get(i);
+            jitter = new float[parts.length];
+            arrive = new float[parts.length];
+            // 字体链（2026-10-04）：先 MONOSPACE（保留终端等宽感），
+            // 后接 DEFAULT。系统对 MONOSPACE 缺字会回退，但**回退链常不含彩 emoji**
+            // —— 直接用 MONOSPACE 画 emoji 会得到方块。
+            // 这里改成“先 MONOSPACE，缺字则 DEFAULT”的显式链；
+            // 真正落笔时还会按 run 再切一次（见 onDraw）。
+            p.setTypeface(mono);
             // ⚠️ Paint.setTextSize 要的是**像素**，而调用方传进来的是 sp
             //    （Theme.TS_SECOND = 12 这类）。直接传会得到 12px ≈ 4dp，
             //    字小到看不清（用户截图实测）。
@@ -505,7 +520,7 @@ final class StatsCharts {
         /** 0..1 整体进度（外部逐帧驱动）。 */
         void setProgress(float v) {
             progress = Math.max(0f, Math.min(1f, v));
-            int n = glyphs.length;
+            int n = parts.length;
             // 每个字按位置稍晚就位：最右的字最后拼好
             for (int i = 0; i < n; i++) {
                 float ti = n <= 1 ? 0f : (i / (float) n) * 0.55f;
@@ -515,6 +530,15 @@ final class StatsCharts {
                 float amp = (1f - local);
                 jitter[i] = amp * (rnd.nextFloat() * 2f - 1f) * textPx * 0.42f;
                 arrive[i] = local >= 1f ? Math.max(0f, arrive[i] - 0.12f) : 1f;
+            }
+            // ── 终点确定性归零（2026-10-04 修「亮色下名字发白」）──
+            // arrive[i] 是“刚就位闪白”的强度，原本只在本方法里递减。
+            // 但动画跑完（progress=1）后**再没有人调它** ——
+            // 于是 arrive 永远停在 1.0，一直按白闪色渲染；
+            // jitter 同理保留了末次随机偏移。
+            // 暗色主题白字在黑底上看得见，亮色主题就几乎不可见。
+            if (progress >= 0.999f) {
+                for (int i = 0; i < n; i++) { arrive[i] = 0f; jitter[i] = 0f; }
             }
             // 全部就位后来一次轻微合拢
             if (progress >= 0.999f && !done) { done = true; scale = 1.03f; }
@@ -530,13 +554,13 @@ final class StatsCharts {
 
         @Override protected void onDraw(Canvas cv) {
             try {
-                int n = glyphs.length;
+                int n = parts.length;
                 if (n == 0) return;
                 cv.save();
                 cv.scale(scale, scale, 0, getHeight() / 2f);
                 float x = 0f;
                 for (int i = 0; i < n; i++) {
-                    String g = String.valueOf(glyphs[i]);
+                    String g = parts[i];
                     float dx = jitter[i];
                     // 未就位：偶尔替换成随机字符（看不出原字，像解码中）
                     if (Math.abs(dx) > 0.6f && rnd.nextInt(3) == 0) {
@@ -553,11 +577,24 @@ final class StatsCharts {
                         p.setColor(normalCol);
                         p.setAlpha(255);
                     }
+                    // 按字符类型选字体（2026-10-04）：
+                    //   ASCII -> MONOSPACE（保持终端等宝感，字宽稳定）
+                    //   其余（CJK \/ emoji）-> DEFAULT（走系统回退，避免方块）
+                    // 测宽也必须用同一字体，否则 x 前进量与实际字形不符。
+                    android.graphics.Typeface tf = isAscii(g) ? mono : prop;
+                    try { p.setTypeface(tf); } catch (Throwable ignored) {}
                     cv.drawText(g, x + dx, getHeight() * 0.72f, p);
                     x += p.measureText(g);
                 }
                 cv.restore();
             } catch (Throwable ignored) {}
+        }
+
+        /** 是否纯 ASCII（可用等宽字体）。 */
+        private static boolean isAscii(String s) {
+            if (s == null || s.length() == 0) return true;
+            for (int i = 0; i < s.length(); i++) if (s.charAt(i) > 0x7F) return false;
+            return true;
         }
 
         private static int blend(int a, int b, float r) {

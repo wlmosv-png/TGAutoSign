@@ -813,6 +813,13 @@ final class StatsView {
                     try { name.setProgress((Float) a.getAnimatedValue()); } catch (Throwable ignored) {}
                 }
             });
+            // 结束后再写一次终态（2026-10-04）：
+            // 不靠展开期间的最后一帧，确保 progress 真的到 1.0。
+            va.addListener(new android.animation.AnimatorListenerAdapter() {
+                @Override public void onAnimationEnd(android.animation.Animator a) {
+                    try { name.setProgress(1f); } catch (Throwable ignored) {}
+                }
+            });
             va.start();
         } catch (Throwable ignored) {}
     }
