@@ -179,8 +179,8 @@ final class StatsView {
         // 换用 RingScanDrawable：弧末端有**扫描头 + 辉光**、起点有十字准星 ——
         // 与终端主题同语汇（旧版只是一段静止圆弧，太素）。
         final StatsCharts.RingScanDrawable rd =
-                new StatsCharts.RingScanDrawable(ringPx, col, Theme.withAlpha(col, 0x2E),
-                        s.todayTotal);   // 底环按目标数分格
+                new StatsCharts.RingScanDrawable(ringPx, col, Theme.withAlpha(col, 0x33),
+                        s.todayTotal);   // 整圈按目标数分格（亮格 = 已签）
         rd.setProgress(animate ? 0f : ratio);
         iv.setImageDrawable(rd);
         ring.addView(iv, new FrameLayout.LayoutParams(ringPx, ringPx));

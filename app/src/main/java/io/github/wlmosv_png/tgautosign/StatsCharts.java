@@ -66,39 +66,28 @@ final class StatsCharts {
         private final Paint mark = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF oval;
         private final float size, cx, cy, r, stroke;
-        private final int col;
-        /** 分格数（= 今日总目标数）。底环按它画成虚线，1..36 以外不分格。 */
-        private final int ticks;
-        private final Path circle = new Path();
+        private final int col, baseCol;
+        /** 分格数（= 今日目标数）。0 = 不分格（连续环）。 */
+        private final int segs;
         private float progress;     // 0..1
 
-        RingScanDrawable(int sizePx, int col, int baseCol) {
-            this(sizePx, col, baseCol, 0);
-        }
+        RingScanDrawable(int sizePx, int col, int baseCol) { this(sizePx, col, baseCol, 0); }
 
         RingScanDrawable(int sizePx, int col, int baseCol, int tickCount) {
             this.col = col;
-            this.ticks = (tickCount >= 1 && tickCount <= 36) ? tickCount : 0;
+            this.baseCol = baseCol;
+            this.segs = (tickCount >= 1 && tickCount <= 36) ? tickCount : 0;
             this.size = sizePx;
             this.cx = sizePx / 2f;
             this.cy = sizePx / 2f;
-            this.stroke = sizePx * 0.093f;             // 细一点，上一版 0.105 偏傻
-            this.r = sizePx / 2f - stroke * 2.1f;      // 留出扫描头的外扰空间
+            this.stroke = sizePx * 0.093f;
+            this.r = sizePx / 2f - stroke * 1.9f;
             oval = new RectF(cx - r, cy - r, cx + r, cy + r);
-            circle.addArc(oval, -90f, 360f);           // 起点 12 点，与进度弧对齐
 
             base.setStyle(Paint.Style.STROKE);
-            base.setStrokeWidth(stroke * 0.72f);
-            base.setStrokeCap(Paint.Cap.BUTT);
+            base.setStrokeWidth(stroke * 0.86f);
+            base.setStrokeCap(Paint.Cap.ROUND);
             base.setColor(baseCol);
-            // 底环分格：占空比固定，数目少时缺口略窄更像「格」
-            if (this.ticks > 0) {
-                float c = (float) (2 * Math.PI * r);
-                float seg = c / this.ticks;
-                float gapR = this.ticks <= 6 ? 0.22f : 0.30f;
-                base.setPathEffect(new android.graphics.DashPathEffect(
-                        new float[]{seg * (1f - gapR), seg * gapR}, 0f));
-            }
 
             arc.setStyle(Paint.Style.STROKE);
             arc.setStrokeWidth(stroke);
@@ -112,58 +101,88 @@ final class StatsCharts {
             glow.setStyle(Paint.Style.FILL);
 
             mark.setStyle(Paint.Style.STROKE);
-            mark.setStrokeWidth(Math.max(1.2f, sizePx * 0.016f));
+            mark.setStrokeWidth(Math.max(1.2f, sizePx * 0.015f));
             mark.setStrokeCap(Paint.Cap.ROUND);
-            mark.setColor(withA(col, 0x99));
+            mark.setColor(withA(col, 0x88));
         }
 
         void setProgress(float p) { this.progress = Math.max(0f, Math.min(1f, p)); invalidateSelf(); }
 
+        /**
+         * 绘制（2026-10-04 第二次重做）。
+         *
+         * 上一版的问题（用户：「底下是类似拼接的，上面又是实的」）：
+         *   底环用 DashPathEffect 画成虚线格，进度却是一条**连续实心**弧 ——
+         *   两种语言拼在一起，上半圈实、下半圈碎，看起来像坏了。
+         *
+         * 现在**整圈都是同一种格子**：
+         *   ① 先把 segs 个格子全画一遍（暗色）——底环本身就是完整的一圈格子；
+         *   ② 再按进度把前几个格子重画一遍（亮色），
+         *      正在进行的那一格用 alpha 渐入，像“卡答上”。
+         *   这样 3/12 就是“十二格亮了三格”，一目了然；
+         *   而且亮格连在一起也自然形成一段弧，不再是两种形态。
+         *
+         * 扫描头仍在最后一个亮格的末端：径向渐变光晕 + 实心点 + 短彗尾。
+         */
         @Override public void draw(Canvas cv) {
             try {
-                // ① 底环（分格虚线）—— 让「3/12」看得出是十二格里亮了三格
-                cv.drawPath(circle, base);
-
                 float sweep = 360f * progress;
 
-                // ② 彗尾：沿进度弧往回扫 26°，逐段降 alpha + 收窄
-                //    —— 上一版只有一个硬边圆斑，像糊在一起的三个圈（用户截图）。
-                if (sweep > 8f) {
-                    final int N = 9;
-                    float span = 26f;
-                    for (int i = 0; i < N; i++) {
-                        float f = i / (float) N;                 // 0 = 最靠近扫描头
-                        float segLen = span / N;
-                        float st = -90f + sweep - (f + 1f) * segLen + segLen;
-                        tail.setAlpha((int) (0xCE * (1f - f) * (1f - f)));   // 平方衰减，更像彗尾
-                        tail.setStrokeWidth(stroke * (1f - f * 0.30f));
-                        cv.drawArc(oval, st - segLen, segLen * 1.25f, false, tail);
+                if (segs > 0) {
+                    float segDeg = 360f / segs;
+                    // 缺口随格数自适应：少格留宽缺口，多格缩短，避免分不出格或碎成沙
+                    float gapDeg = Math.max(1.3f, Math.min(6.5f, 54f / segs));
+                    float drawDeg = Math.max(1.5f, segDeg - gapDeg);
+
+                    for (int i = 0; i < segs; i++) {
+                        cv.drawArc(oval, -90f + i * segDeg + gapDeg / 2f, drawDeg, false, base);
                     }
+                    for (int i = 0; i < segs; i++) {
+                        float f = progress * segs - i;
+                        if (f <= 0f) break;
+                        if (f > 1f) f = 1f;
+                        arc.setAlpha((int) (255f * f));
+                        cv.drawArc(oval, -90f + i * segDeg + gapDeg / 2f, drawDeg, false, arc);
+                    }
+                    arc.setAlpha(255);
+                } else {
+                    // 目标数为 0 或超过 36 时不分格：
+                    // 底环和进度都是连续弧，保持同一种形态。
+                    cv.drawArc(oval, -90f, 360f, false, base);
+                    if (sweep > 0.5f) cv.drawArc(oval, -90f, sweep, false, arc);
                 }
 
-                // ③ 主弧
-                if (sweep > 0.5f) cv.drawArc(oval, -90f, sweep, false, arc);
-
-                // ④ 起点准星（比上一版长一点，否则被弧盖住看不见）
+                // 起点准星：四段断口十字，卡在 12 点位的缺口里
                 float tx = cx, ty = cy - r;
-                float k = size * 0.052f;
-                cv.drawLine(tx - k, ty, tx - k * 0.34f, ty, mark);
-                cv.drawLine(tx + k * 0.34f, ty, tx + k, ty, mark);
-                cv.drawLine(tx, ty - k, tx, ty - k * 0.34f, mark);
-                cv.drawLine(tx, ty + k * 0.34f, tx, ty + k, mark);
+                float k = size * 0.046f;
+                cv.drawLine(tx - k, ty, tx - k * 0.36f, ty, mark);
+                cv.drawLine(tx + k * 0.36f, ty, tx + k, ty, mark);
+                cv.drawLine(tx, ty - k, tx, ty - k * 0.36f, mark);
+                cv.drawLine(tx, ty + k * 0.36f, tx, ty + k, mark);
 
-                // ⑤ 扫描头：**半径渐变幻光** + 实心点
-                //    之前用三个同心硬边圆叠加，边缘硬、比弧还宽，
-                //    看起来就是一团方块状的糊斑。现在用 RadialGradient 真正的光。
                 if (progress > 0.001f) {
                     double a0 = Math.toRadians(-90f + sweep);
                     float ex = (float) (cx + r * Math.cos(a0));
                     float ey = (float) (cy + r * Math.sin(a0));
-                    float gr = stroke * 3.0f;
+
+                    // 短彗尾：比上一版更短更淡，只作暗示，不与格子抢视线
+                    final int N = 7;
+                    float span = 16f;
+                    float segLen = span / N;
+                    for (int i = 0; i < N; i++) {
+                        float f = i / (float) N;
+                        tail.setAlpha((int) (0x9A * (1f - f) * (1f - f)));
+                        tail.setStrokeWidth(stroke * (1f - f * 0.34f));
+                        cv.drawArc(oval, -90f + sweep - (f + 1f) * segLen, segLen * 1.3f, false, tail);
+                    }
+
+                    // 扫描头：径向渐变光晕（上一版已从硬边圈改成）
+                    // 本次再收一圈：3.0 -> 2.2倍笔画，免得在格子上暂出一团大光斑
+                    float gr = stroke * 2.2f;
                     try {
                         android.graphics.RadialGradient rg = new android.graphics.RadialGradient(
                                 ex, ey, gr,
-                                new int[]{withA(col, 0xB0), withA(col, 0x48), withA(col, 0x00)},
+                                new int[]{withA(col, 0x98), withA(col, 0x38), withA(col, 0x00)},
                                 new float[]{0f, 0.34f, 1f},
                                 android.graphics.Shader.TileMode.CLAMP);
                         glow.setShader(rg);
@@ -171,7 +190,7 @@ final class StatsCharts {
                         glow.setShader(null);
                     } catch (Throwable ignored) {}
                     glow.setColor(col);
-                    cv.drawCircle(ex, ey, stroke * 0.40f, glow);
+                    cv.drawCircle(ex, ey, stroke * 0.42f, glow);
                 }
             } catch (Throwable ignored) {}
         }
