@@ -2,9 +2,9 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/banner-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="docs/banner-light.svg">
-    <img src="docs/banner-light.svg" alt="TGAutoSign" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/banner-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/banner-light.svg">
+    <img src="https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/banner-light.svg" alt="TGAutoSign" width="100%">
   </picture>
 </p>
 
@@ -75,9 +75,9 @@ sha256sum TGAutoSign-*.apk                     # 比对 Release 里的 sha256sum
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/hero-light.png">
-    <img src="docs/hero-light.png" alt="TGAutoSign 界面一览" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/hero-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/hero-light.png">
+    <img src="https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/hero-light.png" alt="TGAutoSign 界面一览" width="100%">
   </picture>
 </p>
 
