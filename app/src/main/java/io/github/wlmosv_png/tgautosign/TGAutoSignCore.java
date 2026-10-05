@@ -10011,6 +10011,24 @@ public final class TGAutoSignCore {
                     didLabel.setPadding(0, dp(2), 0, dp(6));
                     card.addView(didLabel);
 
+                    /* 2026-10-04 P2：两个「以后怎么办」勾选 —— 点一次永久解决，
+                       不必每次确认，也不必去设置页写规则。 */
+                    final android.widget.CheckBox cbAuto = new android.widget.CheckBox(act);
+                    cbAuto.setTextSize(Theme.TS_CAPTION);
+                    cbAuto.setTextColor(Theme.termMuted(act));
+                    cbAuto.setTypeface(Theme.text());
+                    cbAuto.setText(Lang.tr("以后这个 bot 的按钮都自动加入"));
+                    cbAuto.setPadding(0, dp(2), 0, 0);
+                    card.addView(cbAuto);
+
+                    final android.widget.CheckBox cbNever = new android.widget.CheckBox(act);
+                    cbNever.setTextSize(Theme.TS_CAPTION);
+                    cbNever.setTextColor(Theme.termMuted(act));
+                    cbNever.setTypeface(Theme.text());
+                    cbNever.setText(Lang.tr("以后这个 bot 的按钮都不再问"));
+                    cbNever.setPadding(0, dp(2), 0, dp(4));
+                    card.addView(cbNever);
+
                     /* row 4: two action buttons */
                     LinearLayout acts = new LinearLayout(act);
                     acts.setOrientation(LinearLayout.HORIZONTAL);
@@ -10018,7 +10036,12 @@ public final class TGAutoSignCore {
 
                     Button acc = mkBtn(act); withIconText(act, acc, "check", "加入");
                     acc.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
-                        if (pendingConfirmAccept(pendingAcc, did, text)) { toast("已加入"); dismissOne(curDlg[0]); showPendingConfirm(act); }
+                        if (pendingConfirmAccept(pendingAcc, did, text)) {
+                            if (cbAuto.isChecked()) rememberBotAutoLearn(did);
+                            if (cbNever.isChecked()) rememberBotNeverLearn(did);
+                            toast("已加入");
+                            dismissOne(curDlg[0]); showPendingConfirm(act);
+                        }
                         else toast("加入失败");
                     } });
                     acts.addView(acc);
@@ -14726,6 +14749,11 @@ public final class TGAutoSignCore {
                 logd("[按钮学习] uid=" + did + " text=" + text + "（命中必学规则，直接加入）");
                 return false;
             }
+            // 用户在确认时勾过「以后这只 bot 都自动加入」→ 直接放行。
+            if (learnAutoDids().contains(Long.valueOf(did))) {
+                logd("[按钮学习] uid=" + did + " text=" + text + "（该 bot 已设为自动加入）");
+                return false;
+            }
             return true;
         } catch (Throwable t) { return false; }
     }
@@ -14985,6 +15013,61 @@ public final class TGAutoSignCore {
             prefs.edit().putString(kPendingConfirm(account), sb.toString()).apply();
             return removed;
         } catch (Throwable ignored) { return false; }
+    }
+
+    // 记住「这只 bot 的按钮都自动加入」：把 bot 名加入必学规则。
+    // 用 bot 的数字 id 不合适（规则匹配的是按钮文案与 data），
+    // 所以这里只把 did 记进白名单集合，命中时直接放行、跳过确认。
+    private void rememberBotAutoLearn(long did) {
+        try {
+            java.util.Set<Long> auto = learnAutoDids();
+            auto.add(did);
+            saveLearnAutoDids(auto);
+            jlog("[按钮学习] 已记住：bot " + did + " 的按钮都自动加入（跳过确认）");
+        } catch (Throwable t) { noteSwallowed("rememberBotAutoLearn", t); }
+    }
+
+    // 记住「这只 bot 的按钮都不再问」：等价于把它加进「排除的 bot」。
+    private void rememberBotNeverLearn(long did) {
+        try {
+            LEARN_BLOCKED_DIDS.add(did);
+            StringBuilder sb = new StringBuilder();
+            for (Long d : LEARN_BLOCKED_DIDS) {
+                if (d == null) continue;
+                if (sb.length() > 0) sb.append(",");
+                sb.append(d.longValue());
+            }
+            prefs.edit().putString(kBlockedDids(), sb.toString()).apply();
+            jlog("[按钮学习] 已记住：bot " + did + " 的按钮不再学习（已加入排除的 bot）");
+        } catch (Throwable t) { noteSwallowed("rememberBotNeverLearn", t); }
+    }
+
+    // 「都自动加入」的 bot 集合（prefs 存逗号分隔）。
+    private java.util.Set<Long> learnAutoDids() {
+        java.util.HashSet<Long> out = new java.util.HashSet<Long>();
+        try {
+            String raw = prefs.getString("jmb_learn_auto_dids", "");
+            if (raw != null && raw.trim().length() > 0) {
+                for (String one : raw.split(",")) {
+                    String t = one.trim();
+                    if (t.length() == 0) continue;
+                    try { out.add(Long.parseLong(t)); } catch (Throwable ignored) {}
+                }
+            }
+        } catch (Throwable ignored) {}
+        return out;
+    }
+
+    private void saveLearnAutoDids(java.util.Set<Long> set) {
+        try {
+            StringBuilder sb = new StringBuilder();
+            for (Long d : set) {
+                if (d == null) continue;
+                if (sb.length() > 0) sb.append(",");
+                sb.append(d.longValue());
+            }
+            prefs.edit().putString("jmb_learn_auto_dids", sb.toString()).apply();
+        } catch (Throwable ignored) {}
     }
 
     private boolean pendingConfirmAccept(long did, String text) { return pendingConfirmAccept(currentAccount(), did, text); }

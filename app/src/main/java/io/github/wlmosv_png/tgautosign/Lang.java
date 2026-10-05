@@ -165,6 +165,8 @@ public final class Lang {
         EN.put("已加入", "Added");
         EN.put("已发出", "Sent");
         EN.put("已忽略", "Skipped");
+        EN.put("以后这个 bot 的按钮都自动加入", "Always learn buttons from this bot automatically");
+        EN.put("以后这个 bot 的按钮都不再问", "Never ask about buttons from this bot again");
         EN.put("按钮学习需确认", "Confirm before learning a button");
         EN.put("开：点按钮后先进「待添加」，你确认了才成为签到目标。\n关：点什么学什么（旧行为）。",
                "On: a tapped button goes to \"Pending add\" first — it becomes a sign-in target only after you confirm.\nOff: whatever you tap gets learned (old behaviour).");
