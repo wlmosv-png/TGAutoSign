@@ -26,6 +26,11 @@
 - **对话框淡入淡出**
   *Dialogs now fade in and out.*
   「待处理」窗关闭/重开不再硬切，改为 alpha 过渡（120ms 出、160ms 入）。
+- **按钮学习需确认（默认开）**
+  *Button learning now asks for confirmation (on by default).*
+  以前点任何按钮都会被学成签到目标 —— 只是查个余额、点个返回，目标列表也会被淹没。
+  现在点按钮先进「待添加」列表，你确认了才成为签到目标。
+  设置里可关掉恢复旧行为；另有「必学规则」（支持正则）用于豁免天天用的 bot。
 
 ### 修复 · Fixed
 

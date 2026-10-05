@@ -65,6 +65,12 @@ public final class TGAutoSignCore {
     private boolean LEARN_ENABLED = true;
     private boolean AUTO_LEARN_NET = true;
     private boolean AUTO_LEARN_NET_CONFIRM = true;   // 网络学习命中后需手动确认，不直接添加（默认开，防误加验证码类 bot）
+    // 2026-10-04：按钮学习是否需确认。
+    // 默认**开** —— 用户反馈「点什么按钮都学」，不确认就不进目标列表。
+    // 命中「必学规则」的按钮仍直接学（避免天天用的 bot 每次都要确认）。
+    private boolean BUTTON_LEARN_CONFIRM = true;
+    // 用户「必学规则」：一行一条，命中即学、跳过确认；/ 包裹当正则。
+    private String LEARN_FORCE = "";
     private long THROTTLE_MS = 60L * 1000L;
     /** 轮询只负责「账号切换感知」+ 兜底，不需要高频；窗口外进一步拉长。 */
     private long POLL_INTERVAL_MS = 30L * 60L * 1000L;
@@ -1339,6 +1345,8 @@ public final class TGAutoSignCore {
             if (prefs.contains("jmb_keywords")) LEARN_KEYWORDS = prefs.getString("jmb_keywords", DEF_KEYWORDS);
             if (prefs.contains(kExclude())) LEARN_EXCLUDE = prefs.getString(kExclude(), "");
             LEARN_SKIP_NAV = prefs.getBoolean("jmb_skip_nav", true);
+            BUTTON_LEARN_CONFIRM = prefs.getBoolean("jmb_btn_confirm", BUTTON_LEARN_CONFIRM);
+            if (prefs.contains("jmb_learn_force")) LEARN_FORCE = prefs.getString("jmb_learn_force", "");
             LEARN_BLOCKED_DIDS.clear();
             try {
                 String bd = prefs.getString(kBlockedDids(), "");
@@ -13974,6 +13982,8 @@ public final class TGAutoSignCore {
                 // 表现为「关了没用，重启才生效」。
                 // 其余三个开关都同步了，只有它漏了。
                 if (R.skipNavSw != null) LEARN_SKIP_NAV = R.skipNavSw.isChecked();
+                if (R.btnConfirmSw != null) BUTTON_LEARN_CONFIRM = R.btnConfirmSw.isChecked();
+                if (R.learnForceEd != null) LEARN_FORCE = String.valueOf(R.learnForceEd.getText()).trim();
                 JUDGE_ENABLED = R.judgeSw.isChecked();
                 LOOSE_MODE = R.looseSw.isChecked();
                 JUDGE_USE_CUSTOM = R.judgeCustomSw.isChecked();
@@ -13986,6 +13996,8 @@ public final class TGAutoSignCore {
                       .putInt("jmb_theme", THEME_MODE)
                       .putInt("jmb_cal_style", CAL_STYLE)
                       .putBoolean("jmb_skip_nav", R.skipNavSw != null && R.skipNavSw.isChecked())
+                      .putBoolean("jmb_btn_confirm", BUTTON_LEARN_CONFIRM)
+                      .putString("jmb_learn_force", LEARN_FORCE == null ? "" : LEARN_FORCE)
                       .putBoolean("jmb_autolearn", AUTO_LEARN)
                       .putBoolean("jmb_autolearn_net", AUTO_LEARN_NET)
                       .putBoolean("jmb_autolearn_net_confirm", AUTO_LEARN_NET_CONFIRM)
@@ -14677,6 +14689,47 @@ public final class TGAutoSignCore {
         return null;
     }
 
+    // 用户「必学规则」：命中即学（跳过确认，也压过内置黑名单）。
+    // 与 excludeHit 同一套语法：普通词按子串、/ 包裹当正则、# 注释。
+    private boolean learnForceHit(String text, String data, String context) {
+        try {
+            if (LEARN_FORCE == null || LEARN_FORCE.trim().length() == 0) return false;
+            String hay = (text == null ? "" : text) + " \n "
+                       + (data == null ? "" : data) + " \n "
+                       + (context == null ? "" : context);
+            String lower = hay.toLowerCase(Locale.US);
+            String[] lines = LEARN_FORCE.split("\r?\n");
+            for (String raw : lines) {
+                String rule = raw == null ? "" : raw.trim();
+                if (rule.length() == 0 || rule.startsWith("#")) continue;
+                if (rule.length() > 2 && rule.startsWith("/") && rule.endsWith("/")) {
+                    String pat = rule.substring(1, rule.length() - 1);
+                    try {
+                        if (java.util.regex.Pattern.compile(pat, java.util.regex.Pattern.CASE_INSENSITIVE)
+                                .matcher(hay).find()) return true;
+                    } catch (Throwable ignored) { // 正则写坏当作没命中
+                    }
+                } else {
+                    if (lower.contains(rule.toLowerCase(Locale.US))) return true;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    // 按钮学习「需确认」闸：返回 true 表示本次应进待确认池而不是直接学。
+    // 调用方在 deny==null 之后、真正 learn 之前调用。
+    private boolean buttonLearnNeedsConfirm(long did, String text, String data, String context) {
+        try {
+            if (!BUTTON_LEARN_CONFIRM) return false;
+            if (learnForceHit(text, data, context)) {
+                logd("[按钮学习] uid=" + did + " text=" + text + "（命中必学规则，直接加入）");
+                return false;
+            }
+            return true;
+        } catch (Throwable t) { return false; }
+    }
+
     /**
      * 取该 bot 最近一条"带键盘的消息"的正文，作为排除规则的匹配上下文。
      * 验证码类签到 bot 的提示语（如"请在 30 秒内点击图中事物的按钮"）就挂在这条消息上，
@@ -14964,6 +15017,13 @@ public final class TGAutoSignCore {
             if (isCallbackButton(button)) {
                 byte[] data = buttonData(button);
                 if (data != null && data.length > 0) {
+                    // 2026-10-04：需确认时先进待确认池，用户确认才进目标列表。
+                    if (buttonLearnNeedsConfirm(did, t, new String(data, "UTF-8"), panelContext(did))) {
+                        if (pendingConfirmAdd(currentAccount(), did, t)) {
+                            jlog("【按钮·结构·待确认】uid=" + did + " -> " + t + "（未确认，暂不加入）");
+                        }
+                        return;
+                    }
                     int msgId = resolveMsgIdFromEnterView(enterView);
                     learnCallback(did, t, data, buttonHash(button), msgId);
                     jlog("【按钮·结构】回调学习 uid=" + did + " text=" + t + " msg_id=" + msgId);
@@ -14971,6 +15031,12 @@ public final class TGAutoSignCore {
                     logd("[按钮·结构] uid=" + did + " text=" + t + "（无回调 data，跳过）");
                 }
             } else {
+                if (buttonLearnNeedsConfirm(did, t, null, panelContext(did))) {
+                    if (pendingConfirmAdd(currentAccount(), did, t)) {
+                        jlog("【按钮·结构·待确认】uid=" + did + " -> " + t + "（未确认，暂不加入）");
+                    }
+                    return;
+                }
                 learnTarget(did, t);
                 jlog("【按钮·结构】文本学习 uid=" + did + " text=" + t);
             }
@@ -16914,6 +16980,34 @@ public final class TGAutoSignCore {
         navSub.setText(Lang.tr("「主菜单 / 返回 / 关闭」这类导航按钮不学。只按文案判断，不会误挡签到按钮；关掉即「点什么学什么」"));
         navSub.setPadding(dp(4), 0, dp(4), dp(4));
         card2.addView(navSub);
+
+        // ── 按钮学习需确认（2026-10-04 新增）──
+        // 用户反馈「点什么按钮都学」，目标列表被噪音淹没。
+        // 打开后：点按钮先进「待添加」列表，你确认了才成为签到目标。
+        R.btnConfirmSw = swRow(act, "按钮学习需确认", BUTTON_LEARN_CONFIRM);
+        card2.addView(R.btnConfirmSw);
+        TextView bcSub = new TextView(act); bcSub.setTextSize(Theme.TS_CAPTION); bcSub.setTextColor(Theme.termFaint(act)); bcSub.setTypeface(Theme.text());
+        bcSub.setText(Lang.tr("开：点按钮后先进「待添加」，你确认了才成为签到目标。\n关：点什么学什么（旧行为）。"));
+        bcSub.setPadding(dp(4), 0, dp(4), dp(4));
+        card2.addView(bcSub);
+
+        // ── 必学规则（2026-10-04 新增）──
+        // 命中即学、跳过确认 —— 给「天天用」的 bot 用，避免每次都要确认。
+        TextView lfLab = new TextView(act);
+        lfLab.setText(Lang.tr("必学规则（一行一条，命中即学、不再确认）"));
+        lfLab.setTextSize(Theme.TS_SECOND); lfLab.setTextColor(Theme.termMuted(act));
+        lfLab.setTypeface(android.graphics.Typeface.MONOSPACE);
+        lfLab.setPadding(dp(2), dp(10), dp(2), dp(4));
+        card2.addView(lfLab);
+        R.learnForceEd = adInput(act, "如: 每日签到（一行一条）", 3);
+        R.learnForceEd.setText(LEARN_FORCE == null ? "" : String.valueOf(LEARN_FORCE));
+        R.learnForceEd.setMinLines(2);
+        card2.addView(R.learnForceEd);
+        TextView lfTip = new TextView(act); lfTip.setTextSize(Theme.TS_CAPTION);
+        lfTip.setTextColor(Theme.termFaint(act)); lfTip.setTypeface(Theme.text());
+        lfTip.setText(Lang.tr("匹配按钮文案与回调 data。普通词按子串（不分大小写）；\n用 / 包裹当正则，如 /^(每日|每天).*(签|领)/ 。# 开头为注释。"));
+        lfTip.setPadding(dp(4), dp(4), dp(4), dp(2));
+        card2.addView(lfTip);
 
         box.addView(card2);
 

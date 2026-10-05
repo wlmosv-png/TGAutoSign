@@ -165,6 +165,12 @@ public final class Lang {
         EN.put("已加入", "Added");
         EN.put("已发出", "Sent");
         EN.put("已忽略", "Skipped");
+        EN.put("按钮学习需确认", "Confirm before learning a button");
+        EN.put("开：点按钮后先进「待添加」，你确认了才成为签到目标。\n关：点什么学什么（旧行为）。",
+               "On: a tapped button goes to \"Pending add\" first — it becomes a sign-in target only after you confirm.\nOff: whatever you tap gets learned (old behaviour).");
+        EN.put("必学规则（一行一条，命中即学、不再确认）", "Always-learn rules (one per line; matched means learn immediately, no confirm)");
+        EN.put("匹配按钮文案与回调 data。普通词按子串（不分大小写）；\n用 / 包裹当正则，如 /^(每日|每天).*(签|领)/ 。# 开头为注释。",
+               "Matches button text and callback data. Plain words match as substrings (case-insensitive);\nwrap in / for regex, e.g. /^(每日|每天).*(签|领)/ . Lines starting with # are comments.");
         EN.put("已学会「{0}」，以后不用再勾", "Learned \"{0}\" — no need to confirm again");
         EN.put("已排除", "Blocked");
         EN.put("已放弃", "Gave up");
