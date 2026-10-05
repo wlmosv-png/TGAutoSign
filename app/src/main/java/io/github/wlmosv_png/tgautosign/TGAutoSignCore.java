@@ -69,13 +69,21 @@ public final class TGAutoSignCore {
     // 默认**开** —— 用户反馈「点什么按钮都学」，不确认就不进目标列表。
     // 命中「必学规则」的按钮仍直接学（避免天天用的 bot 每次都要确认）。
     private boolean BUTTON_LEARN_CONFIRM = true;
+    // 用户「确认加入」时必须放行（否则永远加不进去）。
+    // 用一个短命标记：pendingConfirmAccept 处置期间置位，
+    // learnTarget/learnCallback 见到即跳过「需确认」判断。
+    private volatile long learnBypassUntil = 0L;
     // 用户「必学规则」：一行一条，命中即学、跳过确认；/ 包裹当正则。
     private String LEARN_FORCE = "";
     private long THROTTLE_MS = 60L * 1000L;
     /** 轮询只负责「账号切换感知」+ 兜底，不需要高频；窗口外进一步拉长。 */
     private long POLL_INTERVAL_MS = 30L * 60L * 1000L;
     private int RETRY_LIMIT = 5;
-    private static final String DEF_KEYWORDS = "签到,打卡,checkin,/checkin,claim,领取,签到领,/qd,/qiandao,/sign,/daily,daily,/clock,/kaoqin";
+    // 2026-10-05 扩：补 /check、每日、报到。
+    // **刻意不含 /start** —— 它是「前置命令」（拉面板），不是签到命令；
+    // 加进来会导致用户在任意 bot 发 /start 都被学成签到目标（通用命令，必误伤）。
+    // 需要它的目标请在条目的「前置命令序列」里填。
+    private static final String DEF_KEYWORDS = "签到,打卡,checkin,/checkin,/check,claim,领取,签到领,每日,报到,/qd,/qiandao,/sign,/daily,daily,/clock,/kaoqin";
     private String LEARN_KEYWORDS = DEF_KEYWORDS;
     /** 排除规则：一行一条，命中即不学习。支持正则（用 /.../ 包裹），否则按子串匹配。 */
     private String LEARN_EXCLUDE = "";
@@ -4289,6 +4297,15 @@ public final class TGAutoSignCore {
         syncAccount();
 
         if (!LEARN_ENABLED) return;
+        // 2026-10-04：需确认时先入待添加池，绝不直接写目标。
+        // 闸装在这里（而不是各入口），一处拦住全部调用方。
+        if (System.currentTimeMillis() > learnBypassUntil
+                && buttonLearnNeedsConfirm(dialogId, text, null, panelContext(dialogId))) {
+            if (pendingConfirmAdd(currentAccount(), dialogId, text)) {
+                jlog("【按钮学习·待确认】uid=" + dialogId + " -> " + text + "（未确认，暂不加入）");
+            }
+            return;
+        }
         if (text == null || text.length() == 0) return;
         if (dialogId == 0) {
             logd("忽略无效 dialogId=0");
@@ -4322,16 +4339,31 @@ public final class TGAutoSignCore {
     }
 
     /** 学习回调按钮目标（inline button，v1.3.0 新增）。同 bot 相同 data 去重。 */
-    private void learnCallback(long dialogId, String display, byte[] data, long hash, int msgId) {
+    // @return true 表示真的写入了目标；false 表示被闸/去重拦下。
+    private boolean learnCallback(long dialogId, String display, byte[] data, long hash, int msgId) {
 
         syncAccount();
 
-        if (!LEARN_ENABLED) return;
-        if (data == null || data.length == 0) return;
-        if (dialogId == 0) return;
+        if (!LEARN_ENABLED) return false;
+        if (data == null || data.length == 0) return false;
+        if (dialogId == 0) return false;
+        // 同上：需确认时先入待添加池。
+        // display 可能为空，用 data 解码做兜底标签，保证待添加里看得见。
+        if (System.currentTimeMillis() > learnBypassUntil) {
+            String _disp = (display != null && display.trim().length() > 0)
+                    ? String.valueOf(display).trim() : cbDataLabel(data);
+            String _dataStr = "";
+            try { _dataStr = new String(data, "UTF-8"); } catch (Throwable ignored) {}
+            if (buttonLearnNeedsConfirm(dialogId, _disp, _dataStr, panelContext(dialogId))) {
+                if (pendingConfirmAdd(currentAccount(), dialogId, _disp)) {
+                    jlog("【按钮学习·待确认】uid=" + dialogId + " -> " + _disp + "（未确认，暂不加入）");
+                }
+                return false;
+            }
+        }
         if (findCbEntry(dialogId, data) != null) {
             logd("目标 " + dialogId + " 已加过相同回调按钮，跳过");
-            return;
+            return false;
         }
         String label = display != null && display.trim().length() > 0 ? String.valueOf(display).trim() : Lang.tr("回调按钮");
         Map<String, Object> m = new HashMap<>();
@@ -4360,6 +4392,7 @@ public final class TGAutoSignCore {
             }
         } catch (Throwable _eP) { noteSwallowed("learnCallback(计数)", _eP); }
         toast(Lang.tf("已添加回调签到目标: {0}", label));
+        return true;
     }
 
     private void learnFromNetwork(long did, String text, int account) {
@@ -10549,16 +10582,19 @@ public final class TGAutoSignCore {
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
         // 待确认池入口（网络学习需确认时产生）
+        // 2026-10-05：改**青色**以区别于「待处理」条（那条是琥珀色）——
+        //   两者语义完全不同（新按钮是否加入 vs 已有目标是否签成），
+        //   同色同措辞时用户容易混。文案也改成明确说明「点此选择加入」。
         final java.util.List<Long> pd = pendingConfirmDids(currentAccount());
         if (pd.size() > 0) {
             LinearLayout pc = new LinearLayout(act); pc.setOrientation(LinearLayout.HORIZONTAL); pc.setGravity(Gravity.CENTER_VERTICAL);
-            pc.setBackground(termBorder(act, Theme.withAlpha(Theme.termAmber(act), 0x0E), Theme.withAlpha(Theme.termAmber(act), 0x50)));
+            pc.setBackground(termBorder(act, Theme.withAlpha(Theme.termCyan(act), 0x0E), Theme.withAlpha(Theme.termCyan(act), 0x50)));
             pc.setPadding(dp(12), dp(10), dp(12), dp(10));
             LinearLayout.LayoutParams pclp = new LinearLayout.LayoutParams(-1, -2);
             pclp.setMargins(0, dp(2), 0, dp(8));
             pc.setLayoutParams(pclp);
-            TextView pct = new TextView(act); pct.setTextSize(Theme.TS_BODY); pct.setTextColor(Theme.termAmber(act)); pct.setTypeface(Theme.monoBold());
-            pct.setText(Lang.tf("待添加 {0} 个（点此处理）", pd.size()));
+            TextView pct = new TextView(act); pct.setTextSize(Theme.TS_BODY); pct.setTextColor(Theme.termCyan(act)); pct.setTypeface(Theme.monoBold());
+            pct.setText(Lang.tf("{0} 个新按钮待添加 —— 点此选择加入", pd.size()));
             pc.addView(pct, new LinearLayout.LayoutParams(0, -2, 1f));
             pc.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ showPendingConfirm(act); } });
             box.addView(pc);
@@ -14754,6 +14790,13 @@ public final class TGAutoSignCore {
                 logd("[按钮学习] uid=" + did + " text=" + text + "（该 bot 已设为自动加入）");
                 return false;
             }
+            // 2026-10-05：**签到类按钮自动学、不必确认**。
+            // 签到按钮是明确目标，每次都问反而烦；说不清的才进待添加。
+            // 词表复用 SignLogic 里同一份 SIGN_WORDS（含 data 匹配）。
+            if (SignLogic.looksLikeSignButton(text, data)) {
+                logd("[按钮学习] uid=" + did + " text=" + text + "（像签到按钮，直接加入）");
+                return false;
+            }
             return true;
         } catch (Throwable t) { return false; }
     }
@@ -15074,6 +15117,8 @@ public final class TGAutoSignCore {
     private boolean pendingConfirmAccept(int account, long did, String text) {
         try {
             pendingConfirmRemove(account, did);
+            // 用户确认路径：短时放行，让 learnTarget 跳过「需确认」判断。
+            learnBypassUntil = System.currentTimeMillis() + 1500L;
             // learnTarget() 使用当前账号；这里 UI 操作必须先确认当前账号仍等于列表所属账号。
             if (account != currentAccount()) return false;
             learnTarget(did, text);
@@ -15387,11 +15432,14 @@ public final class TGAutoSignCore {
                                         // 注意：TL_messages_getBotCallbackAnswer 本身没有 hash 字段（官方版会抛 NoSuchFieldException），
                                         // 用容错读取，取不到就传 0。
                                         Object h = getFieldValSafe(req, "hash");
-                                        learnCallback(u, disp, d, h instanceof Number ? ((Number) h).longValue() : 0L, mid0);
-                                        // 账号必须用 hookAccount（本次网络请求所属账号），
-                                        // 不能用 currentAccount() —— 那是"此刻界面上选中的账号"，
-                                        // 异步回调里读它会串号（实测日志出现前缀=账号2、内容=账号1）。
-                                        jlog("【网络层学习·回调】acc=" + accountLabel(hookAccount) + " " + u + " -> [" + disp + "] data=" + Base64.getEncoder().encodeToString(d) + " msg_id=" + mid0);
+                                        boolean _learned = learnCallback(u, disp, d, h instanceof Number ? ((Number) h).longValue() : 0L, mid0);
+                                        // 2026-10-05：只有真的写入了才说「已学习」，否则明确写「已转待确认」。
+                                        // 旧版无论结果都打同一句，排障时严重误导（看着像学进去了，其实被闸拦了）。
+                                        if (_learned) {
+                                            jlog("【网络层学习·回调】acc=" + accountLabel(hookAccount) + " " + u + " -> [" + disp + "] data=" + Base64.getEncoder().encodeToString(d) + " msg_id=" + mid0);
+                                        } else {
+                                            logd("[网络层学习·回调] acc=" + accountLabel(hookAccount) + " uid=" + u + " -> [" + disp + "]（未直接加入，见上方待确认日志）");
+                                        }
                                     } catch (Throwable lt) {
                                         loge("[网络层学习·回调] 失败: " + lt);
                                     }

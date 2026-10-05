@@ -406,6 +406,45 @@ public final class SignLogic {
      * @param data 回调按钮的 data 原文（可为 null）；网络层只能拿到这个
      * @return 命中的类别说明（用于日志），不是这类按钮返回 null
      */
+
+    /**
+     * 这个按钮看起来是不是「签到类」按钮？
+     *
+     * 用于按钮学习准入：命中即**自动学习、不必确认**——
+     * 签到按钮是明确目标，没必要每次都问用户；
+     * 说不清的按钮才进「待添加」交给用户判断。
+     *
+     * 复用 navButtonHit 里那份 SIGN_WORDS（同一份词表，避免两处维护跑偏），
+     * 额外也匹配回调 data —— 有些 bot 的按钮文案只有图标，语义在 data 里。
+     *
+     * 纯函数、无副作用，可直接单测。
+     */
+    public static boolean looksLikeSignButton(String text, String data) {
+        try {
+            String t = text == null ? "" : stripDecor(text);
+            String d = data == null ? "" : stripDecor(data.replace('_', ' ').replace(':', ' '));
+            String tRaw = text == null ? "" : text.toLowerCase(java.util.Locale.US);
+            String dRaw = data == null ? "" : data.toLowerCase(java.util.Locale.US);
+            boolean signHit = false;
+            for (String w : SIGN_WORDS) {
+                if (t.contains(w) || tRaw.contains(w) || d.contains(w) || dRaw.contains(w)) {
+                    signHit = true;
+                    break;
+                }
+            }
+            if (!signHit) return false;
+            // 2026-10-05 防误伤：命中签到词后再查反向否决词。
+            // 「积分商城」「奖励规则」这类属查询/说明，不该自动学 → 落到待添加。
+            for (String rj : SIGN_REJECT_WORDS) {
+                if (t.contains(rj) || tRaw.contains(rj) || d.contains(rj) || dRaw.contains(rj)) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
     public static String navButtonHit(String text, String data) {
         String raw = text == null ? "" : text.trim();
         String dat = data == null ? "" : data.trim();
@@ -477,8 +516,25 @@ public final class SignLogic {
      *   ② 去掉重复的「签到」（原本出现两次，无功能影响，但说明该表未被复核）。
      */
     private static final String[] SIGN_WORDS = {
-            "签到", "打卡", "签领", "领取", "每日",
+            "签到", "打卡", "签领", "领取", "每日", "报到",
+            // 2026-10-05 扩：常见措辞（这些词较宽，靠下面 REJECT_WORDS 反向否决防误伤）
+            "奖励", "积分", "续期", "保号", "签到领",
             "check", "sign", "clock", "daily", "reward", "claim", "bonus",
+    };
+
+    /**
+     * 反向否决词：命中 SIGN_WORDS 后再含这些的，**不算签到按钮**。
+     *
+     * 为什么需要（2026-10-05）：
+     *   「积分」「奖励」「续期」在签到场景很常见，但在**查询/商城**场景同样常见：
+     *     「积分商城」「奖励规则」「续期说明」「积分排行」「签到记录」
+     *   若不放否决，这些会被当成签到按钮自动学进目标列表 —— 就是用户抱怨的噪音。
+     *   加这道闸后它们落到「待添加」，由用户判断。宁可多问一次，不要误学。
+     */
+    private static final String[] SIGN_REJECT_WORDS = {
+            "商城", "排行", "榜单", "规则", "说明", "明细", "记录", "历史",
+            "兑换", "教程", "帮助", "客服", "统计", "查询", "详情", "介绍",
+            "shop", "rank", "rule", "help", "history", "detail", "exchange",
     };
 
     /** 后退类：任何「往回走」的表达 */

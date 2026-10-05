@@ -35,6 +35,12 @@
   *Confirming a candidate can also remember what to do next time.*
   每条候选下多了两个勾选：「以后这个 bot 的按钮都自动加入」「都不再问」。
   勾一次即永久生效，不必每次确认，也不必去设置页写规则。
+- **签到类按钮自动学，其余才问**
+  *Sign-in-like buttons are learned automatically; the rest are asked about.*
+  含「签到 / 打卡 / 领取 / 每日 / 报到 / 奖励 / 积分 / 续期」等词的按钮直接学，
+  不必每次确认——它们是明确目标。说不清的按钮才进「待添加」。
+  同时加了反向否决词（商城 / 排行 / 规则 / 记录 / 说明 等）：
+  「积分商城」「奖励规则」这类查询入口不会被误当成签到按钮。
 
 ### 修复 · Fixed
 

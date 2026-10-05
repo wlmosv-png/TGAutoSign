@@ -165,6 +165,7 @@ public final class Lang {
         EN.put("已加入", "Added");
         EN.put("已发出", "Sent");
         EN.put("已忽略", "Skipped");
+        EN.put("{0} 个新按钮待添加 —— 点此选择加入", "{0} new button(s) to add — tap to choose");
         EN.put("以后这个 bot 的按钮都自动加入", "Always learn buttons from this bot automatically");
         EN.put("以后这个 bot 的按钮都不再问", "Never ask about buttons from this bot again");
         EN.put("按钮学习需确认", "Confirm before learning a button");
