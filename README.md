@@ -20,7 +20,7 @@
 [![Latest Release](https://img.shields.io/github/v/release/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=blue)](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/total?label=%E4%B8%8B%E8%BD%BD%E9%87%8F&color=brightgreen)](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases)
 [![API](https://img.shields.io/badge/libxposed-API%20102-8A2BE2)](https://github.com/LSPosed/LSPlant)
-[![License](https://img.shields.io/badge/license-GPLv3-green)](LICENSE)
+[![License](https://img.shields.io/badge/license-GPLv3-green)](https://github.com/wlmosv-png/TGAutoSign/blob/master/LICENSE)
 [![Telegram Group](https://img.shields.io/badge/Telegram-Join%20Group-26A5E4?logo=telegram&logoColor=white)](https://t.me/+V2Oyu8pSubs4ZjE0)
 
 **[下载最新版 APK](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases/latest)** · [源码仓库](https://github.com/wlmosv-png/TGAutoSign)
@@ -89,15 +89,15 @@ sha256sum TGAutoSign-*.apk                     # 比对 Release 里的 sha256sum
 
 | 主面板 · 暗色 | 主面板 · 亮色 |
 | --- | --- |
-| ![主面板·暗色](docs/screenshots/shot-main-dark.png) | ![主面板·亮色](docs/screenshots/shot-main-light.png) |
+| ![主面板·暗色](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/shot-main-dark.png) | ![主面板·亮色](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/shot-main-light.png) |
 
 | 目标列表 · 暗色 | 目标列表 · 亮色 |
 | --- | --- |
-| ![目标列表·暗色](docs/screenshots/shot-targets-dark.png) | ![目标列表·亮色](docs/screenshots/shot-targets-light.png) |
+| ![目标列表·暗色](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/shot-targets-dark.png) | ![目标列表·亮色](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/shot-targets-light.png) |
 
 | 设置 · 暗色 | 设置 · 亮色 |
 | --- | --- |
-| ![设置·暗色](docs/screenshots/shot-settings-dark.png) | ![设置·亮色](docs/screenshots/shot-settings-light.png) |
+| ![设置·暗色](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/shot-settings-dark.png) | ![设置·亮色](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/shot-settings-light.png) |
 
 ## 它能做什么 · What it does
 

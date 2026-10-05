@@ -18,7 +18,7 @@ The control panel lives inside Telegram: send `/jmb` in any chat.
 [![Latest Release](https://img.shields.io/github/v/release/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign?label=release&color=blue)](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/total?label=downloads&color=brightgreen)](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases/latest)
 [![API](https://img.shields.io/badge/libxposed-API%20102-8A2BE2)](https://github.com/LSPosed/LSPlant)
-[![License](https://img.shields.io/badge/license-GPLv3-green)](LICENSE)
+[![License](https://img.shields.io/badge/license-GPLv3-green)](https://github.com/wlmosv-png/TGAutoSign/blob/master/LICENSE)
 [![Telegram Group](https://img.shields.io/badge/Telegram-Join%20Group-26A5E4?logo=telegram&logoColor=white)](https://t.me/+V2Oyu8pSubs4ZjE0)
 
 **[Download the latest APK](https://github.com/Xposed-Modules-Repo/io.github.wlmosv_png.tgautosign/releases/latest)** · [Source repo](https://github.com/wlmosv-png/TGAutoSign)
@@ -87,15 +87,15 @@ Each page shown in dark / light
 
 | Main panel · Dark | Main panel · Light |
 | --- | --- |
-| ![Main panel·Dark](docs/screenshots/shot-main-dark.png) | ![Main panel·Light](docs/screenshots/shot-main-light.png) |
+| ![Main panel·Dark](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/shot-main-dark.png) | ![Main panel·Light](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/shot-main-light.png) |
 
 | Targets · Dark | Targets · Light |
 | --- | --- |
-| ![Targets·Dark](docs/screenshots/shot-targets-dark.png) | ![Targets·Light](docs/screenshots/shot-targets-light.png) |
+| ![Targets·Dark](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/shot-targets-dark.png) | ![Targets·Light](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/shot-targets-light.png) |
 
 | Settings · Dark | Settings · Light |
 | --- | --- |
-| ![Settings·Dark](docs/screenshots/shot-settings-dark.png) | ![Settings·Light](docs/screenshots/shot-settings-light.png) |
+| ![Settings·Dark](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/shot-settings-dark.png) | ![Settings·Light](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/shot-settings-light.png) |
 
 ## What it does
 
