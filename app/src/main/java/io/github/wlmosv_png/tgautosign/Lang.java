@@ -165,6 +165,16 @@ public final class Lang {
         EN.put("已加入", "Added");
         EN.put("已发出", "Sent");
         EN.put("已忽略", "Skipped");
+        EN.put("未经校验", "Not verified");
+        EN.put("这次下载没有校验文件指纹", "This download was not checksum-verified");
+        EN.put("发布页里没有找到与这个安装包同名的 sha256 校验行，因此无法核对文件是否完整。\n"
+             + "校验和与安装包来自同一个发布页，它本身不能防止发布端被篡改；真正的保护是系统要求同签名的包才能覆盖安装。",
+               "No sha256 line matching this package was found on the release page, so the file could not be verified.\n"
+             + "The checksum comes from the same page as the package, so it cannot protect against the release source being tampered with; the real protection is that Android only allows an update signed with the same key.");
+        EN.put("文件已保存在：", "File saved at: ");
+        EN.put("如需继续，可在「下载」目录里手动点开该 APK 安装", "To continue, open the APK manually from your Downloads folder");
+        EN.put("下载未校验，请在「下载」目录手动确认安装", "Download was not verified — confirm the install manually from Downloads");
+        EN.put("下载到系统「下载」目录，尽力核对文件指纹后交给系统安装", "Download to the system Downloads folder, verify the fingerprint where possible, then hand it to the system installer");
         EN.put("{0} 个新按钮待添加 —— 点此选择加入", "{0} new button(s) to add — tap to choose");
         EN.put("以后这个 bot 的按钮都自动加入", "Always learn buttons from this bot automatically");
         EN.put("以后这个 bot 的按钮都不再问", "Never ask about buttons from this bot again");

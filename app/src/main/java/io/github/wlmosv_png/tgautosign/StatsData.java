@@ -26,8 +26,8 @@ import java.util.Set;
 final class StatsData {
     private StatsData() {}
 
-    private static final SimpleDateFormat YMD =
-            new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+    // 2026-10-06 P3：原为静态共享 SimpleDateFormat —— **非线程安全**，
+    // 多账号并发下会串日期。改走 DateUtils（java.time，不可变、线程安全）。
 
     /** yyyy-MM-dd 的当天（把时分秒清零，避免跨日边界抖动）。 */
     static String ymd(Calendar c) {
@@ -36,7 +36,7 @@ final class StatsData {
         t.set(Calendar.MINUTE, 0);
         t.set(Calendar.SECOND, 0);
         t.set(Calendar.MILLISECOND, 0);
-        return YMD.format(t.getTime());
+        return DateUtils.fromMillis(t.getTimeInMillis());
     }
 
     /**
@@ -51,7 +51,8 @@ final class StatsData {
         List<String> out = new ArrayList<String>();
         try {
             Calendar c = Calendar.getInstance();
-            c.setTime(YMD.parse(today));
+            c.setTimeInMillis(java.time.LocalDate.parse(today, DateUtils.YMD)
+                    .atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
             if (weekCols) {
                 // 对齐到本周一，再往前推若干整周，终点正好落在"今天所在的那一周"
                 int dow = c.get(Calendar.DAY_OF_WEEK);          // 1=周日 … 7=周六
@@ -60,13 +61,13 @@ final class StatsData {
                 c.add(Calendar.DATE, -toMon - (cols - 1) * 7);
                 int total = cols * 7;
                 for (int i = 0; i < total; i++) {
-                    out.add(YMD.format(c.getTime()));
+                    out.add(DateUtils.fromMillis(c.getTimeInMillis()));
                     c.add(Calendar.DATE, 1);
                 }
             } else {
                 c.add(Calendar.DATE, -(days - 1));
                 for (int i = 0; i < days; i++) {
-                    out.add(YMD.format(c.getTime()));
+                    out.add(DateUtils.fromMillis(c.getTimeInMillis()));
                     c.add(Calendar.DATE, 1);
                 }
             }
@@ -125,7 +126,8 @@ final class StatsData {
             if (d == null || d.length() != 10) continue;
             try {
                 Calendar c = Calendar.getInstance();
-                c.setTime(YMD.parse(d));
+                c.setTimeInMillis(java.time.LocalDate.parse(d, DateUtils.YMD)
+                        .atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
                 int dow = c.get(Calendar.DAY_OF_WEEK);      // 1=周日
                 out[(dow + 5) % 7]++;                        // 转成 0=周一
             } catch (Throwable ignored) {}

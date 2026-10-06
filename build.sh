@@ -80,6 +80,10 @@ if [ "${TGAS_SKIP_TESTS:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/SignLogicTest
   rm -rf "$_tcls"; mkdir -p "$_tcls"
   if javac -nowarn -encoding UTF-8 -d "$_tcls" \
         "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/SignLogic.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/UpdateLogic.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/DateUtils.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/StatsData.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/StatsSnapshot.java" \
         "$TGAS_SRC/tools/tests/SignLogicTest.java" 2>&1; then
     if ! java -cp "$_tcls" io.github.wlmosv_png.tgautosign.SignLogicTest; then
       rm -rf "$_tcls"
@@ -128,6 +132,46 @@ if [ "${TGAS_SKIP_WIRING:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/check-wiring.py" ]
   echo "== 接线自检 =="
   python3 "$TGAS_SRC/tools/check-wiring.py" "$TGAS_SRC" || {
     echo "FATAL: 有孤儿方法或菜单项没派发（临时跳过：TGAS_SKIP_WIRING=1）" >&2; exit 1; }
+fi
+
+# ── judge 子系统单测门禁（2026-10-06 补做第 5 项）──
+# 来历：judge/UnkPool 依赖 android.content.SharedPreferences，SignLogicTest 的
+#   最小编译集里没有它，所以这块一直没测试。这里用 tools/tests/stubs/ 的桩 +
+#   内存版假实现，让 UnkPool 在纯 Java 环境也能被真正测到。
+# 注意：桩只放 tools/tests/ 下，**不进 app/src/main/**，不参与正式构建。
+# 跳过：TGAS_SKIP_JUDGETEST=1
+if [ "${TGAS_SKIP_JUDGETEST:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/JudgeTest.java" ]; then
+  echo "== judge 子系统单测 =="
+  _jcls="${TMPDIR:-/tmp}/tgas-jcls-$$"
+  rm -rf "$_jcls"; mkdir -p "$_jcls"
+  if javac -nowarn -encoding UTF-8 -d "$_jcls" \
+        "$TGAS_SRC/tools/tests/stubs/android/content/SharedPreferences.java" \
+        "$TGAS_SRC/tools/tests/stubs/android/content/Context.java" \
+        "$TGAS_SRC/tools/tests/JudgeTest.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/judge/UnkPool.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/judge/ReplyNormalizer.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/DateUtils.java" 2>&1; then
+    if ! java -cp "$_jcls" io.github.wlmosv_png.tgautosign.JudgeTest; then
+      rm -rf "$_jcls"
+      echo "FATAL: judge 子系统单测失败（临时跳过：TGAS_SKIP_JUDGETEST=1）" >&2; exit 1
+    fi
+    rm -rf "$_jcls"
+  else
+    rm -rf "$_jcls"
+    echo "FATAL: judge 单测编译失败（临时跳过：TGAS_SKIP_JUDGETEST=1）" >&2; exit 1
+  fi
+fi
+
+# ── 宿主作用域一致性门禁（2026-10-06 新增，P1）──
+# 来历：Turrit（org.telegram.group）曾在 Hosts.KNOWN 与 scope.list 里都有、
+#   module.prop 的 scope= 缺失，当时没有任何门禁能发现 ——
+#   用户装完才发现 Turrit 不在作用域里。三处任一不同步都会造成
+#   「声明支持但实际不注入」。这里做集合比对，不一致就失败并指出差异。
+# 跳过：TGAS_SKIP_SCOPE=1
+if [ "${TGAS_SKIP_SCOPE:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/check-scope-sync.py" ]; then
+  echo "== 宿主作用域一致性 =="
+  python3 "$TGAS_SRC/tools/check-scope-sync.py" "$TGAS_SRC" || {
+    echo "FATAL: Hosts.KNOWN / scope.list / module.prop 的宿主集合不一致（临时跳过：TGAS_SKIP_SCOPE=1）" >&2; exit 1; }
 fi
 
 # ── README 同步门禁：README 的更新日志段必须与 CHANGELOG.md 一致 ──

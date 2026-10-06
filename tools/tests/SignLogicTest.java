@@ -47,6 +47,9 @@ public final class SignLogicTest {
         crossDayRetry();
         ruleTesterChain();
         statsData();
+        p0ComboFalsePositive();
+        p2UpdateLogic();
+        p3DateUtils();
 
         System.out.println("----------------------------------------");
         System.out.println("通过 " + passed + " / 失败 " + failed.size());
@@ -1040,5 +1043,201 @@ public final class SignLogicTest {
             int dow = c.get(java.util.Calendar.DAY_OF_WEEK);   // 1=周日
             return (dow + 5) % 7;
         } catch (Throwable t) { return -1; }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  P0 · 组合判定误判回归（2026-10-06 交接单）
+    //
+    //  背景：COMBO_OK 曾含过宽的「已/积分/奖励/领取」，与「签到」同句极易命中；
+    //        且 FAIL 表只列固定组合，没有通用否定守卫 ——
+    //        说明类/统计类/冷却类文本被判成 V_SIGNED，当天不再补发，用户次日才发现断签。
+    // ══════════════════════════════════════════════════════════════
+    private static void p0ComboFalsePositive() {
+        // ── 不能判成功（结果必须 != V_SIGNED）──
+        String[] notSigned = {
+                "今日已有 123 人签到",
+                "签到提醒:您今天还没有签到,已为您准备好奖励",
+                "您已被禁止签到",
+                "您还没有完成今日签到任务",
+                "您的积分:120,今日尚未签到",
+                "签到规则:每日签到可获得积分",
+                "每日签到:连续签到 3 天,明日可领取更多奖励",
+                "You haven't checked in today. Received 0 points",
+                "签到冷却中,请于 8 小时后再试,已签到 5 次",
+                "Daily check-in rules: earn points every day",
+        };
+        for (String r : notSigned) {
+            int v = SignLogic.verdictOf(r, null, null, null);
+            tru("P0 不能判成功: " + r, v != SignLogic.V_SIGNED);
+        }
+
+        // ── 指定期望值 ──
+        eq("P0 统计类 → UNKNOWN", SignLogic.verdictOf("今日已有 123 人签到", null, null, null),
+           Integer.valueOf(SignLogic.V_UNKNOWN));
+        eq("P0 规则类 → UNKNOWN", SignLogic.verdictOf("签到规则:每日签到可获得积分", null, null, null),
+           Integer.valueOf(SignLogic.V_UNKNOWN));
+        eq("P0 英文规则 → UNKNOWN", SignLogic.verdictOf("Daily check-in rules: earn points every day", null, null, null),
+           Integer.valueOf(SignLogic.V_UNKNOWN));
+        eq("P0 禁止签到 → FAILED", SignLogic.verdictOf("您已被禁止签到", null, null, null),
+           Integer.valueOf(SignLogic.V_FAILED));
+
+        // ── 必须仍然判成功 ──
+        String[] stillSigned = {
+                "签到成功",
+                "今日已签到",
+                "今天已经签到过了",
+                "🎉 恭喜你完成签到",
+                "✅ 今日打卡 +1",
+                "签到完成,获得 5 积分",
+                "恭喜,今日签到成功",
+                // 否定词离得远的反例 —— 不能被守卫误杀
+                "没问题,签到成功",
+                "不错,今日已签到",
+        };
+        for (String r : stillSigned) {
+            int v = SignLogic.verdictOf(r, null, null, null);
+            eq("P0 仍应成功: " + r, Integer.valueOf(v), Integer.valueOf(SignLogic.V_SIGNED));
+        }
+
+        // ── 必须仍然判失败 ──
+        String[] stillFailed = {
+                "签到失败",
+                "未签到成功",
+                "没有签到成功",
+                "Check-in failed, please try again",
+                "请先关注频道后再签到,已关注请重试",
+        };
+        for (String r : stillFailed) {
+            int v = SignLogic.verdictOf(r, null, null, null);
+            eq("P0 仍应失败: " + r, Integer.valueOf(v), Integer.valueOf(SignLogic.V_FAILED));
+        }
+
+        // ── 否定守卫本身：中文按字符窗口 ──
+        eq("守卫 还没有签到", SignLogic.negated("还没有签到", "签到"), true);
+        eq("守卫 尚未签到成功", SignLogic.negated("尚未签到成功", "签到成功"), true);
+        eq("守卫 无法签到", SignLogic.negated("无法签到", "签到"), true);
+        eq("守卫 反例:没问题,签到成功", SignLogic.negated("没问题,签到成功", "签到成功"), false);
+        eq("守卫 反例:不错,今日已签到", SignLogic.negated("不错,今日已签到", "已签到"), false);
+        // ── 否定守卫：英文按词窗口 ──
+        eq("守卫 EN haven't checked in", SignLogic.negated("you haven't checked in", "checked in"), true);
+        eq("守卫 EN not signed", SignLogic.negated("not signed", "signed"), true);
+        eq("守卫 EN 反例 no problem, checked in ok", SignLogic.negated("no problem, checked in ok", "checked in"), false);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  P2 · 更新检查纯函数（2026-10-06 交接单）
+    // ══════════════════════════════════════════════════════════════
+    private static void p2UpdateLogic() {
+        // ── parseTag ──
+        eq("parseTag 1.6.5", UpdateLogic.parseTag("1.6.5")[0], "1.6.5");
+        eq("parseTag v1.6.5", UpdateLogic.parseTag("v1.6.5")[0], "1.6.5");
+        eq("parseTag 103-1.6.5 版本", UpdateLogic.parseTag("103-1.6.5")[0], "1.6.5");
+        eq("parseTag 103-1.6.5 码", UpdateLogic.parseTag("103-1.6.5")[1], "103");
+        eq("parseTag v1.6.5-debug", UpdateLogic.parseTag("v1.6.5-debug")[0], "1.6.5");
+        eq("parseTag 空", UpdateLogic.parseTag(null)[0], "");
+        eq("parseTag 1.6.5/extra", UpdateLogic.parseTag("1.6.5/extra")[0], "1.6.5");
+
+        // ── compareVersion（含段数不等）──
+        eq("cmp 1.6.5 > 1.6.4", UpdateLogic.compareVersion("1.6.5", "1.6.4"), Integer.valueOf(1));
+        eq("cmp 1.6.4 < 1.6.5", UpdateLogic.compareVersion("1.6.4", "1.6.5"), Integer.valueOf(-1));
+        eq("cmp 1.6 == 1.6.0（段数不等）", UpdateLogic.compareVersion("1.6", "1.6.0"), Integer.valueOf(0));
+        eq("cmp 1.6.0 == 1.6（反向）", UpdateLogic.compareVersion("1.6.0", "1.6"), Integer.valueOf(0));
+        eq("cmp 1.10 > 1.9（非字典序）", UpdateLogic.compareVersion("1.10", "1.9"), Integer.valueOf(1));
+        eq("cmp 2.0 > 1.99", UpdateLogic.compareVersion("2.0", "1.99"), Integer.valueOf(1));
+        eq("cmp 1.6.5-beta == 1.6.5", UpdateLogic.compareVersion("1.6.5-beta", "1.6.5"), Integer.valueOf(0));
+        eq("cmp 空 vs 1.0", UpdateLogic.compareVersion("", "1.0"), Integer.valueOf(-1));
+
+        // ── resolveRedirect ──
+        eq("redirect 绝对 https",
+           UpdateLogic.resolveRedirect("https://a.com/x", "https://b.com/y"),
+           "https://b.com/y");
+        eq("redirect 相对路径",
+           UpdateLogic.resolveRedirect("https://a.com/dir/x", "y.apk"),
+           "https://a.com/dir/y.apk");
+        eq("redirect 根相对",
+           UpdateLogic.resolveRedirect("https://a.com/dir/x", "/z.apk"),
+           "https://a.com/z.apk");
+        eq("redirect 拒绝 http 降级",
+           UpdateLogic.resolveRedirect("https://a.com/x", "http://b.com/y"),
+           null);
+        eq("redirect 拒绝空", UpdateLogic.resolveRedirect("https://a.com/x", ""), null);
+        eq("redirect 拒绝 null", UpdateLogic.resolveRedirect("https://a.com/x", null), null);
+        eq("redirect 拒绝垃圾", UpdateLogic.resolveRedirect("https://a.com/x", "::::"), null);
+
+        // ── parseShaLine（P2 第 5 点：找不到同名行不再回退）──
+        String sha = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        eq("sha 命中同名",
+           UpdateLogic.parseShaLine(sha + "  TGAutoSign-v1.6.5.apk", "TGAutoSign-v1.6.5.apk"), sha);
+        eq("sha 不同名 → 空",
+           UpdateLogic.parseShaLine(sha + "  Other.apk", "TGAutoSign-v1.6.5.apk"), "");
+        eq("sha 行太短 → 空",
+           UpdateLogic.parseShaLine("abc  x.apk", "x.apk"), "");
+        eq("sha 非法字符 → 空",
+           UpdateLogic.parseShaLine("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz  x.apk", "x.apk"), "");
+        eq("sha apkName 为空 → 空",
+           UpdateLogic.parseShaLine(sha + "  x.apk", ""), "");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  P3 · 日期工具（2026-10-06 交接单）
+    // ══════════════════════════════════════════════════════════════
+    private static void p3DateUtils() {
+        String today = DateUtils.today();
+        String yest = DateUtils.yesterday();
+
+        // 格式必须是 yyyy-MM-dd（存量 prefs 依赖，不可变）
+        tru("P3 today 格式", today.matches("\\d{4}-\\d{2}-\\d{2}"));
+        tru("P3 yesterday 格式", yest.matches("\\d{4}-\\d{2}-\\d{2}"));
+
+        // 今天 / 昨天判断
+        eq("P3 isToday(今天)", DateUtils.isToday(today), true);
+        eq("P3 isToday(昨天)", DateUtils.isToday(yest), false);
+        eq("P3 isYesterday(昨天)", DateUtils.isYesterday(yest), true);
+        eq("P3 isYesterday(今天)", DateUtils.isYesterday(today), false);
+        eq("P3 isTodayOrYesterday(今天)", DateUtils.isTodayOrYesterday(today), true);
+        eq("P3 isTodayOrYesterday(昨天)", DateUtils.isTodayOrYesterday(yest), true);
+
+        // ── failStreak 语义：stamp 为今天或昨天 → 延续；更早 → 中断 ──
+        // （failStreakContinues 就是直接转发 isTodayOrYesterday，此处等价覆盖）
+        eq("P3 连续失败:今天 → 延续", DateUtils.isTodayOrYesterday(today), true);
+        eq("P3 连续失败:昨天 → 延续", DateUtils.isTodayOrYesterday(yest), true);
+        eq("P3 连续失败:前天 → 中断",
+           DateUtils.isTodayOrYesterday(DateUtils.fromMillis(System.currentTimeMillis() - 2L * 86400000L)),
+           false);
+
+        // 空串 / 非法串 → 不延续（不得抛异常）
+        eq("P3 连续失败:空串 → 中断", DateUtils.isTodayOrYesterday(""), false);
+        eq("P3 连续失败:null → 中断", DateUtils.isTodayOrYesterday(null), false);
+        eq("P3 连续失败:非法串 → 中断", DateUtils.isTodayOrYesterday("not-a-date"), false);
+
+        // 解析
+        eq("P3 parse 合法", DateUtils.parse("2026-10-06").toString(), "2026-10-06");
+        eq("P3 parse 非法 → null", DateUtils.parse("2026-13-99"), null);
+        eq("P3 parse 空 → null", DateUtils.parse(""), null);
+
+        // ── 跨月 / 跨年边界 ──
+        // 用 daysBetween 验证跨月跨年不塌
+        eq("P3 daysBetween 跨月", DateUtils.daysBetween("2026-01-31", "2026-02-01"), Long.valueOf(1));
+        eq("P3 daysBetween 跨年", DateUtils.daysBetween("2025-12-31", "2026-01-01"), Long.valueOf(1));
+        eq("P3 daysBetween 闰年2月", DateUtils.daysBetween("2024-02-28", "2024-03-01"), Long.valueOf(2));
+        eq("P3 daysBetween 平年2月", DateUtils.daysBetween("2026-02-28", "2026-03-01"), Long.valueOf(1));
+        eq("P3 daysBetween 非法 → -1", DateUtils.daysBetween("bad", "2026-01-01"), Long.valueOf(-1));
+
+        // fromMillis 回环
+        long now = System.currentTimeMillis();
+        eq("P3 fromMillis 回环", DateUtils.fromMillis(now), today);
+
+        // 2026-10-06 补做第 4 项：新增格式化助手的回归
+        eq("P3 nowHms 格式", DateUtils.nowHms().matches("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}"), true);
+        eq("P3 todayCompact 格式", DateUtils.todayCompact().matches("\\d{8}"), true);
+        eq("P3 todayCompact 与 today 一致",
+           DateUtils.todayCompact(), today.replace("-", ""));
+        eq("P3 hms 回环解析", DateUtils.parseHms(DateUtils.hms(now)).toString().substring(0, 10), today);
+        eq("P3 parseHms 非法 → null", DateUtils.parseHms("bad"), null);
+        eq("P3 parseHms 空 → null", DateUtils.parseHms(""), null);
+        eq("P3 parseCompact 合法", DateUtils.parseCompact(DateUtils.todayCompact()).toString(), today);
+        eq("P3 parseCompact 长度错 → null", DateUtils.parseCompact("202610"), null);
+        eq("P3 parseCompact 非法 → null", DateUtils.parseCompact("zzzzzzzz"), null);
+        eq("P3 ymd(ms)", DateUtils.ymd(now), today);
     }
 }

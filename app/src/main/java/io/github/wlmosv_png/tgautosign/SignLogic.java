@@ -325,6 +325,8 @@ public final class SignLogic {
             // 那是明确的拒绝，用户压根没签到。同类还有「请先绑定或注册账号」。
             // 这类措辞的共同点是**要求用户先做某事**，属于功能性拒绝而非业务结果。
             "请先加入", "加入频道", "请先绑定", "请先注册", "未绑定", "未注册",
+            // 2026-10-06 P0：封禁/禁止类 —— 条件不满足且今日无解，归永久失败。
+            "禁止签到", "禁止", "被封", "封禁", "已拉黑", "拉黑",
             "请先验证", "无权限", "没有权限", "暂无权限", "不可用", "暂未开放",
             "please join", "not linked", "not registered", "no permission",
             // 2026-09-30 补：否定词 + 签到动词的常见组合。
@@ -641,7 +643,9 @@ public final class SignLogic {
         }
         if (userOk != null && userOk.length > 0) {
             String m = matched(lower, userOk);
-            if (m != null) return new Object[]{Integer.valueOf(V_SIGNED), m};
+            // 2026-10-06：用户词也过否定守卫 —— 学到的是肯定句，
+            //   却被「还没有绑定」这类否定句命中，会把失败判成功。
+            if (m != null && !negated(lower, m)) return new Object[]{Integer.valueOf(V_SIGNED), m};
         }
         return verdictDetail(reply, dup, ok, fail);
     }
@@ -668,14 +672,91 @@ public final class SignLogic {
         // 会被组合判定当成"签到+已"误判成功；但它**不等于签到成功**。
         m = matched(lower, EXHAUSTED_WORDS);
         if (m != null) return new Object[]{Integer.valueOf(V_EXHAUSTED), m};
+        // ── 非结论类（说明 / 统计 / 冷却）：在 FAIL 之后、DUP/OK/组合之前 ──
+        // 2026-10-06 新增。位置很关键：放最前会吞掉真失败（「签到失败,详见规则说明」），
+        // 放最后又拦不住（DUP/OK 已先命中）。只在这一段直接返回 V_UNKNOWN。
+        if (matched(lower, NON_CONCLUSION_WORDS) != null) {
+            return new Object[]{Integer.valueOf(V_UNKNOWN), ""};
+        }
         m = matched(lower, dup != null ? dup : DUP_WORDS_DEFAULT);
-        if (m != null) return new Object[]{Integer.valueOf(V_SIGNED), m};
+        if (m != null && !negated(lower, m)) return new Object[]{Integer.valueOf(V_SIGNED), m};
         m = matched(lower, ok != null ? ok : OK_WORDS_DEFAULT);
-        if (m != null) return new Object[]{Integer.valueOf(V_SIGNED), m};
+        if (m != null && !negated(lower, m)) return new Object[]{Integer.valueOf(V_SIGNED), m};
         // ── 组合判定（兜底）：词表没覆盖，但语义上明显是成功 ──
-        m = comboSuccess(lower);
-        if (m != null) return new Object[]{Integer.valueOf(V_SIGNED), m};
+        String cm = comboSuccess(lower);
+        if (cm != null && !negated(lower, cm.split("\\+")[0])) {
+            return new Object[]{Integer.valueOf(V_SIGNED), cm};
+        }
         return new Object[]{Integer.valueOf(V_UNKNOWN), ""};
+    }
+
+    /**
+     * 否定守卫：命中词**紧邻之前**是否出现否定词。
+     *
+     * 2026-10-06 新增。起因：FAIL 表只列了固定组合（「没有签到成功」等），
+     *   「还没有签到」「尚未签到」「无法签到」「haven't checked in」全部漏过，
+     *   而这些句子里含「签到成功」类子串，会被 DUP/OK/组合判成成功。
+     *
+     * 窗口设计（两套规则分开，不能混用）：
+     *   · 中文：看命中词之前 **3 个字符**
+     *   · 英文：看命中词之前 **2 个词**
+     *
+     * 边界用例（必须有测试）：
+     *   ✗ 「还没有签到」   → 前 3 字含「没有」→ 作废
+     *   ✗ 「尚未签到成功」 → 前 3 字含「尚未」→ 作废
+     *   ✓ 「没问题,签到成功」→ 前 3 字是「题,签」→ 不作废（否定词离得远）
+     *   ✓ 「不错,今日已签到」→ 前 3 字是「日已签」→ 不作废
+     *
+     * @param lower 已小写的整句
+     * @param hitWord 命中的词（matched 返回的是小写词）
+     * @return true = 该命中应作废
+     */
+    static boolean negated(String lower, String hitWord) {
+        try {
+            if (lower == null || hitWord == null || hitWord.length() == 0) return false;
+            int idx = lower.indexOf(hitWord);
+            if (idx < 0) return false;
+            // 取命中词之前的一小段
+            int from = Math.max(0, idx - 12);
+            String before = lower.substring(from, idx);
+            if (before.length() == 0) return false;
+
+            // ── 中文规则：只看命中词**紧邻的 2 个字符** ──
+            // 为什么是 2 而不是 3（2026-10-06 实测迭代）：
+            //   3 字窗口会把「不错,今日已签到」误杀 —— 「不」正好落在窗口里。
+            //   2 字窗口仍能覆盖「还没有/尚未/无法/不能/没有/禁止」等全部实际写法，
+            //   而逗号/空格会把「不错,」与命中词隔开，自然不误伤。
+            String cnWin = before.length() > 2 ? before.substring(before.length() - 2) : before;
+            // 例外：这些前缀本身含否定字，但语义是肯定
+            if (cnWin.startsWith("不") || cnWin.startsWith("没") || cnWin.startsWith("无")) {
+                // 「不错」「没问题」类：否定字后面跟着褒义词，不算否定
+                if (cnWin.startsWith("不错") || cnWin.startsWith("没问") || cnWin.startsWith("无妨")) {
+                    // 视为肯定，跳过中文否定判定
+                } else {
+                    for (String n : NEG_WORDS_CN) {
+                        if (cnWin.contains(n)) return true;
+                    }
+                }
+            } else {
+                for (String n : NEG_WORDS_CN) {
+                    if (cnWin.contains(n)) return true;
+                }
+            }
+
+            // ── 英文规则：只看命中词**紧邻的 1 个词** ──
+            // 同理由 2 词收窄到 1 词：「no problem, checked in」里
+            //   「no」与 checked 中间隔着 problem → 只有一个词窗口才不会误杀。
+            String[] parts = before.trim().split("[\\s,.;:!?、，。！？]+");
+            if (parts.length > 0) {
+                String w = parts[parts.length - 1] == null ? "" : parts[parts.length - 1].trim();
+                String wFlat = w.replace("'", "").replace("\u2019", "");
+                for (String neg : NEG_WORDS_EN) {
+                    String nFlat = neg.replace("'", "").replace("\u2019", "");
+                    if (wFlat.equals(nFlat)) return true;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return false;
     }
 
     /** 签到行为词（与「结果词」组合时才生效） */
@@ -683,10 +764,59 @@ public final class SignLogic {
             "签到", "打卡", "签领", "check in", "check-in", "checked in", "sign in", "sign-in"
     };
 
-    /** 成功结果词 */
+    /**
+     * 成功结果词（2026-10-06 收紧）。
+     *
+     * 旧表含「已」「积分」「奖励」「领取」—— 这些词与「签到」同句的概率极高
+     * （「签到规则:每日签到可获得积分」「已有 123 人签到」），
+     * 于是大量**非成功**回复被组合判定成 V_SIGNED，进而 markSigned，
+     * 当天不再补发，用户第二天才发现断签。
+     *
+     * 现在只保留**强结果词**：出现即基本等价于「这次签到有明确结果」。
+     * 「获得 + 数字」「+1」这类带数值的，由 comboSuccess 的数值分支单独处理。
+     */
     private static final String[] COMBO_OK = {
-            "成功", "完成", "已", "获得", "领取", "恭喜", "奖励", "积分", "+1",
-            "success", "complete", "done", "earned", "claimed", "received"
+            "成功", "完成签到", "签到完成", "打卡完成", "完成打卡",
+            "success", "completed", "checked in successfully",
+    };
+
+    /**
+     * 「非结论类」词表（2026-10-06 新增）—— 说明 / 统计 / 冷却。
+     *
+     * 这类文本常在句子内容纳了签到相关字样，却**不是本次签到的结论**：
+     *   · 说明类：「签到规则:每日签到可获得积分」
+     *   · 统计类：「今日已有 123 人签到」
+     *   · 冷却类：「签到冷却中,请于 8 小时后再试,已签到 5 次」
+     * 若放它们进入 DUP / OK / 组合判定，极易命中「已」「积分」等宽词被误判成功。
+     *
+     * 判定位置：**必须排在 FAIL / PERMANENT_FAIL / EXHAUSTED 之后**。
+     *   否则「签到失败,详见规则说明」会被它先吞成 V_UNKNOWN，丢掉真失败结论。
+     */
+    private static final String[] NON_CONCLUSION_WORDS = {
+            // 说明 / 规则
+            "规则", "说明", "教程", "指引", "如何", "怎么", "帮助", "介绍",
+            // 统计 / 排行
+            "已有", "已有 ", "人数", "排名", "排行", "榜单", "统计", "总数", "累计",
+            // 冷却 / 等待
+            "冷却", "请等待", "稍后", "后再试", "小时后", "分钟后再",
+            "rules", "how to", "guide", "ranking", "cooldown", "try again in",
+    };
+
+    /**
+     * 否定词 —— 出现在命中词**紧邻之前**时，该命中作废。
+     *
+     * 中文按**字符数**看前 3 个字符；英文按**词数**看前 2 个词（两套规则分开写，
+     * 因为中文 3 字≈英文 1~2 词，用同一套会一边过松、一边过紧）。
+     *
+     * 为什么窗口这么窄：要把「没问题,签到成功」「不错,今日已签到」保留为成功
+     *   —— 它们的否定词离得远（「没问题,」后面还有 5 个字），不会被误伤。
+     */
+    private static final String[] NEG_WORDS_CN = {
+            "未", "没", "无", "不", "别", "禁止", "尚未", "无法", "不能", "勿",
+    };
+    private static final String[] NEG_WORDS_EN = {
+            "not", "no", "never", "haven't", "hasn't", "didn't", "don't", "won't",
+            "cannot", "can't", "unable", "without", "fail", "failed",
     };
 
     /**

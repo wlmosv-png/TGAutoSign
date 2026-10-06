@@ -101,7 +101,6 @@ public final class TGAutoSignCore {
     private final SharedPreferences prefs;
     private final Set<String> seenSignals = cs();
     private long lastSeenClean = 0L;
-    private final SimpleDateFormat SDF = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
     private volatile boolean started = false;
     private volatile long captureArmedAt = 0L;
     private final Object TLOCK = new Object();
@@ -1478,14 +1477,15 @@ public final class TGAutoSignCore {
     }
 
     // ---------------- 工具 ----------------
-    private String todayStr() { return new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date()); }
+    // 2026-10-06 P3：改走 DateUtils（线程安全，格式与存量一致）。
+    private String todayStr() { return DateUtils.today(); }
 
     /** 昨天日期 yyyy-MM-dd。日历摘要判定"连续是否延续"用（2026-10-01）。 */
     private String yesterdayStr() {
         try {
             java.util.Calendar c = java.util.Calendar.getInstance();
             c.add(java.util.Calendar.DATE, -1);
-            return new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(c.getTime());
+            return DateUtils.fromMillis(c.getTimeInMillis());
         } catch (Throwable t) { return ""; }
     }
 
@@ -2190,7 +2190,7 @@ public final class TGAutoSignCore {
         }
 
         private static String dayStr() {
-            return new SimpleDateFormat("yyyyMMdd", Locale.US).format(new Date());
+            return DateUtils.todayCompact();
         }
 
         /** 异常带堆栈落盘（关键路径用；栈只取前 8 层，避免刷屏）。 */
@@ -4492,7 +4492,7 @@ public final class TGAutoSignCore {
      * 这是**唯一入口** —— 别再直接写 pendcfm_，否则界面拿不到原因。
      */
     private void markResultCode(String prefix, String id, int result) {
-        try { stateStore.markResult(prefix, id, result); } catch (Throwable ignored) {}
+        try { stateStore.markResult(prefix, id, result); } catch (Throwable _e) { noteSwallowed("markResultCode", _e); }
     }
 
     /** 读取归类码；无归类返回 -1。 */
@@ -6051,8 +6051,10 @@ public final class TGAutoSignCore {
                     int ib = isInactive(accountPrefix(), b) ? 1 : 0;
                     if (ia != ib) return ia - ib;
                     int fa = 0, fb = 0;
-                    try { fa = prefs.getInt(Keys.failStreak(accountPrefix(), entryId(a)), 0); } catch (Throwable ignored) {}
-                    try { fb = prefs.getInt(Keys.failStreak(accountPrefix(), entryId(b)), 0); } catch (Throwable ignored) {}
+                    // 2026-10-06 P3：改走 SignStateStore.failStreak —— 它带跨天判断，
+                    // 裸读会把「几天前失败过」一直算作当前连续失败（排序被陈旧数据污染）。
+                    try { fa = stateStore.failStreak(accountPrefix(), entryId(a)); } catch (Throwable ignored) {}
+                    try { fb = stateStore.failStreak(accountPrefix(), entryId(b)); } catch (Throwable ignored) {}
                     if (fa != fb) return fb - fa;          // 失败多的在前
                     String na = botName(entryDid(a));
                     String nb = botName(entryDid(b));
@@ -6682,7 +6684,8 @@ public final class TGAutoSignCore {
         String lastT = prefs.getString(kLast(accountPrefix(), id), "");
         {
             int failN = 0;
-            try { failN = prefs.getInt(Keys.failStreak(accountPrefix(), id), 0); } catch (Throwable ignored) {}
+            // 2026-10-06 P3：同上，带跨天判断。
+            try { failN = stateStore.failStreak(accountPrefix(), id); } catch (Throwable ignored) {}
             String tail = null;
             int tailCol = Theme.termFaint(c);
             if (failN >= 2) {
@@ -10188,7 +10191,7 @@ public final class TGAutoSignCore {
                         if (nm != null && nm.length() > 0) t.name = nm;
                     } catch (Throwable _nm) { noteSwallowed("stats-name", _nm); }
                     try { t.signedToday = s.today.equals(prefs.getString(kLast(prefix, id), "")); } catch (Throwable ignored) {}
-                    try { t.failStreak = prefs.getInt(Keys.failStreak(prefix, id), 0); } catch (Throwable ignored) {}
+                    try { t.failStreak = stateStore.failStreak(prefix, id); } catch (Throwable ignored) {}
                     try { t.signedAtMs = stateStore.signedAtMs(prefix, id); } catch (Throwable ignored) {}
                     try { t.pending = isPendingConfirm(prefix, id); } catch (Throwable ignored) {}
                     try { t.frozen = isFrozen(prefix, id) || isBotBlocked(entryDid(m)); } catch (Throwable ignored) {}
@@ -12596,7 +12599,7 @@ public final class TGAutoSignCore {
     private static String kAutoLearnNet() { return "jmb_autolearn_net"; }
     private static String kLastRound() { return "jmb_last_round"; }
     private static String kTimerPlanOf(String prefix) { return prefix + "timer_plan_" + todayStrStatic(); }
-    private static String todayStrStatic() { try { return new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(new java.util.Date()); } catch (Throwable t) { return ""; } }
+    private static String todayStrStatic() { try { return DateUtils.today(); } catch (Throwable t) { return ""; } }
 
     /** 当日时刻表 key：acc{N}_timer_plan_<yyyy-MM-dd>，值 = JSON 数组 [{id,did,kind,text,min}]（min=窗口内偏移分钟） */
     private String timerPlanKey(String prefix) {
@@ -14150,10 +14153,53 @@ public final class TGAutoSignCore {
                 lastUpdate = r;
                 info.setText(r.summary(UpdateChecker.VERSION_NAME));
                 if (r.newer && r.apkUrl != null) {
-                    menuItem(box, "download", Lang.tf("下载 v{0} 安装包", r.version), "下载到系统「下载」目录，校验 sha256 后确认安装", "update_download");
+                    menuItem(box, "download", Lang.tf("下载 v{0} 安装包", r.version), Lang.tr("下载到系统「下载」目录，尽力核对文件指纹后交给系统安装"), "update_download");
                 }
             } catch (Throwable ignored) {}
         });
+    }
+
+
+    /**
+     * 「本次下载未校验」的二次确认（2026-10-06 补做）。
+     *
+     * 场景：release 里没有 sha256sum.txt，或文件里找不到与安装包同名的行。
+     * 此时不替用户做决定 —— 明确告知未校验，由他选择继续或放弃。
+     */
+    private void confirmUnverifiedInstall(final Activity act, final UpdateChecker.Result d) {
+        try {
+            LinearLayout box = new LinearLayout(act);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(4), dp(2), dp(4), dp(2));
+
+            TextView warn = new TextView(act);
+            warn.setTextSize(Theme.TS_BODY);
+            warn.setTextColor(Theme.termAmber(act));
+            warn.setTypeface(Theme.monoBold());
+            warn.setText(Lang.tr("这次下载没有校验文件指纹"));
+            box.addView(warn);
+
+            TextView body = new TextView(act);
+            body.setTextSize(Theme.TS_CAPTION);
+            body.setTextColor(Theme.termMuted(act));
+            body.setTypeface(Theme.text());
+            body.setLineSpacing(dp(3), 1f);
+            body.setPadding(0, dp(6), 0, dp(2));
+            body.setText(Lang.tr("发布页里没有找到与这个安装包同名的 sha256 校验行，因此无法核对文件是否完整。\n"
+                    + "校验和与安装包来自同一个发布页，它本身不能防止发布端被篡改；真正的保护是系统要求同签名的包才能覆盖安装。")
+                    + "\n\n" + Lang.tr("文件已保存在：") + d.savedPath);
+            box.addView(body);
+
+            showDialog(act, Lang.tr("未经校验"), box, Lang.tr("取消"));
+            // showDialog 的 negativeButton 是「取消」，这里再补一个「继续安装」入口
+            // 用 toast 提示用户如何手动打开 —— 避免对话框按钮布局在不同宿主上不一致。
+            toast(Lang.tr("如需继续，可在「下载」目录里手动点开该 APK 安装"));
+            jlog("未校验提示已展示，未自动打开安装器: " + d.savedPath);
+        } catch (Throwable t) {
+            noteSwallowed("confirmUnverifiedInstall", t);
+            // 兜底：出不来对话框也不静默 —— 直接提示路径
+            toast(Lang.tr("下载未校验，请在「下载」目录手动确认安装"));
+        }
     }
 
     private void downloadUpdate(Activity act) {
@@ -14164,6 +14210,16 @@ public final class TGAutoSignCore {
         UpdateChecker.downloadAsync(appContext, src.apkUrl, src.apkName, src.apkSha256, mainHandler, d -> {
             if (d.networkError) { jlog("下载失败: " + d.message); toast(Lang.tf("下载失败：{0}", d.message)); return; }
             jlog("安装包已保存: " + d.savedPath);
+            // 2026-10-06 补做（P2 第 1 点）：sha 未能校验时**不静默打开安装器**，
+            // 先让用户明确知道「这次没校验」，由他自己决定是否继续。
+            // 为什么不是直接拒绝：sha256sum.txt 缺失时拒绝会让用户完全无法升级；
+            // 而 sha 与 APK 同源，防不了发布端被篡改 ——
+            // 真正的兜底是 Android 对「同签名才能覆盖安装」的校验。
+            if (d.shaUnverified) {
+                jlog("提示：本次下载未经 sha256 校验（未找到同名校验行或校验文件缺失）");
+                confirmUnverifiedInstall(act, d);
+                return;
+            }
             boolean opened = UpdateChecker.openSaved(appContext, d.savedUri, d.savedPath);
             toast(Lang.tf("已保存到 {0}", d.savedPath) + Lang.tr(opened ? "，请在安装界面确认" : "，请用文件管理器点开安装"));
         });
@@ -14319,7 +14375,7 @@ public final class TGAutoSignCore {
             if (UpdateChecker.PATCH_TAG != null && UpdateChecker.PATCH_TAG.length() > 0)
                 sb.append(" (").append(UpdateChecker.PATCH_TAG).append(")");
             sb.append(" =====\n");
-            sb.append("时间: ").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date())).append("\n");
+            sb.append("时间: ").append(DateUtils.nowHms()).append("\n");
             String _dp158 = safePkg();
             sb.append("宿主: ").append(hostLabel(_dp158)).append(" [").append(_dp158).append("] ")
               .append(hostVersion(_dp158)).append("\n");
@@ -14442,13 +14498,13 @@ public final class TGAutoSignCore {
                   .append("  宿主=").append(safePkg())
                   .append("  当前账号=").append(accountLabel(currentAccount()))
                   .append("  目标=").append(acctTargetCount(currentAccount()))
-                  .append("  导出=").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()))
+                  .append("  导出=").append(DateUtils.nowHms())
                   .append("  行数=").append(all.size()).append('\n');
                 for (LogLine l : all) sb.append(l.flat()).append('\n');
                 String content = sb.toString();
                 android.content.ContentResolver cr = appContext.getContentResolver();
                 android.content.ContentValues v = new android.content.ContentValues();
-                String fname = "TGAutoSign-log-" + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date()) + ".txt";
+                String fname = "TGAutoSign-log-" + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date()) + ".txt";   // 含时分秒，保留具体格式
                 v.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, fname);
                 v.put(android.provider.MediaStore.Downloads.MIME_TYPE, "text/plain");
                 v.put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS);
@@ -15609,6 +15665,10 @@ public final class TGAutoSignCore {
                 }
             }
             for (Object u : ups) {
+            // 2026-10-06 P4：null 元素必须先跳过 ——
+            // 否则 u.getClass() 抛 NPE，被外层 try 捕获后**整批 update 一起丢**，
+            // 含同批的目标 bot 回复与面板消息（与此前 return/continue 事故同类）。
+            if (u == null) continue;
             String un = u.getClass().getName();
             if (!un.contains("TL_updateNewMessage") && !un.contains("TL_updateNewChannelMessage")) continue;
             Object msg = getFieldVal(u, "message");
@@ -16455,18 +16515,56 @@ public final class TGAutoSignCore {
         return Proxy.newProxyInstance(cl, new Class<?>[]{iface}, handler);
     }
 
+    // Field 反射缓存（2026-10-06 P4）。
+
+    // 逐条 update 都要读 message / peer_id / from_id … 经过 getFieldVal，
+
+    // 每次 getField / getDeclaredField 都是一次全类字段扫描，量级上很亏。
+
+    // 缓存键为 (Class, 字段名)；**未命中也要缓存**（记为 MISS），
+
+    // 否则不存在的字段每条都会重扫一遍 —— 那正是最坏情况。
+
+    private static final java.util.concurrent.ConcurrentHashMap<String, Object> FIELD_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<String, Object>();
+    private static final Object FIELD_MISS = new Object();
+
+    private static String fieldKey(Class<?> cls, String name) {
+        return cls.getName() + "#" + name;
+    }
+
+    // 查缓存（含 MISS）。返回 Field 或 null（null 表示确定不存在）。
+
+    private static Field cachedField(Class<?> cls, String name) {
+        String k = fieldKey(cls, name);
+        Object v = FIELD_CACHE.get(k);
+        if (v == null) {
+            Field found = null;
+            try {
+                found = cls.getField(name);
+            } catch (Throwable ignored) {
+                try {
+                    found = cls.getDeclaredField(name);
+                    found.setAccessible(true);
+                } catch (Throwable ignored2) {
+                    found = null;
+                }
+            }
+            Object put = (found == null) ? FIELD_MISS : found;
+            Object prev = FIELD_CACHE.putIfAbsent(k, put);
+            if (prev != null) put = prev;
+            v = put;
+        }
+        return (v == FIELD_MISS) ? null : (Field) v;
+    }
+
     private static Object getFieldVal(Object obj, Class<?> cls, String name) {
         try {
-            Field f = cls.getField(name);
+            Field f = cachedField(cls, name);
+            if (f == null) throw new RuntimeException("no field " + name);
             return f.get(obj);
         } catch (Throwable t) {
-            try {
-                Field f = cls.getDeclaredField(name);
-                f.setAccessible(true);
-                return f.get(obj);
-            } catch (Throwable t2) {
-                throw new RuntimeException(t2);
-            }
+            throw new RuntimeException(t);
         }
     }
 

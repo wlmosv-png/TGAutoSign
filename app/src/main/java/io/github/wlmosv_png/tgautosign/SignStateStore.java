@@ -38,8 +38,9 @@ public final class SignStateStore {
 
     public SignStateStore(PrefsStore store) { this.store = store; }
 
+    // 2026-10-06 P3：改走 DateUtils（java.time，线程安全，与存量格式一致）。
     private String today() {
-        return new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(new java.util.Date());
+        return DateUtils.today();
     }
 
     private void warn(String m) { if (hooks != null) { try { hooks.logWarn(m); } catch (Throwable ignored) {} } }
@@ -117,18 +118,29 @@ public final class SignStateStore {
 
     /** 连续失败天数（跨天自动视为 0）。 */
     public int failStreak(String prefix, String id) {
+        // 2026-10-06 P3 修正：原判据是 `!isYesterday(stamp) → 0`，
+        // 但 noteFailStreak 写入的 stamp 是**今天** —— 于是今天刚失败反而返回 0，
+        // 完全读不到连续失败天数（且该方法此前无人调用，所以一直没暴露）。
+        // 现语义：stamp 为**今天或昨天** → 视为仍在延续，返回存储天数；更早 → 0。
         String y = store.s(Keys.failLastStamp(prefix, id), "");
-        if (!isYesterday(y)) return 0;
+        if (!DateUtils.isTodayOrYesterday(y)) return 0;
         return store.i(Keys.failStreak(prefix, id), 0);
     }
 
+    /**
+     * 连续失败天数是否应「继续计数」（纯函数，便于单测）。
+     *
+     * 2026-10-06 P3 抽出。判据：stamp 为**今天或昨天** → 延续；更早 / 空 / 非法 → 中断。
+     * 为什么是「今天或昨天」而不是「昨天」：
+     *   noteFailStreak 写入的 stamp 就是**今天**（当天失败当天记），
+     *   若只认昨天，今天刚失败反而返回 0 —— 这正是修复前的 bug。
+     */
+    static boolean failStreakContinues(String stampYmd) {
+        return DateUtils.isTodayOrYesterday(stampYmd);
+    }
+
     private boolean isYesterday(String ymd) {
-        try {
-            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
-            java.util.Calendar c = java.util.Calendar.getInstance();
-            c.add(java.util.Calendar.DAY_OF_YEAR, -1);
-            return f.format(c.getTime()).equals(ymd);
-        } catch (Throwable t) { return false; }
+        return DateUtils.isYesterday(ymd);
     }
 
     // ───────────── 执行结果归类（2026-09-28）─────────────

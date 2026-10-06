@@ -7,4 +7,4 @@ description=Telegram daily auto check-in (LSPosed). Send /jmb in any chat. Callb
 minApiVersion=102
 targetApiVersion=102
 staticScope=true
-scope=org.telegram.messenger,org.telegram.messenger.web,fork.risin42.nagramx,nu.gpu.nagram,nu.gpu.nagramx,nu.gpu.nagram.web,com.exteraless.app,xyz.nextalone.nagram,it.belloworld.mercurygram
+scope=org.telegram.messenger,org.telegram.messenger.web,fork.risin42.nagramx,nu.gpu.nagram,nu.gpu.nagramx,nu.gpu.nagram.web,com.exteraless.app,xyz.nextalone.nagram,it.belloworld.mercurygram,org.telegram.group
