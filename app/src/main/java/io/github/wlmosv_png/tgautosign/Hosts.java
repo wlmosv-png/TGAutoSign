@@ -37,7 +37,12 @@ public final class Hosts {
             "nu.gpu.nagram.web",   // NagramNX（thesv4k 分支 APP_PACKAGE）
             "com.exteraless.app",  // ExteraLess（ExteraGram fork，12.10.1-feae791 实测标志类齐全）
             "xyz.nextalone.nagram", // NextAlone Nagram（12.10.1，标志类齐全）
-            "tw.nekomimi.nekogram",      // Nekogram
+            // 2026-10-06 移除 Nekogram：实测其 R8 混淆把 tgnet 包压到只剩 6 个类，
+            //   MessagesController / UserConfig / TLRPC$TL_messages_sendMessage /
+            //   SendMessagesHelper 全部不存在 —— 注入后会「提示已注入但 /jmb 无反应」，
+            //   且回复判定与账号识别同样失效。
+            //   注意：MARKERS 里本就有 UserConfig，能力探测本来就会正确挡掉它，
+            //   是这里的白名单硬放行才造成误导。移出后由能力探测自然处理。
             "it.belloworld.mercurygram", // Mercurygram
             // Turrit（SEASTAR FUTURE；1.9.0.4.2 / 40427 实测：7 dex / 57774 类，
             // 未加固，且**类名未被 R8 混淆** —— ChatActivity、ChatMessageCellDelegate、
