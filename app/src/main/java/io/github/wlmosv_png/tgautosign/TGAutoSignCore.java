@@ -17344,13 +17344,18 @@ public final class TGAutoSignCore {
                 // 是 logd（默认不落盘）→ 事后完全无从诊断。
                 // 这里只针对「发送者像 bot」的群消息补一条持久日志：
                 // 群友闲聊不会触发，不会刷屏。
-                if (peerUid < 0L && (rm.senderLooksLikeBot || fromIsBot)) {
+                // ── 2026-10-07 降噪 ──
+                // 只记「这个会话本来就有目标」的未关联 —— 那才是用户关心的会话。
+                // 实测：不加这个条件，一次导出 1370 行里 940 行都是用户压根
+                // 没加过目标的群在刷屏，真正的信息全被埋了。
+                final int _peerN = countTargetsInPeer(replyTargets, peerUid);
+                if (peerUid < 0L && _peerN > 0 && (rm.senderLooksLikeBot || fromIsBot)) {
                     logw("[群聊未关联] chat=" + peerUid + " from=" + fromUid
                          + " isBot=" + fromIsBot + " lookBot=" + rm.senderLooksLikeBot
                          + " replyTo=" + replyToMsgId
                          + " candidateCount=" + rm.candidateCount
                          + " method=" + rm.method
-                         + "（该会话目标数=" + countTargetsInPeer(replyTargets, peerUid) + "）");
+                         + "（该会话目标数=" + _peerN + "）");
                 }
                 continue;
             }
