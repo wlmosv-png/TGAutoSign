@@ -7842,10 +7842,17 @@ public final class TGAutoSignCore {
             //   0.72 屏高（1711px）；root 里 sv 之上还有芯片/搜索/状态/头部卡，
             //   之下还有工具栏 → 总高远超上限 → CapBox 直接裁掉底部：
             //     ① 工具栏（加载更多）看不见 ② sv 滚动范围按 1853 算、实际只分到更少 → 滚不到底
-            // 现在：先按 WRAP_CONTENT 放进去，构建完成后由 fitScrollToChrome
-            //   实测上方占用并回填高度（与目标列表同一套做法）。
-            root.addView(sv, new LinearLayout.LayoutParams(-1,
-                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT));
+            // ── 2026-10-07 修「打开瞬间闪一下」──
+            // 上一版按 WRAP_CONTENT 加进去，弹窗后再由 fitLogScroll 改成真实高：
+            //   首帧 = CapBox 钳后的高度，接着 post/150ms/400ms 三次改高度
+            //   → 从首帧到稳定之间有两次以上布局变化，视觉上就是「闪一下」。
+            // 现在：构建时就用**预估值**把高度设对（下方 chrome 是固定几行，
+            //   dp 可算），随后 fitLogScroll 实测发现没差别 → 不再改动 → 无闪动。
+            //   预估值只是起点，真到了实测那一步仍会纠正偏差（低频路径）。
+            int _estChrome = dp(214);   // 芯片行+搜索+状态+头部卡+工具栏+图例
+            int _estH = dlgBodyMaxH(act) - _estChrome;
+            if (_estH < dp(160)) _estH = dp(160);
+            root.addView(sv, new LinearLayout.LayoutParams(-1, _estH));
 
             // 底部工具条：只留「加载更多」（看最新由芯片「回到最新」负责）
             LinearLayout tools = new LinearLayout(act);
@@ -7874,7 +7881,12 @@ public final class TGAutoSignCore {
             logLimit = 200;   // 首屏 200 条（2026-10-03 由 400 下调）
             logRendered = 0;  // 重置分页游标（每次打开都从首屏开始）
             refreshLog();     // ← 先填内容
-            jumpLogNewest();  // 打开即定位到最新
+            // ── 2026-10-07 去掉打开时的 fullScroll（闪动源之一）──
+            // 日志是「最新在最上」，新 ScrollView 的 scrollY 本来就是 0，
+            // 再 post 一次 fullScroll(FOCUS_UP) 等于在第二帧重复一次同样的滚动 ——
+            // 首帧到底、下一帧又"跳"一次，观感上就是闪。
+            // 高度现在构建时一次设对，首帧就是最终态，无需任何后续滚动。
+            // （芯片「回到最新」按钮仍保留，那是用户主动操作。）
             // ── 2026-10-07 修正：必须**在内容填完之后**才量高度 ──
             // 旧位置在 refreshLog() 之前 → 那时 logList 还是空的 →
             // contentH 只反映空容器（截图实测 contentH=222）→ svH 被钉死 360 →
@@ -11540,11 +11552,15 @@ public final class TGAutoSignCore {
                         int target = avail;          // 恒定，不随内容变化
 
                         android.view.ViewGroup.LayoutParams lp = sv.getLayoutParams();
-                        if (lp != null && lp.height != target) {
+                        // 只在与当前值差异明显时才改（2026-10-07）：
+                        // 构建时已给过预估值，实测若只差几个像素就是抖动，
+                        // 改了反而让用户看见「闪一下」。差值 < 12px 视为一致。
+                        int cur = lp == null ? -1 : lp.height;
+                        if (lp != null && Math.abs(cur - target) >= 12) {
                             lp.height = target;
                             sv.setLayoutParams(lp);
                             logd("[日志适配] chrome=" + chrome + " maxH=" + maxH
-                                 + " → svH=" + target + " (svTop=" + sv.getTop() + ")");
+                                 + " → svH=" + target + " (was=" + cur + " svTop=" + sv.getTop() + ")");
                         }
                     } catch (Throwable t) { noteSwallowed("fitLogScroll", t); }
                 }
