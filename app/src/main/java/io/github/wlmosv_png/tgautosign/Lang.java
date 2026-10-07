@@ -795,6 +795,8 @@ public final class Lang {
         EN.put("以下目标发出后未得到明确结论，需要你判断。", "The following targets have been sent but no conclusion received. Please review.");
         EN.put("以下目标来自网络学习，确认后加入自动签到。点「加入」确认，点「忽略」丢弃。", "The following targets are from network learning. Tap 'Add' to confirm, 'Ignore' to discard.");
         EN.put("未自动学习：{0}", "Not learned automatically: {0}");
+        EN.put("你手动发过的签到口令", "a check-in command you sent by hand");
+        EN.put("群里发过的签到口令", "a check-in command sent in this group");
         EN.put("(这里还没有内容)\n遇到拿不准的按钮，我会先放到这里问你。",
                "(nothing here yet)\nIf a button is unclear, I'll drop it here and ask you first.");
         EN.put("暂时没有等你确认的", "Nothing waiting for your confirmation");

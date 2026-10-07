@@ -4501,11 +4501,32 @@ public final class TGAutoSignCore {
         return true;
     }
 
+    /** 文本是否命中任一签到关键词（不含其它任何闸）。用于诊断日志降噪。 */
+    private boolean keywordHit(String t) {
+        try {
+            if (t == null || t.length() == 0) return false;
+            String low = t.toLowerCase(java.util.Locale.US);
+            if (LEARN_KEYWORDS == null || LEARN_KEYWORDS.trim().length() == 0) return false;
+            for (String kw : LEARN_KEYWORDS.split(",")) {
+                String k = kw.trim().toLowerCase(java.util.Locale.US);
+                if (k.length() > 0 && low.contains(k)) return true;
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
     private void learnFromNetwork(long did, String text, int account) {
+        // ── 2026-10-07 可诊断化 ──
+        // 用户反馈「bot 明明回复了 / 我明明发了签到，就是识别不到」，而这一路
+        // 有七八个 return 全是 logd（默认不落盘）→ 事后完全无从下手。
+        // 现在：只要文本沾点签到味（含任意关键词），无论最终学没学都落盘一行并去重。
+        // 闲聊不触发，不刷屏。
         if (!AUTO_LEARN_NET || !LEARN_ENABLED) return;
         if (text == null) return;
         if (did == 0) return;   // 群 ID 是负数，合法
         String t = String.valueOf(text).trim();
+        final boolean _kb = keywordHit(t);
+        if (_kb) logOnce("cand:" + did + ":" + t, LV_DEBUG, "[候选] did=" + did + " text=" + t);
         if (t.length() == 0 || t.length() > 20) return;
         // ── 2026-10-07 群聊加严 ──
         // 群里天天有人聊「签到」，而关键词是子串匹配 —— 一句
@@ -4516,7 +4537,7 @@ public final class TGAutoSignCore {
         //     「谁找找我修复群聊签到」不算
         // 私聊不放这道闸：在 bot 会话里说「签到」本来就是正常口令。
         if (did < 0L && !SignLogic.looksLikeSignCommand(t)) {
-            logd("[候选] 群 " + did + " msg=" + t + "（不像口令，不在群里自动学习）");
+            if (_kb) jlog("[候选] 群 " + did + " msg=" + t + "（不像口令，不在群里自动学习）");
             return;
         }
         if (targetContains(did, account)) return;
@@ -4528,9 +4549,9 @@ public final class TGAutoSignCore {
                 if (u0 != null) isBotPre = Boolean.TRUE.equals(getFieldVal(u0, "bot"));
             }
         } catch (Throwable _e5) { noteSwallowed("learnFromNetwork", _e5); }
-        if (isBotPre && isBotBlocked(did)) { logd("[候选] uid=" + did + " msg=" + t + "（命中「排除的 bot」，不自动添加）"); return; }
+        if (isBotPre && isBotBlocked(did)) { if (_kb) jlog("[候选] uid=" + did + " msg=" + t + "（命中「排除的 bot」，不自动添加）"); return; }
         String exHit = excludeHit(t);
-        if (exHit != null) { logd("[候选] uid=" + did + " msg=" + t + "（命中排除规则「" + exHit + "」，不自动添加）"); return; }
+        if (exHit != null) { if (_kb) jlog("[候选] uid=" + did + " msg=" + t + "（命中排除规则「" + exHit + "」，不自动添加）"); return; }
         if (LEARN_KEYWORDS != null && LEARN_KEYWORDS.trim().length() > 0) {
             String[] kws = LEARN_KEYWORDS.split(",");
             boolean matched = false;
@@ -4541,7 +4562,7 @@ public final class TGAutoSignCore {
                 }
             }
             if (!matched) {
-                logd("[候选] uid=" + did + " msg=" + t + "（不含签到关键词，不自动添加）");
+                if (_kb) jlog("[候选] uid=" + did + " msg=" + t + "（不含签到关键词，不自动添加）");
                 return;
             }
         }
@@ -4564,14 +4585,18 @@ public final class TGAutoSignCore {
         // 误学风险由「关键词匹配 + 需确认」两道闸兜住。
         boolean isGroupTarget = did < 0L;
         if (!isBot && !isGroupTarget) {
-            logd("[候选] uid=" + did + " msg=" + t + "（非bot，不自动添加）");
+            if (_kb) jlog("[候选] uid=" + did + " msg=" + t + "（非bot，不自动添加）");
             return;
         }
         if (AUTO_LEARN_NET_CONFIRM) {
             // 需确认：进入待确认池，不直接添加（防验证码类 bot 误加）
-            if (pendingConfirmAdd(account, did, t)) {
+            // reason 写明来路，用户在待添加页一眼看出它是怎么来的。
+            if (pendingConfirmAdd(account, did, t,
+                    did < 0L ? Lang.tr("群里发过的签到口令") : Lang.tr("你手动发过的签到口令"))) {
                 jlog("【网络层学习·待确认】" + did + " -> " + t + "（已入待确认池）");
                 toast("已入待添加：确认后才加入目标");
+            } else if (_kb) {
+                jlog("[候选] uid=" + did + " msg=" + t + "（已在待添加池中，未重复加入）");
             }
             return;
         }
