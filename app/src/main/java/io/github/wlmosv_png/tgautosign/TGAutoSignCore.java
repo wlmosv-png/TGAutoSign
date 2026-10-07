@@ -10292,6 +10292,7 @@ public final class TGAutoSignCore {
             final int pendingAcc = currentAccount();
             final java.util.List<Long> dids = pendingConfirmDids(pendingAcc);
             final java.util.List<String> texts = pendingConfirmTexts(pendingAcc);
+            final java.util.List<String> reasons = pendingConfirmReasons(pendingAcc);
             if (dids.isEmpty()) {
                 TextView e = new TextView(act); e.setTextSize(Theme.TS_BODY); e.setTextColor(Theme.termMuted(act)); e.setTypeface(Theme.text());
                 e.setText(Lang.tr("(待添加列表为空)\n网络学习命中且「需确认」开启时，这里会出现候选目标。"));
@@ -10306,6 +10307,7 @@ public final class TGAutoSignCore {
                 for (int i = 0; i < dids.size(); i++) {
                     final long did = dids.get(i);
                     final String text = i < texts.size() ? texts.get(i) : "";
+                    final String reason = i < reasons.size() ? reasons.get(i) : "";
 
                     /* card layout matching the rest of the UI */
                     LinearLayout card = new LinearLayout(act);
@@ -10334,6 +10336,19 @@ public final class TGAutoSignCore {
                         tx.setText(text.trim().replace("\n", " "));
                         tx.setPadding(0, dp(2), 0, 0);
                         card.addView(tx);
+                    }
+
+                    /* row 2.5: 未自动学习的原因（2026-10-07）
+                       被导航判定 / 排除规则拦下的按钮也进这里，
+                       必须让用户看见"为什么它没被直接学走"，否则判错时无从察觉。 */
+                    if (reason != null && reason.trim().length() > 0) {
+                        TextView rsn = new TextView(act);
+                        rsn.setTextSize(Theme.TS_CAPTION);
+                        rsn.setTextColor(Theme.termAmber(act));
+                        rsn.setTypeface(Theme.text());
+                        rsn.setPadding(0, dp(3), 0, 0);
+                        rsn.setText(Lang.tf("未自动学习：{0}", reason.trim()));
+                        card.addView(rsn);
                     }
 
                     /* row 3: id (small, dim) */
@@ -15706,6 +15721,39 @@ public final class TGAutoSignCore {
     }
 
     /**
+     * 被拦下的按钮「能不能捞回」。
+     *
+     * 2026-10-07：旧行为是被拦即彻底丢弃 —— 导航判定或排除规则命中，
+     * 按钮就静默消失，用户既看不见也捞不回（只能手动添加），判错时毫无补救。
+     *
+     * 现在按原因分流：
+     *   · 硬拒（丢弃）—— 「排除的 bot」（用户明确拉黑整只 bot）、
+     *      「按钮学习已关闭」（开关层面，不该产生数据）、「模块自身请求」
+     *   · 软拒（入待添加池）—— 导航判定、排除规则
+     *     这两类都可能判错，落进待添加后用户能看见原因、能一键加入或忽略。
+     */
+    private boolean learnDenyRecoverable(long did, String reason) {
+        try {
+            if (reason == null) return true;
+            if (did != 0 && LEARN_BLOCKED_DIDS.contains(did)) return false;
+            if (reason.indexOf("排除的 bot") >= 0) return false;
+            if (reason.indexOf("学习已关闭") >= 0) return false;
+            if (reason.indexOf("模块自身") >= 0) return false;
+            return true;
+        } catch (Throwable t) { return false; }
+    }
+
+    /** 被拦下的按钮：能捞回就进待添加池。返回 true 表示已入池。 */
+    private boolean pendingAddDenied(long did, String text, String reason) {
+        try {
+            if (did == 0) return false;
+            if (!learnDenyRecoverable(did, reason)) return false;
+            if (text == null || text.trim().length() == 0) return false;
+            return pendingConfirmAdd(currentAccount(), did, text.trim(), reason);
+        } catch (Throwable t) { return false; }
+    }
+
+    /**
      * 取该 bot 最近一条"带键盘的消息"的正文，作为排除规则的匹配上下文。
      * 验证码类签到 bot 的提示语（如"请在 30 秒内点击图中事物的按钮"）就挂在这条消息上，
      * 用户写一条规则即可挡住整类 bot，不必去穷举它会出什么图/什么按钮。
@@ -15932,18 +15980,65 @@ public final class TGAutoSignCore {
         return out;
     }
 
-    private boolean pendingConfirmAdd(long did, String text) { return pendingConfirmAdd(currentAccount(), did, text); }
-    private boolean pendingConfirmAdd(int account, long did, String text) {
+    private boolean pendingConfirmAdd(long did, String text) { return pendingConfirmAdd(currentAccount(), did, text, ""); }
+    private boolean pendingConfirmAdd(int account, long did, String text) { return pendingConfirmAdd(account, did, text, ""); }
+
+    /**
+     * 入待添加池。格式（2026-10-07 起）：did|text|reason
+     *
+     * reason 说明「为什么它没被自动学走」。旧行为里被导航判定 / 排除规则
+     * 拦下的按钮是彻底静默丢弃的，用户看不见也捞不回；现在一样入池，
+     * 只是带上原因，可加入、可忽略。旧数据只有两段，reason 读作空串，兼容。
+     */
+    private boolean pendingConfirmAdd(int account, long did, String text, String reason) {
         try {
             java.util.List<Long> dids = pendingConfirmDids(account);
-            for (Long d : dids) if (d != null && d.longValue() == did) return false;
+            java.util.List<String> texts = pendingConfirmTexts(account);
+            java.util.List<String> reasons = pendingConfirmReasons(account);
+            String tt = text == null ? "" : text.replace("\n", " ").replace('|', ' ');
+            String rr = reason == null ? "" : reason.replace("\n", " ").replace('|', ' ');
+            int idx = -1;
+            for (int i = 0; i < dids.size(); i++) {
+                if (dids.get(i) != null && dids.get(i).longValue() == did) { idx = i; break; }
+            }
+            if (idx >= 0) {
+                String oldT = idx < texts.size() ? texts.get(idx) : "";
+                if (tt.length() == 0 || tt.equals(oldT)) return false;
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < dids.size(); i++) {
+                    if (i > 0) sb.append('\n');
+                    String t2 = i < texts.size() ? texts.get(i) : "";
+                    String r2 = i < reasons.size() ? reasons.get(i) : "";
+                    if (i == idx) { t2 = oldT + " / " + tt; r2 = rr; }
+                    sb.append(dids.get(i)).append('|').append(t2).append('|').append(r2);
+                }
+                prefs.edit().putString(kPendingConfirm(account), sb.toString()).apply();
+                return true;
+            }
             StringBuilder sb = new StringBuilder();
             String raw = prefs.getString(kPendingConfirm(account), "");
             if (raw != null && raw.trim().length() > 0) sb.append(raw).append('\n');
-            sb.append(did).append('|').append(text == null ? "" : text.replace("\n", " ").replace('|', ' '));
+            sb.append(did).append('|').append(tt).append('|').append(rr);
             prefs.edit().putString(kPendingConfirm(account), sb.toString()).apply();
             return true;
         } catch (Throwable ignored) { return false; }
+    }
+
+    /** 待添加条目的「未自动学习原因」；旧数据或空返回 ""。 */
+    private java.util.List<String> pendingConfirmReasons() { return pendingConfirmReasons(currentAccount()); }
+    private java.util.List<String> pendingConfirmReasons(int account) {
+        java.util.List<String> out = new java.util.ArrayList<String>();
+        try {
+            String raw = prefs.getString(kPendingConfirm(account), "");
+            if (raw == null || raw.trim().length() == 0) return out;
+            for (String line : raw.split("\n")) {
+                String t = line.trim(); if (t.length() == 0) continue;
+                int p1 = t.indexOf('|'); if (p1 < 0) { out.add(""); continue; }
+                int p2 = t.indexOf('|', p1 + 1);
+                out.add(p2 < 0 ? "" : t.substring(p2 + 1));
+            }
+        } catch (Throwable ignored) {}
+        return out;
     }
 
     private boolean pendingConfirmRemove(long did) { return pendingConfirmRemove(currentAccount(), did); }
@@ -15951,11 +16046,13 @@ public final class TGAutoSignCore {
         try {
             java.util.List<Long> dids = pendingConfirmDids(account);
             java.util.List<String> texts = pendingConfirmTexts(account);
+            java.util.List<String> reasons = pendingConfirmReasons(account);
             StringBuilder sb = new StringBuilder(); boolean removed = false;
             for (int i = 0; i < dids.size(); i++) {
                 if (dids.get(i) != null && dids.get(i).longValue() == did) { removed = true; continue; }
                 if (sb.length() > 0) sb.append('\n');
-                sb.append(dids.get(i)).append('|').append(i < texts.size() ? texts.get(i) : "");
+                sb.append(dids.get(i)).append('|').append(i < texts.size() ? texts.get(i) : "")
+                  .append('|').append(i < reasons.size() ? reasons.get(i) : "");
             }
             prefs.edit().putString(kPendingConfirm(account), sb.toString()).apply();
             return removed;
@@ -16045,7 +16142,13 @@ public final class TGAutoSignCore {
             String t = String.valueOf(text);
             byte[] _bd1 = isCallbackButton(button) ? buttonData(button) : null;
             String deny = !AUTO_LEARN ? "按钮学习已关闭" : learnDenyReason(did, t, _bd1 == null ? null : new String(_bd1, "UTF-8"), panelContext(did));
-            if (deny != null) { logd("[按钮·结构] uid=" + did + " text=" + t + "（" + deny + "，不自动学习）"); return; }
+            if (deny != null) {
+                boolean pooled = pendingAddDenied(did, t, deny);
+                logd("[按钮·结构] uid=" + did + " text=" + t + "（" + deny + "，不自动学习"
+                     + (pooled ? "；已放入待添加" : "") + "）");
+                if (pooled) jlog("【按钮·结构·待确认】uid=" + did + " -> " + t + "（" + deny + "）");
+                return;
+            }
             if (isCallbackButton(button)) {
                 byte[] data = buttonData(button);
                 if (data != null && data.length > 0) {
@@ -16542,7 +16645,13 @@ public final class TGAutoSignCore {
                 long u = ((Number) did).longValue();
                 byte[] _bd2 = isCallbackButton(proto) ? buttonData(proto) : null;
                 String deny = !AUTO_LEARN ? "按钮学习已关闭" : learnDenyReason(u, t, _bd2 == null ? null : new String(_bd2, "UTF-8"), panelContext(u));
-                if (deny != null) { logd("[按钮] uid=" + did + " text=" + t + "（" + deny + "，不自动学习；可用 捕获/调试台 手动绑定）"); return; }
+                if (deny != null) {
+                    boolean pooled = pendingAddDenied(u, t, deny);
+                    logd("[按钮] uid=" + did + " text=" + t + "（" + deny + "，不自动学习"
+                         + (pooled ? "；已放入待添加" : "；可用 捕获/调试台 手动绑定") + "）");
+                    if (pooled) jlog("【按钮·待确认】uid=" + u + " -> " + t + "（" + deny + "）");
+                    return;
+                }
                 if (isCallbackButton(proto)) {
                     byte[] data = buttonData(proto);
                     if (data != null && data.length > 0) {
@@ -16579,7 +16688,13 @@ public final class TGAutoSignCore {
                 long u = ((Number) did).longValue();
                 byte[] _bd2 = isCallbackButton(proto) ? buttonData(proto) : null;
                 String deny = !AUTO_LEARN ? "按钮学习已关闭" : learnDenyReason(u, t, _bd2 == null ? null : new String(_bd2, "UTF-8"), panelContext(u));
-                if (deny != null) { logd("[按钮] uid=" + did + " text=" + t + "（" + deny + "，不自动学习；可用 捕获/调试台 手动绑定）"); return; }
+                if (deny != null) {
+                    boolean pooled = pendingAddDenied(u, t, deny);
+                    logd("[按钮] uid=" + did + " text=" + t + "（" + deny + "，不自动学习"
+                         + (pooled ? "；已放入待添加" : "；可用 捕获/调试台 手动绑定") + "）");
+                    if (pooled) jlog("【按钮·待确认】uid=" + u + " -> " + t + "（" + deny + "）");
+                    return;
+                }
                 if (isCallbackButton(proto)) {
                     byte[] data = buttonData(proto);
                     if (data != null && data.length > 0) {
@@ -16735,7 +16850,10 @@ public final class TGAutoSignCore {
                                         loge("[网络层学习·回调] 失败: " + lt);
                                     }
                                 } else {
-                                    logd("[回调] acc=" + accountLabel(hookAccount) + " uid=" + u + " data=" + Base64.getEncoder().encodeToString(d) + "（不学习：" + deny + "）");
+                                    boolean pooled = pendingAddDenied(u, disp, deny);
+                                    logd("[回调] acc=" + accountLabel(hookAccount) + " uid=" + u + " data=" + Base64.getEncoder().encodeToString(d) + "（不学习：" + deny + "）"
+                                         + (pooled ? "；已放入待添加" : ""));
+                                    if (pooled) jlog("【网络层·待确认】uid=" + u + " -> [" + disp + "]（" + deny + "）");
                                 }
                             } else {
                                 logd("[回调] uid=" + u + " 跳过学习: alreadyBound=" + (findCbEntry(u, d) != null) + " dataLen=" + d.length);

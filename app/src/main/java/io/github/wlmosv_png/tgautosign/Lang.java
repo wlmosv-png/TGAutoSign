@@ -794,6 +794,7 @@ public final class Lang {
         EN.put("结果未知", "Result unknown");
         EN.put("以下目标发出后未得到明确结论，需要你判断。", "The following targets have been sent but no conclusion received. Please review.");
         EN.put("以下目标来自网络学习，确认后加入自动签到。点「加入」确认，点「忽略」丢弃。", "The following targets are from network learning. Tap 'Add' to confirm, 'Ignore' to discard.");
+        EN.put("未自动学习：{0}", "Not learned automatically: {0}");
         EN.put("已发送", "Sent");
         EN.put("已发送 \u2713", "Sent \u2713");
 
