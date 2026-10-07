@@ -4507,6 +4507,18 @@ public final class TGAutoSignCore {
         if (did == 0) return;   // 群 ID 是负数，合法
         String t = String.valueOf(text).trim();
         if (t.length() == 0 || t.length() > 20) return;
+        // ── 2026-10-07 群聊加严 ──
+        // 群里天天有人聊「签到」，而关键词是子串匹配 —— 一句
+        // 「谁找找 我修复群聊签到」就会被当成签到口令收进待添加（用户实测）。
+        // 群聊（did<0）额外要求文本**像一条口令**：
+        //   · 斜杠开头的命令（/checkin、/qd）直接算
+        //   · 否则去掉标点/emoji 后必须很短（≤8 字），「每日签到」算、
+        //     「谁找找我修复群聊签到」不算
+        // 私聊不放这道闸：在 bot 会话里说「签到」本来就是正常口令。
+        if (did < 0L && !SignLogic.looksLikeSignCommand(t)) {
+            logd("[候选] 群 " + did + " msg=" + t + "（不像口令，不在群里自动学习）");
+            return;
+        }
         if (targetContains(did, account)) return;
         boolean isBotPre = false;
         try {

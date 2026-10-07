@@ -28,6 +28,7 @@ public final class GroupScopeTest {
         scopedWords();
         unkPoolSource();
         normalizerSource();
+        groupSignCommand();
 
         System.out.println("----------------------------------------");
         System.out.println("通过 " + passed + " / 失败 " + failed.size());
@@ -201,6 +202,40 @@ public final class GroupScopeTest {
         List<ReplyNormalizer.Pattern> legacy = ReplyNormalizer.cluster(raws);
         eq("旧接口仍可用", Integer.valueOf(legacy.size()), Integer.valueOf(1));
         eq("旧接口 dids 为空（无法知道来源）", Integer.valueOf(legacy.get(0).dids.size()), Integer.valueOf(0));
+    }
+
+    /**
+     * 群聊口令判定（2026-10-07）。
+     *
+     * 起因：群聊网络学习的关键词是子串匹配，用户在群里发
+     * 「谁找找 我修复群聊签到」被当成签到口令收进了待添加。
+     * 群聊额外要求「像一条口令」，这里把边界钉住。
+     */
+    private static void groupSignCommand() {
+        // ① 斜杠命令：算
+        eq("斜杠 /checkin", Boolean.TRUE, Boolean.valueOf(SignLogic.looksLikeSignCommand("/checkin")));
+        eq("斜杠 /qd", Boolean.TRUE, Boolean.valueOf(SignLogic.looksLikeSignCommand("/qd")));
+        eq("斜杠 /sign", Boolean.TRUE, Boolean.valueOf(SignLogic.looksLikeSignCommand("/sign")));
+        eq("前后空格也认", Boolean.TRUE, Boolean.valueOf(SignLogic.looksLikeSignCommand("  /checkin  ")));
+
+        // ② 短口令：算
+        eq("签到", Boolean.TRUE, Boolean.valueOf(SignLogic.looksLikeSignCommand("签到")));
+        eq("每日签到", Boolean.TRUE, Boolean.valueOf(SignLogic.looksLikeSignCommand("每日签到")));
+        eq("打卡", Boolean.TRUE, Boolean.valueOf(SignLogic.looksLikeSignCommand("打卡")));
+        eq("带 emoji 的短口令", Boolean.TRUE, Boolean.valueOf(SignLogic.looksLikeSignCommand("🌵签到🌵")));
+
+        // ③ 闲聊句子：不算（这是本次要修的场景）
+        eq("谁找找 我修复群聊签到", Boolean.FALSE,
+           Boolean.valueOf(SignLogic.looksLikeSignCommand("谁找找 我修复群聊签到")));
+        eq("今天有人签到成功了吗", Boolean.FALSE,
+           Boolean.valueOf(SignLogic.looksLikeSignCommand("今天有人签到成功了吗")));
+        eq("我刚签到了你们呢啊哈哈", Boolean.FALSE,
+           Boolean.valueOf(SignLogic.looksLikeSignCommand("我刚签到了你们呢啊哈哈")));
+
+        // ④ 边角
+        eq("空串", Boolean.FALSE, Boolean.valueOf(SignLogic.looksLikeSignCommand("")));
+        eq("null", Boolean.FALSE, Boolean.valueOf(SignLogic.looksLikeSignCommand(null)));
+        eq("纯 emoji", Boolean.FALSE, Boolean.valueOf(SignLogic.looksLikeSignCommand("🌵🌵🌵")));
     }
 
     private static UnkPool.Item mkItem(String text, long chat, long from, String tid) {

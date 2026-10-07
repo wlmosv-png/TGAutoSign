@@ -438,6 +438,42 @@ public final class SignLogic {
      *
      * 纯函数、无副作用，可直接单测。
      */
+    /**
+     * 群聊里这段话「像不像一条签到口令」。
+     *
+     * 用途：群聊的自动学习比私聊危险得多 —— 群里天天有人聊「签到」，
+     * 而关键词是子串匹配，一句随口的话就能被收进待添加（用户实测：
+     * 「谁找找 我修复群聊签到」被抓）。所以群聊额外要求文本像一条**口令**，
+     * 而不是像一句话。
+     *
+     * 判据（按顺序）：
+     *   ① 以 / 开头 → 命令式，算（/checkin、/qd、/sign）
+     *   ② 去掉标点/emoji/空白后 ≤8 字 → 算（「签到」「每日签到」「打卡」）
+     *   ③ 其余 → 不算（长句子、闲聊）
+     *
+     * 纯函数、无副作用，可直接单测。
+     */
+    public static boolean looksLikeSignCommand(String text) {
+        try {
+            if (text == null) return false;
+            String s = text.trim();
+            if (s.length() == 0) return false;
+            if (s.startsWith("/")) return true;
+            String bare = stripDecor(s);
+            if (bare.length() == 0) return false;
+            if (bare.length() > COMMAND_MAX_BARE) return false;
+            // 太长的原文同样可疑（夹在一句话里）
+            if (s.length() > COMMAND_MAX_RAW) return false;
+            return true;
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /** 口令判定：去修饰后的最大字数。 */
+    private static final int COMMAND_MAX_BARE = 8;
+    /** 口令判定：原文最大字数（含 / 与 emoji 之类）。 */
+    private static final int COMMAND_MAX_RAW = 16;
+
     public static boolean looksLikeSignButton(String text, String data) {
         try {
             String t = text == null ? "" : stripDecor(text);
