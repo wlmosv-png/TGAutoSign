@@ -16062,6 +16062,26 @@ public final class TGAutoSignCore {
         } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
     }
 
+    /**
+     * 用户在会话里**手动**发出了某目标的指令（2026-10-08）。
+     *
+     * 为什么需要：群聊里「只认自己触发的」必须靠 sent_at_ 判定 ——
+     * 没有这条记录，bot 的回复就无法区分是回应我还是回应群里别人。
+     * 模块自己发的时候由 sendSign 写 sent_at_；用户手动发的时候此前没人写。
+     * 这里补上，语义就是「我确实发出过这条指令」。
+     *
+     * 注意：**不写 kLast / 不标已签** —— 只是记录"发出过"，
+     * 结论仍由后续的回复判定决定（发出去 ≠ 成功）。
+     */
+    private void markManualSendPending(int account, String entryId) {
+        try {
+            if (entryId == null || entryId.length() == 0) return;
+            String prefix = accountPrefix(account);
+            prefs.edit().putLong(prefix + "sent_at_" + entryId, System.currentTimeMillis()).commit();
+            logd("[手动] 已记录一次手动发送（供回复关联用） " + entryId);
+        } catch (Throwable t) { noteSwallowed("markManualSendPending", t); }
+    }
+
     /** 该 bot 是否整体被排除 */
     private boolean isBotBlocked(long did) {
         try { return did != 0 && LEARN_BLOCKED_DIDS.contains(did); } catch (Throwable t) { return false; }
@@ -16759,26 +16779,24 @@ public final class TGAutoSignCore {
                 candCount++;
                 only = m;
             }
-            // 第二轮：群聊 + 该会话唯一目标 + 发送者像 bot → 认它
-            if (candCount == 0 && group && peerTargets == 1 && rm.senderLooksLikeBot) {
-                for (Map<String, Object> m : list) {
-                    if (entryDid(m) != peerDid) continue;
-                    if (fromDid != 0L) {
-                        long boundBot = 0L;
-                        try {
-                            Object bb = m.get("botDid");
-                            if (bb instanceof Number) boundBot = ((Number) bb).longValue();
-                        } catch (Throwable ignored) {}
-                        if (boundBot != 0L && boundBot != fromDid) continue;
-                    }
-                    only = m;
-                    candCount = 1;
-                    break;
-                }
-                if (candCount == 1) {
-                    logd("[回复关联] chat=" + peerDid + " fromBot=" + fromDid
-                         + " 群内唯一目标，无发送记录也关联（手动签到场景）");
-                }
+            // ── 2026-10-08 撤销「群内唯一目标」兜底 ──
+            //
+            // 上一版为了让「用户手动在群里发签到」能被认出来，放宽了一条：
+            // 会话里只有 1 个目标 + 发送者像 bot 时，即使没有发送记录也关联。
+            //
+            // 实测证明这条**太宽**：群里**别人**签到、bot 一回复，也会被算成
+            // 自己的签到成功。用户日志里同一个群反复出现
+            //   【回复判定】-1001943736638 命中「签到成功」→ 计入已签
+            // 而他自己那天并没有发那么多次。
+            //
+            // 正确做法是「补记录」而不是「放宽判定」：
+            // 用户手动发签到的那一刻，sendMessage hook 能看到那条消息，
+            // 当时就给对应目标写上 sent_at_（见 markManualSendPending），
+            // 之后走**原本严格的 PEER_TTL**（要求 sent_at_ 存在且未过期）。
+            // 群里别人发的消息不经过我们的 sendMessage hook → 没有记录 →
+            // 候选恒为 0 → 不关联。这才是「只认自己触发的」。
+            if (false && candCount == 0 && group && peerTargets == 1 && rm.senderLooksLikeBot) {
+                // 保留结构占位，便于将来需要时快速回滚；当前恒为 false。
             }
             // 真机修复：发送者不像 bot 时也允许「唯一候选」路径 ——
             //   否则取不到 bot 标志就会把正常回复全部丢掉（原行为）。
@@ -17179,6 +17197,13 @@ public final class TGAutoSignCore {
                                     markSignedFromRequest(hookAccount, u, t);
                                 } else {
                                     logd("[活动] 非模块发起的文本，不乐观标记 " + u);
+                                }
+                                if (tx != null) {
+                                    // ── 2026-10-08：用户**手动**发出的指令，补一条发送记录 ──
+                                    // 这样 bot 的回复才能走严格 PEER_TTL 关联上；
+                                    // 模块没有因此放宽任何判定条件，只是把「我确实
+                                    // 发过这条」这个事实记下来。
+                                    markManualSendPending(hookAccount, entryId(tx));
                                 }
                             } else {
                                 learnFromNetwork(u, t, hookAccount);
@@ -17632,8 +17657,14 @@ public final class TGAutoSignCore {
                             clearSendAttempts(prefix, id);   // 有结论了，当日发送计数归零
                             marked++;
                         }
-                        jlog("【回复判定】" + did + " 命中「" + hitWord + "」→ 计入已签（" + marked + " 条）"
-                             + (extraHit(hitWord, extraOk) ? "（用户自定义词）" : ""));
+                        // ── 2026-10-08 日志降噪（用户反馈「没必要出现在日志里」）──
+                        // 同一个目标一天内被判定成功可能发生很多次（群聊里 bot 反复
+                        // 回复），每次都记一行会把日志刷满。
+                        // 现在同一目标**当天只记首次** —— 「今天这个目标签上了」这件事
+                        // 记一次就够，后续重复只是噪声。
+                        logOnce("signed:" + todayStr() + ":" + did, LV_INFO,
+                                "【回复判定】" + did + " 命中「" + hitWord + "」→ 计入已签（" + marked + " 条）"
+                                + (extraHit(hitWord, extraOk) ? "（用户自定义词）" : ""));
                         noteResult(ctrlAcc >= 0 ? ctrlAcc : currentAccount(), true);
                         return;
                     }
