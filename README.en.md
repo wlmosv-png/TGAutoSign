@@ -2,9 +2,9 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/banner-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/banner-light.svg">
-    <img src="https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/banner-light.svg" alt="TGAutoSign" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="https://cdn.jsdelivr.net/gh/wlmosv-png/TGAutoSign@master/docs/banner-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://cdn.jsdelivr.net/gh/wlmosv-png/TGAutoSign@master/docs/banner-light.svg">
+    <img src="https://cdn.jsdelivr.net/gh/wlmosv-png/TGAutoSign@master/docs/banner-light.svg" alt="TGAutoSign" width="100%">
   </picture>
 </p>
 
@@ -73,9 +73,9 @@ The fingerprint corresponds to the release key in use since September 2026; any 
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/hero-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/hero-light.png">
-    <img src="https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/hero-light.png" alt="TGAutoSign UI overview" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="https://cdn.jsdelivr.net/gh/wlmosv-png/TGAutoSign@master/docs/hero-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://cdn.jsdelivr.net/gh/wlmosv-png/TGAutoSign@master/docs/hero-light.png">
+    <img src="https://cdn.jsdelivr.net/gh/wlmosv-png/TGAutoSign@master/docs/hero-light.png" alt="TGAutoSign UI overview" width="100%">
   </picture>
 </p>
 
@@ -87,15 +87,15 @@ Each page shown in dark / light
 
 | Main panel · Dark | Main panel · Light |
 | --- | --- |
-| ![Main panel·Dark](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/shot-main-dark.png) | ![Main panel·Light](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/shot-main-light.png) |
+| ![Main panel·Dark](https://cdn.jsdelivr.net/gh/wlmosv-png/TGAutoSign@master/docs/screenshots/shot-main-dark.png) | ![Main panel·Light](https://cdn.jsdelivr.net/gh/wlmosv-png/TGAutoSign@master/docs/screenshots/shot-main-light.png) |
 
 | Targets · Dark | Targets · Light |
 | --- | --- |
-| ![Targets·Dark](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/shot-targets-dark.png) | ![Targets·Light](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/shot-targets-light.png) |
+| ![Targets·Dark](https://cdn.jsdelivr.net/gh/wlmosv-png/TGAutoSign@master/docs/screenshots/shot-targets-dark.png) | ![Targets·Light](https://cdn.jsdelivr.net/gh/wlmosv-png/TGAutoSign@master/docs/screenshots/shot-targets-light.png) |
 
 | Settings · Dark | Settings · Light |
 | --- | --- |
-| ![Settings·Dark](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/shot-settings-dark.png) | ![Settings·Light](https://raw.githubusercontent.com/wlmosv-png/TGAutoSign/master/docs/screenshots/shot-settings-light.png) |
+| ![Settings·Dark](https://cdn.jsdelivr.net/gh/wlmosv-png/TGAutoSign@master/docs/screenshots/shot-settings-dark.png) | ![Settings·Light](https://cdn.jsdelivr.net/gh/wlmosv-png/TGAutoSign@master/docs/screenshots/shot-settings-light.png) |
 
 ## What it does
 
