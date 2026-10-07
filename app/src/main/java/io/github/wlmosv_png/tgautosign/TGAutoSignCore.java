@@ -8450,8 +8450,53 @@ public final class TGAutoSignCore {
      * 页面构建在独立的 LearnPage 类里；这里只提供 Core 侧的三个能力回调：
      * 当前账号 prefs、写入判定词（含自动开开关与去重）、忽略表读写。
      */
+    /**
+     * 清掉池里「其实是自己发出去的指令」的条目（2026-10-07）。
+     *
+     * 用户截图：群里发了一条「签到」，它出现在「未识别回复」页里等人判断 ——
+     * 那是我发出的命令，不是机器人回复。根因是 out 字段那道闸此前缺失
+     * （已在 onUpdateProcessed 补上），但**已经在池里的**得清掉，
+     * 否则用户还得手动点一次「先不管」。
+     *
+     * 判据保守：文本与该账号任一目标的指令**完全相同**才删。机器人回复
+     * 恰好等于指令原文的概率极低，误删风险可忽略。
+     */
+    private void purgeSelfCommandFromUnkPool() {
+        try {
+            String prefix = accountPrefix();
+            String poolKey = prefix + "unk_pool";
+            java.util.List<io.github.wlmosv_png.tgautosign.judge.UnkPool.Item> items =
+                    io.github.wlmosv_png.tgautosign.judge.UnkPool.list(prefs, poolKey);
+            if (items == null || items.isEmpty()) return;
+            java.util.Set<String> cmds = new java.util.HashSet<String>();
+            java.util.List<Map<String, Object>> tl = new ArrayList<Map<String, Object>>();
+            loadTargetsInto(prefix, tl);
+            for (Map<String, Object> m : tl) {
+                try {
+                    if (!KIND_TEXT.equals(entryKind(m))) continue;
+                    String tx = entryText(m);
+                    if (tx != null && tx.trim().length() > 0) cmds.add(tx.trim());
+                } catch (Throwable ignored) {}
+            }
+            if (cmds.isEmpty()) return;
+            int removed = 0;
+            for (io.github.wlmosv_png.tgautosign.judge.UnkPool.Item it : items) {
+                String raw = it.o != null ? it.o : it.r;
+                if (raw == null) continue;
+                if (cmds.contains(raw.trim())) {
+                    io.github.wlmosv_png.tgautosign.judge.UnkPool.remove(prefs, poolKey, it.r);
+                    removed++;
+                }
+            }
+            if (removed > 0) {
+                logd("[学习] 清理了 " + removed + " 条「其实是自己发的指令」的池内条目");
+            }
+        } catch (Throwable t) { noteSwallowed("purgeSelfCommandFromUnkPool", t); }
+    }
+
     private void showLearnPage(Activity act) {
         if (act == null) return;
+        purgeSelfCommandFromUnkPool();
         // 构建标记：便于用户/排障时确认装的是哪一版（学习页历经三轮性能修复）
         logd("[学习] 打开学习页 · build=async-refresh-v4");
         final long _tOpen0 = System.currentTimeMillis();
@@ -17293,7 +17338,20 @@ public final class TGAutoSignCore {
             // 所以"排除自己发的"必须在两种分支上都做。
             boolean isGroupPeer = peerUid < 0;
             long selfId = accountSelfId(ctrlAcc >= 0 ? ctrlAcc : currentAccount());
-            if (selfId > 0 && fromUid == selfId) continue;   // 自己发的（含收藏夹汇总、群指令）一律不处理
+            // ── 2026-10-07 修「自己发的『签到』被当成未识别回复」──
+            // 用户截图：在群里发了一条「签到」，它出现在「未识别回复」页里等人判断。
+            // 根因：这道「跳过自己发的」闸依赖 accountSelfId() 能取到自己的 id，
+            // 取不到（返回 0）时 整个失效 —— 模块自己发出去的签到文本
+            // 被当成机器人的回复，判不出 → 沉淀进 unk_pool。
+            // TG 消息自带 `out` 字段（true = 这条是我发的），不依赖任何反射取值，
+            // 用它作主判据，accountSelfId 只作补充。这是更可靠的一道闸。
+            boolean msgOut = false;
+            try {
+                Object _o = getFieldVal(msg, "out");
+                msgOut = Boolean.TRUE.equals(_o);
+            } catch (Throwable ignored) {}
+            if (msgOut) continue;                                   // 自己发的，一律不处理
+            if (selfId > 0 && fromUid == selfId) continue;          // 同上（兜底）
             if (isGroupPeer) {
                 // continue 而非 return：TG 一次投递可带多条 update（Updates 容器），
                 // return 会把同批里排在后面的**目标 bot 的带按钮面板**一起丢掉 ——
