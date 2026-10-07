@@ -285,8 +285,8 @@ public final class LearnPage {
         try {
             if (pendingCountLabel != null) {
                 pendingCountLabel.setText(n > 0
-                        ? ("还有 " + n + " 条等你判断")
-                        : "都处理完了");
+                        ? Lang.tf("还有 {0} 条等你判断", n)
+                        : Lang.tr("都处理完了"));
             }
         } catch (Throwable ignored) {}
     }
@@ -337,7 +337,7 @@ public final class LearnPage {
         hTitle.setTextSize(Theme.TS_SUBTITLE);
         hTitle.setTextColor(Theme.termTxt(act));
         hTitle.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        hTitle.setText("帮我认一认这些回复");
+        hTitle.setText(Lang.tr("帮我认一认这些回复"));
         head.addView(hTitle);
 
         pendingCountLabel = new TextView(act);
@@ -345,8 +345,9 @@ public final class LearnPage {
         pendingCountLabel.setTextColor(Theme.termCyan(act));
         pendingCountLabel.setTypeface(Theme.text());
         pendingCountLabel.setPadding(0, dp(4), 0, dp(2));
-        pendingCountLabel.setText(shown.isEmpty() ? "都处理完了"
-                : ("还有 " + shown.size() + " 条等你判断"));
+        pendingCountLabel.setText(shown.isEmpty()
+                ? Lang.tr("都处理完了")
+                : Lang.tf("还有 {0} 条等你判断", shown.size()));
         head.addView(pendingCountLabel);
 
         TextView hSub = new TextView(act);
@@ -354,15 +355,15 @@ public final class LearnPage {
         hSub.setTextColor(Theme.termFaint(act));
         hSub.setTypeface(Theme.text());
         hSub.setLineSpacing(dp(2), 1f);
-        hSub.setText("机器人回复了、但我认不出结果的消息会攒在这里。"
-                   + "你只要告诉我「这样的话算不算签到成功」，以后同类回复我就能自动认出来。");
+        hSub.setText(Lang.tr("机器人回复了、但我认不出结果的消息会攒在这里。"
+                           + "你只要告诉我「这样的话算不算签到成功」，以后同类回复我就能自动认出来。"));
         head.addView(hSub);
         box.addView(head);
 
         if (shown.isEmpty()) {
             box.addView(emptyBlock(rawItems.size(), pats.size()));
         } else {
-            sectionHeader(box, "等你判断（" + shown.size() + "）");
+            sectionHeader(box, Lang.tf("等你判断（{0}）", shown.size()));
             for (final ReplyNormalizer.Pattern pt : shown) {
                 View cardV = questionCard(pt, prefix, poolKey);
                 cardRefs.add(cardV);
@@ -382,7 +383,7 @@ public final class LearnPage {
             toggle.setTypeface(Theme.text());
             toggle.setPadding(dp(12), dp(10), dp(12), dp(10));
             toggle.setBackground(containerBg(Theme.surface(act, 1)));
-            toggle.setText("已忽略 " + ignoredPats.size() + " 条  ▾ 点开可恢复");
+            toggle.setText(Lang.tf("已忽略 {0} 条  ▾ 点开可恢复", ignoredPats.size()));
             host.addView(toggle);
 
             final LinearLayout inner = new LinearLayout(act);
@@ -396,8 +397,9 @@ public final class LearnPage {
                 @Override public void onClick(View v) {
                     boolean open = inner.getVisibility() == View.VISIBLE;
                     inner.setVisibility(open ? View.GONE : View.VISIBLE);
-                    toggle.setText((open ? "已忽略 " + ignoredPats.size() + " 条  ▾ 点开可恢复"
-                                         : "已忽略 " + ignoredPats.size() + " 条  ▴ 点此收起"));
+                    toggle.setText(open
+                            ? Lang.tf("已忽略 {0} 条  ▾ 点开可恢复", ignoredPats.size())
+                            : Lang.tf("已忽略 {0} 条  ▴ 点此收起", ignoredPats.size()));
                 }
             });
             LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-1, -2);
@@ -419,7 +421,7 @@ public final class LearnPage {
                 tg.setTypeface(Theme.text());
                 tg.setPadding(dp(12), dp(10), dp(12), dp(10));
                 tg.setBackground(containerBg(Theme.surface(act, 1)));
-                tg.setText("另有 " + skipped.size() + " 条被自动过滤  ▾");
+                tg.setText(Lang.tf("另有 {0} 条被自动过滤  ▾", skipped.size()));
                 host2.addView(tg);
 
                 final LinearLayout inner2 = new LinearLayout(act);
@@ -431,8 +433,8 @@ public final class LearnPage {
                 note.setTextSize(Theme.TS_CAPTION);
                 note.setTextColor(Theme.termFaint(act));
                 note.setTypeface(Theme.text());
-                note.setText("这些回复因为「像广告 / 太长 / 不是本轮交互」被跳过了。"
-                           + "如果你觉得其中有该认的，可以全部收回来。");
+                note.setText(Lang.tr("这些回复因为「像广告 / 太长 / 不是本轮交互」被跳过了。"
+                                   + "如果你觉得其中有该认的，可以全部收回来。"));
                 inner2.addView(note);
 
                 int shownSk = 0;
@@ -449,11 +451,11 @@ public final class LearnPage {
                     inner2.addView(row);
                 }
 
-                TextView all = pill("全部收回，我来判断", Theme.termCyan(act), 1);
+                TextView all = pill(Lang.tr("全部收回，我来判断"), Theme.termCyan(act), 1);
                 all.setOnClickListener(new View.OnClickListener() {
                     @Override public void onClick(View v) {
                         int n = cb.promoteSkipped();
-                        cb.toast("已收回 " + n + " 条");
+                        cb.toast(Lang.tf("已收回 {0} 条", n));
                         cb.dismissAndRefresh();
                     }
                 });
@@ -466,7 +468,7 @@ public final class LearnPage {
                     @Override public void onClick(View v) {
                         boolean open = inner2.getVisibility() == View.VISIBLE;
                         inner2.setVisibility(open ? View.GONE : View.VISIBLE);
-                        tg.setText("另有 " + skipped.size() + " 条被自动过滤  "
+                        tg.setText(Lang.tf("另有 {0} 条被自动过滤  ", skipped.size())
                                  + (open ? "▾" : "▴"));
                     }
                 });
@@ -520,13 +522,13 @@ public final class LearnPage {
             fold.setTextColor(Theme.termCyan(act));
             fold.setTypeface(Theme.text());
             fold.setPadding(0, dp(2), 0, 0);
-            fold.setText("展开全文 ▾");
+            fold.setText(Lang.tr("展开全文 ▾"));
             fold.setOnClickListener(new View.OnClickListener() {
                 private boolean open = false;
                 @Override public void onClick(View v) {
                     open = !open;
                     body.setText(open ? fullText : preview(fullText));
-                    fold.setText(open ? "收起 ▴" : "展开全文 ▾");
+                    fold.setText(open ? Lang.tr("收起 ▴") : Lang.tr("展开全文 ▾"));
                 }
             });
             card.addView(fold);
@@ -537,7 +539,7 @@ public final class LearnPage {
         meta.setTextColor(Theme.termFaint(act));
         meta.setTypeface(Theme.text());
         meta.setPadding(0, dp(3), 0, 0);
-        meta.setText("出现过 " + pt.count + " 次");
+        meta.setText(Lang.tf("出现过 {0} 次", pt.count));
         card.addView(meta);
 
         // ② 问题
@@ -546,7 +548,7 @@ public final class LearnPage {
         ask.setTextColor(Theme.termTxt(act));
         ask.setTypeface(Theme.text());
         ask.setPadding(0, dp(10), 0, dp(4));
-        ask.setText("看到这样的话，算签到成功吗？");
+        ask.setText(Lang.tr("看到这样的话，算签到成功吗？"));
         card.addView(ask);
 
         // ③ 推荐词
@@ -558,7 +560,7 @@ public final class LearnPage {
         wordEd.setSingleLine(true);
         wordEd.setInputType(InputType.TYPE_CLASS_TEXT);
         wordEd.setPadding(dp(10), dp(9), dp(10), dp(9));
-        wordEd.setHint("填一段这句话里固定出现的文字");
+        wordEd.setHint(Lang.tr("填一段这句话里固定出现的文字"));
         wordEd.setHintTextColor(Theme.termFaint(act));
         if (suggest != null && suggest.length() > 0) wordEd.setText(uiClip(suggest));
         try { wordEd.setBackground(controlBg(Theme.surface(act, 3))); } catch (Throwable ignored) {}
@@ -569,7 +571,7 @@ public final class LearnPage {
         hint.setTextColor(Theme.termFaint(act));
         hint.setTypeface(Theme.text());
         hint.setPadding(0, dp(3), 0, 0);
-        hint.setText("以后回复里出现这段文字，就按你的判断算。改一改也行。");
+        hint.setText(Lang.tr("以后回复里出现这段文字，就按你的判断算。改一改也行。"));
         card.addView(hint);
 
         // 命中反馈（有记录才显示）
@@ -582,7 +584,7 @@ public final class LearnPage {
                     hit.setTextColor(Theme.termGreen(act));
                     hit.setTypeface(Theme.text());
                     hit.setPadding(0, dp(4), 0, 0);
-                    hit.setText("✓ 这个词已经帮你认出 " + hs[0] + " 次");
+                    hit.setText(Lang.tf("✓ 这个词已经帮你认出 {0} 次", hs[0]));
                     card.addView(hit);
                 }
             }
@@ -605,10 +607,10 @@ public final class LearnPage {
         refreshScope[0] = new Runnable() {
             @Override public void run() {
                 String cur = scope[0];
-                String label = "global".equals(cur) ? "对所有目标生效"
-                             : "target".equals(cur) ? "只对这一条目标生效"
-                             : "只对这只机器人生效（推荐）";
-                scRow.setText("适用范围： " + label + "   ▾");
+                String label = "global".equals(cur) ? Lang.tr("对所有目标生效")
+                             : "target".equals(cur) ? Lang.tr("只对这一条目标生效")
+                             : Lang.tr("只对这只机器人生效（推荐）");
+                scRow.setText(Lang.tf("适用范围： {0}   ▾", label));
             }
         };
         refreshScope[0].run();
@@ -618,19 +620,19 @@ public final class LearnPage {
                 // 轻量选择器：三个候选用对话框列表（不引入宿主 Spinner 主题风险）
                 final String[] keys = {"bot", "global", "target"};
                 String[] labels = {
-                        "只对这只机器人生效（推荐）",
-                        "对所有目标生效（影响最大）",
-                        "只对这一条目标生效（最保守）"
+                        Lang.tr("只对这只机器人生效（推荐）"),
+                        Lang.tr("对所有目标生效（影响最大）"),
+                        Lang.tr("只对这一条目标生效（最保守）")
                 };
                 android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(act);
-                b.setTitle("这个词对谁生效？");
+                b.setTitle(Lang.tr("这个词对谁生效？"));
                 b.setItems(labels, new android.content.DialogInterface.OnClickListener() {
                     @Override public void onClick(android.content.DialogInterface d, int which) {
                         scope[0] = keys[which];
                         refreshScope[0].run();
                     }
                 });
-                try { b.show(); } catch (Throwable t) { cb.toast("打不开选择器"); }
+                try { b.show(); } catch (Throwable t) { cb.toast(Lang.tr("打不开选择器")); }
             }
         });
 
@@ -641,7 +643,7 @@ public final class LearnPage {
         rlp.topMargin = dp(10);
         row.setLayoutParams(rlp);
 
-        TextView okB = primaryButton("算成功，记住它");
+        TextView okB = primaryButton(Lang.tr("算成功，记住它"));
         okB.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 submit(card, pt, wordEd.getText().toString(), true, scope[0], ptDid, ptTarget, prefix, poolKey);
@@ -650,7 +652,7 @@ public final class LearnPage {
         row.addView(okB, new LinearLayout.LayoutParams(0, -2, 1.35f));
         row.addView(gap(6));
 
-        TextView failB = pill("其实是失败", Theme.termPink(act), 1);
+        TextView failB = pill(Lang.tr("其实是失败"), Theme.termPink(act), 1);
         failB.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 submit(card, pt, wordEd.getText().toString(), false, scope[0], ptDid, ptTarget, prefix, poolKey);
@@ -665,7 +667,7 @@ public final class LearnPage {
         skip.setTypeface(Theme.text());
         skip.setGravity(Gravity.CENTER);
         skip.setPadding(0, dp(10), 0, dp(2));
-        skip.setText("先不管（以后想起来可以在「已忽略」里找回）");
+        skip.setText(Lang.tr("先不管（以后想起来可以在「已忽略」里找回）"));
         skip.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 cb.addIgnoredPattern(pt.norm);
@@ -674,7 +676,7 @@ public final class LearnPage {
                         addToIgnoredSection(pt, prefix, poolKey);
                     }
                 });
-                cb.toast("已跳过");
+                cb.toast(Lang.tr("已跳过"));
             }
         });
         card.addView(skip);
@@ -710,18 +712,19 @@ public final class LearnPage {
         try {
             String word = rawWord == null ? "" : rawWord.trim();
             if (word.length() == 0) {
-                cb.toast("先填一段这句话里固定出现的文字");
+                cb.toast(Lang.tr("先填一段这句话里固定出现的文字"));
                 return;
             }
             cb.addJudgeWordScoped(word, isOk, scope, did, targetId);
             UnkPool.remove(cb.prefs(), poolKey, pt.norm);
-            String scopeLabel = "global".equals(scope) ? "所有目标"
-                              : "target".equals(scope) ? "这一条目标" : "这只机器人";
-            cb.toast((isOk ? "记住了「" : "记下了「") + word + "」（" + scopeLabel + "）");
+            String scopeLabel = "global".equals(scope) ? Lang.tr("所有目标")
+                              : "target".equals(scope) ? Lang.tr("这一条目标") : Lang.tr("这只机器人");
+            cb.toast((isOk ? Lang.tr("记住了「") : Lang.tr("记下了「")) + word
+                     + Lang.tr("」（") + scopeLabel + Lang.tr("）"));
             // 关键：只摘这一张卡，不重建整页（上一版卡顿的主因）
             removeCard(card, null);
         } catch (Throwable t) {
-            cb.toast("保存失败：" + t);
+            cb.toast(Lang.tf("保存失败：{0}", String.valueOf(t)));
         }
     }
 
@@ -747,7 +750,7 @@ public final class LearnPage {
             okN = a == null ? 0 : a.size();
             failN = b == null ? 0 : b.size();
         } catch (Throwable ignored) {}
-        toggle.setText("我已经学会的词（成功 " + okN + " · 失败 " + failN + "）  ▾");
+        toggle.setText(Lang.tf("我已经学会的词（成功 {0} · 失败 {1}）  ▾", okN, failN));
         outer.addView(toggle);
 
         final LinearLayout inner = new LinearLayout(act);
@@ -774,7 +777,7 @@ public final class LearnPage {
         title.setTextSize(Theme.TS_SECOND);
         title.setTextColor(isOk ? Theme.termGreen(act) : Theme.termPink(act));
         title.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        title.setText(isOk ? "遇到就说「成功了」的词" : "遇到就说「没成功」的词");
+        title.setText(isOk ? Lang.tr("遇到就说「成功了」的词") : Lang.tr("遇到就说「没成功」的词"));
         card.addView(title);
 
         java.util.List<String[]> words = wordsFor(isOk);
@@ -785,7 +788,7 @@ public final class LearnPage {
             none.setTextColor(Theme.termFaint(act));
             none.setTypeface(Theme.text());
             none.setPadding(0, dp(4), 0, 0);
-            none.setText("（还没有）");
+            none.setText(Lang.tr("（还没有）"));
             card.addView(none);
         } else {
             for (final String[] kv : words) {
@@ -807,7 +810,7 @@ public final class LearnPage {
                 tv.setText(w + (scopeTag.length() > 0 ? "  · " + scopeTag : ""));
                 row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
 
-                TextView del = pill("删除", Theme.termPink(act), -1);
+                TextView del = pill(Lang.tr("删除"), Theme.termPink(act), -1);
                 del.setOnClickListener(new View.OnClickListener() {
                     @Override public void onClick(View v) { removeWordScoped(isOk, w, scopeTag); }
                 });
@@ -826,7 +829,7 @@ public final class LearnPage {
         addRow.setLayoutParams(alp);
 
         final EditText ed = new EditText(act);
-        ed.setHint(isOk ? "如：签到成功" : "如：次数已用完");
+        ed.setHint(isOk ? Lang.tr("如：签到成功") : Lang.tr("如：次数已用完"));
         ed.setHintTextColor(Theme.termFaint(act));
         ed.setTextSize(Theme.TS_SECOND);
         ed.setTextColor(Theme.termTxt(act));
@@ -838,14 +841,14 @@ public final class LearnPage {
         addRow.addView(ed, new LinearLayout.LayoutParams(0, -2, 1f));
         addRow.addView(gap(8));
 
-        TextView add = pill("加一个", Theme.termTxt(act), -1);
+        TextView add = pill(Lang.tr("加一个"), Theme.termTxt(act), -1);
         add.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 String t = ed.getText().toString().trim();
-                if (t.length() == 0) { cb.toast("请输入词"); return; }
+                if (t.length() == 0) { cb.toast(Lang.tr("请输入词")); return; }
                 if (isOk) cb.addJudgeWords(new String[]{t}, null);
                 else cb.addJudgeWords(null, new String[]{t});
-                cb.toast("已添加「" + t + "」");
+                cb.toast(Lang.tf("已添加「{0}」", t));
                 ed.setText("");
                 cb.dismissAndRefresh();
             }
@@ -860,10 +863,10 @@ public final class LearnPage {
         try {
             cb.removeJudgeWord(word + "\u0001" + (scopeTag == null ? "" : scopeTag)
                                + "\u0001" + (isOk ? "ok" : "fail"), isOk);
-            cb.toast("已删除「" + word + "」");
+            cb.toast(Lang.tf("已删除「{0}」", word));
             cb.dismissAndRefresh();
         } catch (Throwable t) {
-            cb.toast("删除失败：" + t);
+            cb.toast(Lang.tf("删除失败：{0}", String.valueOf(t)));
         }
     }
 
@@ -886,14 +889,14 @@ public final class LearnPage {
         meta.setTextColor(Theme.termFaint(act));
         meta.setTypeface(Theme.text());
         meta.setPadding(0, dp(3), 0, dp(6));
-        meta.setText("出现过 " + pt.count + " 次 · 已跳过");
+        meta.setText(Lang.tf("出现过 {0} 次 · 已跳过", pt.count));
         card.addView(meta);
 
-        TextView undo = pill("恢复，让我重新判断", Theme.termCyan(act), -1);
+        TextView undo = pill(Lang.tr("恢复，让我重新判断"), Theme.termCyan(act), -1);
         undo.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 cb.removeIgnoredPattern(pt.norm);
-                cb.toast("已恢复");
+                cb.toast(Lang.tr("已恢复"));
                 cb.dismissAndRefresh();
             }
         });
@@ -910,7 +913,7 @@ public final class LearnPage {
         t.setTextSize(Theme.TS_SUBTITLE);
         t.setTextColor(Theme.termGreen(act));
         t.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        t.setText("暂时没有要我认的");
+        t.setText(Lang.tr("暂时没有要我认的"));
         card.addView(t);
 
         TextView s = new TextView(act);
@@ -919,9 +922,9 @@ public final class LearnPage {
         s.setTypeface(Theme.text());
         s.setLineSpacing(dp(3), 1f);
         s.setPadding(0, dp(6), 0, 0);
-        s.setText("签到时如果机器人回了句我看不懂的话，会自动攒到这里，"
-                + "到时候你只要点一下「算成功」就行。\n\n"
-                + "识别得越准，你越不用管它。");
+        s.setText(Lang.tr("签到时如果机器人回了句我看不懂的话，会自动攒到这里，"
+                        + "到时候你只要点一下「算成功」就行。\n\n"
+                        + "识别得越准，你越不用管它。"));
         card.addView(s);
         return card;
     }

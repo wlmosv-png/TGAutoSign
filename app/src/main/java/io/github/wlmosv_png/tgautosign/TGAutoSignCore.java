@@ -11004,8 +11004,12 @@ public final class TGAutoSignCore {
         // 2026-10-05：改**青色**以区别于「待处理」条（那条是琥珀色）——
         //   两者语义完全不同（新按钮是否加入 vs 已有目标是否签成），
         //   同色同措辞时用户容易混。文案也改成明确说明「点此选择加入」。
-        final java.util.List<Long> pd = pendingConfirmDids(currentAccount());
-        if (pd.size() > 0) {
+        // ── 2026-10-07 修「显示 1 个、进去有好几个」──
+        // pendingConfirmDids() 返回的是**去重后的 bot 数**，而待确认池现在
+        // 是「一条 = 一个按钮」，同一个 bot 的多个按钮会被算成 1。
+        // 计数一律用 pendingConfirmCount()（真实条数）。
+        final int pcTotal = pendingConfirmCount(currentAccount());
+        if (pcTotal > 0) {
             LinearLayout pc = new LinearLayout(act); pc.setOrientation(LinearLayout.HORIZONTAL); pc.setGravity(Gravity.CENTER_VERTICAL);
             pc.setBackground(termBorder(act, Theme.withAlpha(Theme.termCyan(act), 0x0E), Theme.withAlpha(Theme.termCyan(act), 0x50)));
             pc.setPadding(dp(12), dp(10), dp(12), dp(10));
@@ -11013,7 +11017,7 @@ public final class TGAutoSignCore {
             pclp.setMargins(0, dp(2), 0, dp(8));
             pc.setLayoutParams(pclp);
             TextView pct = new TextView(act); pct.setTextSize(Theme.TS_BODY); pct.setTextColor(Theme.termCyan(act)); pct.setTypeface(Theme.monoBold());
-            pct.setText(Lang.tf("{0} 个新按钮待添加 —— 点此选择加入", pd.size()));
+            pct.setText(Lang.tf("{0} 个新按钮待添加 —— 点此选择加入", pcTotal));
             pc.addView(pct, new LinearLayout.LayoutParams(0, -2, 1f));
             pc.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ showPendingConfirm(act); } });
             box.addView(pc);
