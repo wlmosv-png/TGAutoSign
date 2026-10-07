@@ -679,6 +679,7 @@ final class StatsView {
                 return box;
             }
             int i = 0;
+            int _rendered = 0, _failed = 0;
             for (StatsSnapshot.Target t : s.targets) {
               // ── 逐项独立 try（2026-10-04）──
               // 旧写法循环体无保护，只有最外层一个 try：
@@ -735,11 +736,17 @@ final class StatsView {
                     } }, 0);
                 }
                 i++;
+                _rendered++;
               } catch (Throwable _one) {
                 // 单个目标失败只丢它自己，不影响其余
+                _failed++;
                 swallow(_one);
+                try { android.util.Log.w("TGAutoSignModule", "[统计] 目标行渲染失败(" + _failed + "): " + _one); } catch (Throwable ignored) {}
               }
             }
+            // 2026-10-07：渲染计数（用户报"统计只显示 5 条"而快照是 7 条）
+            try { android.util.Log.i("TGAutoSignModule", "[条数核对] 统计各目标：渲染 " + _rendered
+                    + " · 失败 " + _failed + " · 输入 " + s.targets.size()); } catch (Throwable ignored) {}
         } catch (Throwable t) { swallow(t); }
         return box;
     }

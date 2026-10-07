@@ -32,7 +32,7 @@ import java.util.HashSet;
 public final class ReplyNormalizer {
 
     /** 归一化文本最长长度（与 UnkPool.MAX_TEXT 对齐）。 */
-    public static final int MAX_LEN = 200;
+    public static final int MAX_LEN = 120;   // 2026-10-07：200 → 120（超长键拖慢聚类与渲染）
 
     private ReplyNormalizer() {}
 
@@ -99,12 +99,65 @@ public final class ReplyNormalizer {
         return out;
     }
 
+    /**
+     * 按 Item 聚类（2026-10-06 新增，交接单第十条）。
+     *
+     * 与 {@link #cluster(java.util.List)} 的区别：这里**保留来源** ——
+     * dids / fromDids / targetIds 会被真实填充。
+     * 旧方法保留，供不关心来源的调用方使用（其 dids 恒为空）。
+     *
+     * @param items UnkPool 里的条目（或任意具备 r/o/d 的对象语义）
+     */
+    public static List<Pattern> clusterItems(List<io.github.wlmosv_png.tgautosign.judge.UnkPool.Item> items) {
+        Map<String, Pattern> map = new LinkedHashMap<String, Pattern>();
+        if (items == null) return new ArrayList<Pattern>();
+        for (io.github.wlmosv_png.tgautosign.judge.UnkPool.Item it : items) {
+            if (it == null) continue;
+            String norm = it.r != null && it.r.length() > 0 ? it.r : normalize(it.o);
+            if (norm == null || norm.length() == 0) continue;
+            Pattern p = map.get(norm);
+            if (p == null) {
+                p = new Pattern(norm);
+                map.put(norm, p);
+            }
+            p.count += Math.max(1, it.n);
+            // 来源（#1：用集合，跨 bot 不再只留最后一个）
+            if (it.d != 0L) p.dids.add(it.d);
+            for (Long f : it.fromList()) { if (f != null && f.longValue() != 0L) p.fromDids.add(f); }
+            if (it.tid != null && it.tid.length() > 0) p.targetIds.add(it.tid);
+            if (it.tids != null && it.tids.length() > 0) {
+                for (String t : it.tids.split(",")) {
+                    String tt = t.trim();
+                    if (tt.length() > 0) p.targetIds.add(tt);
+                }
+            }
+            // 样例
+            if (p.samples.size() < 3 && it.o != null) {
+                String s = it.o.trim();
+                if (s.length() > UnkPool.MAX_SAMPLE) s = s.substring(0, UnkPool.MAX_SAMPLE);
+                if (!p.samples.contains(s)) p.samples.add(s);
+            }
+        }
+        List<Pattern> out = new ArrayList<Pattern>(map.values());
+        Collections.sort(out, new Comparator<Pattern>() {
+            @Override public int compare(Pattern a, Pattern b) {
+                if (a.count != b.count) return b.count - a.count;
+                return a.norm.compareTo(b.norm);
+            }
+        });
+        return out;
+    }
+
     /** 归一化模式（聚类结果）。 */
     public static final class Pattern {
         public final String norm;              // 归一化文本（聚类键）
         public int count;                      // 出现次数
         public final List<String> samples;     // 原始样例（≤3）
-        public final HashSet<Long> dids = new HashSet<Long>();   // 涉及的 bot
+        public final HashSet<Long> dids = new HashSet<Long>();   // 涉及的会话（群/私聊）
+        // 2026-10-06：来源集合（交接单第十条）—— 由 clusterItems 填充。
+        // 旧 cluster(List<String>) 无法知道来源，此集合会保持为空。
+        public final HashSet<Long> fromDids = new HashSet<Long>();   // 回复发送者（群聊时是 bot）
+        public final HashSet<String> targetIds = new HashSet<String>(); // 目标条目 id
 
         public Pattern(String norm) {
             this.norm = norm;

@@ -141,21 +141,28 @@ fi
 # 注意：桩只放 tools/tests/ 下，**不进 app/src/main/**，不参与正式构建。
 # 跳过：TGAS_SKIP_JUDGETEST=1
 if [ "${TGAS_SKIP_JUDGETEST:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/JudgeTest.java" ]; then
-  echo "== judge 子系统单测 =="
+  echo "== judge 子系统单测（含群聊/作用域）=="
   _jcls="${TMPDIR:-/tmp}/tgas-jcls-$$"
   rm -rf "$_jcls"; mkdir -p "$_jcls"
+  _jcommon="\
+        $TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/DateUtils.java \
+        $TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/SignLogic.java \
+        $TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/judge/UnkPool.java \
+        $TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/judge/ReplyNormalizer.java"
+  _jstub="\
+        $TGAS_SRC/tools/tests/stubs/android/content/SharedPreferences.java \
+        $TGAS_SRC/tools/tests/stubs/android/content/Context.java"
   if javac -nowarn -encoding UTF-8 -d "$_jcls" \
-        "$TGAS_SRC/tools/tests/stubs/android/content/SharedPreferences.java" \
-        "$TGAS_SRC/tools/tests/stubs/android/content/Context.java" \
+        $_jstub $_jcommon \
         "$TGAS_SRC/tools/tests/JudgeTest.java" \
-        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/judge/UnkPool.java" \
-        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/judge/ReplyNormalizer.java" \
-        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/DateUtils.java" 2>&1; then
-    if ! java -cp "$_jcls" io.github.wlmosv_png.tgautosign.JudgeTest; then
-      rm -rf "$_jcls"
-      echo "FATAL: judge 子系统单测失败（临时跳过：TGAS_SKIP_JUDGETEST=1）" >&2; exit 1
-    fi
+        "$TGAS_SRC/tools/tests/GroupScopeTest.java" 2>&1; then
+    _jfail=0
+    java -cp "$_jcls" io.github.wlmosv_png.tgautosign.JudgeTest || _jfail=1
+    java -cp "$_jcls" io.github.wlmosv_png.tgautosign.GroupScopeTest || _jfail=1
     rm -rf "$_jcls"
+    if [ "$_jfail" != 0 ]; then
+      echo "FATAL: judge / 群聊作用域 单测失败（临时跳过：TGAS_SKIP_JUDGETEST=1）" >&2; exit 1
+    fi
   else
     rm -rf "$_jcls"
     echo "FATAL: judge 单测编译失败（临时跳过：TGAS_SKIP_JUDGETEST=1）" >&2; exit 1

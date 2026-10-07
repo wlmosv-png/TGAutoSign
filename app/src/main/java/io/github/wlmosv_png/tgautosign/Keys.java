@@ -97,6 +97,17 @@ public final class Keys {
     public static String missAt(String p, String id)    { return p + "miss_at_" + id; }
     /** bot 在 callback answer 里回过内容（但词表没识别出结果）。用于区分"有响应/无响应"。 */
     public static String answered(String p, String id)  { return p + "answered_" + id; }
+    // ── 2026-10-06 判定词作用域（交接单第八条）────────────────
+    // 三级：全局 / Bot / 目标。旧键 jmb_ok_words、jmb_fail_words 是「全局」级，
+    // 继续原样读写，不迁移、不丢失。
+    ///
+    public static String okWordsGlobal()  { return "jmb_ok_words"; }
+    public static String failWordsGlobal(){ return "jmb_fail_words"; }
+    public static String okWordsBot(long did)   { return "jmb_ok_bot_" + did; }
+    public static String failWordsBot(long did) { return "jmb_fail_bot_" + did; }
+    public static String okWordsTarget(String entryId)   { return "jmb_ok_tgt_" + entryId; }
+    public static String failWordsTarget(String entryId) { return "jmb_fail_tgt_" + entryId; }
+
     /**
      * 当日「发出后仍无结论」的发送次数（2026-10-01）。
      *

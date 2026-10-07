@@ -118,6 +118,23 @@ public final class SignLogic {
      * 补签时段判定：[窗口开始, 补签截止]，与签到窗口解耦。
      * 截止早于窗口开始 = 跨到次日（如窗口 20:00-23:00、截止 06:00）。
      */
+    /**
+     * 两个时间戳是否属于同一天（本地时区）。
+     *
+     * 用途：未识别回复的入库门槛从「TTL 内」放宽到「当天发过请求」时要判断跨天。
+     * 纯函数、无 Android 依赖。
+     */
+    public static boolean sameDay(long a, long b) {
+        try {
+            java.util.Calendar ca = java.util.Calendar.getInstance();
+            ca.setTimeInMillis(a);
+            java.util.Calendar cb = java.util.Calendar.getInstance();
+            cb.setTimeInMillis(b);
+            return ca.get(java.util.Calendar.YEAR) == cb.get(java.util.Calendar.YEAR)
+                && ca.get(java.util.Calendar.DAY_OF_YEAR) == cb.get(java.util.Calendar.DAY_OF_YEAR);
+        } catch (Throwable t) { return false; }
+    }
+
     public static boolean inMissBackTime(int nowMin, int[] range, int missDeadline, boolean missBackOn) {
         if (!missBackOn) return false;
         int start = range != null ? range[0] : 0;
@@ -617,6 +634,50 @@ public final class SignLogic {
      * 返回 {Integer 判定码, String 命中词}。
      */
     /**
+     * 带**作用域**的判定入口（2026-10-06 交接单第八条）。
+     *
+     * 四级词表按「从通用到具体」叠加，失败词始终优先于成功词：
+     *   失败侧：系统默认 → 全局自定义 → Bot 专属 → 目标专属
+     *   成功侧：系统默认 → 全局自定义 → Bot 专属 → 目标专属
+     *
+     * 为什么必须分层：全局词表下，为 A bot 学的「任务完成」会污染 B bot。
+     * 学习默认写入 **Bot 级**（拿不到 bot id 时降级到目标级），
+     * 只有用户显式选「全局」才进全局表。
+     *
+     * @param okGlobal / failGlobal   全局自定义词（旧 jmb_ok_words / jmb_fail_words）
+     * @param okBot    / failBot      Bot 级词
+     * @param okTarget / failTarget   目标级词
+     * @return {Integer 判定码, String 命中词}
+     */
+    public static Object[] verdictDetailScoped(String reply,
+                                               String[] okGlobal, String[] failGlobal,
+                                               String[] okBot, String[] failBot,
+                                               String[] okTarget, String[] failTarget) {
+        if (reply == null || reply.length() == 0) return new Object[]{Integer.valueOf(V_UNKNOWN), ""};
+        String lower = reply.toLowerCase();
+
+        // 失败侧：具体级优先（目标 > Bot > 全局）
+        String[][] failChains = { failTarget, failBot, failGlobal };
+        for (String[] words : failChains) {
+            if (words == null || words.length == 0) continue;
+            String m = matched(lower, words);
+            if (m != null) return new Object[]{Integer.valueOf(V_FAILED), m};
+        }
+
+        // 成功侧：具体级优先（目标 > Bot > 全局）
+        String[][] okChains = { okTarget, okBot, okGlobal };
+        for (String[] words : okChains) {
+            if (words == null || words.length == 0) continue;
+            String m = matched(lower, words);
+            // 否定守卫同样生效（「还没有完成」不能被「完成」命中）
+            if (m != null && !negated(lower, m)) return new Object[]{Integer.valueOf(V_SIGNED), m};
+        }
+
+        // 都未命中 → 落回内置完整判定链（含非结论类、组合判定）
+        return verdictDetail(reply, null, null, null);
+    }
+
+    /**
      * 判定，但**用户自定义词优先**。
      *
      * 为什么需要（2026-10-04 实测事故）：
@@ -726,7 +787,25 @@ public final class SignLogic {
             //   3 字窗口会把「不错,今日已签到」误杀 —— 「不」正好落在窗口里。
             //   2 字窗口仍能覆盖「还没有/尚未/无法/不能/没有/禁止」等全部实际写法，
             //   而逗号/空格会把「不错,」与命中词隔开，自然不误伤。
-            String cnWin = before.length() > 2 ? before.substring(before.length() - 2) : before;
+            int cnSep = -1;
+            for (int ci = before.length() - 1; ci >= 0; ci--) {
+                char cc = before.charAt(ci);
+                if (cc == ',' || cc == '，' || cc == '。' || cc == '.' || cc == ';' || cc == '；'
+                        || cc == '!' || cc == '！' || cc == '?' || cc == '？' || cc == '、'
+                        || cc == '\n' || cc == ' ' || cc == '\t') { cnSep = ci; break; }
+            }
+            String cnWin;
+            if (cnSep >= 0) {
+                // 有分隔符 → **只取分隔符之后**，绝不回溯。
+                // 为什么不能回溯：「没有问题,签到成功」的前一小句含「没有」，
+                //   但那是"没问题"，后一小句才是结论 —— 回溯会把它误判成否定。
+                //   「没有问题,签到成功」与「没有签到成功」的区别就在这个逗号。
+                cnWin = before.substring(cnSep + 1);
+            } else {
+                // 无分隔符：同一小句内向回看最多 6 字（覆盖「今天没有签到成功」）
+                cnWin = before.length() > 6 ? before.substring(before.length() - 6) : before;
+            }
+            if (cnWin.length() > 6) cnWin = cnWin.substring(cnWin.length() - 6);
             // 例外：这些前缀本身含否定字，但语义是肯定
             if (cnWin.startsWith("不") || cnWin.startsWith("没") || cnWin.startsWith("无")) {
                 // 「不错」「没问题」类：否定字后面跟着褒义词，不算否定
@@ -748,11 +827,27 @@ public final class SignLogic {
             //   「no」与 checked 中间隔着 problem → 只有一个词窗口才不会误杀。
             String[] parts = before.trim().split("[\\s,.;:!?、，。！？]+");
             if (parts.length > 0) {
-                String w = parts[parts.length - 1] == null ? "" : parts[parts.length - 1].trim();
-                String wFlat = w.replace("'", "").replace("\u2019", "");
-                for (String neg : NEG_WORDS_EN) {
-                    String nFlat = neg.replace("'", "").replace("\u2019", "");
-                    if (wFlat.equals(nFlat)) return true;
+                // 2026-10-07：窗口 1 词 → 2 词，但跳过不构成否定的名词。
+                //   1 词漏掉 "not yet signed in"；2 词又会把 "no problem, checked in"
+                //   的 no 误当否定 —— 跳过 problem/idea/doubt 这类即可两全。
+                String[] SKIPW = {"problem", "idea", "doubt", "question", "worry", "issue"};
+                int checkedW = 0;
+                for (int pi = parts.length - 1; pi >= 0 && checkedW < 2; pi--) {
+                    String w = parts[pi] == null ? "" : parts[pi].trim();
+                    if (w.length() == 0) continue;
+                    String wFlat = w.replace("'", "").replace("\u2019", "").toLowerCase();
+                    boolean skipW = false;
+                    for (String sk : SKIPW) { if (wFlat.equals(sk)) { skipW = true; break; } }
+                    // 2026-10-07：遇到这类名词要**截断窗口**，不只是跳过它。
+                    //   「no problem, checked in」里 no 修饰的是 problem，
+                    //   与后面的 checked 无关；若只是跳过 problem 继续往前看，
+                    //   仍会读到 no 并误判为否定。break 才是正确语义。
+                    if (skipW) break;
+                    checkedW++;
+                    for (String neg : NEG_WORDS_EN) {
+                        String nFlat = neg.replace("'", "").replace("\u2019", "").toLowerCase();
+                        if (wFlat.equals(nFlat)) return true;
+                    }
                 }
             }
         } catch (Throwable ignored) {}
@@ -1208,6 +1303,191 @@ public final class SignLogic {
     };
 
     /** 这条回复是不是「进度提示」而非结果。 */
+    /**
+     * 广告 / 推广类特征词（命中即不值得学）。
+     *
+     * 2026-10-07 收窄：原表含「限时/优惠/福利/推广/广告」——
+     * 这些词**会出现在真实的签到结果里**，例如
+     *   「签到成功，限时福利已到账」「恭喜获得今日福利」
+     * 一旦误杀，用户看到的就是"判不出、学习页还空的"（实测反馈）。
+     * 现在只保留**不太可能出现在签到结论中**的铁广告特征。
+     */
+    public static final int CONF_LOW = 0;
+    public static final int CONF_MEDIUM = 1;
+    public static final int CONF_HIGH = 2;
+
+    /**
+     * 判定置信度（2026-10-07 · 方案 2.3）。
+     * 让用户区分「真签上了」与「按兜底策略算签上了」。纯函数，不改判定结果。
+     */
+    public static int confidenceOf(String hitWord, boolean isCombo) {
+        try {
+            if (hitWord == null || hitWord.length() == 0) return CONF_LOW;
+            if (isCombo || hitWord.indexOf('+') >= 0) return CONF_MEDIUM;
+            if (hitWord.trim().length() <= 2) return CONF_MEDIUM;
+            return CONF_HIGH;
+        } catch (Throwable t) { return CONF_LOW; }
+    }
+
+    private static final String[] AD_WORDS = {
+            "恭喜您获取到", "扩展任务", "独家算法", "严格验证", "远超同行",
+            "注册链接", "推荐码", "邀请码", "返利", "佣金",
+            "www.", "http://", "https://", "t.me/", "@所有人",
+            // ── 2026-10-07 扩充（用户截图实证的漏网广告）──
+            // 截图中这条 600+ 字的推广长文以上词一个都不含，所以照进了池子。
+            "接广告合作", "广告合作", "免广告", "广告位",
+            "博彩", "赌", "菠菜", "下注", "彩票",
+            "打粉", "引流", "拉新", "曝光吧", "吃瓜",
+            "付费广告", "发布广告", "广告投放", "私人定制", "定制服务",
+            "成人", "美女图", "福利群", "资源群", "交流群",
+            "私聊", "加微", "加v", "看片", "免费观看",
+            "供需", "招代理", "接单", "上车",
+    };
+
+    /**
+     * 这条回复值不值得进「未识别回复」池（2026-10-06 补）。
+     *
+     * 起因：上一轮把入库门槛从「TTL 内」放宽到「当天发过请求就收」，
+     * 结果 bot 的推广长文也进了池，学习页被广告占满（用户截图 3 条全是广告）。
+     *
+     * 判别（**不**依赖 TTL）：
+     *   ✗ 含广告/推广特征词            → 不收
+     *   ✗ 超长（>120 字）且无签到语义   → 不收（说明/规则类长文）
+     *   ✓ 其余照收（保留放宽后的行为）
+     *
+     * @param reply 原文
+     * @return true = 值得沉淀
+     */
+    public static boolean worthLearning(String reply) {
+        try {
+            if (reply == null) return false;
+            String r = reply.trim();
+            if (r.length() < 2) return false;
+            String low = r.toLowerCase();
+            for (String w : AD_WORDS) {
+                if (low.contains(w)) return false;
+            }
+            // 超长且不含签到语义 → 判为说明/规则长文，不收。
+            // 2026-10-07：阈值 120 → 300。带排版的 bot 回复（说明+结果）常超 120，
+            // 误杀会让用户遇到"判不出但学习页是空的"。
+            // 2026-10-07：>400 字一律不收。
+            // 真实的签到结果不会这么长；600+ 字的必然是推广/说明长文，
+            // 而且它们会拖慢学习页（聚类、提词、EditText 渲染都要处理这几百字）。
+            if (r.length() > 400) return false;
+            if (r.length() > 300) {
+                boolean hasSign = false;
+                for (String w : SIGN_WORDS) {
+                    if (low.contains(w)) { hasSign = true; break; }
+                }
+                if (!hasSign) return false;
+            }
+            return true;
+        } catch (Throwable t) { return false; }
+    }
+
+    /**
+     * 从归一化文本里**算法化**地提一个推荐判定词（未识别回复重构 · 问题 3）。
+     *
+     * 为什么不再用固定词表：用户要学的恰恰是词表里没有的新措辞，
+     * 硬编码的 46 个词永远提不出「任务达成」「办妥了」这类。
+     *
+     * 算法：
+     *   ① 按分隔符切片；
+     *   ② 丢噪声片段（纯 {N} / 单字 / 纯符号）；
+     *   ③ 片段打分（与已知词有公共子串 +、句尾 +、长度 2~6 +、
+     *      否定词 −、通用客套 −）；
+     *   ④ 取最高分；全 0 返回 null（交给用户手填）。
+     *
+     * 纯函数、无 Android 依赖，可单测。
+     *
+     * @param norm 已归一化的文本（ReplyNormalizer.normalize 的输出）
+     * @return 推荐词；提不出返回 null
+     */
+    public static String suggestWord(String norm) {
+        try {
+            if (norm == null) return null;
+            String s0 = norm.trim();
+            if (s0.length() == 0) return null;
+
+            String[] parts = s0.split("[\\s,，、;；:：|/\\-—–\\[\\]（）(){}<>\"']+");
+            String best = null;
+            int bestScore = 0;
+            for (int i = 0; i < parts.length; i++) {
+                String seg = parts[i] == null ? "" : parts[i].trim();
+                if (seg.length() == 0) continue;
+                // ② 噪声：纯数字占位 / 单字符 / 纯符号
+                if (seg.equals("{n}") || seg.equals("{N}")) continue;
+                if (seg.length() < 2) continue;
+                boolean allSym = true;
+                for (int k = 0; k < seg.length(); k++) {
+                    char c = seg.charAt(k);
+                    if (Character.isLetterOrDigit(c) || c > 0x2E80) { allSym = false; break; }
+                }
+                if (allSym) continue;
+
+                int score = 0;
+                // 长度：2~6 最佳
+                int L = seg.length();
+                if (L >= 2 && L <= 6) score += 3;
+                else if (L <= 10) score += 1;
+                else score -= 1;
+
+                // 与已知判定词有公共子串 → 同类语义
+                if (sharesWithKnown(seg)) score += 4;
+
+                // 句尾片段（中文结论常在尾部）
+                if (i == parts.length - 1) score += 2;
+
+                // 否定词 → **直接跳过**（不推荐）。
+                // 早先是 -5 分，但「还没有签到」这类句子：
+                //   长度 +3、与已知词共现 +4、句尾 +2 = +4，扣完仍是最高分被选中，
+                //   用户照抄就会把一个否定句学成成功词。整段跳过才是安全做法。
+                boolean negated = false;
+                for (String nw : NEG_WORDS_CN) { if (seg.contains(nw)) { negated = true; break; } }
+                if (!negated) {
+                    for (String nw : NEG_WORDS_EN) { if (seg.contains(nw)) { negated = true; break; } }
+                }
+                if (negated) continue;
+
+                // 通用客套 → 判别力低
+                if (seg.contains("欢迎") || seg.contains("感谢") || seg.contains("谢谢")
+                        || seg.contains("请") || seg.contains("如有") || seg.contains("客服")
+                        || seg.contains("详情") || seg.contains("说明") || seg.contains("帮助")
+                        || seg.contains("菜单") || seg.contains("命令")) score -= 3;
+
+                // 进度提示词 → 不该推荐（那是过程不是结论）
+                for (String pw : PROGRESS_WORDS) { if (seg.contains(pw)) { score -= 4; break; } }
+
+                if (score > bestScore) { bestScore = score; best = seg; }
+            }
+            return best;   // 可能为 null
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 片段是否与已知成功/失败词有 ≥2 字公共子串（同类语义的弱证据）。 */
+    private static boolean sharesWithKnown(String seg) {
+        try {
+            for (String w : KNOWN_LEXICON) {
+                if (w == null || w.length() < 2) continue;
+                for (int i = 0; i + 2 <= w.length(); i++) {
+                    String bi = w.substring(i, i + 2);
+                    if (seg.contains(bi)) return true;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /** 「大概率是签到语义」的二字词根库（只用于给推荐词打分，不用于判定）。 */
+    private static final String[] KNOWN_LEXICON = {
+            "签到", "打卡", "签领", "领取", "已签", "完成", "成功", "失败", "奖励",
+            "积分", "获得", "已获", "达成", "办妥", "已办", "结算", "到账", "发放",
+            "领取", "过期", "结束", "上限", "用尽", "再来", "重试", "绑定", "关注",
+            "check", "sign", "claim", "reward", "success", "fail", "done", "complete"
+    };
+
     public static boolean looksLikeProgress(String reply) {
         if (reply == null) return false;
         String lr = reply.toLowerCase(java.util.Locale.US);

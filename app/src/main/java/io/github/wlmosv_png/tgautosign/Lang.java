@@ -914,6 +914,26 @@ public final class Lang {
         EN.put("该目标正在发送中，未重复发送", "Sending in progress; not sent again");
         EN.put("该目标稍后自动重试", "Will retry automatically later");
         EN.put("某目标", "a target");
+        // ── 未识别回复重构（2026-10-06）──
+        EN.put("{0} 条待学习", "{0} to learn");
+        EN.put("{0} 条未识别回复待学习", "{0} unrecognized replies to learn");
+        EN.put("去学习", "Learn");
+        EN.put("已学会判定词「{0}」", "Learned judge word \"{0}\"");
+        EN.put("判定词已更新", "Judge words updated");
+        EN.put("全局", "Global");
+        EN.put("删除", "Delete");
+        EN.put("已删除「{0}」", "Deleted \"{0}\"");
+        EN.put("删除失败：{0}", "Delete failed: {0}");
+        EN.put("判不出结果时怎么办", "When the result can't be judged");
+        EN.put("严格", "Strict");
+        EN.put("放行(算成功)", "Allow (treat as OK)");
+        EN.put("拦截(算失败)", "Block (treat as fail)");
+        EN.put("判不出时：{0}", "When unjudgeable: {0}");
+        EN.put("严格：判不出就攒到「未识别回复」等你学词。\n放行：只要机器人回了就算成功（失败词仍判失败）。\n拦截：判不出就当失败，撤销已签并重试。",
+               "Strict: collect into Unrecognized replies for you to learn.\nAllow: any reply counts as OK (fail words still fail).\nBlock: unjudgeable counts as fail; undo and retry.");
+        EN.put("恢复", "Restore");
+        EN.put("已恢复：「{0}」回到待确认", "Restored: \"{0}\" is back to pending");
+        EN.put("已忽略（可在下方「已忽略」里恢复）", "Ignored (restore it under \"Ignored\" below)");
         EN.put("  /  补签至 {0}", "  /  make-up until {0}");
         EN.put("  /  补签 {0}", "  /  make-up {0}");
         EN.put("昨天 {0}/{1} 完成", "Yesterday {0}/{1} done");

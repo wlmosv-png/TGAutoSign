@@ -37,6 +37,52 @@ final class Theme {
     }
     private static boolean themeLogDone;
     private static long darkCacheAt = 0L;
+    /** 上次「屏幕采样」的时间；采样极贵，做最小间隔节流（2026-10-07）。 */
+    private static long lastSampleAt = 0L;
+    private static final long SAMPLE_MIN_GAP_MS = 3_000L;
+
+    /** 暗色缓存时长（2026-10-07：600ms → 10s，见 dark() 内注释）。 */
+    private static final long CACHE_MS = 60_000L;   // 2026-10-07：10s → 60s（采样太贵）
+
+    /** 冻结状态：页面批量构建期间钉住主题值，避免触发昂贵的屏幕采样。 */
+    private static volatile boolean frozen = false;
+    private static volatile boolean frozenVal = false;
+
+    /**
+     * 冻结主题判定（2026-10-07 卡顿修复）。
+     *
+     * 用途：在**批量构建 View 树**之前调用一次，把当前深浅色值钉死；
+     *   构建期间所有 Theme.xxx(c) 都直接返回该值，不会走到 colorProbe
+     *   （colorProbe 会把整棵视图树重绘到 1×1 位图，实测一次约 1.3 秒）。
+     * 用法：freeze() → 构建 → unfreeze()。必须在 finally 里 unfreeze。
+     */
+    static void freeze(Context c) {
+        try {
+            // ── 2026-10-07 关键修复 ──
+            // 旧实现是 `frozenVal = dark(c);` —— 而 dark() 在缓存过期时会走
+            //   colorProbe → sampleScreenColor → target.draw(canvas)
+            // 也就是**把整棵视图树重绘到 1×1 位图**。
+            // 结果：本意是"冻结以免采样"，实际上 freeze 自己就触发了那次采样，
+            // 打开学习页仍然是 1 秒级卡顿（用户反复反馈"一瞬就卡"）。
+            //
+            // 现在：冻结时**只用已有缓存/已知值，绝不主动采样**。
+            //   有缓存 → 用缓存；缓存过期也照用（主题不会在打开一个面板的瞬间变）；
+            //   完全没有过值 → 才退一次 dark()（这是进程内第一次，无从避免）。
+            long now = System.currentTimeMillis();
+            boolean hasKey = false;
+            try { hasKey = cacheKey(c).equals(darkCacheKey); } catch (Throwable ignored) {}
+            if (darkCacheAt > 0L && (hasKey || now - darkCacheAt < 60_000L)) {
+                frozenVal = darkCacheVal;          // 用已知值，零成本
+            } else {
+                frozenVal = dark(c);               // 进程内首次：无从避免
+            }
+            frozen = true;
+        } catch (Throwable ignored) {}
+    }
+
+    static void unfreeze() {
+        frozen = false;
+    }
     private static boolean darkCacheVal = false;
 
     /** 主题模式：0=自动（跟宿主主题，取不到再看系统）1=强制日间 2=强制夜间 */
@@ -79,7 +125,15 @@ final class Theme {
 
         long now = System.currentTimeMillis();
         String key = cacheKey(c);
-        if (now - darkCacheAt < 600L && key.equals(darkCacheKey)) return darkCacheVal;
+        // 2026-10-07 卡顿修复：600ms → 10s。
+        //   600ms 太短 —— 构建一个页面的 View 树时（调 Theme.xxx 几十次）
+        //   每 600ms 就会触发一次 colorProbe，而它内部要做
+        //     target.draw(canvas)   // 整棵视图树重绘到 1×1 位图
+        //   对话框打开时树很庞大，实测单次约 1.3 秒（用户报的卡顿）。
+        //   主题在 10 秒内不会变，缓存拉长完全安全。
+        if (now - darkCacheAt < CACHE_MS && key.equals(darkCacheKey)) return darkCacheVal;
+        // 冻结期：直接返回钉住的值，绝不触发采样
+        if (frozen) return frozenVal;
 
         boolean val;
         String how;
@@ -89,7 +143,17 @@ final class Theme {
         //    但加两道保险，避免子面板动画/遮罩期采到瞬时帧而判反：
         //      · 同一页面连续两次一致才采信；不一致时先沿用上一次的结论（不翻转）
         //      · 缓存按页面分开，主界面与子面板互不污染
-        Boolean byColor = colorProbe(c);
+        // 2026-10-07：采样是**最贵的操作**（整棵视图树重绘到 1×1 位图）。
+        // 即便缓存过期，也强制两次采样之间至少间隔 SAMPLE_MIN_GAP_MS，
+        // 期间直接用上次的值 —— 主题不会在几秒内改变。
+        Boolean byColor;
+        long sinceSample = now - lastSampleAt;
+        if (lastSampleAt > 0L && sinceSample < SAMPLE_MIN_GAP_MS) {
+            byColor = null;      // 节流：本次不采样，走下面的属性/API 回退（它们很便宜）
+        } else {
+            byColor = colorProbe(c);
+            if (byColor != null) lastSampleAt = now;
+        }
         if (byColor != null) {
             boolean b = byColor.booleanValue();
             if (!sampleSeen) {                 // 本进程第一次：直接采信

@@ -40,6 +40,15 @@ public final class UnkPool {
     public static final int MAX_ITEMS = 200;
     /** 单个 bot 每日最多入池条数（防刷）。 */
     public static final int DAILY_PER_BOT = 8;
+    /**
+     * 同一「规范化模式」每天最多入池次数（#2）。
+     *
+     * 为什么单列一个：DAILY_PER_BOT 是「每 bot 每天 8 条**候选**」，
+     * 但同一个 bot 反复回同一句（心跳每 90 秒一次）会把这 8 条配额
+     * 全部烧在同一句话上，别的措辞就再也进不了池。
+     * 所以对「同一 normalized」再设一个更小的上限。
+     */
+    public static final int PER_PATTERN_PER_DAY = 2;
     /** 单条文本最长保留长度（防一条超长回复撑爆 prefs）。 */
     public static final int MAX_TEXT = 200;
     /** 原始样例最长保留长度。 */
@@ -53,12 +62,60 @@ public final class UnkPool {
     /** 一条池记录。 */
     public static final class Item {
         public long t;        // 首次入库时间戳
-        public long d;        // did
+        public long d;        // did（会话 id：群为负、私聊为正）
         public int n;         // 出现次数
         public String r;      // 归一化文本（聚类键）
         public String o;      // 原始样例（展示用）
 
+        // ── 2026-10-06 新增：来源（交接单第九条）──
+        // 为什么必须记：同一句「签到成功」可能来自 Bot A 与 Bot B，
+        // 不记来源就无法回答「这条模式该学给谁」，也会让聚类结果失去归属性。
+        public String tid;    // 目标条目 id（entryId），可能为空
+        public long from;     // 回复发送者 did（群聊时是 bot），0 = 未知；**最近一次**
+        public long chat;     // 会话 did（= d 的别名，保留语义清晰），0 = 未知
+
+        // ── 2026-10-06 遗留收口（#1）──
+        // 为什么还需要集合：同一句「签到成功」可能来自 Bot A 与 Bot B，
+        // 只留一个 from 会让学习页无法判断"该学给谁"，也丢掉了来源分布。
+        // 用逗号分隔的字符串存（与整个池的手写序列化风格一致，零依赖）。
+        public String froms = "";   // 发送者 did 集合，逗号分隔（含 from）
+        public String tids  = "";   // 目标条目 id 集合，逗号分隔（含 tid）
+
         public Item() {}
+
+        /** 解析来源集合（去空、去重由调用方保证）。 */
+        public java.util.List<Long> fromList() {
+            java.util.List<Long> out = new java.util.ArrayList<Long>();
+            if (froms == null || froms.length() == 0) {
+                if (from != 0L) out.add(Long.valueOf(from));
+                return out;
+            }
+            for (String p : froms.split(",")) {
+                try { long v = Long.parseLong(p.trim()); if (v != 0L) out.add(Long.valueOf(v)); }
+                catch (Throwable ignored) {}
+            }
+            if (out.isEmpty() && from != 0L) out.add(Long.valueOf(from));
+            return out;
+        }
+
+        /** 把来源加入集合（去重）。 */
+        public void addFrom(long v) {
+            if (v == 0L) return;
+            String cur = froms == null ? "" : froms;
+            String tok = String.valueOf(v);
+            if (("," + cur + ",").indexOf("," + tok + ",") >= 0) { from = v; return; }
+            froms = cur.length() == 0 ? tok : (cur + "," + tok);
+            from = v;
+        }
+
+        /** 把目标 id 加入集合（去重）。 */
+        public void addTid(String v) {
+            if (v == null || v.length() == 0) return;
+            String cur = tids == null ? "" : tids;
+            if (("," + cur + ",").indexOf("," + v + ",") >= 0) { tid = v; return; }
+            tids = cur.length() == 0 ? v : (cur + "," + v);
+            tid = v;
+        }
 
         Item(long t, long d, int n, String r, String o) {
             this.t = t; this.d = d; this.n = n; this.r = r; this.o = o;
@@ -79,6 +136,34 @@ public final class UnkPool {
      * @param today   当日标识（yyyymmdd），用于限频
      * @return true 表示本次真的写入了（新增或计数+1）
      */
+    // 带来源的采集（2026-10-06 新增，交接单第九条）。
+    // 旧签名保留为转发，调用方按需选择。
+    public static boolean add(SharedPreferences prefs, String poolKey, String seenKey,
+                              long did, String raw, String norm, String today,
+                              String targetId, long replyFromDid) {
+        try {
+            boolean ok = add(prefs, poolKey, seenKey, did, raw, norm, today);
+            if (!ok) return false;
+            // 回填来源到刚写入/命中的那一条
+            List<Item> items = load(prefs, poolKey);
+            String key = norm == null || norm.length() == 0 ? clip(raw, MAX_TEXT) : clip(norm, MAX_TEXT);
+            boolean touched = false;
+            for (Item it : items) {
+                if (it.r != null && it.r.equals(key)) {
+                    // #1：来源**累加**，不再覆盖 —— 同句来自多个 bot 时保留全部来源
+                    if (targetId != null && targetId.length() > 0) it.addTid(targetId);
+                    if (replyFromDid != 0L) it.addFrom(replyFromDid);
+                    if (did != 0L) it.chat = did;
+                    touched = true;
+                }
+            }
+            if (touched) save(prefs, poolKey, items);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     public static boolean add(SharedPreferences prefs, String poolKey, String seenKey,
                               long did, String raw, String norm, String today) {
         try {
@@ -86,17 +171,21 @@ public final class UnkPool {
             String key = norm == null || norm.length() == 0 ? clip(raw, MAX_TEXT) : clip(norm, MAX_TEXT);
             if (key == null || key.length() == 0) return false;
 
-            // 1. 限频：该 bot 今日已记满则直接返回
+            // 1. 限频（#2 修正语义）
+            //   ① 每 bot 每天最多 DAILY_PER_BOT 条候选  → 键 = 纯 did
+            //   ② 同一 normalized 每天最多 PER_PATTERN_PER_DAY 次 → 键 = did + "|" + 模式哈希
+            // 旧实现只有 ②（每(会话×每原文)各 8 条），于是「每 bot 每天 8 条」从未生效，
+            // 一个 bot 可以往池里灌任意多条（只要措辞不同）。
             Map<String, int[]> seen = loadSeen(prefs, seenKey);
-            // 2026-10-04：限频键改为 did+id（每个目标独立配额）。
-            // 原先按 did 限频，一个 bot 下多个目标共用 5 条，
-            // 用户反复测同一 bot 时很快打满，之后完全不采集（实测 "7002913751 20261004 5"）。
-            String didKey = did + "|" + (raw == null ? "" : raw.hashCode());
-            // 说明：用 (did, 回复内容哈希) 作限频键 —— 同一目标的同一句话只记一次，
-            // 不同目标/不同内容各有配额，避免一个 bot 撑爆整池。
+            String didKey = String.valueOf(did);
             int[] rec = seen.get(didKey);
             if (rec != null && today != null && today.equals(dayOf(rec))) {
                 if (rec[1] >= DAILY_PER_BOT) return false;
+            }
+            String patKey = did + "|" + (key == null ? "" : key.hashCode());
+            int[] prec = seen.get(patKey);
+            if (prec != null && today != null && today.equals(dayOf(prec))) {
+                if (prec[1] >= PER_PATTERN_PER_DAY) return false;
             }
 
             // 2. 读池
@@ -112,17 +201,22 @@ public final class UnkPool {
                 // 刷新样例（保留最新一条，展示更贴近现状）
                 if (raw != null && raw.length() > 0) hit.o = clip(raw, MAX_SAMPLE);
             } else {
-                items.add(new Item(System.currentTimeMillis(), did, 1, key, clip(raw, MAX_SAMPLE)));
+                Item ni = new Item(System.currentTimeMillis(), did, 1, key, clip(raw, MAX_SAMPLE));
+                ni.chat = did;
+                items.add(ni);
                 trim(items);
             }
 
             // 4. 落盘
             save(prefs, poolKey, items);
 
-            // 5. 更新限频
+            // 5. 更新限频（两个计数器一起走）
             if (today != null) {
+                int day = Integer.parseInt(today.replace("-", "").substring(0, 8));
                 int cur = (rec != null && today.equals(dayOf(rec))) ? rec[1] : 0;
-                seen.put(didKey, new int[]{Integer.parseInt(today.replace("-", "").substring(0, 8)), cur + 1});
+                seen.put(didKey, new int[]{day, cur + 1});
+                int pcur = (prec != null && today.equals(dayOf(prec))) ? prec[1] : 0;
+                seen.put(patKey, new int[]{day, pcur + 1});
                 saveSeen(prefs, seenKey, seen);
             }
             return true;
@@ -175,6 +269,34 @@ public final class UnkPool {
         } catch (Throwable t) { return false; }
     }
 
+    /**
+     * 批量删除（一次读写多条）—— 卡顿修复。
+     *
+     * 旧路径：每次 remove() 都 load 全池 + save 全池。
+     *   学习页每次操作都要删一条，池子大时等于反复重写整段 prefs 字符串。
+     * 本方法一次遍历删除全部命中项，只写一次盘。
+     *
+     * @return 实际删除的条数
+     */
+    public static int removeBatch(SharedPreferences prefs, String poolKey,
+                                  java.util.Collection<String> norms) {
+        try {
+            if (prefs == null || poolKey == null || norms == null || norms.isEmpty()) return 0;
+            java.util.HashSet<String> set = new java.util.HashSet<String>();
+            for (String n : norms) { if (n != null && n.length() > 0) set.add(n); }
+            if (set.isEmpty()) return 0;
+            List<Item> items = load(prefs, poolKey);
+            int before = items.size();
+            for (int i = items.size() - 1; i >= 0; i--) {
+                Item it = items.get(i);
+                if (it != null && it.r != null && set.contains(it.r)) items.remove(i);
+            }
+            int removed = before - items.size();
+            if (removed > 0) save(prefs, poolKey, items);
+            return removed;
+        } catch (Throwable t) { return 0; }
+    }
+
     /** 清空池与限频记录。 */
     public static void clear(SharedPreferences prefs, String poolKey, String seenKey) {
         try {
@@ -213,7 +335,14 @@ public final class UnkPool {
                   .append(FIELD_SEP).append("d").append(PAIR_SEP).append(it.d)
                   .append(FIELD_SEP).append("n").append(PAIR_SEP).append(it.n)
                   .append(FIELD_SEP).append("r").append(PAIR_SEP).append(esc(it.r))
-                  .append(FIELD_SEP).append("o").append(PAIR_SEP).append(esc(it.o));
+                  .append(FIELD_SEP).append("o").append(PAIR_SEP).append(esc(it.o))
+                  // 2026-10-06：来源字段（旧记录没有这几个 key，读时留空即可）
+                  .append(FIELD_SEP).append("tid").append(PAIR_SEP).append(esc(it.tid))
+                  .append(FIELD_SEP).append("from").append(PAIR_SEP).append(it.from)
+                  .append(FIELD_SEP).append("chat").append(PAIR_SEP).append(it.chat)
+                  // #1：来源集合（旧记录没有，读时留空 → fromList() 会退回单个 from）
+                  .append(FIELD_SEP).append("froms").append(PAIR_SEP).append(esc(it.froms))
+                  .append(FIELD_SEP).append("tids").append(PAIR_SEP).append(esc(it.tids));
             }
             prefs.edit().putString(poolKey, sb.toString()).apply();
         } catch (Throwable ignored) {}
@@ -233,6 +362,11 @@ public final class UnkPool {
                 else if ("n".equals(k)) it.n = parseInt(v);
                 else if ("r".equals(k)) it.r = v;
                 else if ("o".equals(k)) it.o = v;
+                else if ("tid".equals(k)) it.tid = v;
+                else if ("from".equals(k)) it.from = parseLong(v);
+                else if ("chat".equals(k)) it.chat = parseLong(v);
+                else if ("froms".equals(k)) it.froms = v;
+                else if ("tids".equals(k)) it.tids = v;
             }
             return it;
         } catch (Throwable t) { return null; }

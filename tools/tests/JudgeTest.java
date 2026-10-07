@@ -136,8 +136,8 @@ public final class JudgeTest {
     // ══════════════════════════════════════════════════════════════
     //  内存版假 SharedPreferences（仅测试用）
     // ══════════════════════════════════════════════════════════════
-    static final class FakePrefs implements SharedPreferences {
-        final Map<String, Object> m = new HashMap<String, Object>();
+    public static final class FakePrefs implements SharedPreferences {
+        public final Map<String, Object> m = new HashMap<String, Object>();
 
         @Override public Map<String, ?> getAll() { return m; }
         @Override public String getString(String k, String d) { Object v = m.get(k); return v == null ? d : (String) v; }
