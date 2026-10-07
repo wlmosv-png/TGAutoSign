@@ -16664,6 +16664,19 @@ public final class TGAutoSignCore {
             //   候选 == 0 → 继续（走到 FALLBACK 或 NONE）
             Map<String, Object> only = null;
             int candCount = 0;
+            // ── 2026-10-07 修「群里手动签到，bot 回了也判不出」──
+            // PEER_TTL 原来硬要求 sent_at_ > 0（只有模块自己发过才写）。
+            // 用户**手动**在群里发「签到」时 sent_at_ 不存在 → 候选恒为 0
+            // → 而 ④ FALLBACK 对群聊是禁用的 → 彻底判不出。
+            // 真机日志实证：
+            //   [群聊未关联] chat=-1001943736638 candidateCount=0 method=NONE（该会话目标数=1）
+            // 现在分两轮扫：
+            //   第一轮 = 原来的口径（模块发出、仍在 TTL 内）
+            //   第二轮 = 群聊专属兜底：该会话**只有一个目标**且发送者像 bot 时，
+            //            即便没有 sent_at_ 也认它。唯一性由「会话内目标数 == 1」保证，
+            //            误判风险由下游的判定词命中再兜一层（不命中不会算签成功）。
+            int peerTargets = 0;
+            for (Map<String, Object> m : list) if (entryDid(m) == peerDid) peerTargets++;
             for (Map<String, Object> m : list) {
                 if (entryDid(m) != peerDid) continue;
                 // 已绑 bot 且与发送者不符 → 排除（同群多 bot 不污染）
@@ -16678,9 +16691,29 @@ public final class TGAutoSignCore {
                 long sent = prefs.getLong(prefix + "sent_at_" + entryId(m), 0L);
                 if (sent <= 0L) continue;
                 if (now - sent > PENDING_TTL_MS) continue;
-                // 带按钮/回调的群目标（有 msgId）优先，避免菜单消息抢关联
                 candCount++;
                 only = m;
+            }
+            // 第二轮：群聊 + 该会话唯一目标 + 发送者像 bot → 认它
+            if (candCount == 0 && group && peerTargets == 1 && rm.senderLooksLikeBot) {
+                for (Map<String, Object> m : list) {
+                    if (entryDid(m) != peerDid) continue;
+                    if (fromDid != 0L) {
+                        long boundBot = 0L;
+                        try {
+                            Object bb = m.get("botDid");
+                            if (bb instanceof Number) boundBot = ((Number) bb).longValue();
+                        } catch (Throwable ignored) {}
+                        if (boundBot != 0L && boundBot != fromDid) continue;
+                    }
+                    only = m;
+                    candCount = 1;
+                    break;
+                }
+                if (candCount == 1) {
+                    logd("[回复关联] chat=" + peerDid + " fromBot=" + fromDid
+                         + " 群内唯一目标，无发送记录也关联（手动签到场景）");
+                }
             }
             // 真机修复：发送者不像 bot 时也允许「唯一候选」路径 ——
             //   否则取不到 bot 标志就会把正常回复全部丢掉（原行为）。
