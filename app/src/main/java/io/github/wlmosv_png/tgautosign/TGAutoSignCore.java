@@ -10185,12 +10185,12 @@ public final class TGAutoSignCore {
             // ── ④ 待确认的目标 ─────────────────────────────────────
             LinearLayout s4 = stepSection(act, box, "④ 待确认的目标", "网络学习命中、等你点头的目标", Theme.termGreen(act), stepRefs, 3);
             int pcCount = 0;
-            try { pcCount = pendingConfirmDids(currentAccount()).size(); } catch (Throwable ignored) {}
+            try { pcCount = pendingConfirmCount(currentAccount()); } catch (Throwable ignored) {}
             TextView pcVal = new TextView(act);
             pcVal.setTextSize(Theme.TS_SECOND);
             pcVal.setTextColor(pcCount > 0 ? Theme.termGreen(act) : Theme.termTxt(act));
             pcVal.setTypeface(android.graphics.Typeface.MONOSPACE);
-            pcVal.setText(pcCount > 0 ? Lang.tf("有 {0} 个等你确认", pcCount) : Lang.tr("暂无待添加"));
+            pcVal.setText(pcCount > 0 ? Lang.tf("有 {0} 个等你确认", pcCount) : Lang.tr("暂时没有等你确认的"));
             s4.addView(pcVal, new LinearLayout.LayoutParams(-1, -2));
 
             Button pcBtn = quietBtn(act, "去处理", "check");
@@ -10290,24 +10290,25 @@ public final class TGAutoSignCore {
             box.setOrientation(LinearLayout.VERTICAL);
             final Object[] curDlg = new Object[1];
             final int pendingAcc = currentAccount();
-            final java.util.List<Long> dids = pendingConfirmDids(pendingAcc);
-            final java.util.List<String> texts = pendingConfirmTexts(pendingAcc);
-            final java.util.List<String> reasons = pendingConfirmReasons(pendingAcc);
-            if (dids.isEmpty()) {
+            final java.util.List<PcItem> items = pendingConfirmItems(pendingAcc);
+            final int total = items.size();
+            if (items.isEmpty()) {
                 TextView e = new TextView(act); e.setTextSize(Theme.TS_BODY); e.setTextColor(Theme.termMuted(act)); e.setTypeface(Theme.text());
-                e.setText(Lang.tr("(待添加列表为空)\n网络学习命中且「需确认」开启时，这里会出现候选目标。"));
+                e.setText(Lang.tr("(这里还没有内容)\n遇到拿不准的按钮，我会先放到这里问你。"));
                 e.setPadding(dp(8), dp(12), dp(8), dp(12));
                 box.addView(e);
             } else {
                 /* top hint (2026-09-29 enhanced) */
                 TextView hint = new TextView(act); hint.setTextSize(Theme.TS_CAPTION); hint.setTextColor(Theme.termFaint(act)); hint.setTypeface(Theme.text());
-                hint.setText(Lang.tr("以下目标来自网络学习，确认后加入自动签到。点「加入」确认，点「忽略」丢弃。"));
+                hint.setText(Lang.tr("这些我拿不准是不是签到目标。点「加入」我就记住它，点「忽略」就当没见过。"));
                 hint.setPadding(dp(4), dp(4), dp(4), dp(8));
                 box.addView(hint);
-                for (int i = 0; i < dids.size(); i++) {
-                    final long did = dids.get(i);
-                    final String text = i < texts.size() ? texts.get(i) : "";
-                    final String reason = i < reasons.size() ? reasons.get(i) : "";
+                for (int i = 0; i < items.size(); i++) {
+                    final PcItem _it = items.get(i);
+                    final int _idx = i;
+                    final long did = _it.did;
+                    final String text = _it.text == null ? "" : _it.text;
+                    final String reason = _it.reason == null ? "" : _it.reason;
 
                     /* card layout matching the rest of the UI */
                     LinearLayout card = new LinearLayout(act);
@@ -10331,9 +10332,12 @@ public final class TGAutoSignCore {
                         tx.setTextSize(Theme.TS_CAPTION);
                         tx.setTextColor(Theme.termMuted(act));
                         tx.setTypeface(android.graphics.Typeface.MONOSPACE);
-                        tx.setSingleLine(true);
+                        // 2026-10-07：不再单行截断 —— 按钮文案有时候很长，
+                        // 截断后用户看不懂这到底是哪个按钮（截图反馈「checkin 后面一堆东西」）。
+                        tx.setSingleLine(false);
+                        tx.setMaxLines(3);
                         tx.setEllipsize(android.text.TextUtils.TruncateAt.END);
-                        tx.setText(text.trim().replace("\n", " "));
+                        tx.setText(text.trim());
                         tx.setPadding(0, dp(2), 0, 0);
                         card.addView(tx);
                     }
@@ -10398,7 +10402,7 @@ public final class TGAutoSignCore {
 
                     Button ign = mkBtn(act); withIconText(act, ign, "x", "忽略");
                     ign.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
-                        pendingConfirmRemove(pendingAcc, did); toast("已忽略"); dismissOne(curDlg[0]); showPendingConfirm(act);
+                        pendingConfirmRemoveAt(pendingAcc, _idx); toast("已忽略"); dismissOne(curDlg[0]); showPendingConfirm(act);
                     } });
                     acts.addView(ign);
 
@@ -10409,7 +10413,22 @@ public final class TGAutoSignCore {
                     box.addView(card);
                 }
             }
-            curDlg[0] = showDialog(act, Lang.tf("待添加（{0}）", dids.size()), box, "关闭");
+            // 清空入口（2026-10-07）：上一版把同一个 bot 的多个按钮拼成了一条，
+            // 老数据已污染且无法还原 —— 给用户一个一键清空，别让它一直挂着。
+            if (total > 0) {
+                Button clr = quietBtn(act, "清空全部", "trash");
+                clr.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
+                    try {
+                        prefs.edit().putString(kPendingConfirm(pendingAcc), "").apply();
+                        toast("已清空");
+                        dismissOne(curDlg[0]); showPendingConfirm(act);
+                    } catch (Throwable ignored) {}
+                } });
+                LinearLayout.LayoutParams clp2 = new LinearLayout.LayoutParams(-1, -2);
+                clp2.topMargin = dp(8);
+                box.addView(clr, clp2);
+            }
+            curDlg[0] = showDialog(act, Lang.tf("待添加（{0}）", total), box, "关闭");
         } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
     }
 
@@ -15949,115 +15968,187 @@ public final class TGAutoSignCore {
             return true;
         } catch (Throwable t) { return false; }
     }
-    // ── 待确认池：网络学习命中但需用户确认才加入的目标 ──
-    private java.util.List<Long> pendingConfirmDids() { return pendingConfirmDids(currentAccount()); }
-    private java.util.List<Long> pendingConfirmDids(int account) {
-        java.util.List<Long> out = new java.util.ArrayList<Long>();
+    // ══════════════════════════════════════════════════════════════
+    // 待确认池（2026-10-07 重写）
+    //
+    // 一条 = 一个按钮，key 是 (bot, 文案)，**同一个 bot 的多个按钮各占一条**。
+    //
+    // 为什么重写：旧实现用 did 做唯一键，同一个 bot 再点一个按钮就把文案
+    // 拼到同一条上（oldT + " / " + tt）。结果 `|🌵|`、`| |` 这类装饰按钮
+    // 反复点击后堆成一条满是竖线的怪串（用户截图反馈）。
+    //
+    // 分隔符从 '|' 换成 '\u0001'：按钮文案里 | 极常见（emoji 包夹写法），
+    // 跟分隔符撞车会把整行解析错位。\u0001 是控制符，文案里不可能出现。
+    //
+    // 存盘格式（每行一条）：
+    //     did \u0001 base64(文案) \u0001 base64(原因)
+    // 用 base64 而不是直接放文本：文案可能含换行、控制符、撇号，
+    // 任何"替换掉再拼接"的做法都会丢信息。base64 之后是纯 ASCII，绝无冲突。
+    //
+    // 兼容：读到一个不含 \u0001 的旧行，尝试按老的 '|' 格式解析；
+    // 解析不了就整行跳过（旧数据已被上一版的拼接逻辑污染，救不回来）。
+    // ══════════════════════════════════════════════════════════════
+
+    private static final char PC_SEP = '\u0001';
+
+    private static String pcB64(String s) {
         try {
-            String raw = prefs.getString(kPendingConfirm(account), "");
-            if (raw == null || raw.trim().length() == 0) return out;
-            for (String line : raw.split("\\n")) {
-                String t = line.trim(); if (t.length() == 0) continue;
-                int sp = t.indexOf('|'); if (sp < 0) continue;
-                try { out.add(Long.parseLong(t.substring(0, sp).trim())); } catch (Throwable ignored) {}
-            }
-        } catch (Throwable ignored) {}
-        return out;
+            if (s == null) s = "";
+            return android.util.Base64.encodeToString(s.getBytes("UTF-8"),
+                    android.util.Base64.NO_WRAP | android.util.Base64.URL_SAFE);
+        } catch (Throwable t) { return ""; }
     }
 
-    private java.util.List<String> pendingConfirmTexts() { return pendingConfirmTexts(currentAccount()); }
-    private java.util.List<String> pendingConfirmTexts(int account) {
-        java.util.List<String> out = new java.util.ArrayList<String>();
+    private static String pcUnB64(String s) {
         try {
-            String raw = prefs.getString(kPendingConfirm(account), "");
-            if (raw == null || raw.trim().length() == 0) return out;
-            for (String line : raw.split("\\n")) {
-                String t = line.trim(); if (t.length() == 0) continue;
-                int sp = t.indexOf('|'); if (sp < 0) continue;
-                out.add(t.substring(sp + 1));
-            }
-        } catch (Throwable ignored) {}
-        return out;
+            if (s == null || s.length() == 0) return "";
+            byte[] b = android.util.Base64.decode(s,
+                    android.util.Base64.NO_WRAP | android.util.Base64.URL_SAFE);
+            return new String(b, "UTF-8");
+        } catch (Throwable t) { return ""; }
     }
 
-    private boolean pendingConfirmAdd(long did, String text) { return pendingConfirmAdd(currentAccount(), did, text, ""); }
-    private boolean pendingConfirmAdd(int account, long did, String text) { return pendingConfirmAdd(account, did, text, ""); }
-
-    /**
-     * 入待添加池。格式（2026-10-07 起）：did|text|reason
-     *
-     * reason 说明「为什么它没被自动学走」。旧行为里被导航判定 / 排除规则
-     * 拦下的按钮是彻底静默丢弃的，用户看不见也捞不回；现在一样入池，
-     * 只是带上原因，可加入、可忽略。旧数据只有两段，reason 读作空串，兼容。
-     */
-    private boolean pendingConfirmAdd(int account, long did, String text, String reason) {
-        try {
-            java.util.List<Long> dids = pendingConfirmDids(account);
-            java.util.List<String> texts = pendingConfirmTexts(account);
-            java.util.List<String> reasons = pendingConfirmReasons(account);
-            String tt = text == null ? "" : text.replace("\n", " ").replace('|', ' ');
-            String rr = reason == null ? "" : reason.replace("\n", " ").replace('|', ' ');
-            int idx = -1;
-            for (int i = 0; i < dids.size(); i++) {
-                if (dids.get(i) != null && dids.get(i).longValue() == did) { idx = i; break; }
-            }
-            if (idx >= 0) {
-                String oldT = idx < texts.size() ? texts.get(idx) : "";
-                if (tt.length() == 0 || tt.equals(oldT)) return false;
-                StringBuilder sb = new StringBuilder();
-                for (int i = 0; i < dids.size(); i++) {
-                    if (i > 0) sb.append('\n');
-                    String t2 = i < texts.size() ? texts.get(i) : "";
-                    String r2 = i < reasons.size() ? reasons.get(i) : "";
-                    if (i == idx) { t2 = oldT + " / " + tt; r2 = rr; }
-                    sb.append(dids.get(i)).append('|').append(t2).append('|').append(r2);
-                }
-                prefs.edit().putString(kPendingConfirm(account), sb.toString()).apply();
-                return true;
-            }
-            StringBuilder sb = new StringBuilder();
-            String raw = prefs.getString(kPendingConfirm(account), "");
-            if (raw != null && raw.trim().length() > 0) sb.append(raw).append('\n');
-            sb.append(did).append('|').append(tt).append('|').append(rr);
-            prefs.edit().putString(kPendingConfirm(account), sb.toString()).apply();
-            return true;
-        } catch (Throwable ignored) { return false; }
+    /** 一行解析结果：bot / 文案 / 原因。 */
+    private static final class PcItem {
+        long did; String text; String reason;
+        PcItem(long d, String t, String r) { did = d; text = t == null ? "" : t; reason = r == null ? "" : r; }
     }
 
-    /** 待添加条目的「未自动学习原因」；旧数据或空返回 ""。 */
-    private java.util.List<String> pendingConfirmReasons() { return pendingConfirmReasons(currentAccount()); }
-    private java.util.List<String> pendingConfirmReasons(int account) {
-        java.util.List<String> out = new java.util.ArrayList<String>();
+    /** 读全部待确认条目。一条一个按钮，顺序与存盘一致。 */
+    private java.util.List<PcItem> pendingConfirmItems() { return pendingConfirmItems(currentAccount()); }
+    private java.util.List<PcItem> pendingConfirmItems(int account) {
+        java.util.List<PcItem> out = new java.util.ArrayList<PcItem>();
         try {
             String raw = prefs.getString(kPendingConfirm(account), "");
             if (raw == null || raw.trim().length() == 0) return out;
             for (String line : raw.split("\n")) {
-                String t = line.trim(); if (t.length() == 0) continue;
-                int p1 = t.indexOf('|'); if (p1 < 0) { out.add(""); continue; }
-                int p2 = t.indexOf('|', p1 + 1);
-                out.add(p2 < 0 ? "" : t.substring(p2 + 1));
+                String t = line == null ? "" : line.trim();
+                if (t.length() == 0) continue;
+                int s1 = t.indexOf(PC_SEP);
+                if (s1 > 0) {
+                    // 新格式
+                    int s2 = t.indexOf(PC_SEP, s1 + 1);
+                    long did;
+                    try { did = Long.parseLong(t.substring(0, s1).trim()); } catch (Throwable e) { continue; }
+                    String tx = pcUnB64(s2 < 0 ? t.substring(s1 + 1) : t.substring(s1 + 1, s2));
+                    String rs = s2 < 0 ? "" : pcUnB64(t.substring(s2 + 1));
+                    if (tx.length() == 0 && rs.length() == 0) continue;
+                    out.add(new PcItem(did, tx, rs));
+                } else {
+                    // 旧格式兜底：did|文案(|原因) —— 文案本身可能含 |，只能尽量切两次
+                    int p1 = t.indexOf('|');
+                    if (p1 <= 0) continue;
+                    long did;
+                    try { did = Long.parseLong(t.substring(0, p1).trim()); } catch (Throwable e) { continue; }
+                    String rest = t.substring(p1 + 1);
+                    // 只有恰好还有 1 个 | 时才认为第三段是原因；否则整段当文案
+                    int p2 = rest.indexOf('|');
+                    String tx, rs = "";
+                    if (p2 > 0 && rest.indexOf('|', p2 + 1) < 0) { tx = rest.substring(0, p2); rs = rest.substring(p2 + 1); }
+                    else tx = rest;
+                    if (tx.length() == 0) continue;
+                    out.add(new PcItem(did, tx, rs));
+                }
             }
         } catch (Throwable ignored) {}
         return out;
     }
 
-    private boolean pendingConfirmRemove(long did) { return pendingConfirmRemove(currentAccount(), did); }
-    private boolean pendingConfirmRemove(int account, long did) {
+    /** 整池写回。 */
+    private void pendingConfirmSave(int account, java.util.List<PcItem> items) {
         try {
-            java.util.List<Long> dids = pendingConfirmDids(account);
-            java.util.List<String> texts = pendingConfirmTexts(account);
-            java.util.List<String> reasons = pendingConfirmReasons(account);
-            StringBuilder sb = new StringBuilder(); boolean removed = false;
-            for (int i = 0; i < dids.size(); i++) {
-                if (dids.get(i) != null && dids.get(i).longValue() == did) { removed = true; continue; }
+            StringBuilder sb = new StringBuilder();
+            for (PcItem it : items) {
+                if (it == null) continue;
                 if (sb.length() > 0) sb.append('\n');
-                sb.append(dids.get(i)).append('|').append(i < texts.size() ? texts.get(i) : "")
-                  .append('|').append(i < reasons.size() ? reasons.get(i) : "");
+                sb.append(it.did).append(PC_SEP).append(pcB64(it.text))
+                  .append(PC_SEP).append(pcB64(it.reason));
             }
             prefs.edit().putString(kPendingConfirm(account), sb.toString()).apply();
-            return removed;
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * 入池。key 是 (bot, 文案)：同一个按钮重复点只留一条；
+     * 同一个 bot 的**不同**按钮各占一条（旧实现会拼成一条，是 bug）。
+     */
+    private boolean pendingConfirmAdd(long did, String text, String reason) {
+        return pendingConfirmAdd(currentAccount(), did, text, reason);
+    }
+    private boolean pendingConfirmAdd(int account, long did, String text, String reason) {
+        try {
+            String tx = text == null ? "" : text.trim();
+            if (did == 0 || tx.length() == 0) return false;
+            java.util.List<PcItem> items = pendingConfirmItems(account);
+            for (PcItem it : items) {
+                if (it.did == did && tx.equals(it.text)) return false;   // 同一个按钮，已在池里
+            }
+            items.add(new PcItem(did, tx, reason == null ? "" : reason));
+            pendingConfirmSave(account, items);
+            return true;
         } catch (Throwable ignored) { return false; }
     }
+
+    /** 按 index 删除（界面用行号操作 —— 同一 bot 可能有多条，did 不再唯一）。 */
+    private boolean pendingConfirmRemoveAt(int account, int index) {
+        try {
+            java.util.List<PcItem> items = pendingConfirmItems(account);
+            if (index < 0 || index >= items.size()) return false;
+            items.remove(index);
+            pendingConfirmSave(account, items);
+            return true;
+        } catch (Throwable ignored) { return false; }
+    }
+
+    /** 兼容旧调用：按 (bot, 文案) 删除。 */
+    private boolean pendingConfirmRemove(long did, String text) { return pendingConfirmRemove(currentAccount(), did, text); }
+    private boolean pendingConfirmRemove(int account, long did, String text) {
+        try {
+            java.util.List<PcItem> items = pendingConfirmItems(account);
+            String tx = text == null ? "" : text.trim();
+            for (int i = 0; i < items.size(); i++) {
+                if (items.get(i).did == did && (tx.length() == 0 || tx.equals(items.get(i).text))) {
+                    items.remove(i);
+                    pendingConfirmSave(account, items);
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /** 池里有多少条（= 多少个按钮）。 */
+    private int pendingConfirmCount() { return pendingConfirmCount(currentAccount()); }
+    private int pendingConfirmCount(int account) { return pendingConfirmItems(account).size(); }
+
+    /** 旧接口保留（别处按 did 用），返回去重后的 bot 列表。 */
+    private java.util.List<Long> pendingConfirmDids() { return pendingConfirmDids(currentAccount()); }
+    private java.util.List<Long> pendingConfirmDids(int account) {
+        java.util.List<Long> out = new java.util.ArrayList<Long>();
+        for (PcItem it : pendingConfirmItems(account)) {
+            if (!out.contains(Long.valueOf(it.did))) out.add(Long.valueOf(it.did));
+        }
+        return out;
+    }
+
+    /** 兼容：旧的每行文案列表（拼接成一行显示用）。 */
+    private java.util.List<String> pendingConfirmTexts() { return pendingConfirmTexts(currentAccount()); }
+    private java.util.List<String> pendingConfirmTexts(int account) {
+        java.util.List<String> out = new java.util.ArrayList<String>();
+        for (PcItem it : pendingConfirmItems(account)) out.add(it.text);
+        return out;
+    }
+
+    private java.util.List<String> pendingConfirmReasons() { return pendingConfirmReasons(currentAccount()); }
+    private java.util.List<String> pendingConfirmReasons(int account) {
+        java.util.List<String> out = new java.util.ArrayList<String>();
+        for (PcItem it : pendingConfirmItems(account)) out.add(it.reason);
+        return out;
+    }
+
+    /** 旧签名兼容（reason 为空）。 */
+    private boolean pendingConfirmAdd(long did, String text) { return pendingConfirmAdd(currentAccount(), did, text, ""); }
+    private boolean pendingConfirmAdd(int account, long did, String text) { return pendingConfirmAdd(account, did, text, ""); }
 
     // 记住「这只 bot 的按钮都自动加入」：把 bot 名加入必学规则。
     // 用 bot 的数字 id 不合适（规则匹配的是按钮文案与 data），
@@ -16117,7 +16208,7 @@ public final class TGAutoSignCore {
     private boolean pendingConfirmAccept(long did, String text) { return pendingConfirmAccept(currentAccount(), did, text); }
     private boolean pendingConfirmAccept(int account, long did, String text) {
         try {
-            pendingConfirmRemove(account, did);
+            pendingConfirmRemove(account, did, text);
             // 用户确认路径：短时放行，让 learnTarget 跳过「需确认」判断。
             learnBypassUntil = System.currentTimeMillis() + 1500L;
             // learnTarget() 使用当前账号；这里 UI 操作必须先确认当前账号仍等于列表所属账号。
