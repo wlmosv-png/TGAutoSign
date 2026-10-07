@@ -4544,7 +4544,14 @@ public final class TGAutoSignCore {
                 }
             }
         } catch (Throwable _e6) { noteSwallowed("learnFromNetwork", _e6); }
-        if (!isBot) {
+        // ── 2026-10-07 群聊放行 ──
+        // did < 0 表示群 / 频道：这里的「你要关注的」是这个群本身，不是某个 bot。
+        // 旧写法无条件要求「发送者是个 bot」，而群 id 去 getUser 必然查不到
+        // → isBot 恒为 false → 群里发的签到文本永远学不进来（用户实测）。
+        // 群聊场景的发送者是用户自己，本来就不该拿 bot 标志去卡它；
+        // 误学风险由「关键词匹配 + 需确认」两道闸兜住。
+        boolean isGroupTarget = did < 0L;
+        if (!isBot && !isGroupTarget) {
             logd("[候选] uid=" + did + " msg=" + t + "（非bot，不自动添加）");
             return;
         }
@@ -16527,6 +16534,16 @@ public final class TGAutoSignCore {
     // @param replyToId   reply_to_msg_id（0 = 无）
     // @param prefix      prefs 前缀（读 sent_at_ / msg_id_ 用）
     ///
+    /** 某个会话（群/私聊）在目标列表里有几条。用于群聊关联失败时的诊断日志。 */
+    private int countTargetsInPeer(List<Map<String, Object>> list, long peerDid) {
+        int n = 0;
+        try {
+            if (list == null) return 0;
+            for (Map<String, Object> m : list) if (entryDid(m) == peerDid) n++;
+        } catch (Throwable ignored) {}
+        return n;
+    }
+
     private ReplyMatch resolveReplyTarget(List<Map<String, Object>> list, long peerDid,
                                           long fromDid, boolean fromIsBot,
                                           int replyToId, String prefix) {
@@ -16589,11 +16606,12 @@ public final class TGAutoSignCore {
                     if (boundBot != 0L && boundBot == fromDid) {
                         rm.target = m; rm.method = "BOT_DID"; return rm;
                     }
-                    // 未绑定但发送者是 bot → 立刻登记（#4），下次就能走 BOT_DID 精确关联
-                    if (boundBot == 0L && fromDid != 0L) {
-                        persistBotDid(prefix, m, fromDid);
-                    }
-                    // 未绑定 bot：留给 ③ 的唯一性判定
+                    // ── 2026-10-07 修「群里第二个目标永远判不出」──
+                    // 旧实现在这里就对**每一个**未绑定的同群目标 persistBotDid(fromDid)：
+                    //   同一个群挂 2 个目标时，bot 回一条 → 两条都被绑成同一个 bot
+                    //   → 下次两条都满足 boundBot == fromDid → 循环永远命中第一条，
+                    //   第二条再也拿不到回复（用户实测：群里 bot 明明回了、判不出）。
+                    // 绑定必须**只在能唯一确定**时才做，挪到 ③ 判出唯一候选之后。
                 }
             }
 
@@ -16630,7 +16648,18 @@ public final class TGAutoSignCore {
             // 真机修复：发送者不像 bot 时也允许「唯一候选」路径 ——
             //   否则取不到 bot 标志就会把正常回复全部丢掉（原行为）。
             //   风险由「候选唯一」兜住：多目标（>1）依然 AMBIGUOUS，不猜。
-            if (candCount == 1 && only != null) { rm.target = only; rm.method = "PEER_TTL"; return rm; }
+            if (candCount == 1 && only != null) {
+                // 唯一候选：此时才敢把它和发送者绑定（下次可走 BOT_DID 精确关联）。
+                // 候选 >1 时不绑 —— 绑错会让某一条永远抢走全部回复，见 ② 的说明。
+                if (group && fromDid != 0L) {
+                    try {
+                        Object _bb = only.get("botDid");
+                        long _b = (_bb instanceof Number) ? ((Number) _bb).longValue() : 0L;
+                        if (_b == 0L) persistBotDid(prefix, only, fromDid);
+                    } catch (Throwable ignored) {}
+                }
+                rm.target = only; rm.method = "PEER_TTL"; return rm;
+            }
             if (candCount > 1) {
                 rm.target = null;
                 rm.method = "AMBIGUOUS";
@@ -16871,8 +16900,15 @@ public final class TGAutoSignCore {
             if (rn.contains("TL_messages_getBotCallbackAnswer")) {
                 try {
                     Object peer = getFieldVal(req, "peer");
+                    // ── 2026-10-07 修「群里点按钮学不到」──
+                    // 旧写法只读 peer.user_id：群聊 / 频道的 peer 是 peerChat / peerChannel，
+                    // 没有 user_id 字段 → uid 恒为 null → 整块学习被静默跳过
+                    //（日志实测：群聊从未产生任何目标）。
+                    // onUpdateProcessed 早修过同一问题，这两处 hook 漏网。
+                    // 改用统一解析，群/频道得到负数 id，与目标条目 did 口径一致。
                     Object uid = null;
-                    if (peer != null) { try { uid = getFieldVal(peer, "user_id"); } catch (Throwable ignored) {} }
+                    long _pd = resolveDialogIdFromPeer(peer);
+                    if (_pd != 0L) uid = Long.valueOf(_pd);
                     if (uid != null) {
                         Object data = getFieldVal(req, "data");
                         if (data instanceof byte[]) {
@@ -16976,8 +17012,10 @@ public final class TGAutoSignCore {
                         return true;
                     }
                 }
+                // ── 2026-10-07 同上：群聊 peer 没有 user_id ──
                 Object uid = null;
-                if (peer != null) { try { uid = getFieldVal(peer, "user_id"); } catch (Throwable ignored) {} }
+                long _pd2 = resolveDialogIdFromPeer(peer);
+                if (_pd2 != 0L) uid = Long.valueOf(_pd2);
                 if (uid != null) {
                     timerHook("TG活动");
                     final Object fUid = uid;
@@ -17226,6 +17264,19 @@ public final class TGAutoSignCore {
                          + " replyTo=" + replyToMsgId
                          + " candidateCount=" + rm.candidateCount
                          + " target=none method=" + rm.method);
+                }
+                // ── 2026-10-07：群聊里「看起来是 bot 发的」却关联不上，必须落盘 ──
+                // 用户反馈「群里 bot 明明回了签到成功，模块判不出」，而 [回复关联]
+                // 是 logd（默认不落盘）→ 事后完全无从诊断。
+                // 这里只针对「发送者像 bot」的群消息补一条持久日志：
+                // 群友闲聊不会触发，不会刷屏。
+                if (peerUid < 0L && (rm.senderLooksLikeBot || fromIsBot)) {
+                    logw("[群聊未关联] chat=" + peerUid + " from=" + fromUid
+                         + " isBot=" + fromIsBot + " lookBot=" + rm.senderLooksLikeBot
+                         + " replyTo=" + replyToMsgId
+                         + " candidateCount=" + rm.candidateCount
+                         + " method=" + rm.method
+                         + "（该会话目标数=" + countTargetsInPeer(replyTargets, peerUid) + "）");
                 }
                 continue;
             }
