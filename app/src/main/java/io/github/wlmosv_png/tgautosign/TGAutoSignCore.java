@@ -16017,6 +16017,7 @@ public final class TGAutoSignCore {
     /** 读全部待确认条目。一条一个按钮，顺序与存盘一致。 */
     private java.util.List<PcItem> pendingConfirmItems() { return pendingConfirmItems(currentAccount()); }
     private java.util.List<PcItem> pendingConfirmItems(int account) {
+        int oldDropped = 0;
         java.util.List<PcItem> out = new java.util.ArrayList<PcItem>();
         try {
             String raw = prefs.getString(kPendingConfirm(account), "");
@@ -16035,20 +16036,18 @@ public final class TGAutoSignCore {
                     if (tx.length() == 0 && rs.length() == 0) continue;
                     out.add(new PcItem(did, tx, rs));
                 } else {
-                    // 旧格式兜底：did|文案(|原因) —— 文案本身可能含 |，只能尽量切两次
-                    int p1 = t.indexOf('|');
-                    if (p1 <= 0) continue;
-                    long did;
-                    try { did = Long.parseLong(t.substring(0, p1).trim()); } catch (Throwable e) { continue; }
-                    String rest = t.substring(p1 + 1);
-                    // 只有恰好还有 1 个 | 时才认为第三段是原因；否则整段当文案
-                    int p2 = rest.indexOf('|');
-                    String tx, rs = "";
-                    if (p2 > 0 && rest.indexOf('|', p2 + 1) < 0) { tx = rest.substring(0, p2); rs = rest.substring(p2 + 1); }
-                    else tx = rest;
-                    if (tx.length() == 0) continue;
-                    out.add(new PcItem(did, tx, rs));
+                    // ── 旧格式行：一律丢弃（2026-10-07）──
+                    // 老格式用 '|' 分隔、且上一版把同一个 bot 的多个按钮拼成一条
+                    // （oldT + " / " + tt），数据已被污染，无法可靠还原。
+                    // 继续显示只会让用户看到满屏竖线和 " / " 拼串
+                    //（截图反馈「这些字符是啥呀」）。直接清掉，不显示。
+                    oldDropped++;
                 }
+            }
+            // 一次性迁移：丢掉旧格式行后立刻写回，避免每次读取都重解析
+            if (oldDropped > 0) {
+                pendingConfirmSave(account, out);
+                logd("[待确认] 已清理 " + oldDropped + " 条旧格式数据（旧版拼接 bug 遗留）");
             }
         } catch (Throwable ignored) {}
         return out;
