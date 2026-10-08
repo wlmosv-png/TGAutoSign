@@ -17635,6 +17635,30 @@ public final class TGAutoSignCore {
             try { loadTargetsInto(ctrlAcc >= 0 ? accountPrefix(ctrlAcc) : accountPrefix(), replyTargets); }
             catch (Throwable _eRT) { noteSwallowed("onUpdateProcessed(loadTargets)", _eRT); }
             final String _rtPrefix = ctrlAcc >= 0 ? accountPrefix(ctrlAcc) : accountPrefix();
+            // ── 2026-10-09 群聊短路：这个会话没在等结论，就什么都别做 ──
+            //
+            // 用户原话：「群聊签到 我只需要在我发送签到指令 或者自动发送后
+            //   捕获有效信息 不要把别人的弄进来呀」
+            //
+            // 此前群聊里**每条消息**都要走完整关联流程（载入目标、逐个比对
+            // did/botDid/sent_at_、判候选数）。日志虽然已经降噪，但**计算仍在做** ——
+            // 群一活跃就是纯空转，而且任何"没关联上"的分支都还有机会写出东西。
+            //
+            // 现在在源头短路：该会话里**没有任何处于「已发出、等结论」的目标**
+            // 就直接跳过。语义上也更对 —— 我们只关心自己触发的那次交互。
+            if (isGroupPeer) {
+                boolean _anyAwaiting = false;
+                try {
+                    for (Map<String, Object> _tm : replyTargets) {
+                        if (!samePeerDid(entryDid(_tm), peerUid)) continue;
+                        String _tid = entryId(_tm);
+                        if (isSentPendingFresh(_rtPrefix, _tid) || isPendingFresh(_rtPrefix, _tid)) {
+                            _anyAwaiting = true; break;
+                        }
+                    }
+                } catch (Throwable ignored) {}
+                if (!_anyAwaiting) continue;
+            }
             ReplyMatch rm = resolveReplyTarget(replyTargets, peerUid, fromUid, fromIsBot,
                                                replyToMsgId, _rtPrefix);
             if (rm.target == null) {
