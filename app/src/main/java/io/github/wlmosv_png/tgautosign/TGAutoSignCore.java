@@ -83,7 +83,21 @@ public final class TGAutoSignCore {
     // **刻意不含 /start** —— 它是「前置命令」（拉面板），不是签到命令；
     // 加进来会导致用户在任意 bot 发 /start 都被学成签到目标（通用命令，必误伤）。
     // 需要它的目标请在条目的「前置命令序列」里填。
-    private static final String DEF_KEYWORDS = "签到,打卡,checkin,/checkin,/check,claim,领取,签到领,每日,报到,/qd,/qiandao,/sign,/daily,daily,/clock,/kaoqin";
+    /**
+     * 默认学习关键词（2026-10-09 去重）。
+     *
+     * 匹配是**子串**（text.contains(kw)，见 keywordHit / learnFromNetwork），
+     * 所以下面这些被更短的项完全覆盖，属于纯冗余，已删：
+     *   /checkin  （checkin 已覆盖）
+     *   /check    （checkin 已覆盖）
+     *   签到领     （签到 已覆盖）
+     *   /daily    （daily 已覆盖）
+     * 保留斜杠指令中**互不覆盖**的那些（/qd、/qiandao、/sign…）——
+     * bot 要求的口令形式各有不同，它们彼此不同，不能只留一个。
+     */
+    private static final String DEF_KEYWORDS = "签到,打卡,checkin,claim,领取,每日,报到,/qd,/qiandao,/sign,/daily,/clock,/kaoqin";
+    /** 上一版默认值：仅用于「用户没改过就自动升级」的迁移判断。 */
+    private static final String DEF_KEYWORDS_OLD = "签到,打卡,checkin,/checkin,/check,claim,领取,签到领,每日,报到,/qd,/qiandao,/sign,/daily,daily,/clock,/kaoqin";
     private String LEARN_KEYWORDS = DEF_KEYWORDS;
     /** 排除规则：一行一条，命中即不学习。支持正则（用 /.../ 包裹），否则按子串匹配。 */
     private String LEARN_EXCLUDE = "";
@@ -664,6 +678,19 @@ public final class TGAutoSignCore {
         return withIcon(c, b, name);
     }
 
+    /**
+     * 指定图标色版本的「图标 + 文字」（2026-10-09）。
+     *
+     * 为什么需要：主按钮是**实心主色底 + 反色文字**（onPrimary），
+     * 而 withIconText 默认把图标画成 termCyan —— 一深一亮，看着像拼凑。
+     * 主按钮调用这个重载，让图标与文字同色。
+     */
+    private Button withIconText(Context c, Button b, String name, String text, int iconColor) {
+        if (b == null) return b;
+        b.setText(Lang.tr(text));
+        return withIcon(c, b, name, iconColor);
+    }
+
     private Button mkBtn(Context c) {
         Button b = new Button(c);
         b.setAllCaps(false);
@@ -691,12 +718,18 @@ public final class TGAutoSignCore {
         b.setTextColor(Theme.onPrimary(c));
         b.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
         try { b.setBackground(controlBg(c, Theme.primaryFill(c))); } catch (Throwable ignored) {}
+        // 2026-10-09：触感不再逐按钮挂钩 —— 改为 showDialog 里的
+        //   **全局触点拦截**（一处覆盖 92 个可点控件 + 将来新增的）。
+        //   这里只留标记：主操作按钮给"重档"。
+        try { b.setTag(android.R.id.button1, "haptic-heavy"); } catch (Throwable ignored) {}
         return b;
     }
 
     /** 终端风按钮（危险：品红，用于删除/清空） */
     private Button mkBtnDanger(Context c) {
         Button b = mkBtn(c);
+        // 2026-10-09：危险按钮标记为"重档"触感（由全局拦截读取）
+        try { b.setTag(android.R.id.button1, "haptic-heavy"); } catch (Throwable ignored) {}
         b.setTextColor(Theme.termPink(c));
         // 危险动作同样去描边：浅粉**实色**底 + 粉字，靠色相区分而不是靠框。
         //   浅色模式下叠半透明会发灰，所以这里也 blend 出实色。
@@ -761,7 +794,7 @@ public final class TGAutoSignCore {
         box.addView(preview, plp);
 
         Button copyB = mkBtn(act);
-        withIconText(act, copyB, "copy", "复制文案");
+        withIconText(act, copyB, "copy", "复制文案", Theme.termCyan(act));
         copyB.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
             try {
                 android.content.ClipboardManager cm = (android.content.ClipboardManager)
@@ -775,7 +808,7 @@ public final class TGAutoSignCore {
         box.addView(copyB, blp);
 
         Button sysB = mkBtn(act);
-        withIconText(act, sysB, "upload", "系统分享（选应用）");
+        withIconText(act, sysB, "upload", "系统分享（选应用）", Theme.termCyan(act));
         sysB.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
             try {
                 android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_SEND);
@@ -1375,6 +1408,15 @@ public final class TGAutoSignCore {
         synchronized (TLOCK) { loadTargetsLocked(); started = true; }
         try {
             if (prefs.contains("jmb_keywords")) LEARN_KEYWORDS = prefs.getString("jmb_keywords", DEF_KEYWORDS);
+            // 2026-10-09：关键词表去重后的**静默迁移** ——
+            //   只在「用户存的值恰好等于旧默认」时才换新的（说明他没自己改过）；
+            //   用户自定义过的值一个字都不动。
+            try {
+                if (LEARN_KEYWORDS != null && LEARN_KEYWORDS.equals(DEF_KEYWORDS_OLD)) {
+                    LEARN_KEYWORDS = DEF_KEYWORDS;
+                    prefs.edit().putString("jmb_keywords", DEF_KEYWORDS).apply();
+                }
+            } catch (Throwable ignored) {}
             if (prefs.contains(kExclude())) LEARN_EXCLUDE = prefs.getString(kExclude(), "");
             LEARN_SKIP_NAV = prefs.getBoolean("jmb_skip_nav", true);
             BUTTON_LEARN_CONFIRM = prefs.getBoolean("jmb_btn_confirm", BUTTON_LEARN_CONFIRM);
@@ -1398,6 +1440,11 @@ public final class TGAutoSignCore {
             GAP_MIN = cfgInt("gap", 0);
             MISS_BACK = cfgBool("missback", false);
             if (prefs.contains("jmb_theme")) THEME_MODE = prefs.getInt("jmb_theme", 0);
+            // 2026-10-09 多主题：色板按 **key 名** 存，未知/缺失退默认（Nord）。
+            try {
+                String sk = prefs.getString("jmb_theme_style", "");
+                Theme.styleId = Theme.styleFromKey(sk);
+            } catch (Throwable ignored) { Theme.styleId = Theme.DEFAULT_STYLE; }
             if (prefs.contains("jmb_cal_style")) CAL_STYLE = prefs.getInt("jmb_cal_style", 0);
             if (prefs.contains("jmb_lang")) { try { io.github.wlmosv_png.tgautosign.Lang.MODE = prefs.getInt("jmb_lang", 0); } catch (Throwable ignored) {} }
             if (prefs.contains("jmb_notify")) NOTIFY_ON = prefs.getBoolean("jmb_notify", true);
@@ -2658,12 +2705,28 @@ public final class TGAutoSignCore {
         } catch (Throwable t) { return false; }
     }
 
+    /**
+     * 是否为「打开面板」命令（2026-10-09 支持短别名）。
+     *
+     * 原来只认 /jmb —— 用户反馈"每次用户 jmb 麻烦"。现在接受：
+     *   /jmb  /jb  /j
+     * 规则：**整词匹配**（后面必须是空白或结束），
+     *       否则 /joke、/join 这类会被误判成开面板。
+     * 群聊里 Telegram 会补成 /jmb@botname 形态，所以 @ 也算边界。
+     */
     private static boolean isJmbCommand(String raw) {
         String t = String.valueOf(raw).trim();
-        if (t.length() < 4 || !t.startsWith("/jmb")) return false;
-        if (t.length() == 4) return true;
-        char c = t.charAt(4);
-        return c == ' ' || c == '\n' || c == '\t';
+        // 2026-10-09：去掉 /jb（用户反馈"你听听 jb 好听吗"，确实有歧义）。
+        // 保留 /j（最短、好打）+ /tgas（与产品同名、好记）。
+        for (String cmd : new String[]{"/jmb", "/tgas", "/j"}) {
+            if (!t.startsWith(cmd)) continue;
+            int n = cmd.length();
+            if (t.length() == n) return true;           // 正好是命令本身
+            char c = t.charAt(n);
+            // 空格/换行/制表符 → 命令带参数；@ → 群聊补全的 @botname
+            if (c == ' ' || c == '\n' || c == '\t' || c == '@') return true;
+        }
+        return false;
     }
 
     /**
@@ -3748,7 +3811,7 @@ public final class TGAutoSignCore {
             else { bg = blendOn(Theme.termCard(act), Theme.termGreen(act), 0x18); edge = blendOn(Theme.termCard(act), Theme.termGreen(act), 0x66); }
         } else {                               // 中性
             if (dark) { bg = Theme.withAlpha(Theme.termCyan(act), 0x0F); edge = Theme.withAlpha(Theme.termMuted(act), 0x33); }
-            else { bg = blendOn(Theme.termCard(act), Theme.termCyan(act), 0x08); edge = 0xFFD5DEEA; }
+            else { bg = blendOn(Theme.termCard(act), Theme.termCyan(act), 0x08); edge = Theme.termLine(act, Theme.termCard(act)); }
         }
         android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
         g.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
@@ -4258,7 +4321,7 @@ public final class TGAutoSignCore {
         TextView head=new TextView(act); head.setTextSize(Theme.TS_BODY); head.setTextColor(android.graphics.Color.parseColor(txtSub(act)));
         head.setText(Lang.tf("回调调试台 · uid={0} msg={1} 按钮 {2} 个\n点任意按钮=实时发一次该回调并看返回；不放心先「重新采样」", lastCapDid, lastCapMid, btns.size()));
         box.addView(head);
-        Button samp=mkBtnPrimary(act); withIconText(act, samp, "target", "重新采样（去点一次按钮）");
+        Button samp=mkBtnPrimary(act); withIconText(act, samp, "target", "重新采样（去点一次按钮）", Theme.onPrimary(act));
         samp.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ startCapture(act); } });
         box.addView(samp);
         int cb=0;
@@ -7106,6 +7169,16 @@ public final class TGAutoSignCore {
         } catch (Throwable t) { logd("更多页异常: " + t); }
     }
 
+    /**
+     * 从 UI 侧打开面板（2026-10-09）。
+     * 用途：长按聊天标题栏。与 /jmb 走同一入口，保证行为完全一致。
+     *
+     * 为什么包一层而不是直接调 showMainMenu：
+     *   · showMainMenu 是 private，Entry 在另一个类；
+     *   · 顺手做「主线程 + Activity 存活性」检查 —— 长按回调可能在
+     *     页面正在销毁的瞬间触发，直接弹会崩。
+     */
+
     private void showMainMenu(Activity act) {
 
         long now0 = System.currentTimeMillis();
@@ -7199,7 +7272,7 @@ public final class TGAutoSignCore {
         final java.util.Random rnd = new java.util.Random();
         final int[] PAL = { Theme.termCyan(act), Theme.termGreen(act), Theme.termPink(act), Theme.termAmber(act) };
         final int cyanC = Theme.termCyan(act), greenC = Theme.termGreen(act), pinkC = Theme.termPink(act), amberC = Theme.termAmber(act);
-        final int flashCol = Theme.dark(act) ? 0xFFFFFFFF : 0xFF001820;
+        final int flashCol = Theme.flashColor(act);
         final java.util.List<TextView> chs = new java.util.ArrayList<>();
         for (int wi = 0; wi < wtitle.length(); ) {
             int cp = wtitle.codePointAt(wi);
@@ -8336,46 +8409,30 @@ public final class TGAutoSignCore {
             }
             // 级别配色：亮色=深色系高对比 / 暗色=亮色系低刺眼
             final int textCol, tsCol, barCol, rowBg;
+            // 2026-10-09 多主题：整套派生走 Theme.levelColors，不再写死色值。
+            //   等级语义映射见 Theme.levelColors 的注释。
+            final int _lv;
             switch (plainSem != null ? -1 : l.lv) {
-                case LV_ERR:
-                    textCol = dark ? 0xFFFF9E94 : 0xFFB3261E;
-                    tsCol = dark ? 0xFF6E7A8C : 0xFF8C8C8C;
-                    barCol = dark ? 0xFFFF5C54 : 0xFFD32F2F;
-                    rowBg = dark ? 0x2E211F : 0x1AFDE7E9;
-                    break;
-                case LV_WARN:
-                    textCol = dark ? 0xFFFFC98A : 0xFF9A6200;
-                    tsCol = dark ? 0xFF6E7A8C : 0xFF8C8C8C;
-                    barCol = dark ? 0xFFFFB24D : 0xFFE67F00;
-                    rowBg = dark ? 0x2E2820 : 0x1AFFF4DE;
-                    break;
-                case LV_OK:
-                    textCol = dark ? 0xFF7FE3A0 : 0xFF1B7E4A;
-                    tsCol = dark ? 0xFF6E7A8C : 0xFF8C8C8C;
-                    barCol = dark ? 0xFF35C46F : 0xFF1E9E55;
-                    rowBg = dark ? 0x1C243028 : 0x14E8F5E9;
-                    break;
-                case LV_DEBUG:
-                    textCol = dark ? 0xFF8A94A6 : 0xFF9A9A9A;
-                    tsCol = dark ? 0xFF5A6478 : 0xFFB0B0B0;
-                    barCol = dark ? 0xFF4A5468 : 0xFFC8C8C8;
-                    rowBg = 0x00000000;
-                    break;
-                default:
-                    if (plainSem != null) {
-                        // 易懂档：颜色取自「翻译结果的语义」，而非原始日志级别。
-                        // 原因见 plainColor 注释：lv 为了保落盘会把成功标成 WARN，
-                        // 直接用它上色会把「签到成功」显示成黄色警告。
-                        textCol = plainColor(plainSem, c);
-                        barCol  = textCol;
-                        tsCol   = dark ? 0xFF5A6478 : 0xFFB0B0B0;
-                        rowBg   = 0x00000000;
-                    } else {
-                        textCol = dark ? 0xFFB8C4DC : 0xFF4A5568;
-                        tsCol = dark ? 0xFF5A6478 : 0xFFB0B0B0;
-                        barCol = dark ? 0xFF7C8DB5 : 0xFF7A8AA3;
-                        rowBg = 0x00000000;
-                    }
+                case LV_ERR:   _lv = 4; break;
+                case LV_WARN:  _lv = 3; break;
+                case LV_OK:    _lv = 2; break;
+                case LV_DEBUG: _lv = 1; break;
+                default:       _lv = 0; break;
+            }
+            int[] _lc = Theme.levelColors(c, _lv);
+            if (_lv == 0 && plainSem != null) {
+                // 易懂档：颜色取自「翻译结果的语义」，而非原始日志级别。
+                // 原因见 plainColor 注释：lv 为了保落盘会把成功标成 WARN，
+                // 直接用它上色会把「签到成功」显示成黄色警告。
+                textCol = plainColor(plainSem, c);
+                barCol  = textCol;
+                tsCol   = _lc[1];
+                rowBg   = 0x00000000;
+            } else {
+                textCol = _lc[0];
+                tsCol   = _lc[1];
+                barCol  = _lc[2];
+                rowBg   = _lc[3];
             }
             // 行容器：背景色 + 左侧级别色条
             LinearLayout row = new LinearLayout(c);
@@ -9175,12 +9232,140 @@ public final class TGAutoSignCore {
     }
 
     /** 控件级圆角背景（R_CONTROL = 8dp，无描边）。 */
+    /**
+     * 控件底（按钮）：圆角实色 + **按压水波纹**（2026-10-09）。
+     *
+     * 之前只返回 GradientDrawable —— 点下去除了业务动画没有任何"按到了"的反馈，
+     * 全站 54 个按钮都是这样。现在包一层 RippleDrawable：
+     *   内容层 = 原来的圆角实色（外观完全不变）
+     *   波纹层 = 按主题明暗取白/黑，低 alpha，按压时从触点扩散
+     * 因为所有按钮都从本方法出，改这一处即覆盖全站。
+     */
     private android.graphics.drawable.Drawable controlBg(Context c, int fill) {
         android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
         g.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
         g.setCornerRadius(dp(Theme.R_CONTROL));
         g.setColor(fill);
-        return g;
+        try {
+            // 掩膜必须同圆角，否则波纹会溢出到直角区域
+            android.graphics.drawable.GradientDrawable mask =
+                    new android.graphics.drawable.GradientDrawable();
+            mask.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
+            mask.setCornerRadius(dp(Theme.R_CONTROL));
+            mask.setColor(0xFFFFFFFF);
+            int wave = Theme.dark(c) ? 0x33FFFFFF : 0x1F000000;
+            android.content.res.ColorStateList csl =
+                    android.content.res.ColorStateList.valueOf(wave);
+            return new android.graphics.drawable.RippleDrawable(csl, g, mask);
+        } catch (Throwable t) {
+            return g;   // 万一某些 ROM 有问题，退回原来的纯色，不影响功能
+        }
+    }
+
+    /**
+     * 轻触感反馈（2026-10-09）。
+     *
+     * 之前全项目 0 处震动 —— 点主操作、切开关、长按都没有触觉回应，
+     * 操作感"隔着玻璃"。这里统一封装：不需要 VIBRATE 权限，
+     * 系统「触感反馈」开关关闭时系统自动静默（这是正确行为，不要绕过）。
+     *
+     * @param v    触发控件
+     * @param heavy true=重（危险操作/确认），false=轻（普通点击）
+     */
+    /**
+     * 把「期望时长」换算成「在系统动画倍率下需要设的时长」（2026-10-09）。
+     *
+     * 为什么需要：用户系统动画倍率是 0.5×，模块自己设 140ms 的淡入
+     * 实际只播 70ms，观感接近硬切 —— 用户反馈"动画看不出来"就是这个原因。
+     * ValueAnimator/ViewPropertyAnimator 都会乘这个倍率，所以这里反算补偿：
+     *     setDuration(期望 × (1/scale))
+     * 倍率取不到或异常时按 1.0 处理（退化为原行为，不会更糟）。
+     */
+    private int animMs(int wantMs) {
+        try {
+            float s = android.provider.Settings.Global.getFloat(
+                    appContext.getContentResolver(),
+                    android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f);
+            if (s <= 0.01f) s = 1f;          // 0 表示"关闭动画"，这里不追（尊重用户选择）
+            int v = Math.round(wantMs / s);
+            if (v < 1) v = 1;
+            if (v > 4000) v = 4000;          // 防御：倍率极小导致夸张时长
+            return v;
+        } catch (Throwable t) {
+            return wantMs;
+        }
+    }
+
+    /**
+     * 在视图树里找 (x,y) 处**最深**的可点击控件（2026-10-09）。
+     * 用于全局触感：对话框只装一个 OnTouchListener，靠它反查用户点到了谁。
+     *
+     * 判定顺序：可点 + 启用 + 可见 + 命中矩形；命中多个时取最深（子优先）。
+     */
+    private View hitTestClickable(View root, float x, float y) {
+        if (root == null) return null;
+        try {
+            if (root.getVisibility() != View.VISIBLE) return null;
+            // 先递归子节点（深层优先：点 chip 时不震整行）
+            if (root instanceof android.view.ViewGroup) {
+                android.view.ViewGroup g = (android.view.ViewGroup) root;
+                for (int i = g.getChildCount() - 1; i >= 0; i--) {
+                    View ch = g.getChildAt(i);
+                    View hit = hitTestClickable(ch, x - ch.getLeft(), y - ch.getTop());
+                    if (hit != null) return hit;
+                }
+            }
+            if (root.isClickable() && root.isEnabled()) {
+                if (x >= 0 && y >= 0 && x < root.getWidth() && y < root.getHeight()) return root;
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    /**
+     * 给对话框装**全局触感拦截**（2026-10-09）。
+     *
+     * 为什么这样做：全站 92 处 setOnClickListener，逐个挂触感既麻烦又易漏
+     *   （第一版只挂了 mkBtnPrimary/mkBtnDanger，用户立刻反馈"只有保存会震"）。
+     * 现在只在 decorView 上装一个 OnTouchListener：
+     *   · 返回 false → 不消费事件，所有业务点击逻辑完全不变
+     *   · ACTION_DOWN 时用坐标反查命中的可点击控件
+     *   · 该控件带 "haptic-heavy" 标记（主操作/危险）→ 重档；否则轻档
+     * 一处改动覆盖全部现有与将来的可点控件。
+     */
+    private void attachGlobalHaptic(final android.app.Dialog dlg) {
+        if (dlg == null) return;
+        try {
+            android.view.Window w = dlg.getWindow();
+            if (w == null) return;
+            final View decor = w.getDecorView();
+            if (decor == null) return;
+            decor.setOnTouchListener(new View.OnTouchListener() {
+                @Override public boolean onTouch(View v, android.view.MotionEvent e) {
+                    if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) {
+                        try {
+                            View hit = hitTestClickable(decor, e.getX(), e.getY());
+                            if (hit != null) {
+                                Object tag = null;
+                                try { tag = hit.getTag(android.R.id.button1); } catch (Throwable ignored) {}
+                                boolean heavy = "haptic-heavy".equals(tag);
+                                haptic(hit, heavy);
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+                    return false;   // 绝不消费
+                }
+            });
+        } catch (Throwable ignored) {}
+    }
+
+    private void haptic(View v, boolean heavy) {
+        if (v == null) return;
+        try {
+            v.performHapticFeedback(heavy
+                    ? android.view.HapticFeedbackConstants.LONG_PRESS
+                    : android.view.HapticFeedbackConstants.VIRTUAL_KEY);
+        } catch (Throwable ignored) {}
     }
 
     /**
@@ -9355,9 +9540,16 @@ public final class TGAutoSignCore {
 
     // 限高容器：内容不超高就用自然高度，超高才钳到 maxH（避免短内容出现大片空白）
     private static final class CapBox extends android.widget.FrameLayout {
-        private final int maxH;
+        /** 2026-10-09：改为可变 —— 对话框 show 后可"实测再缩"。 */
+        private int maxH;
         CapBox(Context c, int maxH) { super(c); this.maxH = maxH; }
         int getMaxH() { return maxH; }
+        /** 运行时调整上限（只会往小调；调大请谨慎，会撑破对话框）。 */
+        void setMaxH(int v) {
+            if (v <= 0 || v == maxH) return;
+            this.maxH = v;
+            try { requestLayout(); invalidate(); } catch (Throwable ignored) {}
+        }
         @Override protected void onMeasure(int wSpec, int hSpec) {
             super.onMeasure(wSpec, android.view.View.MeasureSpec.makeMeasureSpec(0,
                     android.view.View.MeasureSpec.UNSPECIFIED));
@@ -9499,7 +9691,40 @@ public final class TGAutoSignCore {
             }
             d = call(b, "create", new Class<?>[0], new Object[0]);
             if (d != null) call(d, "show", new Class<?>[0], new Object[0]);
+            // ── 入场过渡（2026-10-09）──
+            // 自绘分支早就有 140ms 淡入，原生分支一直没有 ——
+            // 而设置页走的正是原生分支，所以「当场切主题」时是硬切、观感闪。
+            // 这里给原生对话框补上同样的过渡：
+            //   对 **decorView** 做 alpha + 上移，而不是 content ——
+            //   整个窗口（含背景圆角）一起淡入，不会出现"框先到、内容后到"。
+            try {
+                if (d instanceof android.app.Dialog) {
+                    android.view.Window _w = ((android.app.Dialog) d).getWindow();
+                    if (_w != null) {
+                        final android.view.View dv = _w.getDecorView();
+                        if (dv != null) {
+                            dv.setAlpha(0f);
+                            dv.setTranslationY(Theme.dp(act, 6));
+                            // 2026-10-09：配合交叉淡入补一点缩放（1.02→1.0），
+                            //   幅度刻意小 —— 大了会显得摇晃。
+                            dv.setScaleX(1.02f);
+                            dv.setScaleY(1.02f);
+                            dv.post(new Runnable() { @Override public void run() {
+                                try {
+                                    dv.animate().alpha(1f).translationY(0f)
+                                      .scaleX(1f).scaleY(1f)
+                                      .setDuration(animMs(260))
+                                      .setInterpolator(new android.view.animation.DecelerateInterpolator(1.5f))
+                                      .start();
+                                } catch (Throwable ignored) {}
+                            } });
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
             // 对话框实现方式只报告一次，避免每次开关窗口都刷屏
+            // 2026-10-09：全局触感拦截（一处覆盖对话框内所有可点控件）
+            if (d instanceof android.app.Dialog) attachGlobalHaptic((android.app.Dialog) d);
             if (!dlgModeLogged) { dlgModeLogged = true; logd("[对话框] 使用 TG 原生对话框"); }
             pushDlg(d);
             return d;
@@ -9538,7 +9763,12 @@ public final class TGAutoSignCore {
             card.addView(div, new LinearLayout.LayoutParams(-1, dp(1)));
             // 内容区：包一层 ScrollView 限高 72% 屏高，超长可滚
             // 0.86 会把「标题栏 + 底部按钮」一起挤出屏幕导致「关闭」被裁；留足 chrome 空间
-            final int maxH = (int) (act.getResources().getDisplayMetrics().heightPixels * 0.72f);
+            // 2026-10-09 三次修正记录：
+            //   v1 给内容区固定减 dp(150) 当作"对话框 chrome" —— 是**猜的**，
+            //      结果所有对话框都白白矮了 150dp（用户：面板变小、「最近动态」被裁）。
+            //   v2 现在改为：**先按 0.72 建，布局完成后实测再精确缩**（见下方 post）。
+            //      内容不多的对话框恢复原尺寸；真超高的才缩，且只缩超出量。
+            int maxH = (int) (act.getResources().getDisplayMetrics().heightPixels * 0.72f);
             // 关键：内容自身已经能滚动时，绝不再套一层 ScrollView。
             // 双层 ScrollView 会让外层抢走手势、内层滑不动（官方 TG 12.10.3 / Nagram 实测有这个毛病）。
             boolean nested = containsScrollable(view);
@@ -9581,7 +9811,10 @@ public final class TGAutoSignCore {
             try {
                 card.setAlpha(0f);
                 card.setTranslationY(Theme.dp(act, 6));
-                card.animate().alpha(1f).translationY(0f).setDuration(140)
+                card.setScaleX(1.02f);
+                card.setScaleY(1.02f);
+                card.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f)
+                        .setDuration(animMs(260))
                         .setInterpolator(new android.view.animation.DecelerateInterpolator(1.5f))
                         .start();
             } catch (Throwable ignored) {}
@@ -9589,6 +9822,8 @@ public final class TGAutoSignCore {
             // 每弹一次窗都会走到这里 —— 不再逐次记录（实测 295 条同句噪音），
             // 改为「同标题只记首次」。
             logOnce("dlg:" + title, LV_DEBUG, "[对话框] 已用自绘终端卡片: " + title);
+            // 2026-10-09：自绘分支同样挂全局触感
+            attachGlobalHaptic(dlg);
             pushDlg(dlg);
             return dlg;
         } catch (Throwable t2) {
@@ -10372,7 +10607,7 @@ public final class TGAutoSignCore {
 
             // ── 底部：保存 ─────────────────────────────────────────
             Button save = mkBtnPrimary(act);
-            withIconText(act, save, "save", "保存排除规则");
+            withIconText(act, save, "save", "保存排除规则", Theme.onPrimary(act));
             save.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
                 LEARN_EXCLUDE = String.valueOf(ex.getText()).trim();
                 prefs.edit().putString(kExclude(), LEARN_EXCLUDE).apply();
@@ -11643,13 +11878,71 @@ public final class TGAutoSignCore {
                                 android.view.ViewGroup g = (android.view.ViewGroup) root;
                                 chrome += g.getPaddingTop() + g.getPaddingBottom();
                             }
+                            // ── 2026-10-09 修「日志底部被裁」──
+                            // 上面的循环只累加了 sv **之上**的空间，但日志面板在
+                            // sv **下面**还有兄弟节点：
+                            //   · 「加载更多（还有 N 条）」按钮
+                            //   · 「最新在最上 | 现在看：…」说明行
+                            // 不扣它们，sv 会把这些行挤出对话框的 72% 限高区，
+                            // 被 CapBox 直接裁掉（用户截图：加载更多只露半截）。
+                            // 实测 chrome=575 maxH=1710 → svH=1135 偏大约 230px。
+                            try {
+                                android.view.ViewParent pp = sv.getParent();
+                                if (pp instanceof android.view.ViewGroup) {
+                                    android.view.ViewGroup pg = (android.view.ViewGroup) pp;
+                                    boolean after = false;
+                                    for (int ci = 0; ci < pg.getChildCount(); ci++) {
+                                        android.view.View ch = pg.getChildAt(ci);
+                                        if (ch == sv) { after = true; continue; }
+                                        if (!after) continue;
+                                        if (ch.getVisibility() == android.view.View.GONE) continue;
+                                        int chh = ch.getHeight();
+                                        // 首次 post 时兄弟可能尚未测量 → 用测量值兜底
+                                        if (chh <= 0) chh = ch.getMeasuredHeight();
+                                        if (chh <= 0) continue;
+                                        chrome += chh;
+                                        android.view.ViewGroup.LayoutParams clp = ch.getLayoutParams();
+                                        if (clp instanceof android.view.ViewGroup.MarginLayoutParams) {
+                                            android.view.ViewGroup.MarginLayoutParams mlp =
+                                                    (android.view.ViewGroup.MarginLayoutParams) clp;
+                                            chrome += mlp.topMargin + mlp.bottomMargin;
+                                        }
+                                    }
+                                }
+                            } catch (Throwable ignored) {}
                         } catch (Throwable ignored) {}
                         if (chrome < 0) chrome = 0;
 
                         int minOne = dp(120);
                         int avail = maxH - chrome;
                         if (avail < minOne) avail = minOne;
-                        int target = avail;          // 恒定，不随内容变化
+                        // ── 2026-10-09 改：内容不足时收缩，别留一大片空白 ──
+                        // 2026-10-07 那版是「恒定占满」，目的是修「框忽大忽小」+
+                        // 「空内容塌成一条」。但它把「易懂档只有 6 条」也撑满了，
+                        // 底部空出一大块（用户截图）。
+                        // 现在：上限仍是 avail，但**按内容收缩**，并给 dp(200) 下限
+                        // （当初真正要防的是"塌成一条"，下限就够，不需要恒满）。
+                        int target = avail;
+                        try {
+                            int contentH = 0;
+                            if (content instanceof android.view.View) {
+                                android.view.View cv = (android.view.View) content;
+                                contentH = cv.getMeasuredHeight();
+                                if (contentH <= 0) contentH = cv.getHeight();
+                            }
+                            if (contentH > 0) {
+                                // 限高容器自身的内边距也算上，避免内容贴边被切
+                                android.view.ViewGroup.LayoutParams cvlp = content.getLayoutParams();
+                                if (cvlp instanceof android.view.ViewGroup.MarginLayoutParams) {
+                                    android.view.ViewGroup.MarginLayoutParams m =
+                                            (android.view.ViewGroup.MarginLayoutParams) cvlp;
+                                    contentH += m.topMargin + m.bottomMargin;
+                                }
+                                int floor = dp(200);
+                                if (floor > avail) floor = avail;
+                                target = Math.min(Math.max(contentH, floor), avail);
+                            }
+                        } catch (Throwable ignored) {}
 
                         android.view.ViewGroup.LayoutParams lp = sv.getLayoutParams();
                         // 只在与当前值差异明显时才改（2026-10-07）：
@@ -14540,14 +14833,15 @@ public final class TGAutoSignCore {
                 }
                 int txtCol;
                 if (today)         txtCol = todayAccent;
-                else if (on)       txtCol = dark ? 0xFFE8FFF6 : blendText(dark, GREEN);
+                else if (on)       txtCol = Theme.onAccentText(act, GREEN);
                 else if (weekend)  txtCol = FAINT;
                 else               txtCol = MUTED;
                 cell.setTextColor(txtCol);
 
                 int accent = today ? todayAccent : GREEN;
                 Icons.DayCellDrawable d = new Icons.DayCellDrawable(
-                        dp(30), on, today, dark, accent, MUTED, CAL_STYLE);
+                        dp(30), on, today, dark, accent, MUTED, CAL_STYLE,
+                        Theme.surface(act, 2), Theme.surface(act, 1));
                 draws[i] = d;
                 cell.setBackground(d);
 
@@ -14681,9 +14975,15 @@ public final class TGAutoSignCore {
         } catch (Throwable t) { return null; }
     }
 
-    /** 亮色模式下把强调色调深，保证在浅底上可读 */
+    /**
+     * 亮色模式下把强调色调深，保证在浅底上可读。
+     * 2026-10-09 多主题：暗色分支的写死值 0xFFE8FFF6 改走 Theme，
+     * 否则换色板后「已签」文字仍是老的薄荷白。
+     * 注：本方法收的是 boolean dark，非 Context —— 需要 Context 才能取色板，
+     *     故保留 (boolean, int) 签名，内部用 Theme 的静态派生。
+     */
     private int blendText(boolean dark, int accent) {
-        if (dark) return 0xFFE8FFF6;
+        if (dark) return Theme.darkAccentText(accent);
         int r = (accent >> 16) & 0xFF, g = (accent >> 8) & 0xFF, b = accent & 0xFF;
         // 与黑色按 45% 混合：压暗但保留色相
         return 0xFF000000
@@ -14868,6 +15168,136 @@ public final class TGAutoSignCore {
     }
 
 
+    /**
+     * 设置页「未保存草稿」（2026-10-09 即时切主题用）。
+     *
+     * 背景：主题要「点了当场生效」，最快实现是重建对话框 ——
+     *   但重建会把用户已经改了一半的设置（间隔、关键词…）一起丢掉。
+     * 这台机器就是重建前把 R 里的值抄下来、重建后填回去。
+     * 只存**用户可能改过的可编辑项**，不存开关（开关是即时读控件的，重建即还原）。
+     */
+    private static final class SettingsDraft {
+        String gap, window, keywords, exclude, retry, wake, okWords, failWords, learnForce;
+        int themeMode = -1, themeStyle = -1, calStyle = -1;
+        int missDeadline = -1;
+        int[] wStart, wEnd;
+        boolean valid = false;
+    }
+    private static SettingsDraft settingsDraft = new SettingsDraft();
+    /** 当前设置页对话框引用（供主题「当场切换」重建用）。 */
+    private volatile Object lastSettingsDlg = null;
+
+    /** 把当前设置页控件里的值抄进草稿。 */
+    private void saveSettingsDraft(SettingsRefs R) {
+        try {
+            SettingsDraft d = new SettingsDraft();
+            d.gap = R.gapEd == null ? null : String.valueOf(R.gapEd.getText());
+            d.keywords = R.keywordsEd == null ? null : String.valueOf(R.keywordsEd.getText());
+            d.exclude = R.excludeEd == null ? null : String.valueOf(R.excludeEd.getText());
+            d.retry = R.retryLimitEd == null ? null : String.valueOf(R.retryLimitEd.getText());
+            d.wake = R.wakeCmdEd == null ? null : String.valueOf(R.wakeCmdEd.getText());
+            d.okWords = R.okWordsEd == null ? null : String.valueOf(R.okWordsEd.getText());
+            d.failWords = R.failWordsEd == null ? null : String.valueOf(R.failWordsEd.getText());
+            d.learnForce = R.learnForceEd == null ? null : String.valueOf(R.learnForceEd.getText());
+            d.window = R.window;
+            d.themeMode = R.themeMode;
+            d.themeStyle = R.themeStyle;
+            d.calStyle = R.calStyle;
+            d.missDeadline = R.missDeadlineMin;
+            d.wStart = R.wStart == null ? null : R.wStart.clone();
+            d.wEnd = R.wEnd == null ? null : R.wEnd.clone();
+            d.valid = true;
+            settingsDraft = d;
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * 主题「当场生效」：落盘 → 重建设置页 → 新窗口淡入。
+     *
+     * 不闪动的关键三点（顺序不能乱）：
+     *   1) Theme.freeze() —— 钉住主题值，避免重建期 colorProbe 触发
+     *      「整棵视图树重绘到 1×1 位图」（实测单次约 1.3 秒，就是用户报的卡顿）
+     *   2) 先建新窗口、再关旧窗口 —— 反过来会有一段没有窗口的空档，
+     *      背后露出聊天界面，观感就是「闪一下」
+     *   3) 新窗口用 alpha 0 → 1 淡入 180ms，替代生硬的瞬间切换
+     */
+    private void applyThemeLive(final Activity act, final SettingsRefs R, final Object oldDlg) {
+        try {
+            saveSettingsDraft(R);                       // 抄下未保存的编辑
+            // ── 2026-10-09 颜色过渡 ──
+            // 记录「旧色板当前明暗」的 13 色作为过渡起点，再切换 styleId。
+            // 注意：本次不做全树重染（343 个控件各写各的，没有通用重染设施），
+            //   所以插值主要服务于**外层容器/背景**这类能拿到 Context 且
+            //   在重建后仍存活的部分；重建出来的新控件直接就是终点色。
+            //   观感上仍是"新面板淡入 + 外壳颜色渐变"，比纯硬切柔和。
+            try {
+                Theme.setTransitionContext(act);
+                Theme.beginTransition(act);
+            } catch (Throwable ignored) {}
+            Theme.styleId = Theme.clampStyle(R.themeStyle);
+            Theme.mode = R.themeMode;
+            try {
+                prefs.edit().putInt("jmb_theme", THEME_MODE = R.themeMode)
+                            .putString("jmb_theme_style", Theme.styleKey()).apply();
+            } catch (Throwable ignored) {}
+            Theme.freeze(act);                          // ① 钉住，防采样
+            // ── 2026-10-09 交叉淡入 ──
+            // 旧窗口淡出（alpha→0 + 轻微缩小 0.98），**动画结束后**才 dismiss；
+            // 新窗口紧接着淡入并收束（1.02→1.0）。两者重叠 →
+            // 观感是「旧内容褪去、新内容浮现」，而不是「关一个再开一个」。
+            // 时长走 animMs() 补偿系统动画倍率（用户机器 0.5×）。
+            try {
+                if (oldDlg instanceof android.app.Dialog) {
+                    android.view.Window _ow = ((android.app.Dialog) oldDlg).getWindow();
+                    if (_ow != null) {
+                        final android.view.View ov = _ow.getDecorView();
+                        if (ov != null) {
+                            ov.animate().alpha(0f).scaleX(0.98f).scaleY(0.98f)
+                              .setDuration(animMs(160))
+                              .setInterpolator(new android.view.animation.DecelerateInterpolator(1.4f))
+                              .withEndAction(new Runnable() { @Override public void run() {
+                                  try { dismissOne(oldDlg); } catch (Throwable ignored) {}
+                              } })
+                              .start();
+                        } else {
+                            dismissOne(oldDlg);
+                        }
+                    } else {
+                        dismissOne(oldDlg);
+                    }
+                } else {
+                    dismissOne(oldDlg);
+                }
+            } catch (Throwable t) {
+                try { dismissOne(oldDlg); } catch (Throwable ignored) {}
+            }
+            showSettings(act);                          // 建新（内部淡入 + 缩放收束）
+            // ③ 过渡推进：260ms 走完，结束后清掉覆盖回到快速路径。
+            //    时长同样经 animMs() 补偿系统倍率，保证观感稳定。
+            try {
+                android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(0f, 1f);
+                va.setDuration(animMs(260));
+                va.setInterpolator(new android.view.animation.DecelerateInterpolator(1.4f));
+                va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                    @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                        try { Theme.setTransition(((Float) a.getAnimatedValue()).floatValue()); }
+                        catch (Throwable ignored) {}
+                    }
+                });
+                va.addListener(new android.animation.AnimatorListenerAdapter() {
+                    @Override public void onAnimationEnd(android.animation.Animator a) {
+                        try { Theme.endTransition(); } catch (Throwable ignored) {}
+                    }
+                });
+                va.start();
+            } catch (Throwable ignored) {}
+        } catch (Throwable t) {
+            noteSwallowed("applyThemeLive", t);
+        } finally {
+            try { Theme.unfreeze(); } catch (Throwable ignored) {}
+        }
+    }
+
     private void showSettings(Activity act) {
         try {
             LinearLayout box = new LinearLayout(act);
@@ -14879,6 +15309,19 @@ public final class TGAutoSignCore {
             box.setPadding(dp(16), 0, dp(16), dp(8));
             // 控件句柄容器：分区方法往里写，保存块从里读（见 SettingsRefs）
             final SettingsRefs R = new SettingsRefs(act, box);
+            // 2026-10-09：主题当场切换会重建本页 —— 把上次抄下的草稿回填。
+            //   只回填「用户可编辑项」，开关类即时读控件、不需要回填。
+            try {
+                if (settingsDraft != null && settingsDraft.valid) {
+                    R.themeStyle = Theme.clampStyle(settingsDraft.themeStyle);
+                    R.themeMode = settingsDraft.themeMode;
+                    R.calStyle = settingsDraft.calStyle >= 0 ? settingsDraft.calStyle : CAL_STYLE;
+                    if (settingsDraft.missDeadline >= 0) R.missDeadlineMin = settingsDraft.missDeadline;
+                    if (settingsDraft.window != null) R.window = settingsDraft.window;
+                    if (settingsDraft.wStart != null) R.wStart = settingsDraft.wStart.clone();
+                    if (settingsDraft.wEnd != null) R.wEnd = settingsDraft.wEnd.clone();
+                }
+            } catch (Throwable ignored) {}
 
             // ── 折叠分区（2026-09-30）──
             // 起因：原设置页 5 个分区约 20 个控件一路平铺，要划 5~6 屏，
@@ -15007,7 +15450,7 @@ public final class TGAutoSignCore {
             // ── 操作 ──
             sectionHeader(box, act, "▍操作");
             Button ok = mkBtnPrimary(act);
-            withIconText(act, ok, "save", "保存设置");
+            withIconText(act, ok, "save", "保存设置", Theme.onPrimary(act));
             ok.setOnClickListener(v -> {
                 String k = R.keywordsEd.getText().toString().trim();
                 LEARN_KEYWORDS = k.isEmpty() ? DEF_KEYWORDS : k;
@@ -15025,6 +15468,8 @@ public final class TGAutoSignCore {
                 NOTIFY_ON = R.notifySw.isChecked();
                 NOTIFY_FAIL_ONLY = R.notifyFailSw.isChecked();
                 THEME_MODE = R.themeMode;
+                // 2026-10-09：色板保存（按 key 名，与 styleId 解耦）
+                Theme.styleId = Theme.clampStyle(R.themeStyle);
                 CAL_STYLE = R.calStyle;
                 // 备份开关（2026-10-03）
                 if (R.backupAutoSw != null) {
@@ -15032,6 +15477,8 @@ public final class TGAutoSignCore {
                     try { prefs.edit().putBoolean(kBackupAuto(), BACKUP_AUTO).apply(); } catch (Throwable ignored) {}
                 }
                 Theme.mode = THEME_MODE;
+                Theme.styleId = Theme.clampStyle(R.themeStyle);   // 2026-10-09 多主题
+                settingsDraft = new SettingsDraft();             // 已落盘，草稿作废
                 try { android.content.SharedPreferences.Editor le = prefs.edit(); le.putInt("jmb_lang", Lang.MODE); le.apply(); } catch (Throwable ignored) {}
                 MISS_BACK = R.missBackSw.isChecked();
                 try { MISS_DEADLINE = R.missDeadlineMin; if (MISS_DEADLINE < 0) MISS_DEADLINE = 0; if (MISS_DEADLINE > 24 * 60 - 1) MISS_DEADLINE = 24 * 60 - 1; } catch (Throwable ignored) {}
@@ -15067,6 +15514,7 @@ public final class TGAutoSignCore {
                       .putInt("jmb_retry", RETRY_LIMIT)
                       .putString("jmb_wake_cmd", WAKE_CMD)
                       .putInt("jmb_theme", THEME_MODE)
+                      .putString("jmb_theme_style", Theme.styleKey())
                       .putInt("jmb_cal_style", CAL_STYLE)
                       .putBoolean("jmb_skip_nav", R.skipNavSw != null && R.skipNavSw.isChecked())
                       .putBoolean("jmb_btn_confirm", BUTTON_LEARN_CONFIRM)
@@ -15120,7 +15568,21 @@ public final class TGAutoSignCore {
                 apTip.setPadding(dp(4), dp(4), dp(4), dp(2));
                 box.addView(apTip);
             }
-            showDialog(act, "设置", box, "取消");
+            // 2026-10-09：编辑框草稿回填（必须在分区都建完之后）
+            try {
+                if (settingsDraft != null && settingsDraft.valid) {
+                    SettingsDraft d = settingsDraft;
+                    if (d.gap != null && R.gapEd != null) R.gapEd.setText(d.gap);
+                    if (d.keywords != null && R.keywordsEd != null) R.keywordsEd.setText(d.keywords);
+                    if (d.exclude != null && R.excludeEd != null) R.excludeEd.setText(d.exclude);
+                    if (d.retry != null && R.retryLimitEd != null) R.retryLimitEd.setText(d.retry);
+                    if (d.wake != null && R.wakeCmdEd != null) R.wakeCmdEd.setText(d.wake);
+                    if (d.okWords != null && R.okWordsEd != null) R.okWordsEd.setText(d.okWords);
+                    if (d.failWords != null && R.failWordsEd != null) R.failWordsEd.setText(d.failWords);
+                    if (d.learnForce != null && R.learnForceEd != null) R.learnForceEd.setText(d.learnForce);
+                }
+            } catch (Throwable ignored) {}
+            lastSettingsDlg = showDialog(act, "设置", box, "取消");
         } catch (Throwable t) {
             jlog("设置框失败: " + t);
             toast(Lang.tf("设置打开失败: {0}", t));
@@ -18772,6 +19234,7 @@ public final class TGAutoSignCore {
             cfg.put("missback", MISS_BACK);
             cfg.put("missdead", MISS_DEADLINE);
             cfg.put("theme", THEME_MODE);
+            cfg.put("theme_style", Theme.styleKey());   // 2026-10-09
             cfg.put("cal_style", CAL_STYLE);
             cfg.put("keywords", LEARN_KEYWORDS == null ? "" : LEARN_KEYWORDS);
             cfg.put("exclude", LEARN_EXCLUDE == null ? "" : LEARN_EXCLUDE);
@@ -18864,6 +19327,12 @@ public final class TGAutoSignCore {
             if (cts <= localCts) return;
             WINDOW = cfg.optString("window", WINDOW);
             THEME_MODE = cfg.optInt("theme", THEME_MODE);
+            // 2026-10-09：色板（key 名）。老配置无此字段 → 保持当前，不重置。
+            try {
+                if (cfg.has("theme_style")) {
+                    Theme.styleId = Theme.styleFromKey(cfg.optString("theme_style", ""));
+                }
+            } catch (Throwable ignored) {}
             CAL_STYLE = cfg.optInt("cal_style", CAL_STYLE);
             TIMER_ENABLED = cfg.optBoolean("timer", TIMER_ENABLED);
             GAP_MIN = cfg.optInt("gap", GAP_MIN);
@@ -18893,6 +19362,7 @@ public final class TGAutoSignCore {
                 .putString(kWindow(), WINDOW)
                 .putString(accountPrefix() + "cfg_window", WINDOW)
                 .putInt("jmb_theme", THEME_MODE)
+                .putString("jmb_theme_style", Theme.styleKey())
                 .putBoolean(kTimerEnabled(), TIMER_ENABLED)
                 .putBoolean(accountPrefix() + "cfg_timer", TIMER_ENABLED)
                 .putInt(kGap(), GAP_MIN)
@@ -19198,22 +19668,78 @@ public final class TGAutoSignCore {
         LinearLayout.LayoutParams c0lp = new LinearLayout.LayoutParams(-1, -2);
         c0lp.setMargins(0, dp(2), 0, dp(6));
         card0.setLayoutParams(c0lp);
+        // ══════════════════════════════════════════════════════════
+        // 外观 · 主题（2026-10-09 重构为两个维度）
+        //   配色：色板（Nord / 终端风 / Solarized…）
+        //   明暗：自动 / 日间 / 夜间
+        // 两维度正交：明暗可自动跟随宿主，配色是用户手选，不该被宿主改。
+        // ══════════════════════════════════════════════════════════
         R.themeMode = THEME_MODE;
+        R.themeStyle = Theme.clampStyle(Theme.styleId);
+
+        // ── 配色切换（带色板预览条）──
+        final Button stySw = mkBtn(act); stySw.setTextSize(Theme.TS_BODY);
+        final LinearLayout swStrip = new LinearLayout(act);
+        swStrip.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams stripLp = new LinearLayout.LayoutParams(-1, -2);
+        stripLp.topMargin = dp(6);
+        swStrip.setLayoutParams(stripLp);
+        // 预览条：色板上取 6 个代表色画小方块，切一次重画一次
+        final Runnable paintStrip = new Runnable() { @Override public void run() {
+            swStrip.removeAllViews();
+            int[] idx = { Theme.SW_PAGE, Theme.SW_CARD, Theme.SW_CYAN,
+                          Theme.SW_GREEN, Theme.SW_AMBER, Theme.SW_PINK };
+            for (int k = 0; k < idx.length; k++) {
+                View sq = new View(act);
+                android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+                g.setColor(Theme.previewColor(act, idx[k]));
+                g.setCornerRadius(dp(k == 0 ? 8 : 5));
+                sq.setBackground(g);
+                LinearLayout.LayoutParams slp =
+                        new LinearLayout.LayoutParams(0, dp(k == 0 ? 16 : 12), 1f);
+                slp.setMargins(dp(k == 0 ? 0 : 3), k == 0 ? 0 : dp(2), 0, 0);
+                swStrip.addView(sq, slp);
+            }
+        } };
+        final TextView styTip = new TextView(act);
+        styTip.setTextSize(Theme.TS_CAPTION); styTip.setTextColor(Theme.termFaint(act));
+        styTip.setTypeface(Theme.text());
+        styTip.setPadding(dp(4), dp(4), dp(4), 0);
+
+        final Runnable refreshS = new Runnable() { @Override public void run() {
+            String nm = Theme.styleName(R.themeStyle);
+            stySw.setText(Lang.tf("配色：{0}", Lang.tr(nm)));
+            styTip.setText(Lang.tr(Theme.styleDesc(R.themeStyle)));
+            paintStrip.run();
+        } };
+        stySw.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
+            R.themeStyle = (R.themeStyle + 1) % Theme.STYLE_COUNT;
+            // 2026-10-09：当场生效（重建 + 淡入），不再等「保存」
+            applyThemeLive(act, R, lastSettingsDlg);
+        } });
+        refreshS.run();
+        card0.addView(stySw, new LinearLayout.LayoutParams(-1, -2));
+        card0.addView(swStrip);
+        card0.addView(styTip);
+
+        // ── 明暗切换 ──
         final Button tbSw = mkBtn(act); tbSw.setTextSize(Theme.TS_BODY);
         final Runnable refreshT = new Runnable() { @Override public void run() {
-            tbSw.setText(Lang.tr(R.themeMode == 0 ? "自动（跟宿主主题）" : (R.themeMode == 1 ? "始终日间（浅色）" : "始终夜间（终端风）")));
+            tbSw.setText(Lang.tr(R.themeMode == 0 ? "明暗：自动（跟宿主）"
+                    : (R.themeMode == 1 ? "明暗：始终日间" : "明暗：始终夜间")));
         } };
         tbSw.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
             R.themeMode = (R.themeMode + 1) % 3;
-            refreshT.run();
-            Theme.mode = R.themeMode;
-            toast(Lang.tf("主题：{0}（保存后生效）", Lang.tr(R.themeMode == 0 ? "自动" : (R.themeMode == 1 ? "日间" : "夜间"))));
+            // 2026-10-09：当场生效（重建 + 淡入）
+            applyThemeLive(act, R, lastSettingsDlg);
         } });
         refreshT.run();
-        card0.addView(tbSw, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(-1, -2);
+        tlp.topMargin = dp(8);
+        card0.addView(tbSw, tlp);
         TextView tTip = new TextView(act); tTip.setTextSize(Theme.TS_CAPTION); tTip.setTextColor(Theme.termFaint(act));
         tTip.setTypeface(Theme.text());
-        tTip.setText(Lang.tr("自动 = 读宿主当前配色（取不到再看系统深色）；识别不准时可手动锁定，保存后重开界面生效"));
+        tTip.setText(Lang.tr("配色与明暗相互独立；自动 = 读宿主当前配色（取不到再看系统深色）。均保存后生效。"));
         tTip.setPadding(dp(4), dp(4), dp(4), 0);
         card0.addView(tTip);
 
@@ -19323,11 +19849,12 @@ public final class TGAutoSignCore {
                 int ac = today ? cyan : green;
                 int tc;
                 if (today)       tc = cyan;                 // 演示"今天待签"
-                else if (signed) tc = dark ? 0xFFE8FFF6 : blendText(dark, green);
+                else if (signed) tc = Theme.onAccentText(act, green);
                 else             tc = muted;
                 cell.setTextColor(tc);
                 cell.setBackground(new Icons.DayCellDrawable(
-                        dp(28), signed, today, dark, ac, muted, R.calStyle));
+                        dp(28), signed, today, dark, ac, muted, R.calStyle,
+                        Theme.surface(act, 2), Theme.surface(act, 1)));
                 // 同主面板：高度随字体缩放（2026-10-04）
                 LinearLayout.LayoutParams lp =
                         new LinearLayout.LayoutParams(0,
@@ -19372,6 +19899,10 @@ public final class TGAutoSignCore {
         box.addView(cardN);
 
         // ── 外部通知（2026-10-03 新增）──
+        // 2026-10-09 排版：本分区原本把「通知 / 外部通知 / 备份」三件事
+        //   平铺在同一个折叠区里，展开后一眼看不到头（91 个控件）。
+        //   这里给后两块各加一个小标题，明确边界；不拆分区（锚点条保持 4 个）。
+        sectionHeader(box, act, Lang.tr("▍外部通知"));
         // 为什么需要：摘要发的是 TG「收藏夹」——那要求 TG 进程活着。
         // 而"TG 被杀/账号被限"恰恰是最需要被告知的情形，此时收藏夹也收不到。
         // 外部通道（ntfy / Bark / Webhook）是唯一能兜底的。
@@ -19415,7 +19946,7 @@ public final class TGAutoSignCore {
         extUrl.setText(EXTERNAL_URL == null ? "" : EXTERNAL_URL);
         cardExt.addView(extUrl);
         Button extTest = mkBtn(act);
-        withIconText(act, extTest, "upload", Lang.tr("发送测试消息"));
+        withIconText(act, extTest, "upload", Lang.tr("发送测试消息"), Theme.termAmber(act));
         extTest.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
             EXTERNAL_KIND = extSel[0];
             EXTERNAL_URL = String.valueOf(extUrl.getText()).trim();
@@ -19435,6 +19966,10 @@ public final class TGAutoSignCore {
         box.addView(cardExt);
 
         // ── 备份（2026-10-03 新增）──
+        // 2026-10-09 排版：备份与「通知」无关，只是历史上被放进同一分区。
+        //   加小标题把它从通知里「摘」出来，视觉上成为独立一块，
+        //   既不用改分区结构，也不会再被当成通知的下属选项。
+        sectionHeader(box, act, Lang.tr("▍备份"));
         LinearLayout cardBk = new LinearLayout(act);
         cardBk.setOrientation(LinearLayout.VERTICAL);
         cardBk.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termGreen(act), 0x26)));
@@ -19462,7 +19997,7 @@ public final class TGAutoSignCore {
         } };
         refreshBk.run();
         Button bkNow = mkBtn(act);
-        withIconText(act, bkNow, "save", Lang.tr("立即备份"));
+        withIconText(act, bkNow, "save", Lang.tr("立即备份"), Theme.termGreen(act));
         bkNow.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
             boolean ok = doAutoBackup(true);
             refreshBk.run();
@@ -19858,6 +20393,10 @@ public final class TGAutoSignCore {
     private void buildSectionKeywords(final SettingsRefs R) {
         final Activity act = R.act;
         final LinearLayout box = R.section;
+        // 2026-10-09 排版：本方法接在 buildSectionLearn 之后、写进**同一个分区**，
+        //   两段都在讲"模块怎么认"，但没有视觉分界，扫读时找不到关键词设置在哪。
+        //   加一个小标题划开（同样是分区内分隔，不动 4 分区结构）。
+        sectionHeader(box, act, Lang.tr("▍关键词与排除"));
         LinearLayout card3 = new LinearLayout(act); card3.setOrientation(LinearLayout.VERTICAL);
         card3.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x26)));
         card3.setPadding(dp(12), dp(10), dp(12), dp(10));

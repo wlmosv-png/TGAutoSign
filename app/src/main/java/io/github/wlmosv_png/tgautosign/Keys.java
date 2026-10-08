@@ -29,6 +29,8 @@ public final class Keys {
     public static String sort()              { return "jmb_sort"; }
     public static String fx()                { return "jmb_fx"; }
     public static String theme()             { return "jmb_theme"; }
+    /** 配色方案键（2026-10-09）：存色板 key 名，不是下标 —— 改数组顺序不丢配置。 */
+    public static String themeStyle()        { return "jmb_theme_style"; }
     public static String lang()              { return "jmb_lang"; }
     public static String exclude()           { return "jmb_exclude"; }
     public static String blockedDids()       { return "jmb_blocked_dids"; }

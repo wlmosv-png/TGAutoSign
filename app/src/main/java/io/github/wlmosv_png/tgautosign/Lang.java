@@ -1179,5 +1179,40 @@ public final class Lang {
         EN.put("今日 {0} 个目标全部已签", "All {0} targets signed in today");
         EN.put("今日 {0}/{1} 已签", "{0}/{1} signed in today");
         EN.put("发送 /jmb 打开面板处理", "Send /jmb to open the panel and handle them");
+        // ── 设置页小节标题（2026-10-09 排版优化）──
+        EN.put("▍外部通知", "▍External alerts");
+        EN.put("▍备份", "▍Backup");
+        EN.put("▍关键词与排除", "▍Keywords & exclusions");
+        // ── 多主题（2026-10-09）──
+        EN.put("配色：{0}", "Theme: {0}");
+        EN.put("配色：{0}（保存后生效）", "Theme: {0} (applies after saving)");
+        EN.put("明暗：{0}（保存后生效）", "Appearance: {0} (applies after saving)");
+        EN.put("配色与明暗相互独立；自动 = 读宿主当前配色（取不到再看系统深色）。均保存后生效。",
+               "Colour scheme and appearance are independent. Auto reads the host theme (falls back to system dark). Both apply after saving.");
+        // 色板名与描述
+        EN.put("Nord（极地冷灰）", "Nord (arctic grey)");
+        EN.put("终端风（原配色）", "Terminal (legacy)");
+        EN.put("Solarized（暖砂护眼）", "Solarized (warm)");
+        EN.put("Tokyo Night（深紫夜）", "Tokyo Night");
+        EN.put("墨玉（极简无彩）", "Ink Jade (mono)");
+        EN.put("暖琥珀（明亮暖色）", "Amber (warm)");
+        EN.put("Gruvbox（复古暖棕）", "Gruvbox (retro)");
+        EN.put("深海 Ocean（蓝青）", "Ocean (blue)");
+        EN.put("北境冷灰蓝 · 安静不抢戏", "Arctic blue-grey, quiet");
+        EN.put("墨青底 + 霓虹主色", "Ink-teal base with neon accents");
+        EN.put("低眩光暖砂底 · 久看不累", "Low-glare warm base, easy on the eyes");
+        EN.put("深紫底 · 夜间最有氛围", "Deep purple, best at night");
+        EN.put("宣纸白配墨字 · 最不吵", "Paper white and ink, minimal");
+        EN.put("米白配琥珀 · 暖亮友善", "Cream with amber, warm and bright");
+        EN.put("暖褐底 · 复古终端味", "Warm brown, retro terminal feel");
+        EN.put("深海底蓝 · 冷静通透", "Deep ocean blue, calm and clear");
+        // 明暗三态
+        EN.put("明暗：自动（跟宿主）", "Appearance: Auto (follow host)");
+        EN.put("明暗：始终日间", "Appearance: Light");
+        EN.put("明暗：始终夜间", "Appearance: Dark");
+        EN.put("明暗：{0}", "Appearance: {0}");
+        EN.put("自动", "Auto");
+        EN.put("日间", "Light");
+        EN.put("夜间", "Dark");
     }
 }

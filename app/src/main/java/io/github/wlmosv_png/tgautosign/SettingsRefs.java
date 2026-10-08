@@ -65,6 +65,8 @@ public final class SettingsRefs {
     public String window = "";          // 签到窗口
     public int missDeadlineMin = 23 * 60;
     public int themeMode = 0;
+    /** 配色方案下标（2026-10-09）。保存时读。 */
+    public int themeStyle = Theme.DEFAULT_STYLE;
     public int calStyle = 0;            // 日历格样式（分区内改动，保存时读取）
 
 

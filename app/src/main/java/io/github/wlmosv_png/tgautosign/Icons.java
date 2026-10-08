@@ -593,11 +593,26 @@ final class Icons {
         private final float unit;
         private final boolean signed, isToday, dark;
         private final int accent, muted, style;
+        /** 2026-10-09 多主题：格子底色由调用方注入（本类无 Context）。 */
+        private final int cellBg, cellBgSigned;
         private final RectF box;
         private float pulse = 0f;
 
+        /** 兼容旧签名：底色按老配色兜底（仅用于未迁移的调用点）。 */
         DayCellDrawable(int size, boolean signed, boolean isToday, boolean dark,
                         int accent, int muted, int style) {
+            this(size, signed, isToday, dark, accent, muted, style,
+                 dark ? 0xFF0B1119 : 0xFFF4F7FB,
+                 dark ? 0xFF0A1F18 : 0xFFFFFFFF);
+        }
+
+        /**
+         * 2026-10-09 新增：+cellBg（未签格底）/ cellBgSigned（已签格底基色）。
+         * 换主题时这两色跟着色板走，不再写死。
+         */
+        DayCellDrawable(int size, boolean signed, boolean isToday, boolean dark,
+                        int accent, int muted, int style,
+                        int cellBg, int cellBgSigned) {
             this.sizePx = size;
             this.signed = signed;
             this.isToday = isToday;
@@ -605,6 +620,8 @@ final class Icons {
             this.accent = accent;
             this.muted = muted;
             this.style = style;
+            this.cellBg = cellBg;
+            this.cellBgSigned = cellBgSigned;
             this.unit = size / 24f;
             float pad = 1.0f * unit;
             box = new RectF(pad, pad, size - pad, size - pad);
@@ -629,8 +646,7 @@ final class Icons {
         private void drawGrid(Canvas c) {
             float r = 2.0f * unit;
             p.setStyle(Paint.Style.FILL);
-            p.setColor(signed ? blend(dark ? 0xFF0A1F18 : 0xFFFFFFFF, accent, 0.30f)
-                              : (dark ? 0xFF0B1119 : 0xFFF4F7FB));
+            p.setColor(signed ? blend(cellBgSigned, accent, 0.30f) : cellBg);
             c.drawRoundRect(box, r, r, p);
 
             if (signed) {
@@ -683,8 +699,7 @@ final class Icons {
                 }
             }
             p.setStyle(Paint.Style.FILL);
-            p.setColor(signed ? withA(accent, dark ? 0x40 : 0x2E)
-                              : (dark ? 0xFF101826 : 0xFFEDF1F8));
+            p.setColor(signed ? withA(accent, dark ? 0x40 : 0x2E) : cellBg);
             c.drawRoundRect(box, r, r, p);
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeWidth(1.3f * unit);
@@ -704,8 +719,7 @@ final class Icons {
         // ── C 硬方波 + 顶部条 ──
         private void drawWave(Canvas c) {
             p.setStyle(Paint.Style.FILL);
-            p.setColor(signed ? withA(accent, dark ? 0x30 : 0x22)
-                              : (dark ? 0xFF0B1119 : 0xFFF0F4FA));
+            p.setColor(signed ? withA(accent, dark ? 0x30 : 0x22) : cellBg);
             c.drawRect(box, p);
             if (signed) {
                 p.setColor(accent);
@@ -738,8 +752,7 @@ final class Icons {
             clip.lineTo(box.left, box.top + k);
             clip.close();
             p.setStyle(Paint.Style.FILL);
-            p.setColor(signed ? withA(accent, dark ? 0x36 : 0x26)
-                              : (dark ? 0xFF0B1119 : 0xFFF0F4FA));
+            p.setColor(signed ? withA(accent, dark ? 0x36 : 0x26) : cellBg);
             c.drawPath(clip, p);
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeWidth(1.3f * unit);
@@ -789,7 +802,7 @@ final class Icons {
             } else {
                 // 未签：空心小圈，一眼区分
                 p.setStyle(Paint.Style.FILL);
-                p.setColor(dark ? 0xFF1A2433 : 0xFFDCE3EE);
+                p.setColor(cellBg);
                 c.drawCircle(cx, cy, R * 0.42f, p);
                 p.setStyle(Paint.Style.STROKE);
                 p.setStrokeWidth(1.0f * unit);
