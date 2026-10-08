@@ -2766,6 +2766,7 @@ public final class TGAutoSignCore {
 
 
     private void persistEntry(String prefix, Map<String, Object> m) {
+        invalidateTargetCache();
         String id = entryId(m);
         SharedPreferences.Editor e = prefs.edit();
         e.putString(kLearned(prefix, id), entryText(m));
@@ -2792,6 +2793,7 @@ public final class TGAutoSignCore {
 
 
     private void removeEntryKeys(String prefix, String id) {
+        invalidateTargetCache();
         prefs.edit()
             .remove(kLearned(prefix, id))
             .remove(prefix + "kind_" + id)
@@ -4334,6 +4336,7 @@ public final class TGAutoSignCore {
 
 
     private void loadTargets() {
+        invalidateTargetCache();
         synchronized (TLOCK) { loadTargetsLocked(); }
     }
 
@@ -4350,7 +4353,39 @@ public final class TGAutoSignCore {
 
 
     /** 从 prefs 读出某账号的全部条目（旧键 learned_<did> 自动迁移为 id=did） */
+    // ══════════ 目标列表缓存（2026-10-09，修「目标多了就卡」）══════════
+    //
+    // loadTargetsInto 内部是 prefs.getAll()（整份快照）+ 逐键读取，
+    // 而它被每条群消息调用一次。目标一多，群一活跃，主线程就被反复拖。
+    // 这里加一层 2 秒有效期的缓存：写入路径主动失效，读路径直接命中。
+    private volatile List<Map<String, Object>> _tCache = null;
+    private volatile long _tCacheAt = 0L;
+    private static final long TARGET_CACHE_MS = 2000L;
+
+    /** 任何改动目标的路径都应调用它，避免读到旧数据。 */
+    private void invalidateTargetCache() {
+        _tCache = null; _tCacheAt = 0L;
+    }
+
     private void loadTargetsInto(String prefix, List<Map<String, Object>> out) {
+        // 先试缓存
+        try {
+            List<Map<String, Object>> c = _tCache;
+            if (c != null && System.currentTimeMillis() - _tCacheAt < TARGET_CACHE_MS) {
+                out.addAll(c);
+                return;
+            }
+        } catch (Throwable ignored) {}
+        List<Map<String, Object>> tmp = new ArrayList<Map<String, Object>>();
+        loadTargetsIntoUncached(prefix, tmp);
+        try {
+            _tCache = tmp;
+            _tCacheAt = System.currentTimeMillis();
+        } catch (Throwable ignored) {}
+        out.addAll(tmp);
+    }
+
+    private void loadTargetsIntoUncached(String prefix, List<Map<String, Object>> out) {
         try {
             Map<String, ?> all = prefs.getAll();
             List<String> ids = new ArrayList<>();
@@ -9936,6 +9971,7 @@ public final class TGAutoSignCore {
             String title = entryDisplayName(m);
             if (isSnoozed(prefix, id)) {
                 prefs.edit().remove(kSnooze(prefix, id)).apply();
+                invalidateTargetCache();
                 toast(Lang.tf("已恢复：{0}", title));
                 logs("【暂停】已恢复 " + title + " (acc" + account + ")");
             } else {
@@ -9943,6 +9979,7 @@ public final class TGAutoSignCore {
                 c.add(java.util.Calendar.DAY_OF_YEAR, 7);
                 String until = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(c.getTime());
                 prefs.edit().putString(kSnooze(prefix, id), until).apply();
+                invalidateTargetCache();
                 toast(Lang.tf("已暂停一周（至 {0}）：{1}", until, title));
                 logs("【暂停】" + title + " 暂停至 " + until + " (acc" + account + ")");
             }
@@ -15774,6 +15811,7 @@ public final class TGAutoSignCore {
             String id = entryId(m);
             String title = entryDisplayName(m);
             prefs.edit().putBoolean(kFrozen(prefix, id), frozen).apply();
+            invalidateTargetCache();   // 冻结/解冻必须立刻对判定链生效
             if (frozen) { logs("【冻结】" + title + " 已冻结，不再自动签到"); toast(Lang.tf("已冻结：{0}", title)); }
             else { logs("【冻结】" + title + " 已解冻"); toast(Lang.tf("已解冻：{0}", title)); }
         } catch (Throwable t) { toast(Lang.tf("冻结操作失败: {0}", t)); }
@@ -16224,6 +16262,7 @@ public final class TGAutoSignCore {
             if (did == 0 || !LEARN_BLOCKED_DIDS.contains(did)) return false;
             LEARN_BLOCKED_DIDS.remove(did);
             prefs.edit().putString(kBlockedDids(), blockedDidsToStr()).apply();
+            invalidateTargetCache();
             jlog("手动添加 " + did + "：已自动解除排除");
             return true;
         } catch (Throwable t) { return false; }
@@ -18055,8 +18094,19 @@ public final class TGAutoSignCore {
                     } else if (looksLikeResult) {
                         logw("【回复判定】" + did + " 这条回复像是签到结果，但没匹配上内置词: "
                              + clip(replyText, 60) + "（可在 设置 → 回复判定词 里补一条）");
-                        noteUnknownReply(prefix, did, replyText,
-                                          scopeTargetId, _isGroup ? fFromUid : did);
+                        // 2026-10-09：同样要求发送者是 bot（群聊）
+                        boolean _sb2 = true;
+                        if (_isGroup && fFromUid != 0L) {
+                            try {
+                                _sb2 = isBotSender(Long.valueOf(fFromUid), ctrlAcc >= 0 ? ctrlAcc : currentAccount());
+                            } catch (Throwable ignored) { _sb2 = false; }
+                        }
+                        if (_sb2) {
+                            noteUnknownReply(prefix, did, replyText,
+                                              scopeTargetId, _isGroup ? fFromUid : did);
+                        } else {
+                            logd("【回复判定】" + did + " 群聊非 bot 消息，不入未识别池: " + clip(replyText, 30));
+                        }
                         for (Map<String, Object> m : judgeTargets) {
                             if (entryDid(m) != did) continue;
                             markResultCode(prefix, entryId(m), SignLogic.R_REPLIED_UNK);
@@ -18076,7 +18126,21 @@ public final class TGAutoSignCore {
                         if (replyText.length() > 1000) {
                             noteSkippedUnknown(prefix, "过长", replyText);
                         }
-                        if (replyText.length() >= 2 && replyText.length() <= 1000) {
+                        // ── 2026-10-09 第二道闸：群聊里只有 bot 发的才收 ──
+                        // 用户截图反馈池里全是群友闲聊（车话题）。原因就是这个分支
+                        // 只要「该目标今天发过请求」就无条件收录，群里谁说话都收。
+                        // resolveReplyTarget 已经要求 senderLooksLikeBot，但那是在
+                        // "关联"层面；入库前再确认一次发送者身份，两道都过才收。
+                        boolean _senderIsBot = true;
+                        if (_isGroup && fFromUid != 0L) {
+                            try {
+                                _senderIsBot = isBotSender(Long.valueOf(fFromUid), ctrlAcc >= 0 ? ctrlAcc : currentAccount());
+                            } catch (Throwable ignored) { _senderIsBot = false; }
+                        }
+                        if (!_senderIsBot) {
+                            logd("【回复判定】" + did + " 群聊非 bot 消息，不入未识别池: " + clip(replyText, 30));
+                        }
+                        if (_senderIsBot && replyText.length() >= 2 && replyText.length() <= 1000) {
                             for (Map<String, Object> m : judgeTargets) {
                                 if (entryDid(m) != did) continue;
                                 String rid = entryId(m);

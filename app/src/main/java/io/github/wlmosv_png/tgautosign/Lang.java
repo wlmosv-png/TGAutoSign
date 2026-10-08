@@ -844,6 +844,7 @@ public final class Lang {
         EN.put("已添加「{0}」", "Added \"{0}\"");
         EN.put("恢复，让我重新判断", "Restore and let me decide again");
         EN.put("已恢复", "Restored");
+        EN.put("还有 {0} 条 · 点此展开", "{0} more · tap to expand");
         EN.put("已签到  {0}/{1}", "Signed in  {0}/{1}");
         EN.put("立即签到  {0}/{1}", "Sign in now  {0}/{1}");
         EN.put("在上面填一段「这句话里固定会出现」的文字，以后看到它就算成功", "Type a phrase that always appears here — it will count as success next time");

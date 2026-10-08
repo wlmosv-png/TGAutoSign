@@ -185,6 +185,23 @@ public final class LearnPage {
     private String contentTypePoolKey;
 
     /**
+    /** 每批渲染多少张卡（2026-10-09）。 */
+    private static final int BATCH = 12;
+
+    /** 渲染 [from, to) 区间的问题卡。 */
+    private void renderBatch(LinearLayout box, List<ReplyNormalizer.Pattern> shown,
+                             int from, int to, String prefix, String poolKey) {
+        for (int i = from; i < to && i < shown.size(); i++) {
+            try {
+                final ReplyNormalizer.Pattern pt = shown.get(i);
+                View cardV = questionCard(pt, prefix, poolKey);
+                cardRefs.add(cardV);
+                box.addView(cardV);
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    /**
      * 整页重填（打开时用一次；之后走 removeCard 增量，不再全量重建）。
      */
     public void refreshInPlace() {
@@ -378,10 +395,39 @@ public final class LearnPage {
             box.addView(emptyBlock(rawItems.size(), pats.size()));
         } else {
             sectionHeader(box, Lang.tf("等你判断（{0}）", shown.size()));
-            for (final ReplyNormalizer.Pattern pt : shown) {
-                View cardV = questionCard(pt, prefix, poolKey);
-                cardRefs.add(cardV);
-                box.addView(cardV);
+            // ── 2026-10-09 分批渲染 ──
+            // 池上限 200 条，而每张卡要建十几个控件 —— 一次全建就是 2000+ 控件，
+            // 打开必然卡（用户反馈「目标条数多了就卡卡卡」）。
+            // 这里先渲染一屏够看的量，剩下的按需追加。
+            renderBatch(box, shown, 0, Math.min(BATCH, shown.size()), prefix, poolKey);
+            if (shown.size() > BATCH) {
+                final TextView more = new TextView(act);
+                more.setTextSize(Theme.TS_SECOND);
+                more.setTextColor(Theme.termCyan(act));
+                more.setTypeface(Theme.text());
+                more.setGravity(Gravity.CENTER);
+                more.setPadding(dp(12), dp(12), dp(12), dp(12));
+                more.setBackground(containerBg(Theme.surface(act, 1)));
+                more.setText(Lang.tf("还有 {0} 条 · 点此展开", shown.size() - BATCH));
+                more.setOnClickListener(new View.OnClickListener() {
+                    private int from = BATCH;
+                    @Override public void onClick(View v) {
+                        int to = Math.min(shown.size(), from + BATCH);
+                        renderBatch(box, shown, from, to, prefix, poolKey);
+                        from = to;
+                        int left = shown.size() - to;
+                        if (left > 0) {
+                            more.setText(Lang.tf("还有 {0} 条 · 点此展开", left));
+                        } else {
+                            try { ((android.view.ViewGroup) box).removeView(more); } catch (Throwable ignored) {}
+                        }
+                        refreshPendingCount(shown.size() - (to - BATCH) + (to - from));
+                    }
+                });
+                LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(-1, -2);
+                mlp.topMargin = dp(6);
+                more.setLayoutParams(mlp);
+                box.addView(more);
             }
         }
 
