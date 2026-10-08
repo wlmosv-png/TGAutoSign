@@ -15589,7 +15589,12 @@ public final class TGAutoSignCore {
                   .append("  目标=").append(acctTargetCount(currentAccount()))
                   .append("  导出=").append(DateUtils.nowHms())
                   .append("  行数=").append(kept)
-                  .append(dropped > 0 ? ("（已滤掉 " + dropped + " 条调试日志；全量导出请开「记录调试日志」）") : "")
+                  // ── 2026-10-09 措辞修正 ──
+                  // 原句「已滤掉 N 条调试日志」会让用户以为"还有 N 条问题没给我看"。
+                  // 实际上那是**内部实现细节**（心跳、尺寸计算、缓存命中之类），
+                  // 从来没落盘、也不影响使用，正常排障完全不需要。
+                  // 写成"另有 N 条内部细节已略去"，语义才对得上。
+                  .append(dropped > 0 ? ("  （另有 " + dropped + " 条内部细节已略去，那类内容不影响使用）") : "")
                   .append('\n');
                 for (LogLine l : all) {
                     if (!debugToDisk && l.lv == LV_DEBUG) continue;
