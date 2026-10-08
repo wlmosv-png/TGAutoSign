@@ -844,6 +844,8 @@ public final class Lang {
         EN.put("已添加「{0}」", "Added \"{0}\"");
         EN.put("恢复，让我重新判断", "Restore and let me decide again");
         EN.put("已恢复", "Restored");
+        EN.put("机器人说今日次数已用尽（通常表示今天已经签过了）",
+               "The bot says today's quota is used up (usually means you already checked in today)");
         EN.put("我已经学会的词（成功 {0} · 失败 {1}）  ▾", "Phrases I've learned (ok {0} · fail {1})  ▾");
         EN.put("遇到就说「成功了」的词", "Phrases that mean success");
         EN.put("遇到就说「没成功」的词", "Phrases that mean failure");

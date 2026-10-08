@@ -6082,7 +6082,9 @@ public final class TGAutoSignCore {
         if (_rc == SignLogic.R_REPLIED_UNK) return Lang.tr("回复判不出");
         if (_rc == SignLogic.R_NO_REPLY)    return Lang.tr("bot 未回复");
         if (_rc == SignLogic.R_JUDGE_OFF)   return Lang.tr("判定已关");
-        if (_rc == SignLogic.R_EXHAUSTED)   return Lang.tr("今日已用尽");
+        // 2026-10-08：V_EXHAUSTED 已改判为「签到成功」，状态栏也要跟着改，
+        // 否则用户看到「今日已用尽」会以为没签上，又去手动点。
+        if (_rc == SignLogic.R_EXHAUSTED)   return Lang.tr("今日已签");
         if (isPendingConfirm(prefix, id)) return Lang.tr("结果未知");
         /* 跨天重置（2026-09-30）：昨天撞上限的，今天不算"已放弃" */
         String _rd = prefs.getString(kRetryDay(prefix, id), "");
@@ -12528,7 +12530,7 @@ public final class TGAutoSignCore {
         if (rc == SignLogic.R_REPLIED_UNK)  return Lang.tr("bot 回复了，但判定词认不出结果");
         if (rc == SignLogic.R_NO_REPLY)     return Lang.tr("bot 全程没回复");
         if (rc == SignLogic.R_JUDGE_OFF)    return Lang.tr("自动判定已关闭，未判成败");
-        if (rc == SignLogic.R_EXHAUSTED)    return Lang.tr("bot 说今日次数已用尽，今天不必再签");
+        if (rc == SignLogic.R_EXHAUSTED)    return Lang.tr("机器人说今日次数已用尽（通常表示今天已经签过了）");
         return Lang.tr("结果未知，需要你看一眼");
     }
 
@@ -12539,7 +12541,7 @@ public final class TGAutoSignCore {
         if (rc == SignLogic.R_REPLIED_UNK)  return Lang.tr("回复判不出");
         if (rc == SignLogic.R_NO_REPLY)     return Lang.tr("bot 未回复");
         if (rc == SignLogic.R_JUDGE_OFF)    return Lang.tr("判定已关");
-        if (rc == SignLogic.R_EXHAUSTED)    return Lang.tr("今日已用尽");
+        if (rc == SignLogic.R_EXHAUSTED)    return Lang.tr("今日已签");
         return Lang.tr("结果未知");
     }
 
@@ -17698,32 +17700,40 @@ public final class TGAutoSignCore {
                     }
 
                     if (verdict == SignLogic.V_EXHAUSTED) {
-                        /* 今日已用尽（2026-10-01 新增）。
-                           现场：某群 bot 对重复签到回「❌ 您本日的规则触发数量上限，请明日再试」。
-                           这句不含签到词、三张词表都不命中 → 原本走 V_UNKNOWN →
-                           不写 kLast、不涨 kRetry、不熔断 → 心跳每 45 秒重发，群里被刷 13 条。
+                        /* 「今日额度已用尽」—— 现在算**签到成功**（2026-10-08 改）。
 
-                           处置原则：
-                             · **不标已签** —— 用户可能真没签上（额度在别处用掉了），标绿是撒谎；
-                             · **不计失败** —— 这不是失败，计进 fail_streak 会污染"连续 3 天失败"告警；
-                             · **不再重发** —— 归入「今日了结」，清计数与发送计数，当天收工。
-                           界面归类码用 R_SIGNED（今天不必再管），但日志与 Toast 说清是"已用尽"。 */
+                           原先的处理是"不标已签、不重发、归入今日了结"，界面显示
+                           「已放弃」。用户实测后明确要求改：
+
+                             "回复上限是成功了……不然一发就把用户封禁了"
+                             "现在是已放弃，我希望可以自动识别为签到成功"
+
+                           理由成立，而且是安全考量：
+                             · 说「次数已达上限 / 请明日再试」的 bot，绝大多数是在
+                               回应**重复签到** —— 也就是今天已经签过了；
+                             · 判成"未成功"会让心跳继续按重试节奏发消息，同一句话
+                               反复触发 → 账号被 bot 侧风控/封禁；
+                             · 而"额度真在别处用掉"属于极少数，代价（界面显示已签
+                               但实际没签）远小于被刷封号。
+
+                           处置：写 kLast（标已签）+ 清重试/发送痕迹，当天安静收工。
+                           界面归类码沿用 R_EXHAUSTED，但状态文案显示为「今日已签」
+                           并附注"额度用完"，用户一眼能看出是怎么回事。 */
                         for (Map<String, Object> m : judgeTargets) {
                             if (entryDid(m) != did) continue;
                             String id = entryId(m);
-                            // 清掉"待结论"痕迹：不再重发，也不再计入发送次数
                             prefs.edit()
-                                 .remove(kLast(prefix, id))          // 不冒充已签
-                                 .putInt(kRetry(prefix, id), RETRY_LIMIT)   // 今日放弃重试
-                                 .putString(kRetryDay(prefix, id), todayStr())
+                                 .remove(kRetryAt(prefix, id))
+                                 .remove(kRetryDay(prefix, id))
                                  .remove(prefix + "sent_at_" + id)
                                  .remove(prefix + "opt_" + id)
                                  .commit();
+                            markSigned(prefix, id);          // ← 关键：算成功
                             clearSendAttempts(prefix, id);
                             markResultCode(prefix, id, SignLogic.R_EXHAUSTED);
                         }
-                        jlog("【回复判定】" + did + " 命中「" + hitWord + "」→ 今日已用尽，不再重发"
-                             + "（不计失败、不标已签；如需重签请手动「立即签到」）");
+                        jlog("【回复判定】" + did + " 命中「" + hitWord
+                             + "」→ 判为已签（额度已用尽，通常意味着今天已经签过了）");
                         noteResult(ctrlAcc >= 0 ? ctrlAcc : currentAccount(), true);
                         return;
                     }
