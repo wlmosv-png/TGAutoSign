@@ -4823,7 +4823,7 @@ public final class TGAutoSignCore {
             jlog("[面板] 更新 uid="+did+" msg="+mid+" 回调按钮="+pl.buttons.size());
             // 改革：先看有没有条目正等这个 did 的面板（前置命令刚发出），有就立即点按钮
             onPanelRefreshedForWaiting(did);
-            if (inWindow() || inMissBackTime()) fireLiveSign(did, account); else logd("[面板] 窗口外且非补签时段，不触发补签 uid="+did);
+            if (inWindow() || inMissBackTime()) fireLiveSign(did, account); else logOnce("panelwin_out:" + did, LV_DEBUG, "[面板] 窗口外且非补签时段，不触发补签 uid=" + did);
         } catch (Throwable _e7) { noteSwallowed("updatePanelLiveButtons", _e7); }
     }
 
@@ -4872,7 +4872,7 @@ public final class TGAutoSignCore {
                 synchronized (panelHitBusy){ panelHitBusy.remove(did); }
                 try {
                     String prefix=accountPrefix(fAcc);
-                    if (!inWindow() && !inMissBackTime()) { logd("[面板事件] "+did+" 窗口外且非补签时段，跳过补签"); return; }
+                    if (!inWindow() && !inMissBackTime()) { logOnce("panelwin_out2:" + did, LV_DEBUG, "[面板事件] " + did + " 窗口外且非补签时段，跳过补签"); return; }
                     List<Map<String, Object>> list=new ArrayList<>();
                     loadTargetsInto(prefix, list);
                     for (Map<String, Object> m:list){
@@ -17652,7 +17652,18 @@ public final class TGAutoSignCore {
                 }
                 boolean relateDebug = false;
                 try { relateDebug = prefs.getBoolean("jmb_log_relate", false); } catch (Throwable ignored) {}
-                if ("AMBIGUOUS".equals(rm.method) || chatIsTarget || relateDebug) {
+                // ── 2026-10-09 详细档降噪 ──
+                // 用户截图里这一条反复出现：
+                //   [回复关联] chat=… isBot=false lookBot=false candidateCount=0 method=NONE
+                // 发送者明确不是 bot，这种消息根本不可能承载签到结果 ——
+                // 连"没关联上"都不值得记。只有下列情况才留痕：
+                //   · AMBIGUOUS（多候选不猜，必须能看见）
+                //   · 发送者像 bot（有可能是 bot 回了但我们没接住）
+                //   · 该会话本身是目标（用户关心的会话）
+                //   · 调试开关打开
+                boolean _worthLog = "AMBIGUOUS".equals(rm.method) || chatIsTarget
+                        || rm.senderLooksLikeBot || fromIsBot || relateDebug;
+                if (_worthLog) {
                     logd("[回复关联] chat=" + peerUid + " fromBot=" + fromUid
                          + " isBot=" + fromIsBot + " lookBot=" + rm.senderLooksLikeBot
                          + " replyTo=" + replyToMsgId
