@@ -17664,7 +17664,20 @@ public final class TGAutoSignCore {
                 // 实测：不加这个条件，一次导出 1370 行里 940 行都是用户压根
                 // 没加过目标的群在刷屏，真正的信息全被埋了。
                 final int _peerN = countTargetsInPeer(replyTargets, peerUid);
-                if (peerUid < 0L && _peerN > 0 && (rm.senderLooksLikeBot || fromIsBot)) {
+                // ── 2026-10-09 再降噪：还要「这个会话确实在等结论」才记 ──
+                // 用户导出实测：1192 条里 306 条是「目标数=1」的群，
+                // 但那些是机器人自己在推消息（我们没发过签到），
+                // candidateCount=0 完全正常 —— 却每条都写一行，几分钟积上千行。
+                // 只有"我发过、还在等"的会话才值得提醒用户"没认出来"。
+                boolean _awaiting = false;
+                try {
+                    for (Map<String, Object> _m : replyTargets) {
+                        if (!samePeerDid(entryDid(_m), peerUid)) continue;
+                        if (isSentPendingFresh(_rtPrefix, entryId(_m))
+                                || isPendingFresh(_rtPrefix, entryId(_m))) { _awaiting = true; break; }
+                    }
+                } catch (Throwable ignored) {}
+                if (peerUid < 0L && _peerN > 0 && _awaiting && (rm.senderLooksLikeBot || fromIsBot)) {
                     logw("[群聊未关联] chat=" + peerUid + " from=" + fromUid
                          + " isBot=" + fromIsBot + " lookBot=" + rm.senderLooksLikeBot
                          + " replyTo=" + replyToMsgId
