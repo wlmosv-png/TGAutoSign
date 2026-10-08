@@ -16656,12 +16656,40 @@ public final class TGAutoSignCore {
     // @param replyToId   reply_to_msg_id（0 = 无）
     // @param prefix      prefs 前缀（读 sent_at_ / msg_id_ 用）
     ///
+    /**
+     * 两个 did 是不是同一个会话（2026-10-08）。
+     *
+     * 起因：用户手填群 ID 时用了 `-1814986730`，而 Telegram 的超级群
+     * chatId 是 `-1001814986730`（`-100` 前缀 + channel_id）。
+     * 发送能成功（resolveInputPeerAny 有容错），但**判定时按 chatId 找目标
+     * 找不到** → 机器人回复永远关联不上 → 目标长期停在「结果未知」。
+     *
+     * 这里做格式归一：把 `-X` 与 `-(1000000000000 + X)` 视为同一个会话。
+     * 只影响比较，不改动已存的数据（用户不必删了重加）。
+     */
+    private static boolean samePeerDid(long a, long b) {
+        if (a == b) return true;
+        if (a == 0L || b == 0L) return false;
+        if (a > 0L || b > 0L) return false;      // 私聊不参与归一
+        // 统一到「channel_id」这个共同量纲再比
+        return channelIdOf(a) == channelIdOf(b) && channelIdOf(a) != 0L;
+    }
+
+    /** 从负数 did 取 channel_id（兼容 -X 与 -100XXXXXXXXXX 两种写法）。 */
+    private static long channelIdOf(long did) {
+        if (did >= 0L) return 0L;
+        long v = -did;
+        // -100XXXXXXXXXX：去掉 100 前缀
+        if (v > 1000000000000L) return v - 1000000000000L;
+        return v;
+    }
+
     /** 某个会话（群/私聊）在目标列表里有几条。用于群聊关联失败时的诊断日志。 */
     private int countTargetsInPeer(List<Map<String, Object>> list, long peerDid) {
         int n = 0;
         try {
             if (list == null) return 0;
-            for (Map<String, Object> m : list) if (entryDid(m) == peerDid) n++;
+            for (Map<String, Object> m : list) if (samePeerDid(entryDid(m), peerDid)) n++;
         } catch (Throwable ignored) {}
         return n;
     }
@@ -16702,7 +16730,7 @@ public final class TGAutoSignCore {
             // ① REPLY_TO：回复指向的消息 id，能对上我们记录发出的 msgId
             if (replyToId > 0) {
                 for (Map<String, Object> m : list) {
-                    if (entryDid(m) != peerDid) continue;
+                    if (!samePeerDid(entryDid(m), peerDid)) continue;
                     int sent = prefs.getInt(prefix + "msg_id_" + entryId(m), 0);
                     if (sent > 0 && sent == replyToId) {
                         rm.target = m;
@@ -16719,7 +16747,7 @@ public final class TGAutoSignCore {
             // 所以这里同时看 did 与「该目标绑定的 bot」（若有）。
             if (group && fromDid != 0L) {
                 for (Map<String, Object> m : list) {
-                    if (entryDid(m) != peerDid) continue;
+                    if (!samePeerDid(entryDid(m), peerDid)) continue;
                     long boundBot = 0L;
                     try {
                         Object bb = m.get("botDid");
@@ -16761,9 +16789,9 @@ public final class TGAutoSignCore {
             //            即便没有 sent_at_ 也认它。唯一性由「会话内目标数 == 1」保证，
             //            误判风险由下游的判定词命中再兜一层（不命中不会算签成功）。
             int peerTargets = 0;
-            for (Map<String, Object> m : list) if (entryDid(m) == peerDid) peerTargets++;
+            for (Map<String, Object> m : list) if (samePeerDid(entryDid(m), peerDid)) peerTargets++;
             for (Map<String, Object> m : list) {
-                if (entryDid(m) != peerDid) continue;
+                if (!samePeerDid(entryDid(m), peerDid)) continue;
                 // 已绑 bot 且与发送者不符 → 排除（同群多 bot 不污染）
                 if (group && fromDid != 0L) {
                     long boundBot = 0L;
@@ -16827,7 +16855,7 @@ public final class TGAutoSignCore {
             if (!group) {
                 if (fromDid != 0L && fromDid == peerDid) {
                     for (Map<String, Object> m : list) {
-                        if (entryDid(m) != peerDid) continue;
+                        if (!samePeerDid(entryDid(m), peerDid)) continue;
                         rm.target = m;
                         rm.method = "FALLBACK";
                         return rm;
