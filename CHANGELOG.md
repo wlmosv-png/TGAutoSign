@@ -140,6 +140,34 @@
   *The pending badge said 1 while several items were waiting.*
   计数用的是「去重后的机器人个数」，而条目是按按钮计的。
 
+- **机器人的「说明」「统计」被当成签到成功**
+  *Explanatory or statistical bot messages could be taken as a successful check-in.*
+  结果词里原先含「已 / 获得 / 领取 / 恭喜 / 奖励 / 积分」这类宽词，
+  它们与「签到」同句的概率极高 —— 「今日已有 123 人签到」
+  「签到规则：每日签到可获得积分」都会被判成功，当天不再补发，
+  用户**次日才发现断签**。现已收紧为强结果词，并新增「说明 / 统计 / 冷却」
+  非结论词表：命中即视为无法判断，而不是成功。
+- **「签到失败,详见规则说明」被判成无法判断**
+  *"Check-in failed, see the rules" could be treated as unknown.*
+  非结论词表刻意排在失败词之后 —— 否则会吞掉这类**真失败**。
+- **带否定的句子误判**
+  *Negated phrasings could be misjudged.*
+  新增否定守卫：命中词紧邻之前出现否定词则本次命中作废。
+  窗口按字符/词数收窄到刚好能覆盖「不是签到成功」而不会误杀
+  「不错，今日已签到」。
+- **「禁止 / 封禁 / 已拉黑」被当成无法判断**
+  *"Banned / blocked" replies were classified as unknown.*
+  这类应属**永久失败**（今天再怎么试也没用），已补进对应词表。
+- **Turrit 客户端装上却不生效**
+  *The Turrit client was installed but never injected.*
+  作用域清单有三处来源，其中一处漏了 Turrit —— 现已补齐，
+  并加了门禁比对三处集合，任何一处缺失都会在构建时直接失败。
+- **更新下载的完整性与安全性加固**
+  *Hardened the in-app updater.*
+  重定向改为有界（最多 5 跳、只允许 https）；下载先标记为「写入中」，
+  校验通过才落盘；字节数与服务器声明比对；校验值缺失时不再静默放行，
+  而是明确标记为「未校验」并如实告知用户。
+
 ## 1.6.3 (129) — 2026-10-05
 
 > 这一版有两件事：**把「按钮学习时灵时不灵」的真正原因挖出来了**，
