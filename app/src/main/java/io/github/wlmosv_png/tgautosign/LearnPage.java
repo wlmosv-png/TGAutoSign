@@ -277,6 +277,8 @@ public final class LearnPage {
     }
 
     private TextView pendingCountLabel;
+    /** 当前卡片的输入框（空词时自动聚焦用）。 */
+    private EditText inputRef;
     private final java.util.List<View> cardRefs = new java.util.ArrayList<View>();
     /** 忽略某条时：把卡片从列表摘掉后，还要把它补进「已忽略」区。 */
     private LinearLayout ignoredHost;
@@ -357,6 +359,18 @@ public final class LearnPage {
         hSub.setLineSpacing(dp(2), 1f);
         hSub.setText(Lang.tr("机器人回复了、但我认不出结果的消息会攒在这里。"
                            + "你只要告诉我「这样的话算不算签到成功」，以后同类回复我就能自动认出来。"));
+        // ── 2026-10-09 P2-b：说清"这个词还能在哪管" ──
+        // 群反馈里有人找不到手动加词的地方（「奥 看到了」= 翻了半天）。
+        // 判定词全貌在「我已经学会的词」里（下方折叠），增删都在那儿；
+        // 这里直接点明，省得他们去设置里瞎翻。
+        TextView where = new TextView(act);
+        where.setTextSize(Theme.TS_CAPTION);
+        where.setTextColor(Theme.termFaint(act));
+        where.setTypeface(Theme.text());
+        where.setLineSpacing(dp(2), 1f);
+        where.setPadding(0, dp(4), 0, 0);
+        where.setText(Lang.tr("已有判定词都在页面底部「我已经学会的词」里，可以随时加一个、删一个。"));
+        head.addView(where);
         head.addView(hSub);
         box.addView(head);
 
@@ -554,6 +568,13 @@ public final class LearnPage {
         // ③ 推荐词
         final String suggest = suggestFor(pt.norm);
         final EditText wordEd = new EditText(act);
+        // 供空词时自动聚焦（见 submit）
+        wordEd.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override public void onFocusChange(View v, boolean has) {
+                if (has) inputRef = wordEd;
+            }
+        });
+        inputRef = wordEd;
         wordEd.setTextSize(Theme.TS_BODY);
         wordEd.setTextColor(Theme.termTxt(act));
         wordEd.setTypeface(Typeface.MONOSPACE);
@@ -712,7 +733,21 @@ public final class LearnPage {
         try {
             String word = rawWord == null ? "" : rawWord.trim();
             if (word.length() == 0) {
-                cb.toast(Lang.tr("先填一段这句话里固定出现的文字"));
+                // ── 2026-10-09：空词提示分情况 + 自动聚焦 ──
+                // 用户反馈「点『其实是失败』也弹提示要填文字」，一脸懵：
+                // 我在否定它，为什么反而要我填词？—— 因为那个词是**以后自动
+                // 判断用的特征**，不是给这条回复的批注，两种路径都需要。
+                // 原来的提示没把这层说清，也没给任何落点，用户在原地打转。
+                if (inputRef != null) {
+                    try {
+                        inputRef.requestFocus();
+                        inputRef.setSelection(0, inputRef.getText().length());
+                    } catch (Throwable ignored) {}
+                }
+                String hint = isOk
+                        ? Lang.tr("在上面填一段「这句话里固定会出现」的文字，以后看到它就算成功")
+                        : Lang.tr("在上面填一段「这句话里固定会出现」的文字，以后看到它就算失败");
+                cb.toast(hint + Lang.tr("（实在找不到就用「先不管」）"));
                 return;
             }
             cb.addJudgeWordScoped(word, isOk, scope, did, targetId);

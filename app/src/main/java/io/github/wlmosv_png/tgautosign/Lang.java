@@ -844,6 +844,14 @@ public final class Lang {
         EN.put("已添加「{0}」", "Added \"{0}\"");
         EN.put("恢复，让我重新判断", "Restore and let me decide again");
         EN.put("已恢复", "Restored");
+        EN.put("已签到  {0}/{1}", "Signed in  {0}/{1}");
+        EN.put("立即签到  {0}/{1}", "Sign in now  {0}/{1}");
+        EN.put("在上面填一段「这句话里固定会出现」的文字，以后看到它就算成功", "Type a phrase that always appears here — it will count as success next time");
+        EN.put("在上面填一段「这句话里固定会出现」的文字，以后看到它就算失败", "Type a phrase that always appears here — it will count as failure next time");
+        EN.put("（实在找不到就用「先不管」）", " (if you can't find one, just tap \"Skip for now\")");
+        EN.put("已有判定词都在页面底部「我已经学会的词」里，可以随时加一个、删一个。", "All your learned phrases live under \"Phrases I've learned\" at the bottom — add or remove any time.");
+        EN.put("判为成功后，撤掉模块自己发出的那条签到指令，群里不留痕。只删自己发的，失败或判不出时保留现场。", "Once a check-in is judged successful, delete the command this module sent, leaving no trace in the group. Only its own messages are removed; on failure or unknown, everything stays for inspection.");
+        EN.put("签到成功后删除指令", "Delete the command after a successful check-in");
         EN.put("机器人说今日次数已用尽（通常表示今天已经签过了）",
                "The bot says today's quota is used up (usually means you already checked in today)");
         EN.put("我已经学会的词（成功 {0} · 失败 {1}）  ▾", "Phrases I've learned (ok {0} · fail {1})  ▾");

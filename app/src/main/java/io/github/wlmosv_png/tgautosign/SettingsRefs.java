@@ -37,6 +37,7 @@ public final class SettingsRefs {
     public Switch autoLearnNetCfmSw;    // 网络学习需确认
     public Switch skipNavSw;            // 忽略导航按钮
     public Switch btnConfirmSw;         // 按钮学习需确认（2026-10-04）
+    public Switch delAfterSw;           // 签到成功后删除指令（2026-10-09）
     public EditText learnForceEd;       // 必学规则（2026-10-04）
     public Switch looseSw;      // 宽松模式
     public Switch judgeSw;      // 自动判定成功/失败

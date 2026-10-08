@@ -1378,6 +1378,7 @@ public final class TGAutoSignCore {
             if (prefs.contains(kExclude())) LEARN_EXCLUDE = prefs.getString(kExclude(), "");
             LEARN_SKIP_NAV = prefs.getBoolean("jmb_skip_nav", true);
             BUTTON_LEARN_CONFIRM = prefs.getBoolean("jmb_btn_confirm", BUTTON_LEARN_CONFIRM);
+            DEL_AFTER_SIGN = prefs.getBoolean("jmb_del_after_sign", false);
             if (prefs.contains("jmb_learn_force")) LEARN_FORCE = prefs.getString("jmb_learn_force", "");
             LEARN_BLOCKED_DIDS.clear();
             try {
@@ -7598,9 +7599,24 @@ public final class TGAutoSignCore {
             //   实心的视觉重量全在填充色明度上，深/浅底都容易发荧光。
             //   幽灵按钮把这个重量交给**描边 + 文字**：不再有发光色块，
             //   但仍然有完整的轮廓，主操作感不丢。
-            Button mainBtn = ghostBtn(act, "立即签到", "bolt");
+            // ── 2026-10-09 P1-c：按钮自带进度 ──
+            // 用户建议：「立即签到」全部签完后应该变成「已签到」，不然太诱人；
+            // 顺带把 n/m 显示出来（「在上面还是有点小，需要额外看一眼」）。
+            // 现在按钮自己就是状态：未签满 = 立即签到 6/7；签满 = 已签到 7/7（弱化 + 不可点）。
+            final int[] _st = accountStats(currentAccount());
+            final int _total = _st[0], _signed = _st[1];
+            final boolean _allDone = _total > 0 && _signed >= _total;
+            String _label = _total <= 0 ? Lang.tr("立即签到")
+                          : (_allDone ? Lang.tf("已签到  {0}/{1}", _signed, _total)
+                                      : Lang.tf("立即签到  {0}/{1}", _signed, _total));
+            Button mainBtn = ghostBtn(act, _label, _allDone ? "check" : "bolt");
             mainBtn.setTextSize(Theme.TS_BODY);
             mainBtn.setPadding(dp(14), dp(12), dp(14), dp(12));
+            if (_allDone) {
+                // 签满了：弱化，并且点它也没意义 —— 但保留"想手动重签"的出口：
+                // 仍然可点（有些 bot 允许重复签），只是视觉上不再是主操作。
+                mainBtn.setAlpha(0.55f);
+            }
             mainBtn.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) { runAction(act, "sign"); }
             });
@@ -12269,12 +12285,58 @@ public final class TGAutoSignCore {
         r = r.replaceAll("^\\[[^\\]]*_cb\\d+\\]\\s*", "");
         r = r.replaceAll("\\[[^\\]]*_cb\\d+\\]", Lang.tr("某目标"));
         r = r.replaceAll("uid=-?\\d+", "");
+        // ── 2026-10-09 P1：能认出是谁的，换成目标名 ──
+        // 用户反馈「同时签两个群，日志分不清是哪个群」。
+        // 原来把所有长数字一锅端成「某目标」—— 脱敏没错，但连目标名也丢了。
+        // 现在先试一次「did → 目标名」，认得出来的就换成名字，
+        // 剩下认不出的才脱敏。既不暴露内部 id，又能分清是谁。
+        r = didsToNames(r);
         r = r.replaceAll("-?\\d{9,}", Lang.tr("某目标"));
         r = r.replace("text=", "");
         r = r.replaceAll("\\s+", " ").trim();
         if (r.length() == 0) return null;
         return foldKey == null ? new String[]{"dots", r, "info"}
                                : new String[]{"dots", r, "info", foldKey};
+    }
+
+    /**
+     * 把日志文本里出现的目标 did 换成人能看的名字（2026-10-09）。
+     *
+     * 只在**易懂档翻译**里用，属纯展示层，不参与任何判定。
+     * 数据源：当前账号的目标列表 + 会话标题缓存。
+     * 单个 did 换不出名字时原样保留，交给调用方后面的脱敏兜底。
+     */
+    private String didsToNames(String text) {
+        try {
+            if (text == null || text.length() == 0) return text;
+            // 粗筛：没有长数字就直接返回
+            if (!text.matches(".*-?\\d{9,}.*")) return text;
+            java.util.Map<String, String> map = new java.util.HashMap<String, String>();
+            java.util.List<Map<String, Object>> tl = new ArrayList<Map<String, Object>>();
+            try { loadTargetsInto(accountPrefix(), tl); } catch (Throwable ignored) {}
+            for (Map<String, Object> m : tl) {
+                try {
+                    long d = entryDid(m);
+                    if (d == 0L) continue;
+                    String nm = entryDisplayName(m);
+                    if (nm == null || nm.length() == 0) nm = entryTitle(m);
+                    if (nm == null || nm.length() == 0) continue;
+                    if (nm.length() > 14) nm = nm.substring(0, 14) + "…";
+                    map.put(String.valueOf(d), nm);
+                } catch (Throwable ignored) {}
+            }
+            if (map.isEmpty()) return text;
+            // 长的先替换，避免 -100123 被 -123 抢先命中
+            java.util.List<String> keys = new ArrayList<String>(map.keySet());
+            java.util.Collections.sort(keys, new java.util.Comparator<String>() {
+                @Override public int compare(String a, String b) { return b.length() - a.length(); }
+            });
+            String out = text;
+            for (String k : keys) {
+                if (out.contains(k)) out = out.replace(k, map.get(k));
+            }
+            return out;
+        } catch (Throwable t) { return text; }
     }
 
     /**
@@ -14954,6 +15016,7 @@ public final class TGAutoSignCore {
                 // 其余三个开关都同步了，只有它漏了。
                 if (R.skipNavSw != null) LEARN_SKIP_NAV = R.skipNavSw.isChecked();
                 if (R.btnConfirmSw != null) BUTTON_LEARN_CONFIRM = R.btnConfirmSw.isChecked();
+                if (R.delAfterSw != null) DEL_AFTER_SIGN = R.delAfterSw.isChecked();
                 if (R.learnForceEd != null) LEARN_FORCE = String.valueOf(R.learnForceEd.getText()).trim();
                 JUDGE_ENABLED = R.judgeSw.isChecked();
                 LOOSE_MODE = R.looseSw.isChecked();
@@ -14970,6 +15033,7 @@ public final class TGAutoSignCore {
                       .putInt("jmb_cal_style", CAL_STYLE)
                       .putBoolean("jmb_skip_nav", R.skipNavSw != null && R.skipNavSw.isChecked())
                       .putBoolean("jmb_btn_confirm", BUTTON_LEARN_CONFIRM)
+                      .putBoolean("jmb_del_after_sign", R.delAfterSw != null && R.delAfterSw.isChecked())
                       .putString("jmb_learn_force", LEARN_FORCE == null ? "" : LEARN_FORCE)
                       .putBoolean("jmb_autolearn", AUTO_LEARN)
                       .putBoolean("jmb_autolearn_net", AUTO_LEARN_NET)
@@ -16064,6 +16128,71 @@ public final class TGAutoSignCore {
         } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
     }
 
+    /** 签到成功后删除自己发出的指令（2026-10-09 P2）。开关默认关。 */
+    private boolean DEL_AFTER_SIGN = false;
+
+    /**
+     * 删掉模块自己发出的那条签到指令（2026-10-09）。
+     *
+     * 只在判定为**成功**后调用。失败/未知都留着 —— 用户要回群里看现场。
+     * id 取自 msg_id_<tid>（发送响应里提取的我们发出的消息 id），
+     * 拿不到就直接放弃，绝不猜、绝不删别人的消息。
+     */
+    private void deleteOwnSentMessage(final int account, final String prefix,
+                                      final String tid, final long dialogId) {
+        try {
+            if (!DEL_AFTER_SIGN) return;
+            final int sentId = (int) numLong(prefix + "msg_id_" + tid, 0L);
+            if (sentId <= 0) return;
+            // 只删私聊 / 群聊里「我们发的」这类，交给 TG 自己判定权限；
+            // 各版本 deleteMessages 签名不同，逐个试。
+            mainHandler.post(new Runnable() { @Override public void run() {
+                try {
+                    Object mc = getMessagesController(account);
+                    if (mc == null) return;
+                    java.util.ArrayList<Integer> ids = new java.util.ArrayList<Integer>();
+                    ids.add(Integer.valueOf(sentId));
+                    java.util.ArrayList<Long> peers = new java.util.ArrayList<Long>();
+                    peers.add(Long.valueOf(dialogId));
+                    boolean ok = false;
+                    // 新版：deleteMessages(ArrayList<Integer>, ArrayList<Long>, boolean)
+                    try {
+                        invoke(mc, "deleteMessages", new Class<?>[]{
+                                java.util.ArrayList.class, java.util.ArrayList.class, boolean.class},
+                                new Object[]{ids, peers, Boolean.TRUE});
+                        ok = true;
+                    } catch (Throwable ignored) {}
+                    // 旧版：deleteMessages(ArrayList<Integer>, boolean)
+                    if (!ok) {
+                        try {
+                            invoke(mc, "deleteMessages", new Class<?>[]{
+                                    java.util.ArrayList.class, boolean.class},
+                                    new Object[]{ids, Boolean.TRUE});
+                            ok = true;
+                        } catch (Throwable ignored) {}
+                    }
+                    // 再旧：deleteMessages(ArrayList<Integer>, ArrayList<Long>, boolean, long)
+                    if (!ok) {
+                        try {
+                            invoke(mc, "deleteMessages", new Class<?>[]{
+                                    java.util.ArrayList.class, java.util.ArrayList.class,
+                                    boolean.class, long.class},
+                                    new Object[]{ids, peers, Boolean.TRUE, Long.valueOf(0L)});
+                            ok = true;
+                        } catch (Throwable ignored) {}
+                    }
+                    if (ok) {
+                        // 也清掉本地记录，免得下轮又拿它去比对 REPLY_TO
+                        prefs.edit().remove(prefix + "msg_id_" + tid).apply();
+                        logd("[清理] 已删除自己发出的签到指令 msg=" + sentId + " （" + tid + "）");
+                    } else {
+                        logd("[清理] 删除未成功（该版本无可用的 deleteMessages 签名）: " + tid);
+                    }
+                } catch (Throwable t) { noteSwallowed("deleteOwnSentMessage", t); }
+            } });
+        } catch (Throwable t) { noteSwallowed("deleteOwnSentMessage(outer)", t); }
+    }
+
     /**
      * 用户在会话里**手动**发出了某目标的指令（2026-10-08）。
      *
@@ -16828,9 +16957,27 @@ public final class TGAutoSignCore {
             if (false && candCount == 0 && group && peerTargets == 1 && rm.senderLooksLikeBot) {
                 // 保留结构占位，便于将来需要时快速回滚；当前恒为 false。
             }
-            // 真机修复：发送者不像 bot 时也允许「唯一候选」路径 ——
-            //   否则取不到 bot 标志就会把正常回复全部丢掉（原行为）。
-            //   风险由「候选唯一」兜住：多目标（>1）依然 AMBIGUOUS，不猜。
+            // ── 2026-10-09 P0：群聊必须确认发送者像 bot ──
+            //
+            // 原先注释写着「发送者不像 bot 时也允许唯一候选路径，否则取不到
+            // bot 标志会把正常回复丢掉」。实测这个让步代价太大：
+            // 群聊里只要有一个待结论目标，**群里任何人的消息**都会被关联上、
+            // 进判定、认不出、打一条日志。群越活跃刷得越凶 ——
+            // 用户实测被刷了 10 分钟，暂停/冻结都压不住。
+            //
+            // 现在：群聊路径要求 senderLooksLikeBot。
+            //   · 已绑 botDid 且一致 → 早已走 ② BOT_DID 精确匹配，不受影响
+            //   · 已绑但不一致 → 上面的循环已 continue 排除
+            //   · 未绑定 → 这里额外把关（looksLikeBot 由 fromIsBot / 目标 did
+            //     比对 / 已绑 bot 比对三者之一得出，见方法开头）
+            // 私聊不设此限：私聊的 fromDid 本来就等于 peerDid，即 bot 本人。
+            boolean groupNeedsBot = group && !rm.senderLooksLikeBot && fromDid != 0L;
+            if (groupNeedsBot) {
+                rm.target = null;
+                rm.method = "NONE";
+                rm.candidateCount = candCount;
+                return rm;
+            }
             if (candCount == 1 && only != null) {
                 // 唯一候选：此时才敢把它和发送者绑定（下次可走 BOT_DID 精确关联）。
                 // 候选 >1 时不绑 —— 绑错会让某一条永远抢走全部回复，见 ② 的说明。
@@ -17520,6 +17667,29 @@ public final class TGAutoSignCore {
                     final java.util.List<Map<String, Object>> judgeTargets =
                             new ArrayList<Map<String, Object>>();
                     try { loadTargetsInto(prefix, judgeTargets); } catch (Throwable ignored) {}
+                    // ── 2026-10-09 P0：冻结 / 暂停必须能立刻压住判定链 ──
+                    //
+                    // 用户反馈：「我暂停和冻结都不行」「冻结和暂停 均无效」。
+                    // 暂停与冻结此前只在**发送侧**检查（sendSign / 调度 / 闸），
+                    // 判定侧读的是另一份列表、没有任何过滤 ——
+                    // 于是「不再发消息」了，但只要那条签到的 sent_at_ 还在，
+                    // 群里每来一条消息仍会跑一遍判定、认不出、写一条日志。
+                    // 用户按了刹车却看着日志继续刷，这比刷屏本身更糟。
+                    //
+                    // 现在装完就剔除：冻结 / 暂停一周 / 该 bot 被整只排除。
+                    try {
+                        java.util.Iterator<Map<String, Object>> _it = judgeTargets.iterator();
+                        while (_it.hasNext()) {
+                            Map<String, Object> _m = _it.next();
+                            try {
+                                String _id = entryId(_m);
+                                if (isFrozen(prefix, _id) || isSnoozed(prefix, _id)
+                                        || isBotBlocked(entryDid(_m))) {
+                                    _it.remove();
+                                }
+                            } catch (Throwable ignored) {}
+                        }
+                    } catch (Throwable ignored) {}
                     // 「已签过/重复」必须先判且同样标记已签：
                     // 否则 last_ 不写 → 日历不绿 → 心跳每 90 秒再发一次（死循环）
                     // 判定逻辑已抽到 SignLogic（纯逻辑、有单测）：返回 {判定码, 命中词}
@@ -17686,6 +17856,9 @@ public final class TGAutoSignCore {
                             markSigned(prefix, id);
                             clearSendAttempts(prefix, id);   // 有结论了，当日发送计数归零
                             marked++;
+                            // 2026-10-09 P2：签成了就把自己刚发的那条指令撤掉
+                            deleteOwnSentMessage(ctrlAcc >= 0 ? ctrlAcc : currentAccount(),
+                                                 prefix, id, did);
                         }
                         // ── 2026-10-08 日志降噪（用户反馈「没必要出现在日志里」）──
                         // 同一个目标一天内被判定成功可能发生很多次（群聊里 bot 反复
@@ -17731,6 +17904,8 @@ public final class TGAutoSignCore {
                             markSigned(prefix, id);          // ← 关键：算成功
                             clearSendAttempts(prefix, id);
                             markResultCode(prefix, id, SignLogic.R_EXHAUSTED);
+                            deleteOwnSentMessage(ctrlAcc >= 0 ? ctrlAcc : currentAccount(),
+                                                 prefix, id, did);
                         }
                         jlog("【回复判定】" + did + " 命中「" + hitWord
                              + "」→ 判为已签（额度已用尽，通常意味着今天已经签过了）");
@@ -19523,6 +19698,21 @@ public final class TGAutoSignCore {
         bcSub.setText(Lang.tr("开：点按钮后先进「待添加」，你确认了才成为签到目标。\n关：点什么学什么（旧行为）。"));
         bcSub.setPadding(dp(4), 0, dp(4), dp(4));
         card2.addView(bcSub);
+
+        // ── 签到成功后自动删除指令（2026-10-09 P2，默认关）──
+        // 用户需求：「主要是自动删除签到指令的功能 很重要」——
+        //   签到指令在群里留痕，闭环出问题时重复发送会刷屏，容易被 ban。
+        // 默认关：涉及删除，不替用户做主。
+        R.delAfterSw = swRow(act, "签到成功后删除指令", DEL_AFTER_SIGN);
+        card2.addView(R.delAfterSw);
+        TextView delSub = new TextView(act);
+        delSub.setTextSize(Theme.TS_CAPTION);
+        delSub.setTextColor(Theme.termFaint(act));
+        delSub.setTypeface(Theme.text());
+        delSub.setText(Lang.tr("判为成功后，撤掉模块自己发出的那条签到指令，群里不留痕。"
+                             + "只删自己发的，失败或判不出时保留现场。"));
+        delSub.setPadding(dp(4), 0, dp(4), dp(4));
+        card2.addView(delSub);
 
         // ── 必学规则（2026-10-04 新增）──
         // 命中即学、跳过确认 —— 给「天天用」的 bot 用，避免每次都要确认。
