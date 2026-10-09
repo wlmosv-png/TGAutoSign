@@ -12037,10 +12037,8 @@ public final class TGAutoSignCore {
                         if (lp instanceof LinearLayout.LayoutParams) {
                             LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) lp;
                             boolean byWeight = llp.weight > 0f && llp.height == 0;
-                            if (byWeight) {
-                                // 2026-10-09 第四修：不再因「内容短」改定高。
-                                if (false) { }
-                            } else if (Math.abs(cur - target) >= 12) {
+                            // 2026-10-09 第四修：不再因「内容短」改定高 —— 恒定占满。
+                            if (!byWeight && Math.abs(cur - target) >= 12) {
                                 llp.weight = 0f;
                                 llp.height = target;
                                 sv.setLayoutParams(llp);
