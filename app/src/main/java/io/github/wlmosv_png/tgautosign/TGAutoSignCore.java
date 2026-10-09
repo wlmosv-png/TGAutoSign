@@ -3611,15 +3611,53 @@ public final class TGAutoSignCore {
         } catch (Throwable t) { logd("群签到页异常: " + t); }
     }
 
+    /**
+     * 添加签到目标 · 第一步：在哪里签？（2026-10-10 改两层）
+     *
+     * 改前是三个平铺选项：自动识别 / 我有签到指令 / 群·频道签到。
+     * 问题：前两个是「怎么找到签到入口」，第三个是「在哪种会话里」——
+     *   **不是同一个维度**，导致「群 + 点按钮」这种组合无处安放。
+     * 现在拆成两步：先选会话类型，再选交互方式（群直接进指令页，
+     *   因为群里几乎都是发指令，多问一步是负担）。
+     */
     private void showAddChooser(final Activity act){
         LinearLayout menu=new LinearLayout(act); menu.setOrientation(LinearLayout.VERTICAL);
         TextView tip=new TextView(act); tip.setTextSize(Theme.TS_BODY); tip.setTextColor(android.graphics.Color.parseColor(txtSub(act)));
-        tip.setText(Lang.tr("不用管类型：去 bot 会话点一下它的签到按钮，选「自动识别」即可。\n如果它要的是发指令，用「我有签到指令」。"));
+        tip.setText(Lang.tr("先选「在哪里签」，下一步再选它要什么。"));
         tip.setPadding(dp(12),dp(8),dp(12),dp(8)); menu.addView(tip);
-        menuItem(menu,"bulb","自动识别（推荐）","去 bot 会话点一下它的签到按钮，会自动记忆并每天跟进","cap_cb");
-        menuItem(menu,"keyboard","我有签到指令","知道它要求的文本指令（bot ID + 指令）","add_text");
-        menuItem(menu,"group","群 / 频道签到","在群聊里发签到指令（不是私聊）","add_group");
-        showDialog(act,"添加签到目标", menu, "关闭");
+        menuItem(menu,"bot","私聊机器人","和它单聊，每天私信签（最常见）","add_bot");
+        menuItem(menu,"group","群 / 频道","在群里@它或发指令签（不是私聊）","add_group");
+        showDialog(act,"添加签到目标 · 1/2", menu, "关闭");
+    }
+
+    /** 添加签到目标 · 第二步（私聊）：它要什么？ */
+    private void showAddChooserBot(final Activity act){
+        LinearLayout menu=new LinearLayout(act); menu.setOrientation(LinearLayout.VERTICAL);
+        TextView tip=new TextView(act); tip.setTextSize(Theme.TS_BODY); tip.setTextColor(android.graphics.Color.parseColor(txtSub(act)));
+        tip.setText(Lang.tr("它平时让你怎么签？"));
+        tip.setPadding(dp(12),dp(8),dp(12),dp(8)); menu.addView(tip);
+        menuItem(menu,"bulb","点一下按钮","例如：点「每日签到」按钮就完事（推荐，会自动记忆）","cap_cb");
+        menuItem(menu,"keyboard","发一条指令","例如：发送 /qd 给它（需要你知道 bot ID 和指令）","add_text");
+        // 「返回上一步」必须是**真的回上一步**：showDialog 的 negLabel 只会关闭对话框，
+        // 写成"返回"会误导（用户以为能回上一步，实际是关掉重来）。
+        // 这里自带一个按钮显式回退。
+        Button back = mkBtn(act);
+        withIconText(act, back, "back", "返回上一步");
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                try {
+                    Object top = dlgStack.pollLast();
+                    if (top != null) call(top, "dismiss", new Class<?>[0], new Object[0]);
+                } catch (Throwable ignored) {}
+                mainHandler.postDelayed(new Runnable() {
+                    @Override public void run() { try { showAddChooser(act); } catch (Throwable ignored) {} }
+                }, 60L);
+            }
+        });
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, -2);
+        blp.topMargin = dp(6);
+        menu.addView(back, blp);
+        showDialog(act,"添加签到目标 · 2/2", menu, "关闭");
     }
 
     /**
@@ -6435,7 +6473,22 @@ public final class TGAutoSignCore {
         v.setOrientation(LinearLayout.VERTICAL);
         v.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
         v.setPadding(dp(8), dp(10), dp(8), dp(10));
-        v.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x22)));
+        // ── 2026-10-10：卡片描边按**语义**上色，不再一律青色 ──
+        // 起因（用户截图）：「添加目标」与「删除目标」并排、尺寸样式完全一致，
+        //   而删除是破坏性操作，误触代价最大（要重建）。
+        //   只有图标是小粉点、卡片边框仍是青的 → 扫一眼分不出哪个不能乱点。
+        // 现在：危险(粉) / 主操作(绿) / 中性(青)，与 menuItem 的 kind 配色同一套语义。
+        int _edge = Theme.withAlpha(Theme.termCyan(act), 0x22);
+        {
+            String _k = action == null ? "" : action.toLowerCase(java.util.Locale.US);
+            if (_k.contains("del") || _k.contains("clear") || _k.contains("remove")
+                    || _k.contains("danger")) {
+                _edge = Theme.withAlpha(Theme.termPink(act), 0x4D);
+            } else if (_k.contains("sign") || _k.contains("add")) {
+                _edge = Theme.withAlpha(Theme.termGreen(act), 0x3D);
+            }
+        }
+        v.setBackground(termBorder(act, Theme.termCard(act), _edge));
         v.setTag(action);
         v.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View vv){ runAction(vv.getContext(), String.valueOf(vv.getTag())); } });
         v.setOnTouchListener(new android.view.View.OnTouchListener() {
@@ -6850,6 +6903,32 @@ public final class TGAutoSignCore {
         }
         tl.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,4), 1));
         tl.addView(typeChip(c, cb));
+        // ── 2026-10-10 新增：「疑似重复」提示 ──
+        // 起因：用户把同一个群用两种写法各加了一次
+        //   （-1001814986730 与 -4476076932，channel_id 都是 1814986730），
+        //   界面完全看不出来 —— 只有看日志才发现是同一个群。
+        // 判据：同账号里存在**另一个**目标，其 did 与本条 samePeerDid 归一后相同。
+        // 注意只比对 did，不比文本 —— 同一群挂两个不同指令是**合法**用法
+        //   （现在已支持），那种情况两个目标 did 相同但不是"重复"。
+        //   所以这里再要求「指令文本也相同」才算疑似重复。
+        try {
+            boolean dup = false;
+            if (!isFrozen(accountPrefix(), id)) {
+                String myText = entryText(entry);
+                for (Map<String, Object> om : targetsSnapshot()) {
+                    String oid = entryId(om);
+                    if (oid == null || oid.equals(id)) continue;
+                    if (!samePeerDid(entryDid(om), did)) continue;
+                    String ot = entryText(om);
+                    if (ot == null || myText == null || !ot.equals(myText)) continue;
+                    dup = true; break;
+                }
+            }
+            if (dup) {
+                tl.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,4), 1));
+                tl.addView(badgeChip(c, " 重复?", Theme.termPink(c), false));
+            }
+        } catch (Throwable ignored) {}
         if (isFrozen(accountPrefix(), id)) {
             tl.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,4), 1));
             TextView fzChip = badgeChip(c, " 冻结", Theme.termAmber(c), false);
@@ -7198,13 +7277,24 @@ public final class TGAutoSignCore {
 
             boolean all = cat == null;
             if (all || "target".equals(cat)) {
-            sectionHeader(root, act, "▍目标");
+            // ── 2026-10-10 重排：按「语义分组 + 危险隔离」──
+            // 改前 5 个 tile 挤一格：添加 / 删除 / 复制 / 签全部账号 / 预设模板。
+            //   三个问题（用户截图）：
+            //     ① 「签全部账号」是**执行动作**（会真的往外发消息），
+            //        跟添加/删除/复制这种**改配置**的操作混在一起，语义不对等；
+            //     ② 删除与添加并排、尺寸样式完全一致，误触代价最大；
+            //     ③ 复制目标的「给其它账号」没说清复制全部还是选的。
+            sectionHeader(root, act, "▍配置");
             android.widget.GridLayout g1 = new android.widget.GridLayout(act); g1.setColumnCount(2); root.addView(g1);
             addTile(g1, act, "plus", "添加目标", "指令 / 捕获按钮", "add");
-            addTile(g1, act, "trash", "删除目标", "移除条目", "del");
-            addTile(g1, act, "copy", "复制目标", "给其它账号", "copy_targets");
-            addTile(g1, act, "globe", "签全部账号", Lang.tf("{0} 个账号", activatedAccounts()), "sign_all_accounts");
-            addTile(g1, act, "layers", "预设模板", "一键添加", "presets");
+            addTile(g1, act, "copy", "复制目标", "当前账号的全部目标 → 其它账号", "copy_targets");
+            addTile(g1, act, "layers", "预设模板", "一键添加常用 bot", "presets");
+            addTile(g1, act, "trash", "删除目标", "移除条目（不可撤销）", "del");
+
+            // 执行：会立即对外发消息，与配置操作分开、单独分组
+            sectionHeader(root, act, "▍执行");
+            android.widget.GridLayout g1b = new android.widget.GridLayout(act); g1b.setColumnCount(2); root.addView(g1b);
+            addTile(g1b, act, "globe", "签全部账号", Lang.tf("立即对 {0} 个账号发送", activatedAccounts()), "sign_all_accounts");
             }
 
             if (all || "data".equals(cat)) {
@@ -10278,6 +10368,7 @@ public final class TGAutoSignCore {
         if ("import".equals(action)) { showImportPicker(act); return; }
         if ("clear_all".equals(action)) { confirmClearAll(act); return; }
         if ("add_text".equals(action)) { showAdd(act); return; }
+        if ("add_bot".equals(action)) { showAddChooserBot(act); return; }
         if ("add_group".equals(action)) { showAddGroup(act); return; }
         if ("cap_cb".equals(action)) { startCapture(act); return; }
         if ("debug".equals(action)) { showDebugConsole(act); return; }
