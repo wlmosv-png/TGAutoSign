@@ -5950,32 +5950,67 @@ public final class TGAutoSignCore {
 
     /** 兜底解析 peer：缓存与数据库都拿不到 user 时，从会话列表里找这个 did 直接用 */
         private Object peerFromDialogs(long did, int account) {
+            // ── 2026-10-09 重写：原实现是**彻底的死代码** ──
+            //
+            // 病根（apk-index 对官方 12.10.6 的实测签名）：
+            //   org.telegram.tgnet.TLRPC$Dialog 只有 3 个方法
+            //   （TLdeserialize / fromConstructor / <init>），**0 个 getter**；
+            //   它只有 public 字段 id:long 与 peer:TLRPC$Peer。
+            //   而原实现调的是：
+            //     call(d,"getDialogId")      —— 方法不存在 → 异常
+            //     getFieldVal(d,"dialogId")  —— 字段不存在（真名是 id）
+            //     call(d,"getInputPeer")     —— 方法不存在
+            //     call(d,"getPeer")          —— 方法不存在
+            //     getFieldVal(d,"inputPeer") —— 字段不存在（真名是 peer）
+            //   → id 恒为 -1 → 每条 dialog 都 continue → **恒返回 null**。
+            //
+            // 后果：这是 peer 解析的**最后一层兜底**。它从来没工作过，
+            //   所以「内存里 getUser/getChat 拿不到 → 报取不到会话数据」这条路
+            //   从来就无路可退。用户反馈的「昨晚刚签到完，凌晨就显示丢失会话数据，
+            //   要去发一条消息才行」正是这条兜底缺失的直接表现。
+            //
+            // 现在：
+            //   ① 首选 MessagesController.getInputPeer(long) —— 官方 12.10.6 存在，
+            //      内部按 dialogId 走 getUser/getChat + access_hash，一步到位；
+            //   ② 失败才遍历 getDialogs(folder)，用**真实字段** id / peer 匹配，
+            //      再经 MessagesController.getInputPeer(TLRPC$Peer) 转成 InputPeer。
             try {
                 Object mc = getMessagesController(account);
                 if (mc == null) return null;
+
+                // ① 直接按 dialogId 取（最快、最可靠）
+                try {
+                    Object ip = call(mc, "getInputPeer", new Class<?>[]{long.class},
+                                     new Object[]{Long.valueOf(did)});
+                    if (ip != null && ip.getClass().getName().contains("InputPeer")) return ip;
+                } catch (Throwable ignored) {}
+
+                // ② 遍历会话列表兜底
                 Object dialogs = null;
-                try { dialogs = call(mc, "getDialogs", new Class<?>[0], new Object[0]); } catch (Throwable ignored) {}
-                if (dialogs == null) { try { dialogs = getFieldVal(mc, "dialogs"); } catch (Throwable ignored) {} }
+                try {
+                    dialogs = call(mc, "getDialogs", new Class<?>[]{int.class},
+                                   new Object[]{Integer.valueOf(0)});
+                } catch (Throwable ignored) {}
+                if (!(dialogs instanceof List)) {
+                    try { dialogs = call(mc, "getDialogs", new Class<?>[0], new Object[0]); } catch (Throwable ignored) {}
+                }
                 if (!(dialogs instanceof List)) return null;
+                Class<?> peerCls = classEx("org.telegram.tgnet.TLRPC$Peer");
                 for (Object d : (List<?>) dialogs) {
                     if (d == null) continue;
+                    // 真实字段：TLRPC$Dialog.id
                     long id = -1L;
-                    try { Object o = call(d, "getDialogId", new Class<?>[0], new Object[0]); if (o instanceof Number) id = ((Number) o).longValue(); } catch (Throwable ignored) {}
-                    if (id != did) {
-                        try { Object o = getFieldVal(d, "dialogId"); if (o instanceof Number) id = ((Number) o).longValue(); } catch (Throwable ignored) {}
-                        if (id != did) continue;
-                    }
-                    Object cand = null;
-                    try { cand = call(d, "getInputPeer", new Class<?>[0], new Object[0]); } catch (Throwable ignored) {}
-                    if (cand == null) { try { cand = call(d, "getPeer", new Class<?>[0], new Object[0]); } catch (Throwable ignored) {} }
-                    if (cand == null) { try { cand = getFieldVal(d, "inputPeer"); } catch (Throwable ignored) {} }
-                    if (cand == null) continue;
-                    String cn = cand.getClass().getName();
-                    if (cn.contains("InputChannel") || cn.contains("InputChat")) return null;
-                    if (cn.contains("InputPeer")) return cand;
                     try {
-                        Object ip = staticInvoke(classEx("org.telegram.messenger.MessagesController"), "getInputPeer",
-                                new Class<?>[]{classEx("org.telegram.tgnet.TLObject")}, new Object[]{cand});
+                        Object o = getFieldVal(d, "id");
+                        if (o instanceof Number) id = ((Number) o).longValue();
+                    } catch (Throwable ignored) {}
+                    if (id != did) continue;
+                    // 真实字段：TLRPC$Dialog.peer → InputPeer
+                    Object peer = null;
+                    try { peer = getFieldVal(d, "peer"); } catch (Throwable ignored) {}
+                    if (peer == null) continue;
+                    try {
+                        Object ip = call(mc, "getInputPeer", new Class<?>[]{peerCls}, new Object[]{peer});
                         if (ip != null && ip.getClass().getName().contains("InputPeer")) return ip;
                     } catch (Throwable ignored) {}
                 }
