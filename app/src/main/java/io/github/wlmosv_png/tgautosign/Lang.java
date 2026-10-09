@@ -1206,6 +1206,17 @@ public final class Lang {
         EN.put("米白配琥珀 · 暖亮友善", "Cream with amber, warm and bright");
         EN.put("暖褐底 · 复古终端味", "Warm brown, retro terminal feel");
         EN.put("深海底蓝 · 冷静通透", "Deep ocean blue, calm and clear");
+        // ── 新增 5 套配色（2026-10-09）──
+        EN.put("雾霭玫瑰 Rosé", "Rose Mist");
+        EN.put("纸墨 Paper", "Paper");
+        EN.put("青瓷 Celadon", "Celadon");
+        EN.put("暮山紫 Twilight", "Twilight");
+        EN.put("薄荷 Mint", "Mint");
+        EN.put("柔玫灰 · 温润不腻", "Soft rose grey, gentle");
+        EN.put("近纯黑白 · 久看不累", "Near monochrome, easy on the eyes");
+        EN.put("东方青瓷绿 · 清淡雅致", "Celadon green, understated");
+        EN.put("紫灰沉静 · 有气质", "Muted violet, composed");
+        EN.put("清爽绿白 · 明亮通透", "Fresh green and white, bright");
         // 明暗三态
         EN.put("明暗：自动（跟宿主）", "Appearance: Auto (follow host)");
         EN.put("明暗：始终日间", "Appearance: Light");

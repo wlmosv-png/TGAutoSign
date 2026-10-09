@@ -721,7 +721,9 @@ public final class TGAutoSignCore {
         // 2026-10-09：触感不再逐按钮挂钩 —— 改为 showDialog 里的
         //   **全局触点拦截**（一处覆盖 92 个可点控件 + 将来新增的）。
         //   这里只留标记：主操作按钮给"重档"。
-        try { b.setTag(android.R.id.button1, "haptic-heavy"); } catch (Throwable ignored) {}
+        // ⚠ 必须用**单参** setTag —— 带 int key 的版本要求 key 是本应用 R.id，
+        //   传 android.R.id.* 会抛 IllegalArgumentException（静默失效过很久）。
+        try { b.setTag("haptic-heavy"); } catch (Throwable ignored) {}
         return b;
     }
 
@@ -729,7 +731,7 @@ public final class TGAutoSignCore {
     private Button mkBtnDanger(Context c) {
         Button b = mkBtn(c);
         // 2026-10-09：危险按钮标记为"重档"触感（由全局拦截读取）
-        try { b.setTag(android.R.id.button1, "haptic-heavy"); } catch (Throwable ignored) {}
+        try { b.setTag("haptic-heavy"); } catch (Throwable ignored) {}
         b.setTextColor(Theme.termPink(c));
         // 危险动作同样去描边：浅粉**实色**底 + 粉字，靠色相区分而不是靠框。
         //   浅色模式下叠半透明会发灰，所以这里也 blend 出实色。
@@ -6750,6 +6752,8 @@ public final class TGAutoSignCore {
         LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(Theme.dp(c,3), LinearLayout.LayoutParams.MATCH_PARENT);
         blp.setMargins(0, Theme.dp(c,3), 0, Theme.dp(c,3));
         wrap.addView(barView, blp);
+        // 2026-10-09 ①：按状态让色条呼吸 —— 扫一眼就知道哪几个在跑 / 要处理
+        try { registerStateBar(barView, barBreatheMode(status, _isSignedRow)); } catch (Throwable ignored) {}
 
         LinearLayout row = new LinearLayout(c);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -7105,6 +7109,8 @@ public final class TGAutoSignCore {
 
     private static long lastMainOpen = 0L;
     private boolean fastMainOpen = false;
+    /** 进程内是否已打开过一次主面板（首次必播入场动画，2026-10-09）。 */
+    private boolean mainOpenedOnce = false;
     private volatile boolean inSendReq = false;
     private volatile long bootReadyAt = 0L;
     /** 「未就绪被跳过」的日志限频时间戳（避免刷屏，又不至于完全无感）。 */
@@ -7194,7 +7200,17 @@ public final class TGAutoSignCore {
     private void showMainMenu(Activity act) {
 
         long now0 = System.currentTimeMillis();
-        fastMainOpen = SHOT_MODE || (now0 - lastMainOpen < 15000L);
+        // ── 2026-10-09 修正 ──
+        // 原逻辑：15 秒内重复打开就跳过所有入场动画。
+        // 但**每次打开都会刷新 lastMainOpen**，于是用户为了看效果反复开合时，
+        // 永远落在窗口内 → 动画一次都不播（用户："没任何改变"）。
+        // 现在：① 进程内**首次打开必播**；② 节流窗口 15s → 4s。
+        if (!mainOpenedOnce) {
+            fastMainOpen = SHOT_MODE;
+            mainOpenedOnce = true;
+        } else {
+            fastMainOpen = SHOT_MODE || (now0 - lastMainOpen < 4000L);
+        }
         lastMainOpen = now0;
         // 标题动效：保持原有"每次打开换一种"的轮换（维持新鲜感）。
         // 真正的节流是上面那行 —— 15 秒内反复打开（切换页面/返回）不重播，
@@ -7462,6 +7478,7 @@ public final class TGAutoSignCore {
             }
             @Override public void onViewDetachedFromWindow(android.view.View vv) { sweep.animate().cancel(); sweep.setVisibility(View.VISIBLE); }
         });
+        staggerIn(titleRow, 0);
         head.addView(titleRow);
         final TextView sv = new TextView(act); sv.setTextSize(Theme.TS_SECOND); sv.setTextColor(Theme.termMuted(act));
         sv.setTypeface(android.graphics.Typeface.MONOSPACE);
@@ -7472,6 +7489,7 @@ public final class TGAutoSignCore {
         LinearLayout svRow = new LinearLayout(act); svRow.setOrientation(LinearLayout.HORIZONTAL); svRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
         svRow.addView(sv);
         svRow.addView(cur);
+        staggerIn(svRow, 60);
         head.addView(svRow);
         // 光标闪烁：打字期间闪，**打完 3 下就收起来**
         //（2026-10-03）：原先只要面板开着就无限闪，是常驻噪声。
@@ -7729,7 +7747,7 @@ public final class TGAutoSignCore {
             String _label = _total <= 0 ? Lang.tr("立即签到")
                           : (_allDone ? Lang.tf("已签到  {0}/{1}", _signed, _total)
                                       : Lang.tf("立即签到  {0}/{1}", _signed, _total));
-            Button mainBtn = ghostBtn(act, _label, _allDone ? "check" : "bolt");
+            final Button mainBtn = ghostBtn(act, _label, _allDone ? "check" : "bolt");
             mainBtn.setTextSize(Theme.TS_BODY);
             mainBtn.setPadding(dp(14), dp(12), dp(14), dp(12));
             if (_allDone) {
@@ -7737,8 +7755,14 @@ public final class TGAutoSignCore {
                 // 仍然可点（有些 bot 允许重复签），只是视觉上不再是主操作。
                 mainBtn.setAlpha(0.55f);
             }
+            // 2026-10-09 B 档特效：闪电按状态呼吸 / 帕拉帕拉 / 静态收束
+            startSignBtnFx(act, mainBtn, _allDone);
             mainBtn.setOnClickListener(new View.OnClickListener() {
-                @Override public void onClick(View v) { runAction(act, "sign"); }
+                @Override public void onClick(View v) {
+                    // 按下瞬间闪电"炸"一下（120ms），给出即时反馈，再进菜单
+                    try { pulseSignBtnIcon(v, 1.45f, 120); } catch (Throwable ignored) {}
+                    runAction(act, "sign");
+                }
             });
             quick.addView(mainBtn, new android.widget.LinearLayout.LayoutParams(0, -2, 1f));
             // 右侧挂一个轻量入口：自检（原来快捷条里的"自检"在卡片里没有）
@@ -7766,11 +7790,16 @@ public final class TGAutoSignCore {
             dlp.setMargins(dp(6), 0, 0, 0);
             quick.addView(diagBtn, dlp);
         }
+        staggerIn(quick, 240);
         head.addView(quick);
+        // 2026-10-09 修正：**不要**给 head 本身做 staggerIn ——
+        //   head 含 titleRow/svRow/statCard/term/quick，
+        //   父容器 alpha=0 会让子元素整体不可见，把各段的错开效果全盖掉。
         root.addView(head);
         // ── 高频区：每天真的会点的 6 个入口（其余收进「更多功能」） ──
         sectionHeader(root, act, "▍签到");
         android.widget.GridLayout g1 = new android.widget.GridLayout(act); g1.setColumnCount(2); root.addView(g1);
+        staggerIn(g1, 300);
         addTile(g1, act, "list", "目标列表", "查看·测试·编辑", "list");
         addTile(g1, act, "calendar", "补签列表", "今日待补·已补·跳过", "misslist");
         // 「立即签到」已提级为顶部主按钮，不再重复出现在卡片区（2026-10-03）
@@ -7997,11 +8026,27 @@ public final class TGAutoSignCore {
             // 这样无论 root 被 CapBox 限到多少，工具条都先拿到位置，不再被裁。
             // （fitLogScroll 仍会在"内容很短"时把 sv 调矮，避免大片留白。）
             int _estChrome = dp(214);   // 仅用于"内容收缩"的下限参考
-            int _estH = dlgBodyMaxH(act) - _estChrome;
-            if (_estH < dp(160)) _estH = dp(160);
-            LinearLayout.LayoutParams _svLp = new LinearLayout.LayoutParams(-1, 0);
-            _svLp.weight = 1f;
-            root.addView(sv, _svLp);
+            // ── 2026-10-09 第三修：日志框小 ──
+            // 原 _estH = CapBox上限 - 估算chrome(214)，但**实际 chrome 常量级更大**
+            //   （芯片行/搜索/状态条/头部卡/图例 ≈ 600px），
+            //   sv + chrome 远超上限 → CapBox 裁掉底部 → 看到小框。
+            // 改为按屏高比例给固定高度，并与上限取小，保证不被裁。
+            int _scrH2 = act.getResources().getDisplayMetrics().heightPixels;
+            if (_scrH2 <= 0) _scrH2 = 1920;
+            int _estH = (int) (_scrH2 * 0.44f);
+            int _cap = dlgBodyMaxHForBuild(act) - dp(180);
+            if (_cap > 0 && _estH > _cap) _estH = _cap;
+            if (_estH < dp(300)) _estH = dp(300);
+            // ── 2026-10-09 回退 weight ──
+            // 曾用 `height=0, weight=1` 想让布局自动分配剩余空间，
+            // 但 **weight 只在父容器有确定高度时才有意义**；
+            // 日志页的 root 是以 WRAP_CONTENT 加进外层 ScrollView 的，
+            // 高度不确定 → 没有剩余空间可分 → sv 被压到最小 → 日志页塌小（用户反馈）。
+            // 现在回到**显式高度**（构建时先给预估值，随后 fitLogScroll 实测纠正）。
+            root.addView(sv, new LinearLayout.LayoutParams(-1, _estH));
+            // 诊断：把实际设定的高度写进 run 日志（jlogForce 保证不被降噪）
+            try { jlogForce("[日志尺寸] svH=" + _estH + " 屏高=" + _scrH2
+                    + " cap=" + dlgBodyMaxHForBuild(act)); } catch (Throwable ignored) {}
 
             // 底部工具条：只留「加载更多」（看最新由芯片「回到最新」负责）
             LinearLayout tools = new LinearLayout(act);
@@ -9370,7 +9415,7 @@ public final class TGAutoSignCore {
                             View hit = hitTestClickable(decor, e.getX(), e.getY());
                             if (hit != null) {
                                 Object tag = null;
-                                try { tag = hit.getTag(android.R.id.button1); } catch (Throwable ignored) {}
+                                try { tag = hit.getTag(); } catch (Throwable ignored) {}
                                 boolean heavy = "haptic-heavy".equals(tag);
                                 haptic(hit, heavy);
                             }
@@ -9596,6 +9641,21 @@ public final class TGAutoSignCore {
     private CapBox lastCapBox;
 
     /** 自绘对话框内容区真实可用高（px）= 本轮 CapBox 上限。 */
+    /**
+     * 构建期专用：按「屏高 × 0.72」算，**不读 lastCapBox**（2026-10-09）。
+     *
+     * 为什么需要：`lastCapBox` 指向**上一个** showDialog 建的 CapBox。
+     * 构建当前页面（如日志页）时本次的 CapBox 还没创建，
+     * 于是拿到别人家的上限 —— 前一个对话框若是小窗，这里就会算得极小，
+     * 表现就是「日志框小，且与内容多少无关」。
+     */
+    private int dlgBodyMaxHForBuild(Activity act) {
+        int h = 0;
+        try { h = act.getResources().getDisplayMetrics().heightPixels; } catch (Throwable ignored) {}
+        if (h <= 0) h = 1920;
+        return (int) (h * 0.72f);
+    }
+
     private int dlgBodyMaxH(Activity act) {
         try {
             CapBox cb = lastCapBox;
@@ -11268,13 +11328,19 @@ public final class TGAutoSignCore {
             // 而 CapBox 上限只有 0.72（1711px）→ 底部被裁；且切 Tab 重建时
             // 高度不随可用空间重算 → 「日志框忽大忽小」。
             // 改为 WRAP_CONTENT + 实测适配（与完整日志页同一套）。
-            wrap.addView(sv, new LinearLayout.LayoutParams(-1,
-                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT));
-            final android.widget.ScrollView _logSv2 = sv;
-            final LinearLayout _logWrap2 = wrap;
-            wrap.post(new Runnable() { @Override public void run() {
-                fitLogScroll(act, _logWrap2, _logSv2, body);
-            } });
+            // ── 2026-10-09 修「内嵌日志框一直很小」──
+            // 原先复用 fitLogScroll（那是给**全屏日志页**设计的：
+            //   dlgBodyMaxH - chrome = "能占多少占多少"，并把 sv 撑到该尺寸）。
+            // 但这里只是目标列表页里的一小块：
+            //   · fitLogScroll 的 chrome 循环从 sv 往上走，直接父就是 wrap，
+            //     立刻退出 → 只算到 sv 在 wrap 内的 top，**不含对话框其余部分**；
+            //   · avail 因此偏大，尺寸算得不对；CapBox 再一裁就成了压扁的小框。
+            // 现在改成**固定高度**：屏高的 30%（约 700px @2376），
+            //   内容多了在内部滚动。旁边的提示语也说明了完整日志在别处，
+            //   这里本来就只是预览。
+            int _inlineH = (int) (act.getResources().getDisplayMetrics().heightPixels * 0.30f);
+            if (_inlineH < dp(220)) _inlineH = dp(220);
+            wrap.addView(sv, new LinearLayout.LayoutParams(-1, _inlineH));
         } catch (Throwable t) { noteSwallowed("buildInlineLogPage", t); }
         return wrap;
     }
@@ -11297,7 +11363,10 @@ public final class TGAutoSignCore {
                 try {
                     String st = statusOf(accountPrefix(), entryId(m), today);
                     if (!listFilterMatch(m, st, today)) { filtN++; continue; }
-                    targetRow(listRowsHost, m, st, "more");
+                    // 2026-10-09：目标列表也**依次落入**（用户要求）。
+                    //   alwaysPlay=true —— 这是独立弹窗，不该受主面板的节流影响。
+                    View _lr = targetRow(listRowsHost, m, st, "more");
+                    staggerIn(_lr, Math.min(shownN, 14) * 40, true);
                     shownN++;
                 } catch (Throwable _row) {
                     // 失败的行不静默消失，画一行降级提示 ——
@@ -15167,9 +15236,13 @@ public final class TGAutoSignCore {
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
         if (targets.size() > 1) {
-            Button all = mkBtn(act);
+            final Button all = mkBtn(act);
             withIconText(act, all, "bolt", Lang.tf("全部签到（{0} 个条目）", targets.size()));
+            // 2026-10-09：这个才是**真正触发签到**的按钮 —— 给它帕拉帕拉特效。
+            //   点下去后 pendingSigns 非空 → signBtnState() 返回 1 → 立即切成进行中动画。
+            startSignBtnFx(act, all, false, true);
             all.setOnClickListener(v -> {
+                try { pulseSignBtnIcon(v, 1.5f, 140); } catch (Throwable ignored) {}
                 // skipSigned=true：批量入口只签未签的，已签/已发出的跳过（用户反馈）
                 int _fired = trySignAllFor("手动全部", true, currentAccount(), true);
                 toast(_fired > 0 ? Lang.tf("已对 {0} 个目标发起签到，结果见运行日志", _fired)
@@ -15178,8 +15251,13 @@ public final class TGAutoSignCore {
             box.addView(all);
         }
         String today = todayStr();
+        // 2026-10-09 C：每个目标行**依次落入**（淡入 + 轻微上移就位）。
+        //   40ms 一档；超过 12 行后不再追加延迟，否则最后一行要等半秒才开始出现。
+        int _rowIdx = 0;
         for (Map<String, Object> m : targetsSnapshot()) {
-            targetRow(box, m, statusOf(accountPrefix(), entryId(m), today), "sign");
+            View _r = targetRow(box, m, statusOf(accountPrefix(), entryId(m), today), "sign");
+            staggerIn(_r, Math.min(_rowIdx, 12) * 40);
+            _rowIdx++;
         }
         showDialog(act, "点选立即签到", box, "取消");
     }
@@ -15238,6 +15316,10 @@ public final class TGAutoSignCore {
     private static SettingsDraft settingsDraft = new SettingsDraft();
     /** 当前设置页对话框引用（供主题「当场切换」重建用）。 */
     private volatile Object lastSettingsDlg = null;
+    /** 设置页滚动位置：主题切换会重建页面，用它把位置带过去（2026-10-09）。 */
+    private volatile int settingsScrollY = 0;
+    /** 本轮设置页的 ScrollView 引用（供记录/恢复滚动位置）。 */
+    private volatile android.widget.ScrollView settingsScrollRef = null;
 
     /** 把当前设置页控件里的值抄进草稿。 */
     private void saveSettingsDraft(SettingsRefs R) {
@@ -15276,6 +15358,11 @@ public final class TGAutoSignCore {
     private void applyThemeLive(final Activity act, final SettingsRefs R, final Object oldDlg) {
         try {
             saveSettingsDraft(R);                       // 抄下未保存的编辑
+            // 2026-10-09：记下当前滚动位置 —— 重建后恢复，避免"闪回顶部"
+            try {
+                android.widget.ScrollView sref = settingsScrollRef;
+                if (sref != null) settingsScrollY = sref.getScrollY();
+            } catch (Throwable ignored) {}
             // ── 2026-10-09 颜色过渡 ──
             // 记录「旧色板当前明暗」的 13 色作为过渡起点，再切换 styleId。
             // 注意：本次不做全树重染（343 个控件各写各的，没有通用重染设施），
@@ -15416,6 +15503,7 @@ public final class TGAutoSignCore {
             box.addView(anchorRow, ahp);
 
             final android.widget.ScrollView scroll = new android.widget.ScrollView(act);
+            settingsScrollRef = scroll;      // 2026-10-09：供主题切换时保存/恢复滚动位置
             box.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
 
             for (int si = 0; si < 4; si++) {
@@ -15634,6 +15722,17 @@ public final class TGAutoSignCore {
                     if (d.learnForce != null && R.learnForceEd != null) R.learnForceEd.setText(d.learnForce);
                 }
             } catch (Throwable ignored) {}
+            // 2026-10-09：主题切换重建后把滚动位置带回来（否则每次闪回顶部）
+            final int _restoreY = settingsScrollY;
+            if (_restoreY > 0) {
+                scroll.post(new Runnable() { @Override public void run() {
+                    try { scroll.scrollTo(0, _restoreY); } catch (Throwable ignored) {}
+                } });
+                scroll.postDelayed(new Runnable() { @Override public void run() {
+                    try { scroll.scrollTo(0, _restoreY); } catch (Throwable ignored) {}
+                } }, 80L);
+                settingsScrollY = 0;      // 用掉即清，避免下次开设置页莫名滚下去
+            }
             lastSettingsDlg = showDialog(act, "设置", box, "取消");
         } catch (Throwable t) {
             jlog("设置框失败: " + t);
@@ -15927,6 +16026,288 @@ public final class TGAutoSignCore {
             }
         } catch (Throwable ignored) {}
         return 0L;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // 「立即签到」按钮特效（2026-10-09，B 档）
+    // ══════════════════════════════════════════════════════════════
+
+    /** 主按钮当前状态：0=待签 1=进行中 2=已完成。 */
+    private int signBtnState() {
+        try {
+            if (pendingSigns.size() > 0) return 1;          // 有指令在飞 → 进行中
+            int[] st = accountStats(currentAccount());
+            if (st != null && st.length >= 2 && st[0] > 0 && st[1] >= st[0]) return 2;
+        } catch (Throwable ignored) {}
+        return 0;
+    }
+
+    /** 签到按钮特效的驱动器表（弱引用，随 View 回收；不用 tag 以免与触感标记冲突）。 */
+    private final java.util.WeakHashMap<View, android.animation.ValueAnimator> signBtnFxMap =
+            new java.util.WeakHashMap<View, android.animation.ValueAnimator>();
+
+    /**
+     * 给「立即签到」按钮挂 B 档特效。
+     *
+     * 三态：
+     *   待签   —— 呼吸（2.4s 一轮，alpha 255→140→255）+ 每 3 轮一次微闪
+     *   进行中 —— 帕拉帕拉（1.1s，不规整跳变）+ 偶尔一道向外光晕
+     *   已完成 —— 静态收束（不动画），并把图标锁在 ✓
+     *
+     * 实现要点：动画只改**图标 Drawable 的 alpha**，
+     *   既做出明暗层次，又天然跟随主题色（不写死色值）。
+     *   面板不可见时暂停，不耗电。
+     */
+    private void startSignBtnFx(final android.app.Activity act, final Button btn, final boolean allDone) {
+        startSignBtnFx(act, btn, allDone, false);
+    }
+
+    /**
+     * @param isBulk true = 这是弹窗里的「全部签到」按钮（真正干活的），
+     *               它的"进行中"更容易触发，动画也更外放。
+     */
+    private void startSignBtnFx(final android.app.Activity act, final Button btn,
+                                final boolean allDone, final boolean isBulk) {
+        try {
+            if (btn == null) return;
+            // 每个按钮一个驱动器，挂在按钮自己身上，互不干扰
+            // 不用 View tag 存动画器 —— 触感标记已占用单参 tag 槽位（"haptic-heavy"），
+            // 共用会互相覆盖。改用弱引用表按 View 索引。
+            android.animation.ValueAnimator prev = signBtnFxMap.get(btn);
+            if (prev != null) {
+                try { prev.cancel(); } catch (Throwable ignored) {}
+                signBtnFxMap.remove(btn);
+            }
+            if (allDone) return;                     // 完成态静态
+
+            final int accent = Theme.termGreen(act);
+            final android.animation.ValueAnimator va =
+                    android.animation.ValueAnimator.ofFloat(0f, 1f);
+            va.setDuration(isBulk ? 1100 : 2400);
+            va.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+            va.setInterpolator(new android.view.animation.LinearInterpolator());
+            va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                    try {
+                        if (!btn.isShown()) return;              // 不可见 → 不动（省电）
+                        int st = signBtnState();
+                        if (st == 2) { a.cancel(); return; }     // 转完成 → 停
+
+                        float t = ((Float) a.getAnimatedValue()).floatValue();
+                        int iconA, edgeA;
+
+                        if (st == 1) {
+                            // ── 进行中：帕拉帕拉（不规整拍子）──
+                            //   0.00-0.10 满亮  0.10-0.18 暗  0.18-0.35 亮
+                            //   0.35-0.45 满亮  0.45-0.65 暗  0.65-1.00 渐亮
+                            int k;
+                            if (t < 0.10f)      k = 255;
+                            else if (t < 0.18f) k = 70;
+                            else if (t < 0.35f) k = 235;
+                            else if (t < 0.45f) k = 255;
+                            else if (t < 0.65f) k = 80;
+                            else                k = (int) (80 + 175 * (t - 0.65f) / 0.35f);
+                            iconA = k;
+                            edgeA = 0x40 + (k * 0x9F) / 255;
+                        } else {
+                            // ── 待签：**纯规律呼吸**（2026-10-09 用户："抽太厉害"）──
+                            //   去掉原来的"每 3 轮双闪"—— 那一下是突跳，显得抽搐。
+                            //   现在只有固定周期的正弦：2.4s 一轮，255 ↔ 90，描边同相位。
+                            //   （弹窗里的「全部签到」保持不规整拍子，用户要求"里面那个就那样抽"）
+                            float breathe = (float) (0.5 + 0.5 * Math.sin(t * Math.PI * 2));
+                            iconA = (int) (90 + 165 * breathe);
+                            edgeA = 0x30 + (iconA * 0x8F) / 255;
+                        }
+                        setBtnIconAlpha(btn, iconA);
+                        setBtnEdgeAlpha(btn, accent, edgeA);
+                    } catch (Throwable ignored) {}
+                }
+            });
+            signBtnFxMap.put(btn, va);
+            va.start();
+        } catch (Throwable t) { jlog("[按钮特效] 启动失败: " + t); }
+    }
+
+    /** 重画按钮描边（让"脉动"整体可见，而不只是图标在动）。 */
+    private void setBtnEdgeAlpha(Button b, int col, int edgeA) {
+        try {
+            android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+            g.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
+            g.setCornerRadius(Theme.dp(b.getContext(), Theme.R_CONTROL));
+            boolean dk = Theme.dark(b.getContext());
+            g.setColor(Theme.withAlpha(col, dk ? 0x0F : 0x0A));
+            g.setStroke(Theme.dp(b.getContext(), 1), Theme.withAlpha(col, edgeA));
+            b.setBackground(g);
+        } catch (Throwable ignored) {}
+    }
+
+    /** 改按钮图标的透明度（不改颜色 —— 颜色仍跟主题）。 */
+    private void setBtnIconAlpha(Button b, int alpha) {
+        try {
+            android.graphics.drawable.Drawable[] ds = b.getCompoundDrawables();
+            for (android.graphics.drawable.Drawable d : ds) {
+                if (d != null) d.setAlpha(alpha < 0 ? 0 : (alpha > 255 ? 255 : alpha));
+            }
+            b.invalidate();
+        } catch (Throwable ignored) {}
+    }
+
+    /** 按下瞬间的"炸一下"：图标放大后回弹（即时反馈）。 */
+    private void pulseSignBtnIcon(final View v, final float scale, final long ms) {
+        try {
+            android.graphics.drawable.Drawable[] ds = ((Button) v).getCompoundDrawables();
+            for (final android.graphics.drawable.Drawable d : ds) {
+                if (d == null) continue;
+                final int osz = Theme.dp(v.getContext(), 15);
+                final int bsz = (int) (osz * scale);
+                d.setBounds(0, 0, bsz, bsz);
+                v.postDelayed(new Runnable() { @Override public void run() {
+                    try { d.setBounds(0, 0, osz, osz); v.invalidate(); } catch (Throwable ignored) {}
+                } }, ms);
+            }
+            v.invalidate();
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * ③ 内容错开落位（2026-10-09）。
+     * 抽成 helper —— 这段样板（setAlpha + addOnAttachStateChangeListener）原先
+     * 在 statCard / term 两处各写了一遍，再加四处就太啰嗦。
+     *
+     * @param delayMs 相对面板打开的延迟；整条序列 0/60/120/180/240/300
+     */
+    private void staggerIn(final View v, final int delayMs) {
+        staggerIn(v, delayMs, false);
+    }
+
+    /**
+     * @param alwaysPlay true = 不受 fastMainOpen 节流影响
+     *                   （独立弹窗用 —— 它们不是"反复开合的主面板"）
+     */
+    private void staggerIn(final View v, final int delayMs, final boolean alwaysPlay) {
+        if (v == null) return;
+        if (!alwaysPlay) {
+            try { if (fastMainOpen) return; } catch (Throwable ignored) {}
+        }
+        try {
+            final Context c = v.getContext();
+            v.setAlpha(0f);
+            // 2026-10-09：幅度加强（用户反馈"不太明显"）——
+            //   位移 8dp → 16dp，并加一点水平偏移，形成"从右下抛入"的实感；
+            //   再配 0.94 → 1.0 的缩放。
+            v.setTranslationY(Theme.dp(c, 16));
+            v.setTranslationX(Theme.dp(c, 6));
+            v.setScaleX(0.94f);
+            v.setScaleY(0.94f);
+            final Runnable start = new Runnable() { @Override public void run() {
+                try {
+                    v.animate().alpha(1f).translationY(0f).translationX(0f)
+                      .scaleX(1f).scaleY(1f)
+                      .setDuration(animMs(300))
+                      .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f))
+                      .start();
+                } catch (Throwable ignored) {}
+            } };
+            // 2026-10-09：**已 attach 的 View 收不到 attach 回调** ——
+            //   原来只挂监听，若注册时已经 attached，动画永远不启动
+            //   （而 alpha 已被设成 0，内容会直接看不见）。
+            //   这里先判断，已 attach 就直接延迟启动。
+            if (v.isAttachedToWindow()) {
+                v.postDelayed(start, delayMs);
+                return;
+            }
+            v.addOnAttachStateChangeListener(new android.view.View.OnAttachStateChangeListener() {
+                @Override public void onViewAttachedToWindow(View vv) {
+                    vv.postDelayed(start, delayMs);
+                }
+                @Override public void onViewDetachedFromWindow(View vv) {
+                    try {
+                        vv.animate().cancel();
+                        vv.setAlpha(0f);
+                        vv.setTranslationY(Theme.dp(c, 16));
+                        vv.setTranslationX(Theme.dp(c, 6));
+                        vv.setScaleX(0.94f);
+                        vv.setScaleY(0.94f);
+                    } catch (Throwable ignored) {}
+                }
+            });
+        } catch (Throwable ignored) {}
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // ① 目标列表状态色条呼吸（2026-10-09）
+    // ══════════════════════════════════════════════════════════════
+
+    /** 呼吸模式：0=静止 1=缓慢呼吸（已签） 2=快速闪动（进行中/需处理）。 */
+    private int barBreatheMode(String status, boolean signed) {
+        try {
+            if (signed) return 1;
+            if (status == null) return 0;
+            // "进行中 / 已发出 / 重试中 / 待确认 / 待处理" 这类需要用户关注 → 快闪
+            if (status.contains("进行") || status.contains("已发出")
+                    || status.contains("重试") || status.contains("待确认")
+                    || status.contains("待处理") || status.contains("失败")) return 2;
+        } catch (Throwable ignored) {}
+        return 0;
+    }
+
+    /** View → 呼吸模式。弱引用，随 View 回收自动出表。 */
+    private final java.util.WeakHashMap<View, Integer> stateBars =
+            new java.util.WeakHashMap<View, Integer>();
+    /** 单一驱动器（列表十几行共用一个动画，避免逐行 ValueAnimator 掉帧）。 */
+    private android.animation.ValueAnimator stateBarVa = null;
+
+    private void registerStateBar(View bar, int mode) {
+        if (bar == null) return;
+        if (mode <= 0) { stateBars.remove(bar); return; }
+        stateBars.put(bar, Integer.valueOf(mode));
+        ensureStateBarAnim(bar.getContext());
+    }
+
+    private void ensureStateBarAnim(android.content.Context c) {
+        try {
+            if (stateBarVa != null && stateBarVa.isRunning()) return;
+            stateBarVa = android.animation.ValueAnimator.ofFloat(0f, 1f);
+            stateBarVa.setDuration(2600);           // 一个基准周期；快闪在帧内换算
+            stateBarVa.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+            stateBarVa.setInterpolator(new android.view.animation.LinearInterpolator());
+            final android.content.Context ctx = c;
+            stateBarVa.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                    try {
+                        float t = ((Float) a.getAnimatedValue()).floatValue();
+                        long now = android.os.SystemClock.uptimeMillis();
+                        java.util.Iterator<java.util.Map.Entry<View, Integer>> it =
+                                stateBars.entrySet().iterator();
+                        boolean anyAlive = false;
+                        while (it.hasNext()) {
+                            java.util.Map.Entry<View, Integer> e = it.next();
+                            View v = e.getKey();
+                            if (v == null || v.getParent() == null) { it.remove(); continue; }
+                            if (!v.isShown()) { anyAlive = true; continue; }   // 滚出屏幕：跳过但保留
+                            anyAlive = true;
+                            int mode = e.getValue() == null ? 0 : e.getValue().intValue();
+                            float alpha;
+                            if (mode == 2) {
+                                // 快闪：与「全部签到」按钮同一套不规整拍子
+                                float u = (now % 1100L) / 1100f;
+                                if (u < 0.10f)      alpha = 1.0f;
+                                else if (u < 0.18f) alpha = 0.30f;
+                                else if (u < 0.45f) alpha = 0.95f;
+                                else if (u < 0.60f) alpha = 0.35f;
+                                else                alpha = 0.65f;
+                            } else {
+                                // 慢呼吸：正弦，1.0 ↔ 0.55（不做更低，避免色条"消失"显得行有缺口）
+                                alpha = (float) (0.55 + 0.45 * (0.5 + 0.5 * Math.sin(t * Math.PI * 2)));
+                            }
+                            v.setAlpha(alpha);
+                        }
+                        if (!anyAlive) { a.cancel(); stateBarVa = null; }
+                    } catch (Throwable ignored) {}
+                }
+            });
+            stateBarVa.start();
+        } catch (Throwable ignored) {}
     }
 
     // 命令入口：拦截用户发送的 /jmb 开头消息
@@ -19968,19 +20349,42 @@ public final class TGAutoSignCore {
         // 预览条：色板上取 6 个代表色画小方块，切一次重画一次
         final Runnable paintStrip = new Runnable() { @Override public void run() {
             swStrip.removeAllViews();
-            int[] idx = { Theme.SW_PAGE, Theme.SW_CARD, Theme.SW_CYAN,
-                          Theme.SW_GREEN, Theme.SW_AMBER, Theme.SW_PINK };
-            for (int k = 0; k < idx.length; k++) {
-                View sq = new View(act);
-                android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
-                g.setColor(Theme.previewColor(act, idx[k]));
-                g.setCornerRadius(dp(k == 0 ? 8 : 5));
-                sq.setBackground(g);
-                LinearLayout.LayoutParams slp =
-                        new LinearLayout.LayoutParams(0, dp(k == 0 ? 16 : 12), 1f);
-                slp.setMargins(dp(k == 0 ? 0 : 3), k == 0 ? 0 : dp(2), 0, 0);
-                swStrip.addView(sq, slp);
-            }
+            // 2026-10-09 改版：原来铺 6 个独立色块（含 green/amber/pink 这些
+            //   高饱和**状态色**），看着像调色板打翻，用户反馈"怪怪的"。
+            //   现在改成「底色小块 + 一条多色渐变」：
+            //     · 小块 = 页面底色，说明这套底色深浅冷暖
+            //     · 渐变 = card → cyan → green → amber → pink，
+            //       高饱和色在渐变里互相过渡，观感柔和，且一眼看出整体色调。
+            try {
+                // ① 底色小块
+                View base = new View(act);
+                android.graphics.drawable.GradientDrawable bg =
+                        new android.graphics.drawable.GradientDrawable();
+                bg.setColor(Theme.previewColor(act, Theme.SW_PAGE));
+                bg.setCornerRadius(dp(7));
+                bg.setStroke(dp(1), Theme.termLine(act, Theme.previewColor(act, Theme.SW_CARD)));
+                base.setBackground(bg);
+                LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(dp(26), dp(16));
+                blp.rightMargin = dp(8);
+                swStrip.addView(base, blp);
+
+                // ② 多色渐变条（五段 → 四段过渡，观感更顺）
+                View bar = new View(act);
+                android.graphics.drawable.GradientDrawable gd =
+                        new android.graphics.drawable.GradientDrawable(
+                                android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT,
+                                new int[]{
+                                        Theme.previewColor(act, Theme.SW_CARD),
+                                        Theme.previewColor(act, Theme.SW_CYAN),
+                                        Theme.previewColor(act, Theme.SW_GREEN),
+                                        Theme.previewColor(act, Theme.SW_AMBER),
+                                        Theme.previewColor(act, Theme.SW_PINK)
+                                });
+                gd.setCornerRadius(dp(7));
+                bar.setBackground(gd);
+                LinearLayout.LayoutParams blp2 = new LinearLayout.LayoutParams(0, dp(16), 1f);
+                swStrip.addView(bar, blp2);
+            } catch (Throwable ignored) {}
         } };
         final TextView styTip = new TextView(act);
         styTip.setTextSize(Theme.TS_CAPTION); styTip.setTextColor(Theme.termFaint(act));

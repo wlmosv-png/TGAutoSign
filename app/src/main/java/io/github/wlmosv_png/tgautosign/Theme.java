@@ -491,6 +491,16 @@ final class Theme {
     static final int STYLE_GRUVBOX = 6;
     /** 深海 Ocean（蓝青） —— 深海底蓝 · 冷静通透 */
     static final int STYLE_OCEAN = 7;
+    /** 雾霭玫瑰 Rosé —— 柔玫灰 · 温润不腻 */
+    static final int STYLE_ROSE = 8;
+    /** 纸墨 Paper —— 近纯黑白 · 久看不累 */
+    static final int STYLE_PAPER = 9;
+    /** 青瓷 Celadon —— 东方青瓷绿 · 清淡雅致 */
+    static final int STYLE_CELADON = 10;
+    /** 暮山紫 Twilight —— 紫灰沉静 · 有气质 */
+    static final int STYLE_TWILIGHT = 11;
+    /** 薄荷 Mint —— 清爽绿白 · 明亮通透 */
+    static final int STYLE_MINT = 12;
 
     /**
      * 默认色板（2026-10-09 用户改定）。
@@ -498,7 +508,7 @@ final class Theme {
      * 只影响**没有** jmb_theme_style 键的机器；已经选过别的色板不受影响。
      */
     static final int DEFAULT_STYLE = STYLE_TERMINAL;
-    static final int STYLE_COUNT = 8;
+    static final int STYLE_COUNT = 13;
 
     /** 色板显示名（下标 = styleId）。 */
     private static final String[] STYLE_NAMES = {
@@ -510,6 +520,11 @@ final class Theme {
         "暖琥珀（明亮暖色）",
         "Gruvbox（复古暖棕）",
         "深海 Ocean（蓝青）",
+        "雾霭玫瑰 Rosé",
+        "纸墨 Paper",
+        "青瓷 Celadon",
+        "暮山紫 Twilight",
+        "薄荷 Mint",
     };
 
     /** 色板键名（持久化用，改名会丢配置 —— 只增不改）。 */
@@ -522,6 +537,11 @@ final class Theme {
         "amber",
         "gruvbox",
         "ocean",
+        "rose",
+        "paper",
+        "celadon",
+        "twilight",
+        "mint",
     };
 
     /** 色板描述（设置页提示语）。 */
@@ -534,6 +554,11 @@ final class Theme {
         "米白配琥珀 · 暖亮友善",
         "暖褐底 · 复古终端味",
         "深海底蓝 · 冷静通透",
+        "柔玫灰 · 温润不腻",
+        "近纯黑白 · 久看不累",
+        "东方青瓷绿 · 清淡雅致",
+        "紫灰沉静 · 有气质",
+        "清爽绿白 · 明亮通透",
     };
 
     /** 明暗 × 色板 二维表。 */
@@ -570,6 +595,26 @@ final class Theme {
             { 0xFFEEF4F8, 0xFFFFFFFF, 0xFFE4EDF3, 0xFF12303F, 0xFF4A6B7C, 0xFF7E99A8, 0xFF0F7A9C, 0xFF2E8B6E, 0xFFB8801F, 0xFFC4444E, 0x1412303F, 0xFF0F7A9C, 0xFFFFFFFF },
             { 0xFF0A1620, 0xFF12222E, 0xFF0E1C26, 0xFFD6E8F2, 0xFF84A3B5, 0xFF5B7A8C, 0xFF4FC3E8, 0xFF5FD3A8, 0xFFF0BE6A, 0xFFF27C86, 0x264FC3E8, 0xFF4FC3E8, 0xFF0A1620 },
         },
+        { // rose
+            { 0xFFFAF4F4, 0xFFFFFFFF, 0xFFF4E9E9, 0xFF3A2E33, 0xFF7A6670, 0xFFA9969E, 0xFFB4637E, 0xFF5C8A5E, 0xFFB4841F, 0xFFC0405A, 0x143A2E33, 0xFFB4637E, 0xFFFFFFFF },
+            { 0xFF191216, 0xFF241a1f, 0xFF1e161a, 0xFFF0E4E8, 0xFFA99099, 0xFF7A626B, 0xFFE39BB0, 0xFF9AC29B, 0xFFE0BC7A, 0xFFE77A93, 0x26FFFFFF, 0xFFE39BB0, 0xFF191216 },
+        },
+        { // paper
+            { 0xFFF7F7F5, 0xFFFFFFFF, 0xFFEFEFED, 0xFF1A1A1A, 0xFF5E5E5E, 0xFF8E8E8E, 0xFF2B2B2B, 0xFF2E6B4F, 0xFF8A6D1F, 0xFFA03A3A, 0x141A1A1A, 0xFF2B2B2B, 0xFFFFFFFF },
+            { 0xFF121212, 0xFF1C1C1C, 0xFF161616, 0xFFE8E8E8, 0xFF9A9A9A, 0xFF6E6E6E, 0xFFD8D8D8, 0xFF6FBF97, 0xFFD6B667, 0xFFD97A7A, 0x26FFFFFF, 0xFFD8D8D8, 0xFF121212 },
+        },
+        { // celadon
+            { 0xFFF2F7F4, 0xFFFFFFFF, 0xFFE8F0EB, 0xFF23332C, 0xFF5F7570, 0xFF8AA09A, 0xFF3E7D6A, 0xFF4A8A5C, 0xFF9A7B2A, 0xFFB05555, 0x1423332C, 0xFF3E7D6A, 0xFFFFFFFF },
+            { 0xFF101A16, 0xFF18241F, 0xFF141E1A, 0xFFDCEAE2, 0xFF94ABA3, 0xFF63807A, 0xFF6FBFA8, 0xFF86C89A, 0xFFD6BC72, 0xFFD98C8C, 0x26FFFFFF, 0xFF6FBFA8, 0xFF101A16 },
+        },
+        { // twilight
+            { 0xFFF6F4F9, 0xFFFFFFFF, 0xFFEDE9F2, 0xFF2E2838, 0xFF6B6278, 0xFF958CA6, 0xFF6A5B9C, 0xFF4E7A62, 0xFF9C7A2E, 0xFFB05070, 0x142E2838, 0xFF6A5B9C, 0xFFFFFFFF },
+            { 0xFF161320, 0xFF201C2C, 0xFF1A1726, 0xFFE8E3F0, 0xFFA49BB5, 0xFF726A84, 0xFFA796E0, 0xFF8FBF9C, 0xFFD6B463, 0xFFE08AA8, 0x26FFFFFF, 0xFFA796E0, 0xFF161320 },
+        },
+        { // mint
+            { 0xFFF1FAF6, 0xFFFFFFFF, 0xFFE4F4EC, 0xFF1E3329, 0xFF5B7268, 0xFF87A096, 0xFF1F8A6E, 0xFF3E9B5E, 0xFF9C8420, 0xFFC05252, 0x141E3329, 0xFF1F8A6E, 0xFFFFFFFF },
+            { 0xFF0C1A15, 0xFF14261E, 0xFF101F19, 0xFFDCF2E6, 0xFF90AC9E, 0xFF5F7D71, 0xFF4FD3A8, 0xFF6FD98C, 0xFFD9C05E, 0xFFE08585, 0x26FFFFFF, 0xFF4FD3A8, 0xFF0C1A15 },
+        }
     };
 
     // 语义索引常量

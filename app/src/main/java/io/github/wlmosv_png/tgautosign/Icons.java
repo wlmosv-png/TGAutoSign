@@ -689,13 +689,30 @@ final class Icons {
         private void drawGlow(Canvas c) {
             float r = 5.5f * unit;
             if (signed) {
-                p.setStyle(Paint.Style.STROKE);
-                for (int i = 4; i >= 1; i--) {
-                    p.setStrokeWidth(i * 1.6f * unit);
-                    p.setColor(withA(accent, dark ? (14 - i * 2) : (10 - i)));
+                // ── 2026-10-09 按明暗分流 ──
+                // 原实现（深/浅共用）：4 层向外扩展的粗描边伪造光晕，
+                //   alpha 只有 6~9。深底上勉强可用，但**浅底上会变成灰绿色脏边**，
+                //   且 inset 的圆角递增让边角错位，看着像没对齐的灰块
+                //   （用户截图：格子右下那圈"不太明显的遮罩"）。
+                if (dark) {
+                    // 深色：保留光晕，但层数 4→3、alpha 略降，减少糊边
+                    p.setStyle(Paint.Style.STROKE);
+                    for (int i = 3; i >= 1; i--) {
+                        p.setStrokeWidth(i * 1.5f * unit);
+                        p.setColor(withA(accent, 10 - i * 2));
+                        RectF e = new RectF(box);
+                        e.inset(-i * 0.85f * unit, -i * 0.85f * unit);
+                        c.drawRoundRect(e, r + i, r + i, p);
+                    }
+                } else {
+                    // 浅色：不做外发光，改为**格子内侧**一圈极淡的强调描边。
+                    //   干净、不脏，且任何浅色主题下都成立。
+                    p.setStyle(Paint.Style.STROKE);
+                    p.setStrokeWidth(Math.max(1f, 1.1f * unit));
+                    p.setColor(withA(accent, 0x2E));
                     RectF e = new RectF(box);
-                    e.inset(-i * 0.9f * unit, -i * 0.9f * unit);
-                    c.drawRoundRect(e, r + i, r + i, p);
+                    e.inset(1.6f * unit, 1.6f * unit);
+                    c.drawRoundRect(e, r - 2f, r - 2f, p);
                 }
             }
             p.setStyle(Paint.Style.FILL);
