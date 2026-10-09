@@ -8033,10 +8033,10 @@ public final class TGAutoSignCore {
             // 改为按屏高比例给固定高度，并与上限取小，保证不被裁。
             int _scrH2 = act.getResources().getDisplayMetrics().heightPixels;
             if (_scrH2 <= 0) _scrH2 = 1920;
-            int _estH = (int) (_scrH2 * 0.44f);
-            int _cap = dlgBodyMaxHForBuild(act) - dp(180);
-            if (_cap > 0 && _estH > _cap) _estH = _cap;
-            if (_estH < dp(300)) _estH = dp(300);
+            // ---- 2026-10-09 第四修：日志框恒等于目标列表高度（用户明确要求）----
+            int _cap = dlgBodyMaxHForBuild(act);
+            int _estH = _cap - dp(560);
+            if (_estH < dp(360)) _estH = dp(360);
             // ── 2026-10-09 回退 weight ──
             // 曾用 `height=0, weight=1` 想让布局自动分配剩余空间，
             // 但 **weight 只在父容器有确定高度时才有意义**；
@@ -12021,27 +12021,8 @@ public final class TGAutoSignCore {
                         // 底部空出一大块（用户截图）。
                         // 现在：上限仍是 avail，但**按内容收缩**，并给 dp(200) 下限
                         // （当初真正要防的是"塌成一条"，下限就够，不需要恒满）。
+                        // 2026-10-09 第四修：不再按内容收缩，恒定 target = avail。
                         int target = avail;
-                        try {
-                            int contentH = 0;
-                            if (content instanceof android.view.View) {
-                                android.view.View cv = (android.view.View) content;
-                                contentH = cv.getMeasuredHeight();
-                                if (contentH <= 0) contentH = cv.getHeight();
-                            }
-                            if (contentH > 0) {
-                                // 限高容器自身的内边距也算上，避免内容贴边被切
-                                android.view.ViewGroup.LayoutParams cvlp = content.getLayoutParams();
-                                if (cvlp instanceof android.view.ViewGroup.MarginLayoutParams) {
-                                    android.view.ViewGroup.MarginLayoutParams m =
-                                            (android.view.ViewGroup.MarginLayoutParams) cvlp;
-                                    contentH += m.topMargin + m.bottomMargin;
-                                }
-                                int floor = dp(200);
-                                if (floor > avail) floor = avail;
-                                target = Math.min(Math.max(contentH, floor), avail);
-                            }
-                        } catch (Throwable ignored) {}
 
                         android.view.ViewGroup.LayoutParams lp = sv.getLayoutParams();
                         // 只在与当前值差异明显时才改（2026-10-07）：
@@ -12057,14 +12038,8 @@ public final class TGAutoSignCore {
                             LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) lp;
                             boolean byWeight = llp.weight > 0f && llp.height == 0;
                             if (byWeight) {
-                                // 交给 weight 自适应；若内容确实很短则改为定高
-                                if (target < avail - dp(40)) {
-                                    llp.weight = 0f;
-                                    llp.height = target;
-                                    sv.setLayoutParams(llp);
-                                    logd("[日志适配] 内容较短 → 定高 " + target
-                                         + " (avail=" + avail + " chrome=" + chrome + ")");
-                                }
+                                // 2026-10-09 第四修：不再因「内容短」改定高。
+                                if (false) { }
                             } else if (Math.abs(cur - target) >= 12) {
                                 llp.weight = 0f;
                                 llp.height = target;
