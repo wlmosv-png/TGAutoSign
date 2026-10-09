@@ -7527,7 +7527,6 @@ public final class TGAutoSignCore {
             addTile(g2, act, "upload", "导出配置", "json 备份", "export");
             addTile(g2, act, "download", "导入配置", "合并或覆盖", "import");
             addTile(g2, act, "trash", "清空日志", "删本地记录", "clear_log");
-            addTile(g2, act, "layers", "导出界面图", "生成预览图", "export_shots");
             addTile(g2, act, "clean", "数据清理", "删孤儿状态", "purge_data");
             }
 
@@ -10598,7 +10597,6 @@ public final class TGAutoSignCore {
         if ("add_group".equals(action)) { showAddGroup(act); return; }
         if ("datastats".equals(action)) { showDataStats(act); return; }
         if ("clear_log".equals(action)) { confirmClearLogTop(act); return; }
-        if ("export_shots".equals(action)) { exportShots(act, null); return; }
         if ("purge_data".equals(action)) { confirmPurgeData(act); return; }
         if ("cap_cb".equals(action)) { startCapture(act); return; }
         if ("debug".equals(action)) { showDebugConsole(act); return; }
