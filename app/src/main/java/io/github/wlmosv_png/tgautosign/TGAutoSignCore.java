@@ -3580,7 +3580,17 @@ public final class TGAutoSignCore {
                         catch (Throwable t) { toast("群 ID 必须是数字（负数），例：-1001234567890"); return; }
                         if (did >= 0) { toast("群 ID 应为负数，如 -1001234567890"); return; }
                         String prefix = accountPrefix();
-                        String id = String.valueOf(did) + "_g1";
+                        // 2026-10-09 修「同群只能加一个签到目标」：
+                        //   旧实现把 id 写死成 <did>_g1 —— 同一个群里挂两个签到 bot
+                        //   （或同一 bot 的两条不同指令）时，第二次添加会**直接覆盖第一条**，
+                        //   用户看到的是"加上了但只剩一个"，且旧目标的 sent_at_ 等状态
+                        //   全部遗留在自己的命名空间里成为孤儿键。
+                        //   现在与其它路径统一：先按 (did, text) 去重，不重复才分配新序号。
+                        if (findTextEntry(did, cmd) != null) {
+                            toast("该群已存在相同指令的目标");
+                            return;
+                        }
+                        String id = nextEntryId(did, KIND_TEXT);
                         Map<String, Object> m = new HashMap<>();
                         m.put("id", id);
                         m.put("did", did);
@@ -4511,14 +4521,31 @@ public final class TGAutoSignCore {
     }
 
     /** 学习文本指令目标（按钮 / 手动 / 网络层）。同 bot 不同指令 = 新增条目；相同指令 = 跳过。 */
-    private void learnTarget(long dialogId, String text) {
+    private void learnTarget(long dialogId, String text) { learnTarget(dialogId, text, false); }
+
+    /**
+     * @param userExplicit true = 用户在「添加签到目标」里**亲手填的 ID + 指令**。
+     *
+     * 2026-10-09 修「手动添加并签到没反应」：
+     *   手动路径原先复用 learnTarget，于是撞上「按钮学习需确认」闸 ——
+     *   指令若不像签到按钮文案（如 /qd、/qiandao、任意自定义口令），
+     *   buttonLearnNeedsConfirm 返回 true → 这里静默 return，
+     *   调用方 findTextEntry 拿到 null → **既不添加、也不签到、连 toast 都没有**。
+     *   用户看到的就是「点了没反应」。
+     *
+     *   学习确认闸的语义是「自动学来的按钮要不要收」，只该约束**自动**路径；
+     *   用户手填是明确意图，必须豁免。同理 LEARN_ENABLED 是"自动学习"总开关，
+     *   不该拦住"用户手动加目标"。
+     */
+    private void learnTarget(long dialogId, String text, boolean userExplicit) {
 
         syncAccount();
 
-        if (!LEARN_ENABLED) return;
+        if (!LEARN_ENABLED && !userExplicit) return;
         // 2026-10-04：需确认时先入待添加池，绝不直接写目标。
         // 闸装在这里（而不是各入口），一处拦住全部调用方。
-        if (System.currentTimeMillis() > learnBypassUntil
+        // 2026-10-09：userExplicit（手动填的）跳过这道闸 —— 见上面的方法注释。
+        if (!userExplicit && System.currentTimeMillis() > learnBypassUntil
                 && buttonLearnNeedsConfirm(dialogId, text, null, panelContext(dialogId))) {
             if (pendingConfirmAdd(currentAccount(), dialogId, text)) {
                 jlog("【按钮学习·待确认】uid=" + dialogId + " -> " + text + "（未确认，暂不加入）");
@@ -15191,11 +15218,18 @@ public final class TGAutoSignCore {
                 if (t.length() == 0) { toast("指令不能为空"); return; }
                 if (findTextEntry(did, t) != null) { toast("该 bot 已存在相同指令"); return; }
                 unblockBot(did);
-                learnTarget(did, t);
+                // 2026-10-09 修「添加并签到没反应」：
+                //   1) 走 userExplicit 分支，跳过"按钮学习需确认"闸（手动意图明确）；
+                //   2) 添加失败必须给出可见反馈，不能静默吞掉。
+                learnTarget(did, t, true);
                 Map<String, Object> m = findTextEntry(did, t);
-                if (m != null) {
-                    toastAfterSign(sendSign(m, currentAccount()), m);
+                if (m == null) {
+                    // 走到这里说明 did/text 非法或写入失败 —— 明确告诉用户，别让人以为是没点中。
+                    toast("添加失败：请检查机器人 ID 是否正确（数字）");
+                    logw("[手动添加] 未写入目标 did=" + did + " text=" + t);
+                    return;
                 }
+                toastAfterSign(sendSign(m, currentAccount()), m);
             } catch (Throwable e) {
                 toast("UID 格式错误");
             }
@@ -17958,6 +17992,25 @@ public final class TGAutoSignCore {
         return channelIdOf(a) == channelIdOf(b) && channelIdOf(a) != 0L;
     }
 
+    /**
+     * 精确匹配：两个 did 写法完全一致（同一会话的同一表示）。
+     *
+     * 2026-10-09 新增。起因：samePeerDid 会把 `-X` 与 `-100X` 归一，
+     * 这是为「用户手填群 ID 少写 -100 前缀」准备的便利；
+     * 但它的代价是**信息缺失下的猜测** —— 一个普通群 `-1234567890`
+     * 与一个超级群 `-1001234567890`（channel_id 恰好也是 1234567890）
+     * 会被判成同一会话（已用脚本复现）。
+     *
+     * 这个碰撞在数值上**无法消除**：两种写法的量纲重叠，单看数字分不出类型。
+     * 能做的只是**收窄归一的使用范围** —— 关联时先按精确匹配扫一遍，
+     * 只有精确匹配全军覆没时，才退到归一匹配（见 resolveReplyTarget）。
+     * 由于目标条目里存的 did 与实际投递的 did 绝大多数情况写法一致，
+     * 正常情况下根本走不到归一那一步，碰撞概率被压到接近零。
+     */
+    private static boolean peerExact(long a, long b) {
+        return a != 0L && a == b;
+    }
+
     /** 从负数 did 取 channel_id（兼容 -X 与 -100XXXXXXXXXX 两种写法）。 */
     private static long channelIdOf(long did) {
         if (did >= 0L) return 0L;
@@ -17984,6 +18037,17 @@ public final class TGAutoSignCore {
         try {
             if (list == null || list.isEmpty() || peerDid == 0L) return rm;
             boolean group = peerDid < 0L;
+            // ── 2026-10-09 精确优先（修 samePeerDid 归一导致的跨群串号）──
+            // samePeerDid 会把 `-X` 与 `-100X` 归一（为兼容用户手填少写 -100）。
+            // 代价是：普通群 -1234567890 与超级群 -1001234567890 会被误判成同一会话。
+            // 这里先按**精确相等**筛出候选；精确集非空则只用它，
+            // 只有精确集为空（即条目里存的是另一种写法）才退回归一集合。
+            // 绝大多数目标存的 did 与实际投递一致 → 永远走精确分支 → 不会被归一误伤。
+            java.util.List<Map<String, Object>> exact = new ArrayList<Map<String, Object>>();
+            for (Map<String, Object> m : list) {
+                if (peerExact(entryDid(m), peerDid)) exact.add(m);
+            }
+            if (!exact.isEmpty()) list = exact;
 
             // ── 群聊发送者过滤（真机修复）──
             // 原实现：`if (group && !fromIsBot) return rm;`
@@ -18060,6 +18124,9 @@ public final class TGAutoSignCore {
             //   候选 == 0 → 继续（走到 FALLBACK 或 NONE）
             Map<String, Object> only = null;
             int candCount = 0;
+            // 2026-10-09：候选发送时刻，用于「明显最新鲜」消歧（见 candCount>1 分支）。
+            long newestSent = 0L;
+            java.util.List<Long> candSent2 = new java.util.ArrayList<Long>();
             // ── 2026-10-07 修「群里手动签到，bot 回了也判不出」──
             // PEER_TTL 原来硬要求 sent_at_ > 0（只有模块自己发过才写）。
             // 用户**手动**在群里发「签到」时 sent_at_ 不存在 → 候选恒为 0
@@ -18089,6 +18156,9 @@ public final class TGAutoSignCore {
                 if (now - sent > PENDING_TTL_MS) continue;
                 candCount++;
                 only = m;
+                // 2026-10-09：记录候选的发送时刻，供下面「明显最新鲜」消歧用。
+                if (sent > newestSent) { newestSent = sent; }
+                if (candSent2 != null) candSent2.add(Long.valueOf(sent));
             }
             // ── 2026-10-08 撤销「群内唯一目标」兜底 ──
             //
@@ -18143,6 +18213,62 @@ public final class TGAutoSignCore {
                 rm.target = only; rm.method = "PEER_TTL"; return rm;
             }
             if (candCount > 1) {
+                // ── 2026-10-09 消歧：候选多，但若只有一个「明显更新鲜」，就认它 ──
+                //
+                // 起因：同群挂两个以上目标时（群签到放开多目标后必然出现），
+                //   只要它们都处于「已发出、等结论」窗口内，candCount 恒 > 1 →
+                //   永远判 AMBIGUOUS。而 botDid 只在「候选唯一」时才回写，
+                //   于是**永远没有机会收敛到唯一** —— 死锁，回复永远判不出。
+                //
+                // 判据（保守）：最新候选要比**次新候选**至少新 60 秒。
+                //   bot 的回复几乎总是紧跟「最后一次发送」，而两次签到之间
+                //   通常间隔数分钟起步（时刻表按目标均分窗口）。
+                //   60 秒阈值能区分"先后两次签到"，同时不会在"两条目标同一轮
+                //   被并发触发"时乱认（那种情况仍判 AMBIGUOUS）。
+                final long DISAMBIG_MIN_GAP_MS = 60000L;
+                int newestIdx = -1;
+                long best = 0L, second = 0L;
+                for (int ci = 0; ci < candSent2.size(); ci++) {
+                    long v = candSent2.get(ci).longValue();
+                    if (v > best) { second = best; best = v; newestIdx = ci; }
+                    else if (v > second) { second = v; }
+                }
+                Map<String, Object> newestTarget = null;
+                if (newestIdx >= 0 && best - second >= DISAMBIG_MIN_GAP_MS) {
+                    // 重扫一遍取对应条目（candSent2 只存了时间，没存引用）
+                    int n = 0;
+                    for (Map<String, Object> m : list) {
+                        if (!samePeerDid(entryDid(m), peerDid)) continue;
+                        if (group && fromDid != 0L) {
+                            long boundBot = 0L;
+                            try {
+                                Object bb = m.get("botDid");
+                                if (bb instanceof Number) boundBot = ((Number) bb).longValue();
+                            } catch (Throwable ignored) {}
+                            if (boundBot != 0L && boundBot != fromDid) continue;
+                        }
+                        long sent = prefs.getLong(prefix + "sent_at_" + entryId(m), 0L);
+                        if (sent <= 0L || now - sent > PENDING_TTL_MS) continue;
+                        if (n++ == newestIdx) { newestTarget = m; break; }
+                    }
+                }
+                if (newestTarget != null) {
+                    // 只有在能唯一确定时才绑定 bot（与 candCount==1 分支同一原则）
+                    if (group && fromDid != 0L) {
+                        try {
+                            Object _bb = newestTarget.get("botDid");
+                            long _b = (_bb instanceof Number) ? ((Number) _bb).longValue() : 0L;
+                            if (_b == 0L) persistBotDid(prefix, newestTarget, fromDid);
+                        } catch (Throwable ignored) {}
+                    }
+                    logw("[回复关联] chat=" + peerDid + " candidateCount=" + candCount
+                         + " → 取明显最新鲜的一条（间隔 " + ((best - second) / 1000L) + "s）"
+                         + " target=" + entryId(newestTarget));
+                    rm.target = newestTarget;
+                    rm.method = "PEER_TTL_NEWEST";
+                    rm.candidateCount = candCount;
+                    return rm;
+                }
                 rm.target = null;
                 rm.method = "AMBIGUOUS";
                 rm.candidateCount = candCount;
@@ -18151,6 +18277,7 @@ public final class TGAutoSignCore {
                      + " method=AMBIGUOUS（同会话多目标无法唯一关联，不猜）");
                 return rm;
             }
+
 
             // ④ FALLBACK：仅私聊兜底；群聊到此为止（宁可不判）
             if (!group) {

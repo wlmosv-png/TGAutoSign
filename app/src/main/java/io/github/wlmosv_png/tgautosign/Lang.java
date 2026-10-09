@@ -430,6 +430,9 @@ public final class Lang {
         EN.put("标签 / 指令", "Label / command");
         EN.put("正在检查更新…", "Checking for updates…");
         EN.put("添加并立即签到", "Add and sign now");
+        EN.put("添加失败：请检查机器人 ID 是否正确（数字）", "Add failed: check that the bot ID is numeric");
+        EN.put("该群已存在相同指令的目标", "This group already has a target with the same command");
+        EN.put("该 bot 已存在相同指令", "This bot already has the same command");
         EN.put("添加群签到目标", "Add group sign-in target");
         EN.put("界面语言：中文", "Language: 中文");
         EN.put("确认框失败: ", "Confirmation dialog failed: ");
