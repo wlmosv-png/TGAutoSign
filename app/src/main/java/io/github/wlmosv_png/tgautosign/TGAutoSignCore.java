@@ -3660,6 +3660,214 @@ public final class TGAutoSignCore {
         showDialog(act,"添加签到目标 · 2/2", menu, "关闭");
     }
 
+
+    // ══════════════════════════════════════════════════════════════
+    //  数据栏新增功能（2026-10-10）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 签到统计（2026-10-10 数据栏新增）。
+     *
+     * 与目标列表里那个「统计」Tab 的区别：
+     *   · 统计 Tab 关心**今天**（谁签了、谁没签、进度条）
+     *   · 这里关心**趋势与结果质量**：历史累计 / 近 30 天 / 今日结果分布 /
+     *     以及「哪些目标判不出来、需要我手动看一眼」
+     * 数据全部来自 prefs（sign_days + 每个目标的 resultCode），不新增存储。
+     */
+    private void showDataStats(final Activity act) {
+        try {
+            final String prefix = accountPrefix();
+            LinearLayout box = new LinearLayout(act);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(14), dp(8), dp(14), dp(8));
+
+            java.util.List<Map<String, Object>> tl = new ArrayList<Map<String, Object>>();
+            try { loadTargetsInto(prefix, tl); } catch (Throwable ignored) {}
+            String today = todayStr();
+
+            java.util.Set<String> days = signDays(prefix);
+            int totalDays = days.size();
+            int hits30 = StatsData.countHits(days, StatsData.dateRange(today, 30, false));
+            int hits7 = StatsData.countHits(days, StatsData.dateRange(today, 7, false));
+            int streak = SignLogic.streakDisplay(streakOf(prefix),
+                    prefs.getString(kLastSignDate(prefix), ""), today, yesterdayStr());
+
+            LinearLayout hero = new LinearLayout(act);
+            hero.setOrientation(LinearLayout.VERTICAL);
+            hero.setPadding(dp(14), dp(12), dp(14), dp(12));
+            hero.setBackground(termBorder(act, Theme.termCard(act),
+                    Theme.withAlpha(Theme.termCyan(act), 0x40)));
+            TextView h1 = new TextView(act);
+            h1.setTextSize(Theme.TS_TITLE);
+            h1.setTextColor(Theme.termTxt(act));
+            h1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+            h1.setText(Lang.tf("{0} 天", totalDays));
+            hero.addView(h1);
+            TextView h2 = new TextView(act);
+            h2.setTextSize(Theme.TS_CAPTION);
+            h2.setTextColor(Theme.termMuted(act));
+            h2.setTypeface(android.graphics.Typeface.MONOSPACE);
+            h2.setText(Lang.tf("累计签到 · 连续 {0} · 近 7 天 {1} · 近 30 天 {2}", streak, hits7, hits30));
+            h2.setPadding(0, dp(3), 0, 0);
+            hero.addView(h2);
+            box.addView(hero);
+
+            int[] bucket = new int[8];
+            int awaiting = 0;
+            java.util.List<Map<String, Object>> needLook = new ArrayList<Map<String, Object>>();
+            for (Map<String, Object> m : tl) {
+                String id = entryId(m);
+                try {
+                    if (isFrozen(prefix, id) || isSnoozed(prefix, id) || isBotBlocked(entryDid(m))) continue;
+                } catch (Throwable ignored) {}
+                boolean signed = today.equals(prefs.getString(kLast(prefix, id), ""));
+                if (signed) { bucket[SignLogic.R_SIGNED]++; continue; }
+                int rc = -1;
+                try { rc = stateStore.resultOf(prefix, id); } catch (Throwable ignored) {}
+                if (rc >= 0 && rc < bucket.length) bucket[rc]++;
+                else awaiting++;
+                if (rc == SignLogic.R_FAILED || rc == SignLogic.R_REPLIED_UNK
+                        || rc == SignLogic.R_NO_REPLY || rc == SignLogic.R_BTN_STALE) {
+                    needLook.add(m);
+                }
+            }
+            sectionHeader(box, act, "▍今日结果");
+            String[][] rows = {
+                {Lang.tr("已签"), String.valueOf(bucket[SignLogic.R_SIGNED]), "green"},
+                {Lang.tr("失败"), String.valueOf(bucket[SignLogic.R_FAILED]), "pink"},
+                {Lang.tr("判不出"), String.valueOf(bucket[SignLogic.R_REPLIED_UNK]), "amber"},
+                {Lang.tr("没回复"), String.valueOf(bucket[SignLogic.R_NO_REPLY]), "muted"},
+                {Lang.tr("按钮失效"), String.valueOf(bucket[SignLogic.R_BTN_STALE]), "amber"},
+                {Lang.tr("待签"), String.valueOf(awaiting), "cyan"},
+            };
+            for (String[] r : rows) {
+                LinearLayout line = new LinearLayout(act);
+                line.setOrientation(LinearLayout.HORIZONTAL);
+                line.setGravity(Gravity.CENTER_VERTICAL);
+                line.setPadding(dp(6), dp(6), dp(6), dp(6));
+                TextView k = new TextView(act);
+                k.setTextSize(Theme.TS_BODY);
+                k.setTextColor(Theme.termTxt(act));
+                k.setTypeface(android.graphics.Typeface.MONOSPACE);
+                k.setText(r[0]);
+                line.addView(k, new LinearLayout.LayoutParams(0, -2, 1f));
+                TextView v = new TextView(act);
+                v.setTextSize(Theme.TS_BODY);
+                int col = "green".equals(r[2]) ? Theme.termGreen(act)
+                        : "pink".equals(r[2]) ? Theme.termPink(act)
+                        : "amber".equals(r[2]) ? Theme.termAmber(act)
+                        : "muted".equals(r[2]) ? Theme.termMuted(act) : Theme.termCyan(act);
+                v.setTextColor(col);
+                v.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+                v.setText(r[1]);
+                line.addView(v, new LinearLayout.LayoutParams(-2, -2));
+                box.addView(line);
+            }
+
+            if (!needLook.isEmpty()) {
+                sectionHeader(box, act, Lang.tf("▍需要处理（{0}）", needLook.size()));
+                for (Map<String, Object> m : needLook) {
+                    TextView t = new TextView(act);
+                    t.setTextSize(Theme.TS_SECOND);
+                    t.setTextColor(Theme.termTxt(act));
+                    t.setTypeface(android.graphics.Typeface.MONOSPACE);
+                    t.setPadding(dp(6), dp(5), dp(6), dp(5));
+                    t.setSingleLine(true);
+                    t.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                    int rc2 = -1;
+                    try { rc2 = stateStore.resultOf(prefix, entryId(m)); } catch (Throwable ignored) {}
+                    String why = rc2 == SignLogic.R_FAILED ? Lang.tr("判为失败")
+                            : rc2 == SignLogic.R_REPLIED_UNK ? Lang.tr("回复认不出")
+                            : rc2 == SignLogic.R_NO_REPLY ? Lang.tr("bot 没回")
+                            : rc2 == SignLogic.R_BTN_STALE ? Lang.tr("按钮失效") : Lang.tr("待确认");
+                    t.setText("· " + targetTitle(entryDid(m)) + "　" + why);
+                    box.addView(t);
+                }
+            }
+
+            TextView foot = new TextView(act);
+            foot.setTextSize(Theme.TS_CAPTION);
+            foot.setTextColor(Theme.termFaint(act));
+            foot.setTypeface(Theme.text());
+            foot.setText(Lang.tr("统计基于本地记录；「判不出」可在 设置 → 回复判定词 补词。"));
+            foot.setPadding(dp(4), dp(10), dp(4), 0);
+            box.addView(foot);
+
+            android.widget.ScrollView sc = new android.widget.ScrollView(act);
+            sc.addView(box, new android.widget.ScrollView.LayoutParams(-1, -2));
+            showDialog(act, "签到统计", sc, "关闭");
+        } catch (Throwable t) { toast(Lang.tf("统计失败: {0}", t)); }
+    }
+
+    /** 清空运行日志（顶层版）。原因：原实现是 LogView 内部类的私有方法，
+     *  数据栏够不到；这里提供同一套语义的入口，并保留"先导出再清空"。 */
+    private void confirmClearLogTop(final Activity act) {
+        try {
+            LinearLayout box = new LinearLayout(act);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(16), dp(8), dp(16), dp(8));
+            TextView t = new TextView(act);
+            t.setTextSize(Theme.TS_BODY);
+            t.setTextColor(Theme.termTxt(act));
+            t.setText(Lang.tr("清空会同时删掉当前列表和落盘的历史日志文件。\n建议先「导出再清空」留一份，方便之后对账。"));
+            box.addView(t);
+            Button b1 = mkBtn(act);
+            b1.setText(Lang.tr("先导出一份，再清空"));
+            b1.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                try { doExportLog(act); } catch (Throwable ignored) {}
+                clearLogTop();
+            } });
+            box.addView(b1);
+            Button b2 = mkBtn(act);
+            b2.setText(Lang.tr("直接清空"));
+            b2.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { clearLogTop(); } });
+            box.addView(b2);
+            showDialog(act, "清空运行日志", box, "取消");
+        } catch (Throwable t) { noteSwallowed("confirmClearLogTop", t); }
+    }
+
+    private void clearLogTop() {
+        int deleted = 0;
+        try {
+            synchronized (logBuffer) { logBuffer.clear(); }
+            java.io.File dir = logDir();
+            if (dir != null) {
+                java.io.File[] fs = dir.listFiles();
+                if (fs != null) for (java.io.File f : fs) {
+                    if (f.isFile() && f.getName().startsWith("run-") && f.getName().endsWith(".log")) {
+                        if (f.delete()) deleted++;
+                    }
+                }
+            }
+            jlog(LV_INFO, "运行日志已清空（删除 " + deleted + " 个文件），这条是新起的第一条");
+            toast(Lang.tf("已清空（删除 {0} 个文件）", deleted));
+        } catch (Throwable t) { logw("清空日志失败: " + t); }
+    }
+
+    /** 数据清理：删掉「条目已不存在、状态键还残留」的孤儿键。
+     *  这些键会让重新添加的目标"带着旧状态复活"（比如一加就显示已签）。
+     *  原实现只在启动时跑一次，出问题没法手动触发 —— 这里给个按钮。 */
+    private void confirmPurgeData(final Activity act) {
+        try {
+            LinearLayout box = new LinearLayout(act);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(16), dp(8), dp(16), dp(8));
+            TextView t = new TextView(act);
+            t.setTextSize(Theme.TS_BODY);
+            t.setTextColor(Theme.termTxt(act));
+            t.setText(Lang.tr("清理「目标已删除、状态却还留着」的残留键。\n不会动你现有的目标与签到记录。"));
+            box.addView(t);
+            Button go = primaryBtn(act, "开始清理");
+            go.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                int n = 0;
+                try { n = sweepOrphanEntryKeys(); } catch (Throwable ignored) {}
+                toast(Lang.tf("清理完成：删除 {0} 个残留键", n));
+            } });
+            box.addView(go);
+            showDialog(act, "数据清理", box, "关闭");
+        } catch (Throwable t) { noteSwallowed("confirmPurgeData", t); }
+    }
+
     /**
      * 按 sendSign 的真实返回码提示用户。
      * 以前调用方一律弹「已发起签到」—— 已签过的目标内部直接 return，
@@ -6515,6 +6723,10 @@ public final class TGAutoSignCore {
             TextView s = new TextView(act); s.setText(Lang.tr(sub)); s.setTextSize(Theme.TS_CAPTION);
             s.setTextColor(Theme.termMuted(act)); s.setTypeface(android.graphics.Typeface.MONOSPACE);
             s.setGravity(android.view.Gravity.CENTER); s.setPadding(0, dp(2), 0, 0);
+            // 2026-10-10：副标题一律**单行 + 省略号**。
+            // 两行会把 tile 撑高一倍，而同排另一个没撑 → 网格歪掉（用户截图）。
+            s.setSingleLine(true);
+            s.setEllipsize(android.text.TextUtils.TruncateAt.END);
             v.addView(s);
         }
         return v;
@@ -7286,23 +7498,37 @@ public final class TGAutoSignCore {
             //     ③ 复制目标的「给其它账号」没说清复制全部还是选的。
             sectionHeader(root, act, "▍配置");
             android.widget.GridLayout g1 = new android.widget.GridLayout(act); g1.setColumnCount(2); root.addView(g1);
+            // 副标题一律控制在一行内（≤8 字）：两行会把整个 tile 撑高一倍，
+            // 与同排另一个不等高，网格看起来就"歪"了（用户截图反馈）。
             addTile(g1, act, "plus", "添加目标", "指令 / 捕获按钮", "add");
-            addTile(g1, act, "copy", "复制目标", "当前账号的全部目标 → 其它账号", "copy_targets");
-            addTile(g1, act, "layers", "预设模板", "一键添加常用 bot", "presets");
-            addTile(g1, act, "trash", "删除目标", "移除条目（不可撤销）", "del");
+            addTile(g1, act, "copy", "复制目标", "复制到其它账号", "copy_targets");
+            addTile(g1, act, "layers", "预设模板", "一键添加", "presets");
+            addTile(g1, act, "trash", "删除目标", "不可撤销", "del");
 
             // 执行：会立即对外发消息，与配置操作分开、单独分组
             sectionHeader(root, act, "▍执行");
             android.widget.GridLayout g1b = new android.widget.GridLayout(act); g1b.setColumnCount(2); root.addView(g1b);
-            addTile(g1b, act, "globe", "签全部账号", Lang.tf("立即对 {0} 个账号发送", activatedAccounts()), "sign_all_accounts");
+            addTile(g1b, act, "globe", "签全部账号", Lang.tf("立即发送 · {0} 个账号", activatedAccounts()), "sign_all_accounts");
             }
 
             if (all || "data".equals(cat)) {
+            // ── 2026-10-10 扩充数据栏（用户要求"加些新功能"）──
+            // 原则：只放**低频但有用、且界面上没有别的入口**的东西。
+            //   备份相关的入口已经在设置页有了，这里不重复。
+            //   新增四项，都是"平时想不起来、需要时找不到"的：
+            //     · 清空日志   —— 原来只在日志页内部，且不在数据栏
+            //     · 导出界面图 —— 原来只能敲 /jmb shots
+            //     · 签到统计   —— 把历史按天汇总，看趋势与成功率
+            //     · 数据清理   —— 原来只在启动时自动跑，出问题没法手动触发
             sectionHeader(root, act, "▍数据");
             android.widget.GridLayout g2 = new android.widget.GridLayout(act); g2.setColumnCount(2); root.addView(g2);
+            addTile(g2, act, "pulse", "签到统计", "历史 · 成功率", "datastats");
             addTile(g2, act, "receipt", "导出日志", "到下载目录", "export_log");
             addTile(g2, act, "upload", "导出配置", "json 备份", "export");
             addTile(g2, act, "download", "导入配置", "合并或覆盖", "import");
+            addTile(g2, act, "trash", "清空日志", "删本地记录", "clear_log");
+            addTile(g2, act, "layers", "导出界面图", "生成预览图", "export_shots");
+            addTile(g2, act, "clean", "数据清理", "删孤儿状态", "purge_data");
             }
 
             if (all || "system".equals(cat)) {
@@ -10370,6 +10596,10 @@ public final class TGAutoSignCore {
         if ("add_text".equals(action)) { showAdd(act); return; }
         if ("add_bot".equals(action)) { showAddChooserBot(act); return; }
         if ("add_group".equals(action)) { showAddGroup(act); return; }
+        if ("datastats".equals(action)) { showDataStats(act); return; }
+        if ("clear_log".equals(action)) { confirmClearLogTop(act); return; }
+        if ("export_shots".equals(action)) { exportShots(act, null); return; }
+        if ("purge_data".equals(action)) { confirmPurgeData(act); return; }
         if ("cap_cb".equals(action)) { startCapture(act); return; }
         if ("debug".equals(action)) { showDebugConsole(act); return; }
         if ("learn".equals(action)) { showLearnPage(act); return; }

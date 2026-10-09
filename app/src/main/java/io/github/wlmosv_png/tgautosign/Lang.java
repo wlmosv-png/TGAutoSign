@@ -432,6 +432,24 @@ public final class Lang {
         EN.put("添加并立即签到", "Add and sign now");
         EN.put("添加失败：请检查机器人 ID 是否正确（数字）", "Add failed: check that the bot ID is numeric");
         EN.put(" 重复?", " dup?");
+        EN.put("bot 没回", "no reply");
+        EN.put("▍今日结果", "▍Today");
+        EN.put("▍需要处理（{0}）", "▍Needs attention ({0})");
+        EN.put("判不出", "unclear");
+        EN.put("判为失败", "failed");
+        EN.put("回复认不出", "reply unrecognized");
+        EN.put("失败", "failed");
+        EN.put("已清空（删除 {0} 个文件）", "Cleared ({0} file(s) removed)");
+        EN.put("没回复", "no reply");
+        EN.put("清理「目标已删除、状态却还留着」的残留键。\n不会动你现有的目标与签到记录。",
+               "Remove leftover state keys for targets that no longer exist.\nYour targets and records are untouched.");
+        EN.put("清理完成：删除 {0} 个残留键", "Done: removed {0} leftover key(s)");
+        EN.put("立即发送 · {0} 个账号", "Send now · {0} account(s)");
+        EN.put("累计签到 · 连续 {0} · 近 7 天 {1} · 近 30 天 {2}",
+               "Total · streak {0} · last 7d {1} · last 30d {2}");
+        EN.put("统计基于本地记录；「判不出」可在 设置 → 回复判定词 补词。",
+               "Based on local records. For 'unclear', add words in Settings → Reply keywords.");
+        EN.put("统计失败: {0}", "Stats failed: {0}");
         EN.put("▍执行", "▍Run");
         EN.put("▍配置", "▍Config");
         EN.put("先选「在哪里签」，下一步再选它要什么。", "Pick where first, then what it expects.");
