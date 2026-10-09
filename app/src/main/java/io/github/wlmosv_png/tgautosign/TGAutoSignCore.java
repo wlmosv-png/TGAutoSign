@@ -21081,20 +21081,47 @@ public final class TGAutoSignCore {
                     }
                     row.addView(badge, new LinearLayout.LayoutParams(-2, -2));
 
-                    // bot 简称 + 指令
+                    // ── 名称 + 类型标识（2026-10-10）──
+                    // 改前：`botName(did)` —— 只查 getUser。
+                    //   群目标的 did 是**群 id**，getUser 必然拿不到 →
+                    //   三个群目标在「今日计划」里显示成裸数字 -1001814989867…，
+                    //   完全看不出是哪个群（用户截图反馈）。
+                    // 改后：`targetTitle(did)`（备注名 > bot 名 > @username > 群名），
+                    //   并把名称截断放宽到 14 字，够放下大多数群名。
+                    // 另外补两个类型徽章，一眼区分「群 / bot」与「回调 / 指令」：
+                    //   群=品红实心 · bot=青色描边（与目标列表同一套 peerChip）
+                    //   回调=回调图标 · 指令=文本图标（与目标列表同一套 typeChip）
                     LinearLayout col = new LinearLayout(act);
                     col.setOrientation(LinearLayout.VERTICAL);
                     col.setPadding(dp(8), 0, dp(4), 0);
-                    String bn = botName(did);
-                    String title = (bn != null && bn.length() > 0) ? bn : String.valueOf(did);
-                    if (title.length() > 12) title = title.substring(0, 12) + "…";
+                    String title = targetTitle(did);
+                    if (title == null || title.length() == 0) title = String.valueOf(did);
+                    if (title.length() > 14) title = title.substring(0, 14) + "…";
+                    // 第一行：名称 + 类型徽章
+                    LinearLayout nameRow = new LinearLayout(act);
+                    nameRow.setOrientation(LinearLayout.HORIZONTAL);
+                    nameRow.setGravity(Gravity.CENTER_VERTICAL);
                     TextView t1 = new TextView(act);
                     t1.setTextSize(Theme.TS_BODY); t1.setTextColor(Theme.termTxt(act)); t1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+                    t1.setSingleLine(true); t1.setEllipsize(android.text.TextUtils.TruncateAt.END);
                     t1.setText(title);
-                    col.addView(t1);
+                    nameRow.addView(t1, new LinearLayout.LayoutParams(0, -2, 1f));
+                    try {
+                        TextView pc = peerChip(act, m);
+                        if (pc != null) {
+                            LinearLayout.LayoutParams pclp = new LinearLayout.LayoutParams(-2, -2);
+                            pclp.setMargins(dp(4), 0, 0, 0);
+                            nameRow.addView(pc, pclp);
+                        }
+                    } catch (Throwable ignored) {}
+                    col.addView(nameRow);
+                    // 第二行：类型（回调/指令）+ 指令原文
                     TextView t2 = new TextView(act);
                     t2.setTextSize(Theme.TS_CAPTION); t2.setTextColor(Theme.termMuted(act)); t2.setTypeface(android.graphics.Typeface.MONOSPACE);
-                    t2.setText(txt);
+                    t2.setSingleLine(true); t2.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                    boolean _cbRow = false;
+                    try { _cbRow = KIND_CB.equals(entryKind(m)); } catch (Throwable ignored) {}
+                    t2.setText((_cbRow ? Lang.tr("回调") : Lang.tr("指令")) + " · " + txt);
                     t2.setPadding(0, dp(1), 0, 0);
                     col.addView(t2);
                     row.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
