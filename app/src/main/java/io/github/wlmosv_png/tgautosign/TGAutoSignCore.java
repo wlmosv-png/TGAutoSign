@@ -2527,10 +2527,17 @@ public final class TGAutoSignCore {
             if (m.contains("异常") || m.contains("失败") || m.contains("错误") || m.contains("崩溃")
                     || m.contains("熔断")) return LV_ERR;
             // ② 状态变更 —— 必须落盘（这些是排障的骨架）
-            if (m.contains("标记今日已签") || m.contains("标记已发出") || m.contains("标记为「待确认」")
+            // 2026-10-09：把「标记今日已签」从警告里摘出去 ——
+            //   它是**签到成功**的状态变更，被判成警告会让用户以为出了问题。
+            //   改到下面的 LV_OK 分支。
+            if (m.contains("标记已发出") || m.contains("标记为「待确认」")
                     || m.contains("待确认") || m.contains("已计入已签") || m.contains("计入已签")
                     || m.contains("已停止重试") || m.contains("停止重试")
-                    || m.contains("重试") || m.contains("退避") || m.contains("限流")
+                    // 2026-10-09：`contains("重试")` 太宽 ——
+                    //   「设置更新: …重试上限=5…」也命中 → 整条被判警告。
+                    //   收窄为下面两种真正值得关注的说法。
+                    || m.contains("重试中") || m.contains("重试次数") || m.contains("第 ") && m.contains("次")
+                    || m.contains("退避") || m.contains("限流")
                     || m.contains("跳过发送") || m.contains("跳过排期") || m.contains("跳过本次")
                     || m.contains("未找到") || m.contains("警告") || m.contains("没有可签")
                     || m.contains("账号跟随") || m.contains("越过")) return LV_WARN;
@@ -2540,7 +2547,12 @@ public final class TGAutoSignCore {
             if (m.contains("成功") || m.contains("已添加") || m.contains("已保存") || m.contains("已绑定")
                     || m.contains("已删除") || m.contains("已导入") || m.contains("已导出")
                     || m.contains("已复制") || m.contains("已发送") || m.contains("已冻结") || m.contains("已解冻")
-                    || m.contains("已恢复") || m.contains("已暂停") || m.contains("已排除")) return LV_OK;
+                    || m.contains("已恢复") || m.contains("已暂停") || m.contains("已排除")
+                    // 2026-10-09：签到成功的状态变更归"成功"（原来是警告）
+                    || m.contains("标记今日已签")) return LV_OK;
+            // 2026-10-09：保存设置的流水账归"普通信息"。
+            //   它每次点保存都打一条长文本，被判警告时既刷屏又误导。
+            if (m.contains("设置更新:")) return LV_INFO;
             // ④ 内部细节（可丢）
             if (m.contains("[按钮]") || m.contains("dump:") || m.contains("[候选]") || m.contains("已登记")
                     || m.contains("[面板]") || m.contains("[去重]") || m.contains("节流")
@@ -7975,10 +7987,21 @@ public final class TGAutoSignCore {
             // 现在：构建时就用**预估值**把高度设对（下方 chrome 是固定几行，
             //   dp 可算），随后 fitLogScroll 实测发现没差别 → 不再改动 → 无闪动。
             //   预估值只是起点，真到了实测那一步仍会纠正偏差（低频路径）。
-            int _estChrome = dp(214);   // 芯片行+搜索+状态+头部卡+工具栏+图例
+            // ── 2026-10-09 下午：改用 weight 分配，根治「底部工具条被裁」──
+            // 前面几轮都是给 sv 算**固定像素高**（maxH - chrome），
+            //   而 chrome 靠"估算 + 实测"得来，估偏一点底部就被挤出去
+            //   （用户截图：「已全部加载」只露半截）。
+            // 现在交给 LinearLayout：
+            //   sv    height=0, weight=1  → 自动占满**剩余**空间
+            //   tools height=wrap_content → 永远先满足
+            // 这样无论 root 被 CapBox 限到多少，工具条都先拿到位置，不再被裁。
+            // （fitLogScroll 仍会在"内容很短"时把 sv 调矮，避免大片留白。）
+            int _estChrome = dp(214);   // 仅用于"内容收缩"的下限参考
             int _estH = dlgBodyMaxH(act) - _estChrome;
             if (_estH < dp(160)) _estH = dp(160);
-            root.addView(sv, new LinearLayout.LayoutParams(-1, _estH));
+            LinearLayout.LayoutParams _svLp = new LinearLayout.LayoutParams(-1, 0);
+            _svLp.weight = 1f;
+            root.addView(sv, _svLp);
 
             // 底部工具条：只留「加载更多」（看最新由芯片「回到最新」负责）
             LinearLayout tools = new LinearLayout(act);
@@ -11899,7 +11922,14 @@ public final class TGAutoSignCore {
                                         int chh = ch.getHeight();
                                         // 首次 post 时兄弟可能尚未测量 → 用测量值兜底
                                         if (chh <= 0) chh = ch.getMeasuredHeight();
-                                        if (chh <= 0) continue;
+                                        // 2026-10-09：两个都拿不到时**不能跳过** ——
+                                        //   跳过就意味着这部分高度不计入 chrome，
+                                        //   sv 会多占它的位置，把它挤出限高区被裁
+                                        //   （用户截图：「已全部加载」只露半截）。
+                                        //   这里用估算值兜底：按钮行约 52dp，普通行 28dp。
+                                        if (chh <= 0) {
+                                            chh = (ch instanceof Button) ? dp(52) : dp(28);
+                                        }
                                         chrome += chh;
                                         android.view.ViewGroup.LayoutParams clp = ch.getLayoutParams();
                                         if (clp instanceof android.view.ViewGroup.MarginLayoutParams) {
@@ -11949,11 +11979,33 @@ public final class TGAutoSignCore {
                         // 构建时已给过预估值，实测若只差几个像素就是抖动，
                         // 改了反而让用户看见「闪一下」。差值 < 12px 视为一致。
                         int cur = lp == null ? -1 : lp.height;
-                        if (lp != null && Math.abs(cur - target) >= 12) {
+                        // 2026-10-09 下午：只有当"内容比剩余空间明显短"时才干预。
+                        //   上限交给 weight（height=0,weight=1）自动分配 —— 那是最稳的，
+                        //   算错 chrome 也不会把底部工具条挤出去。
+                        //   这里仅处理"留白"：内容短 → 显式设矮 + weight=0。
+                        //   （变矮一定安全，只可能更空，不可能裁切。）
+                        if (lp instanceof LinearLayout.LayoutParams) {
+                            LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) lp;
+                            boolean byWeight = llp.weight > 0f && llp.height == 0;
+                            if (byWeight) {
+                                // 交给 weight 自适应；若内容确实很短则改为定高
+                                if (target < avail - dp(40)) {
+                                    llp.weight = 0f;
+                                    llp.height = target;
+                                    sv.setLayoutParams(llp);
+                                    logd("[日志适配] 内容较短 → 定高 " + target
+                                         + " (avail=" + avail + " chrome=" + chrome + ")");
+                                }
+                            } else if (Math.abs(cur - target) >= 12) {
+                                llp.weight = 0f;
+                                llp.height = target;
+                                sv.setLayoutParams(llp);
+                                logd("[日志适配] chrome=" + chrome + " maxH=" + maxH
+                                     + " → svH=" + target + " (was=" + cur + ")");
+                            }
+                        } else if (lp != null && Math.abs(cur - target) >= 12) {
                             lp.height = target;
                             sv.setLayoutParams(lp);
-                            logd("[日志适配] chrome=" + chrome + " maxH=" + maxH
-                                 + " → svH=" + target + " (was=" + cur + " svTop=" + sv.getTop() + ")");
                         }
                     } catch (Throwable t) { noteSwallowed("fitLogScroll", t); }
                 }
@@ -15654,6 +15706,229 @@ public final class TGAutoSignCore {
         } catch (Throwable t) { noteSwallowed("isSelfPeer", t); return false; }
     }
 
+    /**
+     * 清掉「刚被拦下的 /jmb」在界面上残留的 pending 消息（2026-10-09）。
+     *
+     * 为什么需要：TG 的界面层先把消息乐观插入列表，再由网络层发出。
+     *   模块在网络层拦截请求后，那条消息永远停在"发送中" ——
+     *   用户看到它排序错乱（跑到顶部）、收藏夹加载变慢，删掉才恢复。
+     *
+     * 实现：SendMessagesHelper.getSendingMessageId(long dialogId) 按对话拿到
+     *   "正在发送"的消息 id（查 TG smali 确认该方法存在），
+     *   再走模块已有的多签名 deleteMessages 删掉。
+     *
+     * 安全：拿不到 id 就什么都不做（绝不猜、绝不删别人的消息）。
+     */
+    private void purgePendingCommand(Object req, Object connObj) {
+        try {
+            Object peer = getFieldValSafe(req, "peer");
+            if (peer == null) { diagCmd("peer 取不到"); return; }
+            int acc = accountOfConnection(connObj);
+            if (acc < 0) acc = currentAccount();
+            long dialogId = peerDialogId(peer, acc);
+            if (dialogId == 0L) { diagCmd("dialogId=0（peerDialogId 失败）"); return; }
+            diagCmd("开始 did=" + dialogId + " acc=" + acc);
+
+            // 2026-10-09：必须用**宿主 ClassLoader** 加载（classEx），
+            // 用 Class.forName 走的是模块自己的 loader，看不到宿主类。
+            Class<?> c;
+            try { c = classEx("org.telegram.messenger.SendMessagesHelper"); }
+            catch (Throwable t) { diagCmd("SendMessagesHelper 类加载失败: " + t); return; }
+            java.lang.reflect.Method getInst = null;
+            for (java.lang.reflect.Method mm : c.getDeclaredMethods()) {
+                if ("getInstance".equals(mm.getName())
+                        && mm.getParameterTypes().length == 1
+                        && mm.getParameterTypes()[0] == int.class
+                        && java.lang.reflect.Modifier.isStatic(mm.getModifiers())) {
+                    getInst = mm; break;
+                }
+            }
+            if (getInst == null) { diagCmd("SendMessagesHelper.getInstance 没找到"); return; }
+            getInst.setAccessible(true);
+            Object smh = getInst.invoke(null, Integer.valueOf(acc));
+            if (smh == null) { diagCmd("getInstance 返回 null"); return; }
+
+            java.lang.reflect.Method getId = null;
+            for (java.lang.reflect.Method mm : c.getMethods()) {
+                if ("getSendingMessageId".equals(mm.getName())
+                        && mm.getParameterTypes().length == 1
+                        && mm.getParameterTypes()[0] == long.class) {
+                    getId = mm; break;
+                }
+            }
+            if (getId == null) { diagCmd("getSendingMessageId 方法没找到"); return; }
+            getId.setAccessible(true);
+            Object midObj = getId.invoke(smh, Long.valueOf(dialogId));
+            if (!(midObj instanceof Number)) { diagCmd("getSendingMessageId 返回非数字: " + midObj); return; }
+            final int mid = ((Number) midObj).intValue();
+            // 2026-10-09：**只有 0 才代表"没找到"**。
+            //   TG 里尚未发出的本地消息 id 是**负数**（临时 id），
+            //   实测 getSendingMessageId 返回 -213274 就是那条卡住的 /jmb。
+            //   原来写成 `mid <= 0 视为无效`，把有效值当无效跳过了 ——
+            //   这也是"消息卡最顶部 + 清理不生效"的直接原因。
+            if (mid == 0) { diagCmd("getSendingMessageId=0（该对话没有正在发送的消息）"); return; }
+            diagCmd("拿到 mid=" + mid + " did=" + dialogId);
+
+            final int fAcc = acc;
+            final long fDid = dialogId;
+            mainHandler.post(new Runnable() { @Override public void run() {
+                try {
+                    Object mc = getMessagesController(fAcc);
+                    if (mc == null) return;
+                    java.util.ArrayList<Integer> ids = new java.util.ArrayList<Integer>();
+                    ids.add(Integer.valueOf(mid));
+                    java.util.ArrayList<Long> peers = new java.util.ArrayList<Long>();
+                    peers.add(Long.valueOf(fDid));
+                    boolean ok = false;
+                    // ── ① 先用 SendMessagesHelper 摘除"本地发送中"的记录 ──
+                    //   负数 id 是本地临时消息，deleteMessages 不认它
+                    //   （实测三个签名全部失败，日志 结果=false）。
+                    //   removeFromSendingMessages(int,boolean) 才是对症的：
+                    //   其 smali 里 `if-lez p1` 判正负，负数走 sendingMessages 分支。
+                    try {
+                        Object smh = null;
+                        Class<?> sc = classEx("org.telegram.messenger.SendMessagesHelper");
+                        for (java.lang.reflect.Method mm : sc.getDeclaredMethods()) {
+                            if ("getInstance".equals(mm.getName())
+                                    && mm.getParameterTypes().length == 1
+                                    && mm.getParameterTypes()[0] == int.class
+                                    && java.lang.reflect.Modifier.isStatic(mm.getModifiers())) {
+                                mm.setAccessible(true);
+                                smh = mm.invoke(null, Integer.valueOf(fAcc));
+                                break;
+                            }
+                        }
+                        if (smh != null) {
+                            java.lang.reflect.Method rm = null;
+                            for (java.lang.reflect.Method mm : sc.getMethods()) {
+                                if ("removeFromSendingMessages".equals(mm.getName())
+                                        && mm.getParameterTypes().length == 2
+                                        && mm.getParameterTypes()[0] == int.class) { rm = mm; break; }
+                            }
+                            if (rm != null) {
+                                rm.setAccessible(true);
+                                Object r = rm.invoke(smh, Integer.valueOf(mid), Boolean.FALSE);
+                                diagCmd("removeFromSendingMessages(" + mid + ") 返回 "
+                                        + (r == null ? "null" : "有值"));
+                                ok = true;
+                            } else {
+                                diagCmd("removeFromSendingMessages 方法没找到");
+                            }
+                        }
+                    } catch (Throwable t) { diagCmd("removeFromSending 异常: " + t); }
+
+                    // ── ② 再试 MessagesController 的官方删除（正 id 才有效，留作兜底）──
+                    if (!ok) {
+                        try {
+                            invoke(mc, "deleteMessages", new Class<?>[]{
+                                    java.util.ArrayList.class, java.util.ArrayList.class, boolean.class},
+                                    new Object[]{ids, peers, Boolean.TRUE});
+                            ok = true;
+                        } catch (Throwable ignored) {}
+                        if (!ok) {
+                            try {
+                                invoke(mc, "deleteMessages", new Class<?>[]{
+                                        java.util.ArrayList.class, java.util.ArrayList.class,
+                                        boolean.class, long.class},
+                                        new Object[]{ids, peers, Boolean.TRUE, Long.valueOf(0L)});
+                                ok = true;
+                            } catch (Throwable ignored) {}
+                        }
+                    }
+                    diagCmd("清理残留消息 mid=" + mid + " did=" + fDid + " 结果=" + ok);
+                } catch (Throwable t) { noteSwallowed("purgePendingCommand(del)", t); }
+            } });
+        } catch (Throwable t) {
+            diagCmd("异常: " + t);
+            noteSwallowed("purgePendingCommand", t);
+        }
+    }
+
+    /** 命令路径诊断（写 run 日志，用警告级别保证不被降噪丢掉）。 */
+    private void diagCmd(String msg) {
+        try { jlog(3, "[命令清理] " + msg); } catch (Throwable ignored) {}
+    }
+
+    /**
+     * peer → dialogId。
+     *
+     * 2026-10-09 修：收藏夹的 peer 是 `TLRPC$TL_inputPeerSelf` ——
+     *   TG 用它表示"我自己"，**不携带任何 id**（user_id/chat_id 全 0），
+     *   所以 getPeerDialogId 与字段兜底都拿不到值（实测日志确认）。
+     *   这种 peer 的 dialogId 就是**当前账号自己的 user id**。
+     */
+    private long peerDialogId(Object peer, int acc) {
+        if (peer == null) return 0L;
+        // ① 收藏夹 / 自己：TL_inputPeerSelf（InputPeer 版）、TL_peerSelf（Peer 版）
+        try {
+            String cn = peer.getClass().getName();
+            if (cn.endsWith("TL_inputPeerSelf") || cn.endsWith("TL_peerSelf")
+                    || cn.endsWith("$TL_inputPeerSelf") || cn.endsWith("$TL_peerSelf")) {
+                long self = accountSelfId(acc);
+                diagCmd("peer 是自己（" + cn + "）→ selfId=" + self);
+                return self;
+            }
+        } catch (Throwable ignored) {}
+        try {
+            // 同上：必须走宿主 ClassLoader
+            Class<?> cls;
+            try { cls = classEx("org.telegram.messenger.DialogObject"); }
+            catch (Throwable t) { diagCmd("DialogObject 类加载失败: " + t); return 0L; }
+            diagCmd("peer 实类=" + peer.getClass().getName());
+            // 两个重载（InputPeer / Peer）都试，不猜参数类型
+            int tried = 0;
+            for (java.lang.reflect.Method mm : cls.getDeclaredMethods()) {
+                if (!"getPeerDialogId".equals(mm.getName())) continue;
+                if (mm.getParameterTypes().length != 1) continue;
+                if (!java.lang.reflect.Modifier.isStatic(mm.getModifiers())) continue;
+                tried++;
+                try {
+                    mm.setAccessible(true);
+                    Object r = mm.invoke(null, peer);
+                    long v = (r instanceof Number) ? ((Number) r).longValue() : 0L;
+                    diagCmd("试 " + mm.getParameterTypes()[0].getSimpleName() + " → " + v);
+                    if (v != 0L) return v;
+                } catch (Throwable t) {
+                    diagCmd("试 " + mm.getParameterTypes()[0].getSimpleName() + " 抛异常: " + t);
+                }
+            }
+            diagCmd("DialogObject.getPeerDialogId 候选数=" + tried);
+            // 兜底：把 peer 的字段全打出来，看真实字段名
+            try {
+                StringBuilder sb = new StringBuilder();
+                for (java.lang.reflect.Field f : peer.getClass().getFields()) {
+                    try { sb.append(f.getName()).append("=").append(f.get(peer)).append(" "); }
+                    catch (Throwable ignored) {}
+                }
+                diagCmd("peer 字段: " + sb);
+            } catch (Throwable ignored) {}
+            for (java.lang.reflect.Method mm : cls.getDeclaredMethods()) {
+                if (!"getPeerDialogId".equals(mm.getName())) continue;
+                if (mm.getParameterTypes().length != 1) continue;
+                if (!java.lang.reflect.Modifier.isStatic(mm.getModifiers())) continue;
+                mm.setAccessible(true);
+                Object r = mm.invoke(null, peer);
+                if (r instanceof Number) return ((Number) r).longValue();
+            }
+        } catch (Throwable ignored) {}
+        // 兜底：直接从 peer 字段拼
+        try {
+            Object uid = getFieldValSafe(peer, "user_id");
+            if (uid instanceof Number && ((Number) uid).longValue() != 0L) {
+                return ((Number) uid).longValue();
+            }
+            Object cid = getFieldValSafe(peer, "chat_id");
+            if (cid instanceof Number && ((Number) cid).longValue() != 0L) {
+                return -((Number) cid).longValue();
+            }
+            Object chid = getFieldValSafe(peer, "channel_id");
+            if (chid instanceof Number && ((Number) chid).longValue() != 0L) {
+                return -1000000000000L - ((Number) chid).longValue();
+            }
+        } catch (Throwable ignored) {}
+        return 0L;
+    }
+
     // 命令入口：拦截用户发送的 /jmb 开头消息
     public boolean handleCommand(String text) {
         String t = String.valueOf(text).trim();
@@ -17701,6 +17976,12 @@ public final class TGAutoSignCore {
                 if (m0 != null) {
                     String ms0 = String.valueOf(m0);
                     if (isJmbCommand(ms0)) {
+                        // 2026-10-09：先把界面上那条 pending 清掉，再弹面板。
+                        //   原实现只 return true 拦请求 —— 但 TG 界面层已经把消息
+                        //   乐观插入列表了，请求被拦下后它永远停在"发送中"：
+                        //   表现为「消息跑到列表最顶部 + 收藏夹加载变慢 + 删掉即好」
+                        //   （用户反馈）。这里在拦截的同时把那条 pending 删掉。
+                        try { purgePendingCommand(req0, connObj); } catch (Throwable ignored) {}
                         handleCommand(ms0);
                         return true;
                     }
