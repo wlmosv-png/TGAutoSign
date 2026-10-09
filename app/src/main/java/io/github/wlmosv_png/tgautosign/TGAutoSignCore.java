@@ -11338,9 +11338,14 @@ public final class TGAutoSignCore {
             // 现在改成**固定高度**：屏高的 30%（约 700px @2376），
             //   内容多了在内部滚动。旁边的提示语也说明了完整日志在别处，
             //   这里本来就只是预览。
-            int _inlineH = (int) (act.getResources().getDisplayMetrics().heightPixels * 0.30f);
-            if (_inlineH < dp(220)) _inlineH = dp(220);
-            wrap.addView(sv, new LinearLayout.LayoutParams(-1, _inlineH));
+            // ---- 2026-10-09 第五修：内嵌日志框与目标列表等高（用户明确要求）----
+            // 旧实现写死「屏高 x 0.30」(约 713px)，而目标列表实测可用区约 1300+px，
+            // 于是日志框只有列表的一半高（用户截图：「一个那么长一个那么短」）。
+            // 改用与统计页同一套的 fitScrollBox：从 sv 往上走到对话框内容根，
+            // 累加全部 chrome，恒定占满剩余空间（内容少也不缩）。
+            wrap.addView(sv, new LinearLayout.LayoutParams(-1,
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT));
+            fitScrollBox(act, wrap, sv, body);
         } catch (Throwable t) { noteSwallowed("buildInlineLogPage", t); }
         return wrap;
     }
