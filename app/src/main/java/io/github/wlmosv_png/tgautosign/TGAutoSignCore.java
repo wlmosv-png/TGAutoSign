@@ -11343,8 +11343,17 @@ public final class TGAutoSignCore {
             // 于是日志框只有列表的一半高（用户截图：「一个那么长一个那么短」）。
             // 改用与统计页同一套的 fitScrollBox：从 sv 往上走到对话框内容根，
             // 累加全部 chrome，恒定占满剩余空间（内容少也不缩）。
-            wrap.addView(sv, new LinearLayout.LayoutParams(-1,
-                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT));
+            // ---- 2026-10-09 第六修：消除切到日志 Tab 时的「闪动」----
+            // 上一版用 WRAP_CONTENT 加进去，随后 fitScrollBox 在 post/150/400ms
+            // 三次改高 —— 首帧是「内容自然高」（可能很小），第二帧才撑满，
+            // 视觉上就是点一下闪一下。
+            // 统计 Tab 不闪是因为它的内容本身就很长，首帧已接近满高。
+            // 现在：构建期直接按「对话框上限 - 本页 chrome」给到位
+            //   （Tab 栏 + 提示行 + 内容区 padding ≈ 90dp），
+            //   fitScrollBox 实测若只差 < 12px 就不再改动 → 无跳变。
+            int _inlineEst = dlgBodyMaxHForBuild(act) - dp(90);
+            if (_inlineEst < dp(300)) _inlineEst = dp(300);
+            wrap.addView(sv, new LinearLayout.LayoutParams(-1, _inlineEst));
             fitScrollBox(act, wrap, sv, body);
         } catch (Throwable t) { noteSwallowed("buildInlineLogPage", t); }
         return wrap;
@@ -11930,11 +11939,14 @@ public final class TGAutoSignCore {
                         int target = avail;          // 恒定
 
                         android.view.ViewGroup.LayoutParams lp = sv.getLayoutParams();
-                        if (lp != null && lp.height != target) {
+                        // 2026-10-09：加 12px 去抖 —— 构建期已给过预估值，
+                        // 实测若只差几个像素就是抖动，改了反而看得见「闪一下」。
+                        int curH = lp == null ? -1 : lp.height;
+                        if (lp != null && Math.abs(curH - target) >= 12) {
                             lp.height = target;
                             sv.setLayoutParams(lp);
                             logd("[滚动适配] chrome=" + chrome
-                                 + " maxH=" + maxH + " → h=" + target);
+                                 + " maxH=" + maxH + " → h=" + target + " (was=" + curH + ")");
                         }
                     } catch (Throwable t) { noteSwallowed("fitScrollBox", t); }
                 }
