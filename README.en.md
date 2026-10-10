@@ -181,7 +181,7 @@ You installed a debug build. Uninstall it, then install the official APK from th
 
 ### v1.6.5 (131) — 2026-10-10
 
-**Fixed**: Scheduled sign-in and missed-day make-up reset to off after restart. · The plain/detailed log toggle was not remembered. · Add and sign now could silently do nothing. · Can't find this chat: the last-resort lookup never worked. · Adding a second sign-in target to the same group overwrote the first. · The same group added twice with different id formats showed up as two targets. · With two targets in one group, replies could never be matched. · Switching to the log tab flickered. · The log box was half the height of the target list.
+**Fixed**: The plain/detailed log toggle was not remembered. · Add and sign now could silently do nothing. · Can't find this chat: the last-resort lookup never worked. · Adding a second sign-in target to the same group overwrote the first. · The same group added twice with different id formats showed up as two targets. · With two targets in one group, replies could never be matched. · Switching to the log tab flickered. · The log box was half the height of the target list.
 
 **New**: Group targets now show the group name. · Adding a target is now two steps. · New: sign-in statistics. · New: clear logs and clean up leftover state. · Target management is grouped by purpose. · Eight color themes, applied instantly. · Animations on a successful sign-in.
 
@@ -192,6 +192,7 @@ You installed a debug build. Uninstall it, then install the official APK from th
 **New**: The review page got a full redesign. · You can now teach it replies it can't read. · Tapping a button no longer learns everything. · Confirming a candidate can also remember what to do next time. · Sign-in-like buttons are learned automatically; the rest are asked about.
 
 [Full changelog →](https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md)
+
 
 
 ## License
