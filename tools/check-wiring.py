@@ -108,6 +108,12 @@ def check_new_files(root):
             fn = m.group(1)
             if fn == cls or fn in WHITELIST:
                 continue
+            # 2026-10-10：跳过 @Override —— 匿名类/内部类覆写父类方法（如
+            # View.OnFocusChangeListener#onFocusChange）不需要有人显式调用，
+            # 由框架回调。此前它一直被误报成 ORPHAN。
+            head = src[max(0, m.start() - 200): m.start()]
+            if '@Override' in head:
+                continue
             tag = '%s#%s' % (name, fn)
             if tag in KNOWN_LEGACY_ORPHANS:
                 continue
