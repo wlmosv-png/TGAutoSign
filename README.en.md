@@ -121,13 +121,13 @@ The module matches by host package first, then falls back to flag-class capabili
 
 | Client | Package | Status |
 | --- | --- | --- |
-| Telegram (Play / default) | `org.telegram.messenger` | ✅ tested on 12.10.4 |
+| Telegram (Play / default) | `org.telegram.messenger` | ✅ tested on 12.10.6 |
 | Telegram (direct APK) | `org.telegram.messenger.web` | ✅ statically verified |
 | Nagram (NextAlone) | `xyz.nextalone.nagram` | ✅ tested on 12.10.3 |
 | Nagram XF | `fork.risin42.nagramx` | ✅ tested (dec46b0) |
 | ExteraLess (ExteraGram fork) | `com.exteraless.app` | ✅ tested on 12.10.1 |
 | Mercurygram | `it.belloworld.mercurygram` | ✅ tested on 12.10.3.1 |
-| Turrit | `org.telegram.group` | ✅ statically verified on 1.9.0.4.2 |
+| Turrit | `org.telegram.group` | ✅ tested on 1.9.0.4.2 |
 | Nagram / NagramX / NagramNX | `nu.gpu.nagram` etc. | whitelisted, not tested |
 | Other Telegram-Android forks | any | injects if flag classes are intact |
 | Telegram X | — | ❌ not injected (different core) |

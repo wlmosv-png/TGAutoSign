@@ -125,13 +125,13 @@ sha256sum TGAutoSign-*.apk                     # 比对 Release 里的 sha256sum
 
 | 客户端 · Client | 包名 · Package | 状态 · Status |
 | --- | --- | --- |
-| Telegram（Play / 默认渠道）| `org.telegram.messenger` | ✅ 12.10.4 实测 · *tested* |
+| Telegram（Play / 默认渠道）| `org.telegram.messenger` | ✅ 12.10.6 实测 · *tested* |
 | Telegram（官网直连版）| `org.telegram.messenger.web` | ✅ 静态核对 · *statically verified* |
 | Nagram（NextAlone）| `xyz.nextalone.nagram` | ✅ 12.10.3 实测 · *tested* |
 | Nagram XF | `fork.risin42.nagramx` | ✅ dec46b0 实测 · *tested* |
 | ExteraLess | `com.exteraless.app` | ✅ 12.10.1 实测 · *tested* |
 | Mercurygram | `it.belloworld.mercurygram` | ✅ 12.10.3.1 实测 · *tested* |
-| Turrit | `org.telegram.group` | ✅ 1.9.0.4.2 静态核对 · *statically verified* |
+| Turrit | `org.telegram.group` | ✅ 1.9.0.4.2 实测 · *tested* |
 | Nagram / NagramX / NagramNX | `nu.gpu.nagram` 等 | 白名单覆盖，未实测 · *whitelisted, untested* |
 | 其它 Telegram-Android fork | 任意 | 标志类齐全即注入 · *injects if flags intact* |
 | Telegram X | — | ❌ 不注入（换内核）· *not injected* |
