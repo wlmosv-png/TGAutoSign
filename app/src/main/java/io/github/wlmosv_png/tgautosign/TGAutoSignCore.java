@@ -8229,6 +8229,7 @@ public final class TGAutoSignCore {
     }
 
     private void showLog(final Activity act) {
+            loadLogPlainOnce();   // 还原上次选的「易懂/详细」档（2026-10-10）
             if (act == null) { toast("请在 TG 界面使用 /jmb"); return; }
             LinearLayout root = new LinearLayout(act);
             root.setOrientation(LinearLayout.VERTICAL);
@@ -8252,6 +8253,8 @@ public final class TGAutoSignCore {
             plainChip.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
                 logPlain = !logPlain;
                 logShowDebug = !logPlain;
+                // 持久化：下次打开日志页保持同一档（2026-10-10）
+                try { prefs.edit().putBoolean("jmb_log_plain", logPlain).apply(); } catch (Throwable ignored) {}
                 // 原地改按钮外观
                 int col = logPlain ? Theme.termGreen(act) : Theme.termMuted(act);
                 plainChip.setText(logPlain ? Lang.tr("易懂") : Lang.tr("详细"));
@@ -12805,7 +12808,19 @@ public final class TGAutoSignCore {
     // ══════════════════════════════════════════════════════════════════
 
     /** 日志显示档位：true=易懂（默认） false=详细（原始） */
+    // 2026-10-10：加持久化。改前是硬编码 true，切换只改内存 ——
+    // 关掉 TG 再打开就退回默认档（用户反馈「日志查看详细会丢失」）。
+    // 用一个轻量的 init 标记：字段初始仍为 true，构造/启动时用 prefs 覆盖。
     private boolean logPlain = true;
+    private volatile boolean logPlainLoaded = false;
+
+    /** 首次读取时从 prefs 还原「易懂/详细」档（只需一次）。 */
+    private void loadLogPlainOnce() {
+        if (logPlainLoaded) return;
+        logPlainLoaded = true;
+        try { logPlain = prefs.getBoolean("jmb_log_plain", true); } catch (Throwable ignored) {}
+        logShowDebug = !logPlain;
+    }
 
     /** 内部机制类日志：只在详细档显示，易懂档直接隐去（用户无需关心） */
     private static boolean isInternalLog(String m) {
@@ -14232,17 +14247,42 @@ public final class TGAutoSignCore {
     // ---- 配置按账号（多账号用户各账号独立设置；老键保留兼容与回滚）----
     private String cfgStr(String name, String def) {
         try {
-            String p = accountPrefix() + "cfg_" + name;
-            if (prefs.contains(p)) return prefs.getString(p, def);
+            String cur = accountPrefix() + "cfg_" + name;
+            if (prefs.contains(cur)) return prefs.getString(cur, def);
+            String any = findCfgKeyAny("cfg_" + name);
+            if (any != null) return prefs.getString(any, def);
             if (prefs.contains("jmb_" + name)) return prefs.getString("jmb_" + name, def);
         } catch (Throwable ignored) {}
         return def;
     }
 
+    /**
+     * 配置读取的**跨账号兜底**（2026-10-10 修「设置重启就丢」）。
+     *
+     * 问题（群友反馈 + 代码复核）：
+     *   cfg_* 是**账号级**键（accN_cfg_timer），而「定时签到」「错过补签」
+     *   在用户心智里是**整个模块**的开关 —— 跟"我现在切到哪个账号"无关。
+     *   而 accountPrefix() 取的是 currentAccount() → selectedAccount，
+     *   这个值在以下场景会变：
+     *     · 多账号用户切号
+     *     · Nagram / Turrit 这类客户端的槽位是跳号的（实测读到过 7、9）
+     *     · 进程重启早期 TG 尚未初始化完整
+     *   一旦读到的槽位与保存时不是同一个，prefs 里明明有值也读不到
+     *   → 回退默认 false → 用户看到「开关自己关了」「配置没保存」。
+     *
+     * 实测证据：本机 tg_autosign_gen.xml 里 acc0_cfg_timer=true、acc1_cfg_timer=true
+     *   两条都在，写入是成功的；问题只出在"读的时候找错了槽位"。
+     *
+     * 修法：本账号没有 → 依次找其它已存在账号的同名键 → 再退全局 jmb_*。
+     *   仍然是「账号级优先」，只是把"找不到"从"当默认值"改成"去别处找找"。
+     *   保存语义不变（仍写当前账号），所以不会互相覆盖。
+     */
     private boolean cfgBool(String name, boolean def) {
         try {
-            String p = accountPrefix() + "cfg_" + name;
-            if (prefs.contains(p)) return prefs.getBoolean(p, def);
+            String cur = accountPrefix() + "cfg_" + name;
+            if (prefs.contains(cur)) return prefs.getBoolean(cur, def);
+            String any = findCfgKeyAny("cfg_" + name);
+            if (any != null) return prefs.getBoolean(any, def);
             if (prefs.contains("jmb_" + name)) return prefs.getBoolean("jmb_" + name, def);
         } catch (Throwable ignored) {}
         return def;
@@ -14250,11 +14290,29 @@ public final class TGAutoSignCore {
 
     private int cfgInt(String name, int def) {
         try {
-            String p = accountPrefix() + "cfg_" + name;
-            if (prefs.contains(p)) return prefs.getInt(p, def);
+            String cur = accountPrefix() + "cfg_" + name;
+            if (prefs.contains(cur)) return prefs.getInt(cur, def);
+            String any = findCfgKeyAny("cfg_" + name);
+            if (any != null) return prefs.getInt(any, def);
             if (prefs.contains("jmb_" + name)) return prefs.getInt("jmb_" + name, def);
         } catch (Throwable ignored) {}
         return def;
+    }
+
+    /**
+     * 在**任意账号**里找第一个存在该配置后缀的键，返回它的完整键名（找不到返回 null）。
+     * 只用于配置读取兜底 —— 不参与写入，因此不会造成跨账号污染。
+     */
+    private String findCfgKeyAny(String suffix) {
+        try {
+            String tail = "_" + suffix;          // 例：_cfg_timer
+            for (String k : prefs.getAll().keySet()) {
+                if (!k.startsWith("acc")) continue;
+                if (!k.endsWith(tail)) continue;
+                return k;
+            }
+        } catch (Throwable ignored) {}
+        return null;
     }
 
     private void putCfg(android.content.SharedPreferences.Editor ed, String name, Object val) {
