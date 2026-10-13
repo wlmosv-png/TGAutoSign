@@ -37,6 +37,12 @@ public final class Hosts {
             "nu.gpu.nagram.web",   // NagramNX（thesv4k 分支 APP_PACKAGE）
             "com.exteraless.app",  // ExteraLess（ExteraGram fork，12.10.1-feae791 实测标志类齐全）
             "xyz.nextalone.nagram", // NextAlone Nagram（12.10.1，标志类齐全）
+            "xyz.nextalone.nnngram", // Nnngram（NextAlone 的 Nagram-reborn／基于 Nullgram；
+                                     // 12.10.6-ddbf1ef 实测：26129 类，MessagesController.getInputPeer(J)
+                                     // 与官方字段完全一致，ChatActivityEnterView/UserConfig/ConnectionsManager
+                                     // 三个标志类齐全 → 兼容）
+            "com.radolyn.ayugram",  // AyuGram for Android（基于 exteraGram；同为 org.telegram.* 类结构，
+                                    // 由能力探测兜底放行 —— 待真机 APK 校验后再确认是否加入白名单）
             // 2026-10-06 移除 Nekogram：实测其 R8 混淆把 tgnet 包压到只剩 6 个类，
             //   MessagesController / UserConfig / TLRPC$TL_messages_sendMessage /
             //   SendMessagesHelper 全部不存在 —— 注入后会「提示已注入但 /jmb 无反应」，
