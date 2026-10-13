@@ -1,5 +1,44 @@
 # 更新日志
 
+## 1.6.6 (132) — 2026-10-13
+
+> 多账号用起来更省心了：配置各管各的，复制过去就能签，删除也不会再连累别的账号。
+> 顺带把 AyuGram、Nnngram 接进来，一键多挂两个客户端。
+
+### 新增 · Added
+
+- **支持 AyuGram、Nnngram 客户端**
+  *AyuGram and Nnngram clients are now supported.*
+  作用域里已加入 `com.radolyn.ayugram` 与 `xyz.nextalone.nnngram`，
+  装上后在 LSPosed 里勾选对应客户端即可。
+
+### 优化 · Improved
+
+- **多账号配置各自独立**
+  *Per-account settings.*
+  定时、窗口、补签、主题、按钮学习、判定词、通知等，一个账号一份，互不干扰。
+- **复制目标更省事**
+  *Copying targets is now one step.*
+  复制到别的账号后可以直接签到，不用再手动挨个打开对话。
+- **多账号下更流畅**
+  *Smoother with multiple accounts.*
+  优化了几处配置读取，切换账号、打开面板更跟手。
+- **应用图标与说明**
+  *App icon and description.*
+  LSPosed 模块列表里正常显示。
+
+### 修复 · Fixed
+
+- **设置保存更可靠**
+  *Settings now persist.*
+  重启 Telegram 后设置保持原样。
+- **删除目标范围更准**
+  *Deleting a target only affects the current account.*
+  只作用于当前账号。
+- **切换账号显示更准**
+  *The target list now matches the current account.*
+  目标列表与当前账号严格对应。
+
 ## 1.6.5 (131) — 2026-10-10
 
 > 这版一半在修**不报错的毛病**，一半在把界面收拾干净。

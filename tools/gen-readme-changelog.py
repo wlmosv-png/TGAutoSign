@@ -33,7 +33,7 @@ CHLOG = os.path.join(BASE, 'CHANGELOG.md')
 FULL_LINK = 'https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md'
 
 CJK = re.compile(r'[\u4e00-\u9fff]')
-SEC_EN = {'新增': 'New', '界面': 'UI', '修复': 'Fixed', '诊断': 'Diagnostics',
+SEC_EN = {'新增': 'New', '界面': 'UI', '修复': 'Fixed', '诊断': 'Diagnostics', '优化': 'Improved',
           '变更': 'Changed', '改进': 'Improved', '移除': 'Removed',
           '可靠性': 'Reliability', '兼容': 'Compatibility',
           '架构更新': 'Architecture', '工具': 'Tooling', '文档': 'Docs',
