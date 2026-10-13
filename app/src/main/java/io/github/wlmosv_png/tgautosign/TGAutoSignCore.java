@@ -1716,6 +1716,24 @@ public final class TGAutoSignCore {
         try { return appContext.getPackageName(); } catch (Throwable t) { return "unknown"; }
     }
 
+    /** 重新加载**账号级**签到配置（window/timer/gap/missback/missdead）。
+     *  这些字段是全局内存变量，但键是账号级的（accN_cfg_*）。
+     *  进程只在 start() 读一次 → 切换账号后仍用上一个账号的值，
+     *  表现为「多账号下设置保存了却不生效 / 显示成别的账号的配置」。
+     *  切号时调用本方法，与 syncAccount 的 targets 重载同步。 */
+    private void reloadAccountConfig() {
+        try {
+            WINDOW = cfgStr("window", "");
+            TIMER_ENABLED = cfgBool("timer", false);
+            GAP_MIN = cfgInt("gap", 0);
+            MISS_BACK = cfgBool("missback", false);
+            MISS_DEADLINE = cfgInt("missdead", 23 * 60);
+            logd("[配置] 已按账号重载: window=" + (WINDOW == null || WINDOW.isEmpty() ? "不限" : WINDOW)
+                 + " timer=" + TIMER_ENABLED + " gap=" + GAP_MIN + " missback=" + MISS_BACK
+                 + " missdead=" + MISS_DEADLINE);
+        } catch (Throwable t) { noteSwallowed("reloadAccountConfig", t); }
+    }
+
     private String accountPrefix() { return "acc" + currentAccount() + "_"; }
 
     private String accountPrefix(int account) { return "acc" + account + "_"; }
@@ -2690,6 +2708,8 @@ public final class TGAutoSignCore {
                     // 的误导（排障时被带偏）。这里跟真实账号保持一致。
                     try { ctxAcc = accountLabel(cur); } catch (Throwable ignored) {}
                     loadTargetsLocked();
+                    // 账号级配置随账号重载（否则切号后仍用上一个账号的 window/timer/...）
+                    try { reloadAccountConfig(); } catch (Throwable ignored) {}
                     jlog("账号跟随: acc" + cur + "（" + accountLabel(cur) + "）"
                          + "，当前目标 " + targets.size() + " 个"
                          + "，selectedAccount=" + lastRawAccount
@@ -14345,13 +14365,17 @@ public final class TGAutoSignCore {
             String today = todayStr();
             int accN = Math.max(1, activatedAccounts());
             SharedPreferences.Editor e = prefs.edit();
-            for (String k : new ArrayList<String>(prefs.getAll().keySet())) {
+            // 2026-10-13 性能：原实现在循环条件里调 prefs.getAll()，且在循环体内
+            //   对每个命中键**再次** prefs.getAll() —— 等于 N 次全表复制（SharedPreferences
+            //   最重的调用）。目标/键一多，启动就明显卡。这里只取一次快照。
+            java.util.Map<String, ?> snap = prefs.getAll();
+            for (String k : new ArrayList<String>(snap.keySet())) {
                 if (!k.startsWith("acc") || !k.contains("_pendcfm_")) continue;
                 // 只处理「待确认」布尔键本身；pendcfm_day_ / pendcfm_note_ /
                 // pendcfm_result_ 是同族伴随键，由下面连带清理，不单独计数。
                 if (k.contains("_pendcfm_day_") || k.contains("_pendcfm_note_")
                         || k.contains("_pendcfm_result_")) continue;
-                if (!Boolean.TRUE.equals(prefs.getAll().get(k))) continue;
+                if (!Boolean.TRUE.equals(snap.get(k))) continue;
                 int us = k.indexOf('_');
                 String prefix = k.substring(0, us + 1);
                 String id = k.substring(k.indexOf("_pendcfm_") + "_pendcfm_".length());
@@ -14452,12 +14476,16 @@ public final class TGAutoSignCore {
      * 只用于配置读取兜底 —— 不参与写入，因此不会造成跨账号污染。
      */
     private String findCfgKeyAny(String suffix) {
+        // 2026-10-13 性能：原实现遍历 prefs.getAll()（SharedPreferences 上最重的调用：
+        //   拿锁 + 复制全部键值到新 HashMap）。而本方法会被 cfgStr/cfgBool/cfgInt 在
+        //   「当前账号没有该键」时**每次**调用 —— 切号重载配置、设置页读取都会触发多次，
+        //   目标多、键多时全表复制相当可观（用户实测「多账号下模块与 TG 变卡」的成因之一）。
+        // 改为按真实账号槽位精确 contains 查（槽位极少，均 O(1) 命中，不再全表复制）。
         try {
-            String tail = "_" + suffix;          // 例：_cfg_timer
-            for (String k : prefs.getAll().keySet()) {
-                if (!k.startsWith("acc")) continue;
-                if (!k.endsWith(tail)) continue;
-                return k;
+            String body = "cfg_" + suffix;       // 例：cfg_timer
+            for (int slot : accountSlots()) {
+                String k = "acc" + slot + "_" + body;
+                if (prefs.contains(k)) return k;
             }
         } catch (Throwable ignored) {}
         return null;
