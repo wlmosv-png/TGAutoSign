@@ -1047,6 +1047,7 @@ public final class TGAutoSignCore {
             final java.util.List<TextView> statTv = new java.util.ArrayList<TextView>();
             final java.util.List<TextView> curTv = new java.util.ArrayList<TextView>();
             final java.util.List<Button> toggleBtns = new java.util.ArrayList<Button>();
+            final java.util.List<TextView> probTv = new java.util.ArrayList<TextView>();
             final java.util.List<View> divs = new java.util.ArrayList<View>();
 
             for (int i : slots) {
@@ -1097,6 +1098,40 @@ public final class TGAutoSignCore {
                 cur.setPadding(dp(1), dp(2), 0, 0);
                 cur.setSingleLine(true);
                 card.addView(cur);
+
+                // ── 该账号的「需处理」入口（卡住定位）：有卡住项才显示 ──
+                final TextView prob = new TextView(act);
+                prob.setTextSize(Theme.TS_CAPTION);
+                prob.setTextColor(Theme.termAmber(act));
+                prob.setTypeface(Theme.monoBold());
+                prob.setPadding(dp(1), dp(6), 0, 0);
+                prob.setVisibility(View.GONE);
+                prob.setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) { showRoundProblems(act, accountPrefix(acc), accountLabel(acc)); }
+                });
+                card.addView(prob);
+                probTv.add(prob);
+
+                // ── 单账号签到按钮（2026-10-14 新增：不必再签全部）──
+                final Button one = mkBtn(act);
+                withIconText(act, one, "today-wait", Lang.tr("签到这个账号"));
+                one.setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        try {
+                            ctxAcc = accountLabel(acc);
+                            accOverviewStartMs = System.currentTimeMillis();
+                            roundClear();
+                            // 只签这一个账号：复用 trySignAllFor（force=true 表示用户明确要求）
+                            trySignAllFor("单账号/" + accountLabel(acc), true, acc, true);
+                            toast(Lang.tf("{0}：已发起签到", accountLabel(acc)));
+                            startAccOverviewTick(act, slots, overall);
+                            startAccPulse();
+                        } catch (Throwable t) { toast(Lang.tf("发起失败: {0}", t)); }
+                    }
+                });
+                LinearLayout.LayoutParams olp = new LinearLayout.LayoutParams(-1, -2);
+                olp.topMargin = dp(6);
+                card.addView(one, olp);
 
                 if (count > 1) {
                     Button tg = mkBtn(act);
@@ -1154,11 +1189,156 @@ public final class TGAutoSignCore {
             box.addView(all, alp);
 
             accNameTv = nameTv; accStatTv = statTv; accCurTv = curTv; accToggleBtns = toggleBtns;
+            accProbTv = probTv;
             // 首次填充
             paintAccOverview(act, slots, nameTv, statTv, curTv, toggleBtns, overall);
 
             showDialog(act, Lang.tf("\u8d26\u53f7\u4e00\u89c8\uff08{0}\uff09", count), box, "\u5173\u95ed");
         } catch (Throwable t) { toast(Lang.tf("\u6253\u5f00\u5931\u8d25: {0}", t)); }
+    }
+
+    /** 「卡住的目标」小面板（2026-10-14 新增）。
+     *  按真实原因分类展示，每条给出可执行的处置，不让用户只看到一个「卡住」。 */
+    private void showRoundProblems(final Activity act, final String prefix, String accName) {
+        try {
+            final java.util.List<RoundState> list = roundProblemsOf(prefix);
+            LinearLayout box = new LinearLayout(act);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(4), dp(2), dp(4), dp(2));
+
+            if (list.isEmpty()) {
+                TextView ok = new TextView(act);
+                ok.setTextSize(Theme.TS_BODY);
+                ok.setTextColor(Theme.termGreen(act));
+                ok.setTypeface(Theme.monoBold());
+                ok.setGravity(Gravity.CENTER);
+                ok.setPadding(0, dp(18), 0, dp(18));
+                ok.setText(Lang.tr("这一轮没有卡住的目标"));
+                box.addView(ok);
+                showDialog(act, accName, box, Lang.tr("关闭"));
+                return;
+            }
+
+            TextView sum = new TextView(act);
+            sum.setTextSize(Theme.TS_CAPTION);
+            sum.setTextColor(Theme.termAmber(act));
+            sum.setTypeface(Theme.monoBold());
+            sum.setPadding(dp(2), 0, dp(2), dp(8));
+            sum.setText(Lang.tf("{0} 条需要处理（点右侧按钮逐一处置）", list.size()));
+            box.addView(sum);
+
+            for (final RoundState rs : list) {
+                LinearLayout card = new LinearLayout(act);
+                card.setOrientation(LinearLayout.VERTICAL);
+                card.setPadding(dp(12), dp(10), dp(12), dp(10));
+                LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
+                clp.setMargins(0, dp(3), 0, dp(3));
+                card.setLayoutParams(clp);
+                int col = rs.state == RS_SENDFAIL ? Theme.termPink(act)
+                        : rs.state == RS_PANEL ? Theme.termAmber(act) : Theme.termCyan(act);
+                card.setBackground(termBorder(act, Theme.withAlpha(col, 0x10), Theme.withAlpha(col, 0x55)));
+
+                // 第一行：目标名 + 状态徽章
+                LinearLayout l1 = new LinearLayout(act);
+                l1.setOrientation(LinearLayout.HORIZONTAL);
+                l1.setGravity(Gravity.CENTER_VERTICAL);
+                TextView nm = new TextView(act);
+                nm.setTextSize(Theme.TS_SUBTITLE);
+                nm.setTextColor(Theme.termTxt(act));
+                nm.setTypeface(Theme.monoBold());
+                nm.setText(rs.name == null || rs.name.isEmpty() ? String.valueOf(rs.did) : rs.name);
+                nm.setSingleLine(true);
+                l1.addView(nm, new LinearLayout.LayoutParams(0, -2, 1f));
+                TextView badge = new TextView(act);
+                badge.setTextSize(Theme.TS_CAPTION);
+                badge.setTextColor(col);
+                badge.setTypeface(Theme.monoBold());
+                badge.setText(roundStateLabel(rs.state));
+                l1.addView(badge, new LinearLayout.LayoutParams(-2, -2));
+                card.addView(l1);
+
+                // 第二行：原因说明
+                TextView why = new TextView(act);
+                why.setTextSize(Theme.TS_CAPTION);
+                why.setTextColor(Theme.termMuted(act));
+                why.setTypeface(Theme.text());
+                why.setPadding(0, dp(4), 0, dp(8));
+                why.setText(rs.note == null || rs.note.isEmpty() ? Lang.tr("（无更多信息）") : rs.note);
+                card.addView(why);
+
+                // 第三行：处置按钮
+                LinearLayout btns = new LinearLayout(act);
+                btns.setOrientation(LinearLayout.HORIZONTAL);
+                btns.setGravity(Gravity.CENTER_VERTICAL);
+                Button retry = mkBtn(act); retry.setText(Lang.tr("重试")); retry.setTextSize(Theme.TS_CAPTION);
+                retry.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                    try {
+                        pendConfirmRetry(prefix, rs.id, rs.did);
+                        roundMark(prefix, rs.id, RS_WAITING, "已重试，等待发出");
+                        toast(Lang.tr("已重试"));
+                        refreshAccOverview(act, accountSlots());
+                    } catch (Throwable t) { toast(Lang.tf("重试失败: {0}", t)); }
+                } });
+                btns.addView(retry, new LinearLayout.LayoutParams(0, -2, 1f));
+
+                Button asSigned = mkBtn(act); asSigned.setText(Lang.tr("记为已签")); asSigned.setTextSize(Theme.TS_CAPTION);
+                asSigned.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                    try {
+                        pendConfirmAsSigned(prefix, rs.id, rs.did);
+                        roundMark(prefix, rs.id, RS_SIGNED, "已手动确认");
+                        toast(Lang.tr("已记为已签"));
+                        refreshAccOverview(act, accountSlots());
+                    } catch (Throwable t) { toast(Lang.tf("操作失败: {0}", t)); }
+                } });
+                LinearLayout.LayoutParams b2 = new LinearLayout.LayoutParams(0, -2, 1f);
+                b2.leftMargin = dp(6);
+                btns.addView(asSigned, b2);
+
+                Button ignore = mkBtn(act); ignore.setText(Lang.tr("忽略今天")); ignore.setTextSize(Theme.TS_CAPTION);
+                ignore.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                    try {
+                        pendConfirmIgnoreToday(prefix, rs.id, rs.did);
+                        roundMark(prefix, rs.id, RS_SKIPPED, "今天忽略");
+                        toast(Lang.tr("今天不再处理它"));
+                        refreshAccOverview(act, accountSlots());
+                    } catch (Throwable t) { toast(Lang.tf("操作失败: {0}", t)); }
+                } });
+                LinearLayout.LayoutParams b3 = new LinearLayout.LayoutParams(0, -2, 1f);
+                b3.leftMargin = dp(6);
+                btns.addView(ignore, b3);
+                card.addView(btns);
+
+                // 「补判定词」仅判不出时出现（另起一行，避免按钮过挤）
+                if (rs.state == RS_UNKNOWN) {
+                    Button words = mkBtn(act);
+                    words.setText(Lang.tr("补判定词（让下次能认出来）")); words.setTextSize(Theme.TS_CAPTION);
+                    words.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                        try { showLearnPage(act); } catch (Throwable ignored) {}
+                    } });
+                    LinearLayout.LayoutParams wp = new LinearLayout.LayoutParams(-1, -2);
+                    wp.topMargin = dp(6);
+                    card.addView(words, wp);
+                }
+
+                box.addView(card);
+            }
+
+            showDialog(act, Lang.tf("卡住的目标 · {0}", accName), box, Lang.tr("关闭"));
+        } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
+    }
+
+    /** 实时状态的界面文案。 */
+    private String roundStateLabel(int st) {
+        switch (st) {
+            case RS_WAITING:  return Lang.tr("排队中");
+            case RS_SENT:     return Lang.tr("等回复");
+            case RS_SIGNED:   return Lang.tr("已签");
+            case RS_NO_REPLY: return Lang.tr("未回复");
+            case RS_UNKNOWN:  return Lang.tr("判不出");
+            case RS_SENDFAIL: return Lang.tr("发送失败");
+            case RS_PANEL:    return Lang.tr("面板过期");
+            default:          return Lang.tr("已跳过");
+        }
     }
 
     /** 刷新一次（重建整个账号一览，用于停用/启用后）。 */
@@ -1196,17 +1376,35 @@ public final class TGAutoSignCore {
                 setIconOn(nameTv.get(k), isCur ? "dot-fill" : "dot-line", 9f,
                         isCur ? Theme.termCyan(act) : Theme.termFaint(act));
             }
+            // ── 本轮口径优先（2026-10-14）：有本轮数据时，进度按「本轮已了结 / 本轮总数」算，
+            //    卡住的目标（未回复/判不出/发送失败）**计入已了结**，不再永远拖着进度条不满。
+            String _pfx = accountPrefix(i);
+            int[] rp = roundProgressOf(_pfx);
+            boolean hasRound = rp[1] > 0;
+            int _done = hasRound ? rp[0] : sig;
+            int _tot  = hasRound ? rp[1] : tot;
+            int _prob = hasRound ? rp[3] : 0;
             StatsCharts.AccProgressDrawable d = accBars.get(Integer.valueOf(i));
             if (d != null) {
-                float r = tot <= 0 ? 0f : (float) sig / tot;
+                float r = _tot <= 0 ? 0f : (float) _done / _tot;
                 d.setRatio(r);
-                d.setDone(tot > 0 && finished);
-                d.setRunning(en && tot > 0 && !finished);
+                d.setDone(_tot > 0 && _done >= _tot && _prob == 0);
+                d.setRunning(en && _tot > 0 && _done < _tot);
                 int col;
                 if (!en) col = Theme.termMuted(act);
-                else if (tot > 0 && finished) col = Theme.termGreen(act);
+                else if (_prob > 0) col = Theme.termAmber(act);   // 有卡住 → 琥珀，视觉上提示
+                else if (_tot > 0 && _done >= _tot) col = Theme.termGreen(act);
                 else col = Theme.termCyan(act);
                 d.setCol(col);
+            }
+            // 「需处理」入口：有卡住项才显示，点开小面板逐个处置
+            if (k < accProbTv.size() && accProbTv.get(k) != null) {
+                if (_prob > 0) {
+                    accProbTv.get(k).setVisibility(View.VISIBLE);
+                    accProbTv.get(k).setText(Lang.tf("\u26a0 {0} \u6761\u5361\u4f4f \u00b7 \u70b9\u6b64\u67e5\u770b\u539f\u56e0\u5e76\u5904\u7f6e", _prob));
+                } else {
+                    accProbTv.get(k).setVisibility(View.GONE);
+                }
             }
             if (k < statTv.size() && statTv.get(k) != null) {
                 statTv.get(k).setText(tot == 0
@@ -1308,6 +1506,13 @@ public final class TGAutoSignCore {
                             if (d == null) continue;
                             d.setPulse(e.getKey().intValue() == cur ? p : 0f);
                         }
+                        // 「需处理」文字跟随呼吸（琥珀色淡入淡出，抓住注意力）
+                        if (accProbTv != null) {
+                            for (TextView pv : accProbTv) {
+                                if (pv == null || pv.getVisibility() != View.VISIBLE) continue;
+                                pv.setAlpha(0.55f + 0.45f * p);
+                            }
+                        }
                     } catch (Throwable ignored) {}
                 }
             });
@@ -1323,6 +1528,7 @@ public final class TGAutoSignCore {
     // 上一次建行的句柄，供轮询重绘
     private java.util.List<TextView> accNameTv, accStatTv, accCurTv;
     private java.util.List<Button> accToggleBtns;
+    private java.util.List<TextView> accProbTv;
     private void paintAccOverviewCurrent(Activity act, int[] slots, TextView overall) {
         if (accNameTv == null) return;
         paintAccOverview(act, slots, accNameTv, accStatTv, accCurTv, accToggleBtns, overall);
@@ -5251,6 +5457,8 @@ public final class TGAutoSignCore {
         // 重构 1.6.1：实现搬到 SignStateStore（那里集中维护"写 last_ 必须连带清理"
         // 等不变式）。此处保留薄封装，既有 6 个调用点不变。
         stateStore.markSigned(prefix, id);
+        // 签到中心实时状态：标记为「已签」
+        try { roundMark(prefix, id, RS_SIGNED, "签到成功"); } catch (Throwable ignored) {}
     }
 
     /**
@@ -5262,6 +5470,23 @@ public final class TGAutoSignCore {
      */
     private void markResultCode(String prefix, String id, int result) {
         try { stateStore.markResult(prefix, id, result); } catch (Throwable _e) { noteSwallowed("markResultCode", _e); }
+        // 签到中心实时状态：把「归类码」翻译成界面能显示的状态与原因
+        try {
+            switch (result) {
+                case SignLogic.R_SIGNED:
+                    roundMark(prefix, id, RS_SIGNED, "签到成功"); break;
+                case SignLogic.R_REPLIED_UNK:
+                    roundMark(prefix, id, RS_UNKNOWN, "回复认不出，可补判定词"); break;
+                case SignLogic.R_NO_REPLY:
+                    roundMark(prefix, id, RS_NO_REPLY, "bot 未回复"); break;
+                case SignLogic.R_BTN_STALE:
+                    roundMark(prefix, id, RS_PANEL, "面板已过期"); break;
+                case SignLogic.R_FAILED:
+                    roundMark(prefix, id, RS_SENDFAIL, "签到失败"); break;
+                default:
+                    roundMark(prefix, id, RS_UNKNOWN, "结果未判定"); break;
+            }
+        } catch (Throwable ignored) {}
     }
 
     /** 读取归类码；无归类返回 -1。 */
@@ -5711,6 +5936,7 @@ public final class TGAutoSignCore {
                 markSelfCbRequest(dialogId, _sentData);
             }
             try { prefs.edit().putLong(prefix + "sent_at_" + id, System.currentTimeMillis()).commit(); } catch (Throwable _e11) { noteSwallowed("sendSign", _e11); }
+            try { roundMark(prefix, id, RS_SENT, "已发出，等回复"); } catch (Throwable ignored) {}
             // 当日发送次数 +1（2026-10-01）：V_UNKNOWN 不涨 kRetry，靠这个计数
             // 给"发出后无结论"一个硬上限，见 SignLogic.MAX_SEND_ATTEMPTS。
             final int _attempts = bumpSendAttempts(prefix, id);
@@ -6248,6 +6474,8 @@ public final class TGAutoSignCore {
         // 重构 1.6.1：这一批发送是**逐个 postDelayed**（间隔 3~10 秒），
         // 期间用户可能切号 —— 用捕获的 Ctx 而非执行时读账号。
         final AccountManager.Ctx batchCtx = accountManager.ctxOf(account, "trySignAll/" + reason);
+        // 签到中心的实时状态表：本轮要发的目标全部登记为「排队中」
+        try { roundStateBegin(account, todo); } catch (Throwable ignored) {}
         long acc = 0L;
         for (Map<String, Object> m : todo) {
             final Map<String, Object> fm = m;
@@ -6289,6 +6517,80 @@ public final class TGAutoSignCore {
         return fired;
     }
 
+
+    // ══════════════ 签到中心的「本轮实时状态表」（2026-10-14 新增）══════════════
+    // 目的：让「签到中心」能一行一行看到**每个目标的真实状态与卡住原因**，
+    //       而不是只显示一个干巴巴的「正在签到…」。
+    // 设计：内存 Map，key = prefix + id；随签到流程埋点更新；仅供界面读取。
+    //       不落盘（跨重启无意义），不进日志（避免刷屏）。
+    static final int RS_WAITING = 0;   // 排队中（已排期，尚未发出）
+    static final int RS_SENT    = 1;   // 已发出，等 bot 回复
+    static final int RS_SIGNED  = 2;   // 已确认签到成功
+    static final int RS_NO_REPLY= 3;   // bot 未回复（超时）
+    static final int RS_UNKNOWN = 4;   // 有回复但判不出
+    static final int RS_SENDFAIL= 5;   // 发送失败（会话不存在 / ID 无效）
+    static final int RS_PANEL   = 6;   // 等面板 / 面板过期
+    static final int RS_SKIPPED = 7;   // 已签跳过 / 冻结等
+
+    /** 单条实时状态。 */
+    static final class RoundState {
+        final String prefix; final String id; final long did; final String name;
+        volatile int state; volatile String note; volatile long at;
+        RoundState(String p, String i, long d, String n) {
+            prefix=p; id=i; did=d; name=n; state=RS_WAITING; note=""; at=System.currentTimeMillis();
+        }
+    }
+    /** key = prefix + id */
+    private final java.util.concurrent.ConcurrentHashMap<String, RoundState> roundStates =
+            new java.util.concurrent.ConcurrentHashMap<String, RoundState>();
+    /** 本轮开始时间（0 = 无进行中的轮次） */
+    private volatile long roundStartAt = 0L;
+
+    private void roundStateBegin(int account, java.util.List<Map<String, Object>> todo) {
+        roundStartAt = System.currentTimeMillis();
+        String pfx = accountPrefix(account);
+        for (Map<String, Object> m : todo) {
+            String id = entryId(m);
+            roundStates.put(pfx + id, new RoundState(pfx, id, entryDid(m), targetTitle(entryDid(m))));
+        }
+    }
+    /** 更新某目标的实时状态（线程安全；界面 1 秒轮询读取）。 */
+    private void roundMark(String prefix, String id, int state, String note) {
+        try {
+            RoundState rs = roundStates.get(prefix + id);
+            if (rs == null) return;
+            rs.state = state;
+            rs.note = note == null ? "" : note;
+            rs.at = System.currentTimeMillis();
+        } catch (Throwable ignored) {}
+    }
+    private void roundClear() { roundStates.clear(); roundStartAt = 0L; }
+
+    /** 该账号在本轮里"需处理"的目标（判不出/未回复/发送失败/面板过期）。 */
+    private java.util.List<RoundState> roundProblemsOf(String prefix) {
+        java.util.List<RoundState> out = new java.util.ArrayList<RoundState>();
+        for (RoundState rs : roundStates.values()) {
+            if (!prefix.equals(rs.prefix)) continue;
+            if (rs.state == RS_NO_REPLY || rs.state == RS_UNKNOWN
+                    || rs.state == RS_SENDFAIL || rs.state == RS_PANEL) out.add(rs);
+        }
+        java.util.Collections.sort(out, new java.util.Comparator<RoundState>() {
+            @Override public int compare(RoundState a, RoundState b) { return Long.compare(a.at, b.at); }
+        });
+        return out;
+    }
+    /** 本轮某账号的进度口径：完成 = 已签 + 出结果(未回复/判不出/发送失败都算"已了结")。 */
+    private int[] roundProgressOf(String prefix) {
+        int done = 0, total = 0, signed = 0, problem = 0;
+        for (RoundState rs : roundStates.values()) {
+            if (!prefix.equals(rs.prefix)) continue;
+            total++;
+            if (rs.state == RS_SIGNED) { done++; signed++; }
+            else if (rs.state == RS_NO_REPLY || rs.state == RS_UNKNOWN
+                     || rs.state == RS_SENDFAIL || rs.state == RS_PANEL) { done++; problem++; }
+        }
+        return new int[]{done, total, signed, problem};
+    }
 
     /** v1.3.0：一键签全部账号（每个账号独立目标集，各自发各自的） */
     /**
@@ -6523,7 +6825,20 @@ public final class TGAutoSignCore {
         }
 
         /** 没真正发出去的失败也要计入退避，否则会每 60 秒空跑一次 */
+        /** 把「卡住原因」映射成签到中心的状态码（供界面分类展示）。 */
+        private int roundStateForReason(String why) {
+            if (why == null) return RS_UNKNOWN;
+            if (why.contains("取不到") || why.contains("会话数据")) return RS_SENDFAIL;
+            if (why.contains("面板") || why.contains("按钮")) return RS_PANEL;
+            if (why.contains("回复") || why.contains("判不出") || why.contains("认不出")) return RS_UNKNOWN;
+            return RS_NO_REPLY;
+        }
+
         private void countSoftFail(Map<String, Object> entry, int account, String why) {
+            try {
+                String _p = accountPrefix(account);
+                roundMark(_p, entryId(entry), roundStateForReason(why), why == null ? "" : why);
+            } catch (Throwable ignored) {}
             String prefix = accountPrefix(account);
             String id = entryId(entry);
             try {
