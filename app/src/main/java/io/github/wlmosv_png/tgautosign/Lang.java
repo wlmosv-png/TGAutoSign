@@ -673,7 +673,7 @@ public final class Lang {
         EN.put("模板（点一下追加；可自行输入）：", "Presets (tap to append; you can also type your own):");
         EN.put("签到指令（如 /checkin）", "Sign-in command (e.g. /checkin)");
         EN.put("（文本/链接按钮，不能绑定回调）", " (text/link button — cannot bind a callback)");
-        EN.put("\n确定删除？（会跨所有账号清干净）", "\nDelete? (clears it across all accounts)");
+        EN.put("\n确定删除？（只影响当前账号：{0}）", "\nDelete? (current account only: {0})");
         EN.put("$ (暂无日志消息，稍后自动出现)", "$ (no log messages yet — they will appear shortly)");
         EN.put("TGAutoSign · 检查更新", "TGAutoSign · Check for updates");
         EN.put("{0}  ·  约 {1} 分钟后", "{0}  ·  in ~{1} min");

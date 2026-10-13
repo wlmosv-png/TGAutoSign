@@ -2988,22 +2988,20 @@ public final class TGAutoSignCore {
     }
 
 
+    /** 删除**指定账号**下某目标的全部键（只影响该账号，不碰其它账号）。
+     *  按 Keys.ENTRY_HEADS 全量覆盖，避免漏键导致状态复活；
+     *  再补上不在表内的 ahash_ / uname_。 */
     private void removeEntryKeys(String prefix, String id) {
         invalidateTargetCache();
-        prefs.edit()
-            .remove(kLearned(prefix, id))
-            .remove(prefix + "kind_" + id)
-            .remove(prefix + "did_" + id)
-            .remove(prefix + "data_" + id)
-            .remove(prefix + "hash_" + id)
-            .remove(prefix + "ahash_" + id)
-            .remove(prefix + "uname_" + id)
-            .remove(prefix + "msg_id_" + id)
-            .remove(kLast(prefix, id))
-            .remove(kRetry(prefix, id))
-            .remove(kRetryAt(prefix, id))
-            .remove(prefix + "sent_at_" + id)
-            .commit();
+        SharedPreferences.Editor e = prefs.edit();
+        for (String head : Keys.ENTRY_HEADS) {
+            e.remove(prefix + head + id);
+        }
+        e.remove(prefix + "ahash_" + id);
+        e.remove(prefix + "uname_" + id);
+        // 旧键（learned_<did> 无前缀序号场景）兜底
+        e.remove(kLearned(prefix, id));
+        e.commit();
     }
 
     private static final String[] ENTRY_MARKERS =
@@ -3231,20 +3229,9 @@ public final class TGAutoSignCore {
         } catch (Throwable ignored) {}
     }
 
-    private void removeEntryEverywhere(String id) {
-            SharedPreferences.Editor e = prefs.edit();
-            int removed = 0;
-            for (String k : new ArrayList<String>(prefs.getAll().keySet())) {
-                if (!isEntryKey(k)) continue;
-                String body = k;
-                if (k.startsWith("acc")) { int i = k.indexOf('_'); if (i > 0) body = k.substring(i + 1); }
-                for (String mk : ENTRY_HEADS) {
-                    if (body.equals(mk + id) || body.endsWith("_" + mk + id)) { e.remove(k); removed++; break; }
-                }
-            }
-            e.apply();
-            logs("【删除】跨账号清除 id=" + id + " 共 " + removed + " 个键");
-        }
+    // 2026-10-13：removeEntryEverywhere（跨全部账号删除）已移除。
+    // 用户明确要求「删除只影响当前账号」——原实现会把所有账号下的同 id 目标一起删掉
+    // （实测在账号2 删目标，连账号1 的也删了）。删除一律走 removeEntryKeys(当前账号前缀, id)。
 
     private int clearAllConfig() {
             SharedPreferences.Editor e = prefs.edit();
@@ -9753,11 +9740,12 @@ public final class TGAutoSignCore {
         try {
             new android.app.AlertDialog.Builder(act)
                 .setTitle(Lang.tr("删除目标"))
-                .setMessage(targetTitle(entryDid(m)) + "  " + entryText(m) + Lang.tr("\n确定删除？（会跨所有账号清干净）"))
+                .setMessage(targetTitle(entryDid(m)) + "  " + entryText(m) + Lang.tf("\n确定删除？（只影响当前账号：{0}）", accountLabel(currentAccount())))
                 .setPositiveButton(Lang.tr("删除"), new android.content.DialogInterface.OnClickListener() {
                     public void onClick(android.content.DialogInterface d, int w) {
                         String id = entryId(m);
-                        removeEntryEverywhere(id);
+                        removeEntryKeys(accountPrefix(), id);
+                        invalidateTargetCache();
                         for (int j = targets.size() - 1; j >= 0; j--) if (entryId(targets.get(j)).equals(id)) targets.remove(j);
                         toast("已删除");
                         showList(act);
@@ -10912,11 +10900,13 @@ public final class TGAutoSignCore {
             Map<String, Object> m = findEntryById(id);
             if (m == null) { toast("目标不存在"); return; }
             long did = entryDid(m);
-            removeEntryEverywhere(id);   // 跨全部账号前缀删净，杜绝删了重开又出现
+            // 只删当前账号下的该目标（2026-10-13 改：原先跨全部账号删，会把账号1 的也删掉）
+            removeEntryKeys(accountPrefix(), id);
+            invalidateTargetCache();
             for (int j = targets.size() - 1; j >= 0; j--) {
                 if (entryId(targets.get(j)).equals(id)) targets.remove(j);
             }
-            jlog("已删除目标 " + did + " (id=" + id + ")");
+            jlog("已删除目标 " + did + " (id=" + id + ", 账号=" + accountLabel(currentAccount()) + ")");
             toast(Lang.tf("已删除 {0}", targetTitle(did)));
             showDelete((Activity) ctx);
             return;
