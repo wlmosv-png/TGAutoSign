@@ -6760,14 +6760,6 @@ public final class TGAutoSignCore {
 
     /** 全账号签到进行中的账号索引（-1 = 未开始），供账号一览显示。 */
     private volatile int allAccCurrent = -1;
-    /** 诊断 v3：记录所有 update 类型的窗口（默认为启动后 5 分钟）。 */
-    private volatile long diagTypesUntil = System.currentTimeMillis() + 5L * 60L * 1000L;
-    /** 诊断：hook 调用记录（方法名|arg0类型）→ 次数；窗口同 diagTypesUntil。 */
-    public volatile long diagHookUntil = System.currentTimeMillis() + 5L * 60L * 1000L;
-    public final java.util.concurrent.ConcurrentHashMap<String, Integer> diagHookCounts =
-            new java.util.concurrent.ConcurrentHashMap<String, Integer>();
-    /** 供 Entry 落日志用（jlog 是私有的，这里开一个受限入口）。 */
-    public void diagHookLog(String msg) { try { jlog(msg); } catch (Throwable ignored) {} }
 
     // ════════════════════════════════════════════════════════════════
     //  链路自检（用户点一下就能判断「是模块坏了还是对面 bot 没回」）
@@ -20171,12 +20163,6 @@ public final class TGAutoSignCore {
             Object batch = args[1];
             if (!(batch instanceof java.util.List)) return 0;
             int hits = 0;
-            int size = ((java.util.List<?>) batch).size();
-            long seen = anchorBSeen.get();
-            if (seen <= 8L) {
-                jlog("[锚点B] 收到通知 acc=" + account + " dialog=" + dialogId
-                     + " 消息数=" + size + "（第 " + seen + " 次）");
-            }
             for (Object o : (java.util.List<?>) batch) {
                 if (o == null) continue;
                 try {
@@ -20209,11 +20195,6 @@ public final class TGAutoSignCore {
             if (!(batch instanceof java.util.List)) return 0;
             java.util.List<?> list = (java.util.List<?>) batch;
             if (list.isEmpty()) return 0;
-            long seen = anchorBSeen.get();
-            if (seen <= 8L) {
-                jlog("[锚点B] 收到通知 id=" + id + " dialog=" + dialogId
-                     + " 消息数=" + list.size() + "（第 " + seen + " 次）");
-            }
             int hits = 0;
             for (Object o : list) {
                 if (o == null) continue;
@@ -20388,29 +20369,9 @@ public final class TGAutoSignCore {
             // 含同批的目标 bot 回复与面板消息（与此前 return/continue 事故同类）。
             if (u == null) continue;
             String un = u.getClass().getName();
-
-
-            // ── 2026-10-14 诊断 v3：记录**所有** update 类型（限时开关，默认开 5 分钟）──
-            // 目的：确认私聊 bot 的「引用回复」到底以哪种 update 投递。
-            // 若它压根不是 updateNewMessage（如 editMessage / 其它类型），
-            // 就会被下面这行过滤掉 —— 那正是「bot 回复收不到」的根因。
-            try {
-                if (System.currentTimeMillis() < diagTypesUntil) {
-                    String _short = un.substring(un.lastIndexOf('.') + 1);
-                    if (!diagTypeCounts.containsKey(_short) || diagTypeCounts.get(_short).intValue() < 3) {
-                        diagTypeCounts.put(_short,
-                                Integer.valueOf(diagTypeCounts.containsKey(_short)
-                                        ? diagTypeCounts.get(_short).intValue() + 1 : 1));
-                        Object _m2 = getFieldValSafe(u, "message");
-                        String _peer2 = "-", _from2 = "-";
-                        try { _peer2 = String.valueOf(resolveDialogIdFromPeer(getFieldValSafe(_m2, "peer_id"))); } catch (Throwable ignored) {}
-                        try { _from2 = String.valueOf(resolveFromDid(getFieldValSafe(_m2, "from_id"))); } catch (Throwable ignored) {}
-                        jlog("[update类型] " + _short + " hasMsg=" + (_m2 != null)
-                             + " peer=" + _peer2 + " from=" + _from2);
-                    }
-                }
-            } catch (Throwable ignored) {}
-            if (!un.contains("TL_updateNewMessage") && !un.contains("TL_updateNewChannelMessage")) continue;
+            // 只处理「新消息」两类；其余 update（已读/输入中/删除…）与本模块无关。
+            if (!un.contains("TL_updateNewMessage")
+                    && !un.contains("TL_updateNewChannelMessage")) continue;
             Object msg = getFieldVal(u, "message");
             if (msg == null) continue;   // 曾经是 return：单条异常会吞掉整批 update（含同批的面板消息）
             // ── 2026-10-06 群聊修复：peer / from 一律走统一解析 ──
@@ -20435,35 +20396,6 @@ public final class TGAutoSignCore {
                 Object r = getFieldValSafe(msg, "reply_to_msg_id");
                 if (r instanceof Number) replyToMsgId = ((Number) r).intValue();
             } catch (Throwable _eR) { noteSwallowed("onUpdateProcessed(replyTo)", _eR); }
-            // ── 2026-10-14 诊断 v2：覆盖 peer 解析失败的盲区 ──
-            // 条件放宽为「私聊消息 && （peer 是我们的目标 || 发送者像 bot）」，
-            // 无论 peer 能不能解析都落一条，把关键字段全打出来。
-            try {
-                Object _o = getFieldValSafe(msg, "out");
-                boolean _isOut = Boolean.TRUE.equals(_o);
-                boolean _ourTarget = false;
-                if (peerUid != 0L) {
-                    for (int _s : accountSlots()) {
-                        java.util.List<Map<String, Object>> _tl = new java.util.ArrayList<Map<String, Object>>();
-                        try { loadTargetsInto(accountPrefix(_s), _tl); } catch (Throwable ignored) {}
-                        for (Map<String, Object> _m : _tl) {
-                            if (entryDid(_m) == peerUid) { _ourTarget = true; break; }
-                        }
-                        if (_ourTarget) break;
-                    }
-                }
-                // 只在「与签到相关的嫌疑消息」上落日志：不是自己发的，
-                // 且（目标是该 peer 或 发送者像 bot 或 peer 都没解析出来）
-                if (!_isOut && (_ourTarget || fromIsBot || peerUid == 0L)) {
-                    Object _peerId = getFieldValSafe(msg, "peer_id");
-                    Object _fromId = getFieldValSafe(msg, "from_id");
-                    jlog("[诊断v2] peer=" + peerUid + " from=" + fromUid + " fromBot=" + fromIsBot
-                         + " out=" + _o + " replyTo=" + replyToMsgId
-                         + " peerCls=" + (_peerId == null ? "null" : _peerId.getClass().getSimpleName())
-                         + " fromCls=" + (_fromId == null ? "null" : _fromId.getClass().getSimpleName())
-                         + " type=" + un.substring(un.lastIndexOf('.') + 1));
-                }
-            } catch (Throwable ignored) {}
             // 解析不出 peer 就跳过本条（continue 而非 return，避免丢整批）
             if (peerUid == 0L) continue;
             // 私聊 bot：要求消息来自该 bot 本人
