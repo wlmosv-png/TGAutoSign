@@ -4799,33 +4799,48 @@ public final class TGAutoSignCore {
     // loadTargetsInto 内部是 prefs.getAll()（整份快照）+ 逐键读取，
     // 而它被每条群消息调用一次。目标一多，群一活跃，主线程就被反复拖。
     // 这里加一层 2 秒有效期的缓存：写入路径主动失效，读路径直接命中。
-    private volatile List<Map<String, Object>> _tCache = null;
-    private volatile String _tCachePrefix = null;
-    private volatile long _tCacheAt = 0L;
+    // 目标列表缓存：**按账号前缀分别缓存**（2026-10-13）。
+    // 历史两个坑，合起来才是最终形态：
+    //   ① 单一全局缓存不校验 prefix → 2 秒内跨账号读取会串目标（A 账号的目标给 B 账号）；
+    //   ② 只改成一个“绑定 prefix 的单槽” → 多账号交替读取（perAccountLine / 孤儿清理 /
+    //      账号一览等会遍历所有 accountPrefix(i)）时每次都 cache miss，退回 prefs.getAll()
+    //      全量快照，反而**越来越卡**（用户实测：改完后模块与 TG 明显变卡）。
+    // 正解：Map<prefix, entry>，每个账号各自 2 秒缓存 —— 既不会串号，也不会因交替读取反复
+    // 失效重读全表。写入路径 invalidate 时清空全部。
+    private static final class TargetsCache {
+        final List<Map<String, Object>> list;
+        final long at;
+        TargetsCache(List<Map<String, Object>> l, long t) { list = l; at = t; }
+    }
+    private final java.util.concurrent.ConcurrentHashMap<String, TargetsCache> _tCacheMap =
+            new java.util.concurrent.ConcurrentHashMap<String, TargetsCache>();
     private static final long TARGET_CACHE_MS = 2000L;
 
     /** 任何改动目标的路径都应调用它，避免读到旧数据。 */
     private void invalidateTargetCache() {
-        _tCache = null; _tCachePrefix = null; _tCacheAt = 0L;
+        _tCacheMap.clear();
     }
 
     private void loadTargetsInto(String prefix, List<Map<String, Object>> out) {
-        // 先试缓存 —— **缓存绑定账号前缀**：只有同一账号的 2 秒内命中，
-        // 否则会把 A 账号的目标串给 B 账号（2026-10-13 修多账号串目标）。
+        long now = System.currentTimeMillis();
         try {
-            List<Map<String, Object>> c = _tCache;
-            if (c != null && prefix != null && prefix.equals(_tCachePrefix)
-                    && System.currentTimeMillis() - _tCacheAt < TARGET_CACHE_MS) {
-                out.addAll(c);
+            TargetsCache c = _tCacheMap.get(prefix);
+            if (c != null && now - c.at < TARGET_CACHE_MS) {
+                out.addAll(c.list);
                 return;
             }
         } catch (Throwable ignored) {}
         List<Map<String, Object>> tmp = new ArrayList<Map<String, Object>>();
         loadTargetsIntoUncached(prefix, tmp);
         try {
-            _tCache = tmp;
-            _tCachePrefix = prefix;
-            _tCacheAt = System.currentTimeMillis();
+            _tCacheMap.put(prefix, new TargetsCache(tmp, now));
+            // 防膨胀：账号数极少（<10），这里只做一次轻量清理，避免长跑累积
+            if (_tCacheMap.size() > 16) {
+                long cut = now - TARGET_CACHE_MS;
+                for (java.util.Map.Entry<String, TargetsCache> en : _tCacheMap.entrySet()) {
+                    if (en.getValue().at < cut) _tCacheMap.remove(en.getKey());
+                }
+            }
         } catch (Throwable ignored) {}
         out.addAll(tmp);
     }
