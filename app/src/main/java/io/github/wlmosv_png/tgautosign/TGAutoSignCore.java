@@ -6686,6 +6686,12 @@ public final class TGAutoSignCore {
     private volatile int allAccCurrent = -1;
     /** 诊断 v3：记录所有 update 类型的窗口（默认为启动后 5 分钟）。 */
     private volatile long diagTypesUntil = System.currentTimeMillis() + 5L * 60L * 1000L;
+    /** 诊断：hook 调用记录（方法名|arg0类型）→ 次数；窗口同 diagTypesUntil。 */
+    public volatile long diagHookUntil = System.currentTimeMillis() + 5L * 60L * 1000L;
+    public final java.util.concurrent.ConcurrentHashMap<String, Integer> diagHookCounts =
+            new java.util.concurrent.ConcurrentHashMap<String, Integer>();
+    /** 供 Entry 落日志用（jlog 是私有的，这里开一个受限入口）。 */
+    public void diagHookLog(String msg) { try { jlog(msg); } catch (Throwable ignored) {} }
     private final java.util.concurrent.ConcurrentHashMap<String, Integer> diagTypeCounts =
             new java.util.concurrent.ConcurrentHashMap<String, Integer>();
     /** 全账号签到是否在跑。 */
@@ -19766,6 +19772,81 @@ public final class TGAutoSignCore {
      *
      * @return 账号索引；拿不到返回 -1（调用方回退全局值）。
      */
+    /** 处理「短消息」update（TL_updateShortMessage / TL_updateShortChatMessage）。
+     *  它没有 message 对象，所以这里直接按 (peer, from, out, text) 走回复判定：
+     *  找到该会话下「已发出、等结论」的目标 → 用文本跑判定词 → 命中即标记。
+     *  2026-10-14：修「私聊 bot 回复永远判不出」（真机确认私聊走的就是短消息）。 */
+    private void onShortMessageUpdate(long peerUid, long fromUid, boolean isOut, String text) {
+        try {
+            if (peerUid == 0L) return;
+            if (isOut) return;                      // 自己发的，不处理
+            // 定位「哪个账号的这个会话在等结论」
+            int hitAcc = -1; String hitPrefix = null; Map<String, Object> hitTarget = null;
+            for (int slot : accountSlots()) {
+                String pfx = accountPrefix(slot);
+                java.util.List<Map<String, Object>> l = new java.util.ArrayList<Map<String, Object>>();
+                try { loadTargetsInto(pfx, l); } catch (Throwable ignored) {}
+                for (Map<String, Object> m : l) {
+                    if (entryDid(m) != peerUid) continue;
+                    String id = entryId(m);
+                    if (isSentPendingFresh(pfx, id) || isPendingFresh(pfx, id)) {
+                        hitAcc = slot; hitPrefix = pfx; hitTarget = m; break;
+                    }
+                }
+                if (hitTarget != null) break;
+            }
+            if (hitTarget == null) return;           // 没有在等的目标 → 与我们无关
+            final int _acc = hitAcc;
+            final String _pfx = hitPrefix;
+            final Map<String, Object> _tg = hitTarget;
+            final String _txt = text == null ? "" : text;
+            jlog("[短消息] 命中在等的目标 " + entryId(_tg) + " @" + accountLabel(_acc)
+                 + " 正文=" + clip(_txt, 60));
+            mainHandler.post(new Runnable() { @Override public void run() {
+                try {
+                    handleReplyText(_pfx, _acc, _tg, _txt);
+                } catch (Throwable t) { noteSwallowed("shortMsg-handle", t); }
+            } });
+        } catch (Throwable t) { noteSwallowed("onShortMessageUpdate", t); }
+    }
+
+    /** 用一段回复文本对某个目标做判定（短消息路径用；与长消息判定链同源）。 */
+    private void handleReplyText(String prefix, int account, Map<String, Object> m, String text) {
+        try {
+            String id = entryId(m);
+            long did = entryDid(m);
+            // 复用统一的判定词逻辑：先取有效词表（全局/Bot/目标级），再看命中
+            String okWords = cfgStr("ok_words", "");
+            String failWords = cfgStr("fail_words", "");
+            String[] oks = SignLogic.parseExtraWords(okWords);
+            String[] fails = SignLogic.parseExtraWords(failWords);
+            String hitOk = null, hitFail = null;
+            if (oks != null) for (String w : oks) { if (w != null && w.length() > 0 && text.contains(w)) { hitOk = w; break; } }
+            if (fails != null) for (String w : fails) { if (w != null && w.length() > 0 && text.contains(w)) { hitFail = w; break; } }
+            if (hitOk != null) {
+                jlog("【回复判定】" + did + " 命中「" + hitOk + "」→ 计入已签（1 条）");
+                markSigned(prefix, id);
+                clearPendingConfirm(prefix, id);
+                return;
+            }
+            if (hitFail != null) {
+                jlog("【回复判定】" + did + " 命中「" + hitFail + "」→ 判定未成功");
+                markResultCode(prefix, id, SignLogic.R_FAILED);
+                return;
+            }
+            // 判不出：沉淀到「未识别回复」，给用户处置（与长消息路径一致）
+            jlog("【回复判定】" + did + " 短消息回复认不出，已记录一条（可去「设置 → 回复判定词」补词）："
+                 + clip(text, 60));
+            markResultCode(prefix, id, SignLogic.R_REPLIED_UNK);
+            try {
+                io.github.wlmosv_png.tgautosign.judge.UnkPool.add(
+                        prefs, prefix + "unk_pool", prefix + "unk_seen", did, text,
+                        io.github.wlmosv_png.tgautosign.judge.ReplyNormalizer.normalize(text),
+                        todayStr(), id, did);
+            } catch (Throwable ignored) {}
+        } catch (Throwable t) { noteSwallowed("handleReplyText", t); }
+    }
+
     /** 事件所属账号的**兜底解析**：ctrlAcc 拿不到时，遍历所有真实槽位，
      *  找出「该 peer 下存在『已发出、等结论』目标」的那个账号。
      *  2026-10-14：修「全账号签到里非当前账号判不出结果」——
@@ -19894,6 +19975,43 @@ public final class TGAutoSignCore {
             // 含同批的目标 bot 回复与面板消息（与此前 return/continue 事故同类）。
             if (u == null) continue;
             String un = u.getClass().getName();
+
+            // ── 2026-10-14 修复：私聊「短消息」类型的 update ──
+            // 真机实测（TG 13.0.1）：私聊 bot 的回复不是 TL_updateNewMessage，
+            // 而是 **TL_updateShortMessage**（扁平结构：user_id / message / out 直接是字段，
+            // 没有嵌套的 message 对象、也没有 peer_id）。原来只认
+            // updateNewMessage / updateNewChannelMessage → 私聊回复全被 continue 掉，
+            // 表现为「bot 明明回了，模块永远已发出 / 回复判不出」。
+            // 这里把它**归一化成与 updateNewMessage 等价的形态**继续走判定链：
+            //   peerUid = user_id（会话就是这个人）、fromUid = user_id（发送者同）、
+            //   out = out 标志、正文直接用 message 字段。
+            if (un.contains("TL_updateShortMessage") || un.contains("TL_updateShortChatMessage")) {
+                try {
+                    Object _uid = getFieldValSafe(u, "user_id");
+                    Object _cid = getFieldValSafe(u, "chat_id");
+                    Object _out = getFieldValSafe(u, "out");
+                    Object _txt = getFieldValSafe(u, "message");
+                    Object _mid = getFieldValSafe(u, "id");
+                    long _peer = 0L;
+                    if (un.contains("TL_updateShortChatMessage")) {
+                        // 群短消息：会话是 chat_id（负数），发送者 user_id
+                        try {
+                            Object c = _cid;
+                            if (c instanceof Number) _peer = -((Number) c).longValue();
+                        } catch (Throwable ignored) {}
+                    } else {
+                        try { if (_uid instanceof Number) _peer = ((Number) _uid).longValue(); } catch (Throwable ignored) {}
+                    }
+                    long _from = 0L;
+                    try { if (_uid instanceof Number) _from = ((Number) _uid).longValue(); } catch (Throwable ignored) {}
+                    boolean _isOut = Boolean.TRUE.equals(_out);
+                    jlog("[短消息] peer=" + _peer + " from=" + _from + " out=" + _isOut
+                         + " id=" + _mid + " text=" + clip(String.valueOf(_txt), 40));
+                    onShortMessageUpdate(_peer, _from, _isOut, String.valueOf(_txt));
+                } catch (Throwable _eShort) { noteSwallowed("shortMessage", _eShort); }
+                continue;   // 已单独处理，不再走下面（下面依赖 msg 对象，短消息没有）
+            }
+
             // ── 2026-10-14 诊断 v3：记录**所有** update 类型（限时开关，默认开 5 分钟）──
             // 目的：确认私聊 bot 的「引用回复」到底以哪种 update 投递。
             // 若它压根不是 updateNewMessage（如 editMessage / 其它类型），

@@ -456,6 +456,23 @@ public final class TGAutoSignEntry extends XposedModule {
                                     // （BaseController 字段），判定回复时才能定位到正确的账号。
                                     Object ctrl = null;
                                     try { ctrl = chain.getThisObject(); } catch (Throwable ignored) {}
+                                    // ── 2026-10-14 诊断：记录「哪个方法被调用、arg0 是什么类型」──
+                                    // 用于确认私聊消息到底走 processUpdateArray 还是 processUpdates。
+                                    try {
+                                        if (System.currentTimeMillis() < CORE.diagHookUntil) {
+                                            String mn = m.getName();
+                                            String at = (update == null ? "null"
+                                                    : update.getClass().getName());
+                                            String kb = mn + "|" + at;
+                                            Integer cc = CORE.diagHookCounts.get(kb);
+                                            if (cc == null || cc.intValue() < 2) {
+                                                CORE.diagHookCounts.put(kb, Integer.valueOf(cc == null ? 1 : cc.intValue() + 1));
+                                                CORE.diagHookLog("[hook调用] " + mn
+                                                        + " argc=" + (chain.getArgs() == null ? 0 : chain.getArgs().size())
+                                                        + " arg0=" + at);
+                                            }
+                                        }
+                                    } catch (Throwable ignored) {}
                                     if (update != null) CORE.onUpdateProcessed(update, ctrl);
                                 } catch (Throwable ignored) {}
                                 return chain.proceed();
