@@ -1288,5 +1288,27 @@ public final class Lang {
         EN.put("自动", "Auto");
         EN.put("日间", "Light");
         EN.put("夜间", "Dark");
+        // ── 链路自检（1.6.7）──
+        EN.put("── 链路自检（只读，不发任何消息） ──", "── Link self-check (read-only, sends nothing) ──");
+        EN.put("锚点A 协议层(processUpdate*): {0}   命中 {1}", "Anchor A protocol (processUpdate*): {0}   hits {1}");
+        EN.put("锚点B 事件层(didReceiveNewMessages): {0}   收到 {1} 批 / 命中 {2}", "Anchor B events (didReceiveNewMessages): {0}   {1} batches / {2} hits");
+        EN.put("锚点C 发送回执(sendRequest): {0}", "Anchor C send receipt (sendRequest): {0}");
+        EN.put("已挂上", "installed");
+        EN.put("未挂上", "NOT installed");
+        EN.put("最近收到消息：{0}（{1} 前）", "Last message received: {0} ({1} ago)");
+        EN.put("最近收到消息：（还没有记录 —— 若刚发过签到请等一会再刷新）", "Last message received: (none yet — if you just sent a check-in, wait a moment and refresh)");
+        EN.put("上次按钮回应：{0}（{1} 前）", "Last button response: {0} ({1} ago)");
+        EN.put("上次按钮回应：（还没有记录）", "Last button response: (none yet)");
+        EN.put("结论：锚点全绿 = 模块这边没问题；若仍判不出，是那个 bot 没回可识别的内容。", "Verdict: all anchors green = the module is fine; if results still can't be read, that bot simply didn't reply with anything recognisable.");
+        EN.put("刷新链路", "Refresh link check");
+        EN.put("已刷新", "Refreshed");
+        // ── 「从不应答」状态（1.6.7）──
+        EN.put("从不应答（这类 bot 不回文字）", "Never replies (this kind of bot sends no text)");
+        // ── humanAge 单位词（1.6.7）──
+        EN.put("毫秒", "ms");
+        EN.put("秒", "s");
+        EN.put("分钟", "min");
+        EN.put("小时", "h");
+        EN.put("天", "d");
     }
 }

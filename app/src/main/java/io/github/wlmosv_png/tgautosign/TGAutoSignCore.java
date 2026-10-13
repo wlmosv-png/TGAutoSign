@@ -1093,7 +1093,7 @@ public final class TGAutoSignCore {
 
                 TextView cur = new TextView(act);
                 cur.setTextSize(Theme.TS_CAPTION);
-                cur.setTextColor(Theme.termFaint(act));
+                cur.setTextColor(Theme.txtMuted(act));
                 cur.setTypeface(Theme.text());
                 cur.setPadding(dp(1), dp(2), 0, 0);
                 cur.setSingleLine(true);
@@ -1161,7 +1161,7 @@ public final class TGAutoSignCore {
             if (count > 1) {
                 TextView tip = new TextView(act);
                 tip.setTextSize(Theme.TS_CAPTION);
-                tip.setTextColor(Theme.termFaint(act));
+                tip.setTextColor(Theme.txtMuted(act));
                 tip.setTypeface(Theme.text());
                 tip.setText(Lang.tr("\u70b9\u4e0b\u65b9\u6309\u94ae\u540e\u8fd9\u91cc\u4f1a\u5b9e\u65f6\u8d70\u8fdb\u5ea6\uff1b\u5b9a\u65f6\u7b7e\u5230\u8ddf\u968f\u5f53\u524d\u8d26\u53f7\u3002"));
                 tip.setPadding(dp(4), dp(8), dp(4), dp(2));
@@ -1374,7 +1374,7 @@ public final class TGAutoSignCore {
                 nameTv.get(k).setTextColor(Theme.termTxt(act));
                 // \u5f53\u524d\u8d26\u53f7 = \u5b9e\u5fc3\u70b9\uff0c\u5176\u5b83 = \u7a7a\u5fc3\u70b9\uff08\u77e2\u91cf\uff0c\u968f\u4e3b\u9898\u8272\uff09
                 setIconOn(nameTv.get(k), isCur ? "dot-fill" : "dot-line", 9f,
-                        isCur ? Theme.termCyan(act) : Theme.termFaint(act));
+                        isCur ? Theme.termCyan(act) : Theme.txtMuted(act));
             }
             // ── 本轮口径优先（2026-10-14）：有本轮数据时，进度按「本轮已了结 / 本轮总数」算，
             //    卡住的目标（未回复/判不出/发送失败）**计入已了结**，不再永远拖着进度条不满。
@@ -1428,7 +1428,7 @@ public final class TGAutoSignCore {
                 curTv.get(k).setText(line);
                 boolean isNow = allAccRunning && allAccCurrent == i;
                 int stCol = finished ? Theme.termGreen(act)
-                        : (isNow ? Theme.termCyan(act) : Theme.termFaint(act));
+                        : (isNow ? Theme.termCyan(act) : Theme.txtMuted(act));
                 curTv.get(k).setTextColor(stCol);
                 setIconOn(curTv.get(k), stIcon, 11f,
                         stIcon != null && "today-done".equals(stIcon) ? Theme.termGreen(act) : stCol);
@@ -4206,7 +4206,7 @@ public final class TGAutoSignCore {
 
             TextView foot = new TextView(act);
             foot.setTextSize(Theme.TS_CAPTION);
-            foot.setTextColor(Theme.termFaint(act));
+            foot.setTextColor(Theme.txtMuted(act));
             foot.setTypeface(Theme.text());
             foot.setText(Lang.tr("统计基于本地记录；「判不出」可在 设置 → 回复判定词 补词。"));
             foot.setPadding(dp(4), dp(10), dp(4), 0);
@@ -4689,7 +4689,7 @@ public final class TGAutoSignCore {
             // 模板 chip：按宽度自动折行（旧版横向滚动，第 4 个起被裁）
             TextView pt = new TextView(act);
             pt.setTextSize(Theme.TS_CAPTION);
-            pt.setTextColor(Theme.termFaint(act));
+            pt.setTextColor(Theme.txtMuted(act));
             pt.setTypeface(Theme.text());
             pt.setText(Lang.tr("点一下追加："));
             LinearLayout.LayoutParams ptLp = new LinearLayout.LayoutParams(-1, -2);
@@ -5129,6 +5129,7 @@ public final class TGAutoSignCore {
 
     /** 任何改动目标的路径都应调用它，避免读到旧数据。 */
     private void invalidateTargetCache() {
+        try { _awaitingCache = null; } catch (Throwable ignored) {}
         _tCacheMap.clear();
     }
 
@@ -5154,6 +5155,38 @@ public final class TGAutoSignCore {
             }
         } catch (Throwable ignored) {}
         out.addAll(tmp);
+    }
+
+    /** 「正在等结论」的会话集合（peer did），2 秒缓存。
+     *
+     *  用途：给 judgeReplyByPeer 做 O(1) 早退。群聊每分钟几十条无关消息，
+     *  没有它的话每条都要遍历全部账号的全部目标（实测几十次循环/秒）。
+     *  缓存窗口与 loadTargetsInto 的 TARGET_CACHE_MS 对齐，保证两者看到的是同一批目标。
+     */
+    private volatile java.util.Set<Long> _awaitingCache = null;
+    private volatile long _awaitingCacheAt = 0L;
+
+    private java.util.Set<Long> awaitingPeers() {
+        long now = System.currentTimeMillis();
+        java.util.Set<Long> c = _awaitingCache;
+        if (c != null && now - _awaitingCacheAt < 500L) return c;
+        java.util.Set<Long> s = new java.util.HashSet<Long>();
+        try {
+            for (int slot : accountSlots()) {
+                String pfx = accountPrefix(slot);
+                java.util.List<Map<String, Object>> l = new java.util.ArrayList<Map<String, Object>>();
+                try { loadTargetsInto(pfx, l); } catch (Throwable ignored) {}
+                for (Map<String, Object> m : l) {
+                    String id = entryId(m);
+                    if (isSentPendingFresh(pfx, id) || isPendingFresh(pfx, id)) {
+                        s.add(Long.valueOf(entryDid(m)));
+                    }
+                }
+            }
+        } catch (Throwable t) { noteSwallowed("awaitingPeers", t); }
+        _awaitingCache = s;
+        _awaitingCacheAt = now;
+        return s;
     }
 
     private void loadTargetsIntoUncached(String prefix, List<Map<String, Object>> out) {
@@ -5477,17 +5510,42 @@ public final class TGAutoSignCore {
         try {
             switch (result) {
                 case SignLogic.R_SIGNED:
+                    clearNoReplyStreak(prefix, id);
                     roundMark(prefix, id, RS_SIGNED, "签到成功"); break;
                 case SignLogic.R_REPLIED_UNK:
+                    clearNoReplyStreak(prefix, id);
                     roundMark(prefix, id, RS_UNKNOWN, "回复认不出，可补判定词"); break;
-                case SignLogic.R_NO_REPLY:
-                    roundMark(prefix, id, RS_NO_REPLY, "bot 未回复"); break;
+                case SignLogic.R_NO_REPLY: {
+                    // ── 2026-10-14：「bot 从不应答」单列 ──
+                    // 有些目标本来就是查询类/菜单类 bot（发过去不会有文字回复），
+                    // 每天都被提醒「未回复」纯属噪音。累计连续无回复天数，
+                    // 达到阈值（3 天）后状态改成「从不应答」—— 用户一眼能分辨
+                    // 「这个 bot 特性如此」和「今天这条出问题了」。
+                    int nr = 0;
+                    try { nr = prefs.getInt("nr_" + prefix + id, 0) + 1; } catch (Throwable ignored) {}
+                    try {
+                        prefs.edit().putInt("nr_" + prefix + id, nr)
+                             .putString("nrday_" + prefix + id, todayStr()).apply();
+                    } catch (Throwable ignored) {}
+                    if (nr >= 3) roundMark(prefix, id, RS_NO_REPLY, Lang.tr("从不应答（这类 bot 不回文字）"));
+                    else roundMark(prefix, id, RS_NO_REPLY, "bot 未回复");
+                    break;
+                }
                 case SignLogic.R_BTN_STALE:
                     roundMark(prefix, id, RS_PANEL, "面板已过期"); break;
                 case SignLogic.R_FAILED:
                     roundMark(prefix, id, RS_SENDFAIL, "签到失败"); break;
                 default:
                     roundMark(prefix, id, RS_UNKNOWN, "结果未判定"); break;
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /** 清掉「连续无回复」计数（有回复/成功时调用，避免历史累计误伤）。 */
+    private void clearNoReplyStreak(String prefix, String id) {
+        try {
+            if (prefs.getInt("nr_" + prefix + id, 0) != 0) {
+                prefs.edit().remove("nr_" + prefix + id).remove("nrday_" + prefix + id).apply();
             }
         } catch (Throwable ignored) {}
     }
@@ -6252,9 +6310,7 @@ public final class TGAutoSignCore {
                                 markOptimistic(fPrefix, fId);
                                 String _ans0 = "";
                                 try {
-                                    Object _am = getFieldValSafe(response, "message");
-                                    if (_am == null) _am = getFieldValSafe(response, "alert");
-                                    if (_am != null) _ans0 = String.valueOf(_am);
+                                    _ans0 = callbackAnswerText(response);
                                 } catch (Throwable ignored) {}
                                 logs("文本指令已发出，等待 bot 回复后判定 " + dialogId
                                      + " text=" + fText + (_ans0.length() > 0 ? " · 返回: " + _ans0 : ""));
@@ -6284,7 +6340,11 @@ public final class TGAutoSignCore {
                                 // 正确时机是 SignStateStore.markSigned（确认成功）——
                                 // 那里的 onSigned hook 会调这两个方法，且已被去重。
                                 String ans = "";
-                                try { Object am = getFieldValSafe(response, "message"); if (am == null) am = getFieldValSafe(response, "alert"); if (am != null) ans = String.valueOf(am); } catch (Throwable _e16) { noteSwallowed("sendSign", _e16); }
+                                try { ans = callbackAnswerText(response); } catch (Throwable _e16) { noteSwallowed("sendSign", _e16); }
+                                try {
+                                    Object _alertObj = getFieldValSafe(response, "alert");
+                                    noteCallbackAnswer(ans, Boolean.TRUE.equals(_alertObj));
+                                } catch (Throwable ignored) {}
                                 // 注意：这只是「请求发送成功」，**不等于签到成功**。
                                 // bot 完全可能回「你还没有绑定账号」之类。真正的结论由
                                 // onUpdateProcessed 的回复判定给出（会覆盖这里的乐观标记）。
@@ -6692,6 +6752,78 @@ public final class TGAutoSignCore {
             new java.util.concurrent.ConcurrentHashMap<String, Integer>();
     /** 供 Entry 落日志用（jlog 是私有的，这里开一个受限入口）。 */
     public void diagHookLog(String msg) { try { jlog(msg); } catch (Throwable ignored) {} }
+
+    // ════════════════════════════════════════════════════════════════
+    //  链路自检（用户点一下就能判断「是模块坏了还是对面 bot 没回」）
+    //
+    //  设计原则：全程只读。不触发任何网络请求、不发消息、不点按钮。
+    //  只报告「我这边挂了什么、最近有没有收到过东西」。
+    // ════════════════════════════════════════════════════════════════
+    /** 锚点 A（MessagesController.processUpdate*）是否挂上 */
+    public volatile boolean anchorAHooked = false;
+    /** 锚点 B（didReceivedNotification/didReceiveNewMessages）是否挂上 */
+    public volatile boolean anchorBHooked = false;
+    /** 锚点 C（sendRequest 回执）是否挂上 */
+    public volatile boolean anchorCHooked = false;
+    /** 各锚点命中次数（收到「对方发来的消息」的次数） */
+    public final java.util.concurrent.atomic.AtomicLong anchorAHits = new java.util.concurrent.atomic.AtomicLong();
+    public final java.util.concurrent.atomic.AtomicLong anchorBHits = new java.util.concurrent.atomic.AtomicLong();
+    /** 锚点 B 被调用的次数（只要 didReceiveNewMessages 进来就 +1，与是否命中无关） */
+    public final java.util.concurrent.atomic.AtomicLong anchorBSeen = new java.util.concurrent.atomic.AtomicLong();
+    /** 最近一条收到的消息（描述串 + 时间戳），证明链路活着 */
+    public volatile String lastRecvDesc = "";
+    public volatile long lastRecvAt = 0L;
+    /** 上次 callback answer 的原文（用于确认 alert 误读已修） */
+    public volatile String lastCallbackAnswer = "";
+    public volatile long lastCallbackAt = 0L;
+
+    /** 记一条「收到的消息」——锚点命中时调用，供自检展示。 */
+    public void noteRecv(String source, long peerUid, long fromUid, String text) {
+        try {
+            if (source != null && source.contains("B")) anchorBHits.incrementAndGet();
+            else anchorAHits.incrementAndGet();
+            lastRecvDesc = "peer=" + peerUid + " from=" + fromUid + " text=" + clip(text, 50);
+            lastRecvAt = System.currentTimeMillis();
+        } catch (Throwable ignored) {}
+    }
+
+    /** 记一条 callback answer（sendSign 收到回应时调用）。 */
+    public void noteCallbackAnswer(String ans, boolean alertFlag) {
+        try {
+            lastCallbackAnswer = (ans == null ? "" : ans) + (alertFlag ? " (alert=true)" : "");
+            lastCallbackAt = System.currentTimeMillis();
+        } catch (Throwable ignored) {}
+    }
+
+    /** 链路自检结果（只读，给 UI 渲染）。 */
+    public static final class LinkCheck {
+        public boolean aHooked, bHooked, cHooked;
+        public long aHits, bHits, bSeen;
+        public String lastRecv = "";
+        public long lastRecvAgeMs = -1L;
+        public String lastCallback = "";
+        public long lastCallbackAgeMs = -1L;
+        public boolean hostLoaded = false;
+        public String hostName = "";
+    }
+
+    /** 跑一次链路自检（纯内存读取，无副作用）。 */
+    public LinkCheck runLinkSelfTest() {
+        LinkCheck r = new LinkCheck();
+        try {
+            r.aHooked = anchorAHooked;
+            r.bHooked = anchorBHooked;
+            r.cHooked = anchorCHooked;
+            r.aHits = anchorAHits.get();
+            r.bHits = anchorBHits.get();
+            r.bSeen = anchorBSeen.get();
+            r.lastRecv = lastRecvDesc;
+            if (lastRecvAt > 0L) r.lastRecvAgeMs = System.currentTimeMillis() - lastRecvAt;
+            r.lastCallback = lastCallbackAnswer;
+            if (lastCallbackAt > 0L) r.lastCallbackAgeMs = System.currentTimeMillis() - lastCallbackAt;
+        } catch (Throwable t) { noteSwallowed("runLinkSelfTest", t); }
+        return r;
+    }
     private final java.util.concurrent.ConcurrentHashMap<String, Integer> diagTypeCounts =
             new java.util.concurrent.ConcurrentHashMap<String, Integer>();
     /** 全账号签到是否在跑。 */
@@ -8935,7 +9067,7 @@ public final class TGAutoSignCore {
                     all.setText(Lang.tr("全部目标"));
                     all.setTextColor(allOn ? Theme.termCyan(act) : Theme.termTxt(act));
                     setIconOn(all, allOn ? "check" : "dot-line", 12f,
-                            allOn ? Theme.termCyan(act) : Theme.termFaint(act));
+                            allOn ? Theme.termCyan(act) : Theme.txtMuted(act));
                     all.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
                         logTarget = ""; refreshLog(); dismissOne(dlg[0]);
                     } });
@@ -8947,7 +9079,7 @@ public final class TGAutoSignCore {
                         row.setText(tn);
                         row.setTextColor(on ? Theme.termCyan(act) : Theme.termTxt(act));
                         setIconOn(row, on ? "check" : "dot-line", 12f,
-                                on ? Theme.termCyan(act) : Theme.termFaint(act));
+                                on ? Theme.termCyan(act) : Theme.txtMuted(act));
                         row.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
                             logTarget = tn; refreshLog(); dismissOne(dlg[0]);
                         } });
@@ -8966,7 +9098,7 @@ public final class TGAutoSignCore {
             q.setTextSize(Theme.TS_BODY);
             q.setHint(Lang.tr("搜索日志，边输边过滤"));
             q.setTextColor(Theme.termTxt(act));
-            q.setHintTextColor(Theme.termFaint(act));
+            q.setHintTextColor(Theme.txtMuted(act));
             q.addTextChangedListener(new android.text.TextWatcher() {
                 @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
                 @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
@@ -10204,7 +10336,7 @@ public final class TGAutoSignCore {
         // 只影响模块内部读取，不动宿主、不动任何已存数据。
         TextView sep = new TextView(act);
         sep.setTextSize(Theme.TS_CAPTION);
-        sep.setTextColor(Theme.termFaint(act));
+        sep.setTextColor(Theme.txtMuted(act));
         sep.setPadding(0, Theme.dp(act, 10), 0, Theme.dp(act, 4));
         sep.setText(Lang.tr("── 多账号串号排查 ──"));
         box.addView(sep);
@@ -10233,6 +10365,66 @@ public final class TGAutoSignCore {
                     activatedAccounts(), accountLabel(parsed), parsed, acctTargetCount(parsed)),
                     parsed == activatedAccounts() - 1);
         }
+
+        // ════════════════════════════════════════════════════════════════
+        //  链路自检（2026-10-14 新增）
+        //
+        //  用途：用户点一下就知道「是模块的钩子掉了，还是对面 bot 根本没回」。
+        //  信息全部来自内存计数，**不发消息、不发请求、不点按钮**。
+        //  每次打开自诊断都会刷新一次；也可以点「刷新链路」重跑。
+        // ════════════════════════════════════════════════════════════════
+        final TextView[] linkRows = new TextView[6];
+        final LinearLayout linkBox = new LinearLayout(act);
+        linkBox.setOrientation(LinearLayout.VERTICAL);
+        for (int li = 0; li < linkRows.length; li++) {
+            TextView tv = new TextView(act);
+            tv.setTextSize(Theme.TS_BODY);
+            tv.setPadding(0, Theme.dp(act, 3), 0, Theme.dp(act, 3));
+            linkRows[li] = tv;
+            linkBox.addView(tv);
+        }
+        Runnable fillLink = new Runnable() { @Override public void run() {
+            try {
+                LinkCheck lc = runLinkSelfTest();
+                int i = 0;
+                linkRows[i].setText(Lang.tf("锚点A 协议层(processUpdate*): {0}   命中 {1}",
+                        lc.aHooked ? Lang.tr("已挂上") : Lang.tr("未挂上"), lc.aHits));
+                linkRows[i].setTextColor(lc.aHooked ? Theme.accent(act) : 0xFFE05252); i++;
+                linkRows[i].setText(Lang.tf("锚点B 事件层(didReceiveNewMessages): {0}   收到 {1} 批 / 命中 {2}",
+                        lc.bHooked ? Lang.tr("已挂上") : Lang.tr("未挂上"), lc.bSeen, lc.bHits));
+                linkRows[i].setTextColor(lc.bHooked ? Theme.accent(act) : 0xFFE05252); i++;
+                linkRows[i].setText(Lang.tf("锚点C 发送回执(sendRequest): {0}",
+                        lc.cHooked ? Lang.tr("已挂上") : Lang.tr("未挂上")));
+                linkRows[i].setTextColor(lc.cHooked ? Theme.accent(act) : 0xFFE05252); i++;
+                linkRows[i].setText(lc.lastRecv.length() > 0
+                        ? Lang.tf("最近收到消息：{0}（{1} 前）", lc.lastRecv, humanAge(lc.lastRecvAgeMs))
+                        : Lang.tr("最近收到消息：（还没有记录 —— 若刚发过签到请等一会再刷新）"));
+                linkRows[i].setTextColor(lc.lastRecv.length() > 0 ? Theme.accent(act) : Theme.txtMuted(act)); i++;
+                linkRows[i].setText(lc.lastCallback.length() > 0
+                        ? Lang.tf("上次按钮回应：{0}（{1} 前）", clip(lc.lastCallback, 60), humanAge(lc.lastCallbackAgeMs))
+                        : Lang.tr("上次按钮回应：（还没有记录）"));
+                linkRows[i].setTextColor(Theme.txtMuted(act)); i++;
+                linkRows[i].setText(Lang.tr("结论：锚点全绿 = 模块这边没问题；若仍判不出，是那个 bot 没回可识别的内容。"));
+                linkRows[i].setTextColor(Theme.txtMuted(act));
+            } catch (Throwable t) { noteSwallowed("fillLink", t); }
+        } };
+        fillLink.run();
+
+        TextView linkTitle = new TextView(act);
+        linkTitle.setTextSize(Theme.TS_CAPTION);
+        linkTitle.setTextColor(Theme.txtMuted(act));
+        linkTitle.setPadding(0, Theme.dp(act, 12), 0, Theme.dp(act, 4));
+        linkTitle.setText(Lang.tr("── 链路自检（只读，不发任何消息） ──"));
+        box.addView(linkTitle);
+        box.addView(linkBox);
+
+        TextView linkBtn = new TextView(act);
+        linkBtn.setText(Lang.tr("刷新链路"));
+        linkBtn.setTextSize(Theme.TS_BODY);
+        linkBtn.setTextColor(Theme.accent(act));
+        linkBtn.setPadding(0, Theme.dp(act, 8), 0, Theme.dp(act, 8));
+        linkBtn.setOnClickListener(v -> { fillLink.run(); toast(Lang.tr("已刷新")); });
+        box.addView(linkBtn);
 
         sv.addView(box);
         showDialog(act, "自诊断", sv, "关闭");
@@ -10296,7 +10488,7 @@ public final class TGAutoSignCore {
         e.setTextSize(Theme.TS_BODY);
         e.setTypeface(android.graphics.Typeface.MONOSPACE);
         e.setTextColor(Theme.termTxt(act));
-        e.setHintTextColor(Theme.termFaint(act));
+        e.setHintTextColor(Theme.txtMuted(act));
         e.setPadding(dp(12), dp(10), dp(12), dp(10));
         try { e.setBackground(controlBg(act, Theme.surface(act, 2))); } catch (Throwable ignored) {}
         if (type == 1) e.setInputType(InputType.TYPE_CLASS_NUMBER);   // 纯数字（如 bot ID）
@@ -10503,7 +10695,7 @@ public final class TGAutoSignCore {
         if (note != null && note.length() > 0) {
             TextView nt = new TextView(act);
             nt.setTextSize(Theme.TS_CAPTION);
-            nt.setTextColor(Theme.termFaint(act));
+            nt.setTextColor(Theme.txtMuted(act));
             nt.setTypeface(Theme.text());
             nt.setText(Lang.tr(note));
             LinearLayout.LayoutParams ntLp = new LinearLayout.LayoutParams(-1, -2);
@@ -11580,7 +11772,7 @@ public final class TGAutoSignCore {
             s1.addView(exCount, eclp);
             TextView exTip = new TextView(act);
             exTip.setTextSize(Theme.TS_CAPTION);
-            exTip.setTextColor(Theme.termFaint(act));
+            exTip.setTextColor(Theme.txtMuted(act));
             exTip.setTypeface(Theme.text());
             exTip.setText(Lang.tr("用 /xxx/ 当正则 · # 开头是注释"));
             LinearLayout.LayoutParams etlp = new LinearLayout.LayoutParams(-1, -2);
@@ -11596,7 +11788,7 @@ public final class TGAutoSignCore {
                         if (v.length() > 0 && !v.startsWith("#")) n++;
                     }
                     exCount.setText(n == 0 ? Lang.tr("还没有规则") : Lang.tf("共 {0} 条规则", n));
-                    exCount.setTextColor(n == 0 ? Theme.termFaint(act) : Theme.termCyan(act));
+                    exCount.setTextColor(n == 0 ? Theme.txtMuted(act) : Theme.termCyan(act));
                 } catch (Throwable ignored) {}
             } };
             ex.addTextChangedListener(new android.text.TextWatcher() {
@@ -11644,7 +11836,7 @@ public final class TGAutoSignCore {
                                 ex2.setTextColor(Theme.termPink(act));
                                 ex2.setText(Lang.tf("另外：命中排除规则「{0}」→ 这个 bot 不会被学习", hitEx));
                             } else {
-                                ex2.setTextColor(Theme.termFaint(act));
+                                ex2.setTextColor(Theme.txtMuted(act));
                                 ex2.setText(Lang.tr("另外：未命中任何排除规则"));
                             }
                             ex2.setPadding(dp(10), dp(6), dp(10), 0);
@@ -11755,7 +11947,7 @@ public final class TGAutoSignCore {
         if (use != null && use.length() > 0) {
             TextView u = new TextView(act);
             u.setTextSize(Theme.TS_CAPTION);
-            u.setTextColor(Theme.termFaint(act));
+            u.setTextColor(Theme.txtMuted(act));
             u.setTypeface(Theme.text());
             u.setText(Lang.tr(use));
             LinearLayout.LayoutParams ulp = new LinearLayout.LayoutParams(-1, -2);
@@ -11792,7 +11984,7 @@ public final class TGAutoSignCore {
                 box.addView(e);
             } else {
                 /* top hint (2026-09-29 enhanced) */
-                TextView hint = new TextView(act); hint.setTextSize(Theme.TS_CAPTION); hint.setTextColor(Theme.termFaint(act)); hint.setTypeface(Theme.text());
+                TextView hint = new TextView(act); hint.setTextSize(Theme.TS_CAPTION); hint.setTextColor(Theme.txtMuted(act)); hint.setTypeface(Theme.text());
                 hint.setText(Lang.tr("这些我拿不准是不是签到目标。点「加入」我就记住它，点「忽略」就当没见过。"));
                 hint.setPadding(dp(4), dp(4), dp(4), dp(8));
                 box.addView(hint);
@@ -11851,7 +12043,7 @@ public final class TGAutoSignCore {
                     /* row 3: id (small, dim) */
                     TextView didLabel = new TextView(act);
                     didLabel.setTextSize(Theme.TS_CAPTION);
-                    didLabel.setTextColor(Theme.termFaint(act));
+                    didLabel.setTextColor(Theme.txtMuted(act));
                     didLabel.setTypeface(android.graphics.Typeface.MONOSPACE);
                     didLabel.setText("ID: " + did);
                     didLabel.setPadding(0, dp(2), 0, dp(6));
@@ -12309,7 +12501,7 @@ public final class TGAutoSignCore {
             bar.setPadding(dp(2), dp(2), dp(2), dp(4));
             TextView tip = new TextView(act);
             tip.setTextSize(Theme.TS_CAPTION);
-            tip.setTextColor(Theme.termFaint(act));
+            tip.setTextColor(Theme.txtMuted(act));
             tip.setTypeface(Theme.text());
             tip.setText(Lang.tr("完整日志（含筛选、导出、清空）在「全部功能 → 数据 → 运行日志」里"));
             bar.addView(tip, new LinearLayout.LayoutParams(0, -2, 1f));
@@ -14123,7 +14315,7 @@ public final class TGAutoSignCore {
         /* top hint (2026-09-29) */
         TextView topHint = new TextView(act);
         topHint.setTextSize(Theme.TS_CAPTION);
-        topHint.setTextColor(Theme.termFaint(act));
+        topHint.setTextColor(Theme.txtMuted(act));
         topHint.setTypeface(Theme.text());
         topHint.setText(Lang.tr("以下目标发出后未得到明确结论，需要你判断。"));
         topHint.setPadding(dp(4), dp(2), dp(4), dp(4));
@@ -14167,7 +14359,7 @@ public final class TGAutoSignCore {
             if (issueAt > 0L) {
                 TextView ts = new TextView(act);
                 ts.setTextSize(Theme.TS_CAPTION);
-                ts.setTextColor(Theme.termFaint(act));
+                ts.setTextColor(Theme.txtMuted(act));
                 ts.setTypeface(Theme.text());
                 ts.setText(new java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(new java.util.Date(issueAt)));
                 head.addView(ts);
@@ -14190,7 +14382,7 @@ public final class TGAutoSignCore {
             /* row 3: hint */
             TextView hint = new TextView(act);
             hint.setTextSize(Theme.TS_CAPTION);
-            hint.setTextColor(Theme.termFaint(act));
+            hint.setTextColor(Theme.txtMuted(act));
             hint.setText(attentionHint(pfx, eid));
             hint.setTypeface(Theme.text());
             hint.setPadding(0, dp(4), 0, dp(8));
@@ -14247,7 +14439,7 @@ public final class TGAutoSignCore {
         if (shown == 0) {
             TextView e = new TextView(act);
             e.setTextSize(Theme.TS_SECOND);
-            e.setTextColor(Theme.termFaint(act));
+            e.setTextColor(Theme.txtMuted(act));
             e.setText(Lang.tr("(没有需要处理的目标)\n按钮失效、回复判不出、bot 未回复时，这里会出现条目。"));
             e.setPadding(dp(6), dp(12), dp(6), dp(12));
             box.addView(e);
@@ -14645,6 +14837,8 @@ public final class TGAutoSignCore {
         // 同文件的 sent_at_ 本来就用的 commit()，这里保持一致。
         try { prefs.edit().putString(kOpt(prefix, id), todayStr()).commit(); }
         catch (Throwable _eMO) { noteSwallowed("markOptimistic", _eMO); }
+        // 刚进入「等结论」——立刻让早退缓存失效，否则 bot 秒回的消息会被旧缓存挡掉。
+        try { _awaitingCache = null; } catch (Throwable ignored) {}
     }
 
     /**
@@ -15674,7 +15868,7 @@ public final class TGAutoSignCore {
             // 时间口径说明：这一版新增了「实签时刻」和「补签时刻」，给用户一句话解释
             TextView legend = new TextView(act);
             legend.setTextSize(Theme.TS_CAPTION);
-            legend.setTextColor(Theme.termFaint(act));
+            legend.setTextColor(Theme.txtMuted(act));
             legend.setTypeface(Theme.text());
             legend.setText(Lang.tr("时间 = 计划 → 实际签上；补签会额外标出补签时刻"));
             legend.setPadding(dp(4), 0, dp(4), dp(8));
@@ -15863,7 +16057,7 @@ public final class TGAutoSignCore {
 
             TextView foot = new TextView(act);
             foot.setTextSize(Theme.TS_CAPTION);
-            foot.setTextColor(Theme.termFaint(act));
+            foot.setTextColor(Theme.txtMuted(act));
             foot.setTypeface(android.graphics.Typeface.MONOSPACE);
             foot.setPadding(dp(4), dp(6), dp(4), 0);
             foot.setText(Lang.tf("已签 {0} · 待补 {1} · 已跳过 {2}", doneN, waitN, skipN) + (missN > 0 ? Lang.tf(" · 错过 {0}", missN) : ""));
@@ -15952,7 +16146,7 @@ public final class TGAutoSignCore {
             final int GREEN = Theme.termGreen(act);
             final int CYAN  = Theme.termCyan(act);
             final int MUTED = Theme.termMuted(act);
-            final int FAINT = Theme.termFaint(act);
+            final int FAINT = Theme.txtMuted(act);
             final int PINK  = Theme.termPink(act);   // 「今天未签」用危险色，与"已签绿"形成对照
 
             LinearLayout box = new LinearLayout(act);
@@ -16801,7 +16995,7 @@ public final class TGAutoSignCore {
                 aplp.topMargin = dp(6);
                 box.addView(applyAll, aplp);
                 TextView apTip = new TextView(act);
-                apTip.setTextSize(Theme.TS_CAPTION); apTip.setTextColor(Theme.termFaint(act)); apTip.setTypeface(Theme.text());
+                apTip.setTextSize(Theme.TS_CAPTION); apTip.setTextColor(Theme.txtMuted(act)); apTip.setTypeface(Theme.text());
                 apTip.setText(Lang.tf("当前共 {0} 个账号。默认只改本账号（{1}…），点上面按钮才会同步到其它账号。", activatedAccounts(), accountLabel(0)));
                 apTip.setPadding(dp(4), dp(4), dp(4), dp(2));
                 box.addView(apTip);
@@ -19772,43 +19966,6 @@ public final class TGAutoSignCore {
      *
      * @return 账号索引；拿不到返回 -1（调用方回退全局值）。
      */
-    /** 处理「短消息」update（TL_updateShortMessage / TL_updateShortChatMessage）。
-     *  它没有 message 对象，所以这里直接按 (peer, from, out, text) 走回复判定：
-     *  找到该会话下「已发出、等结论」的目标 → 用文本跑判定词 → 命中即标记。
-     *  2026-10-14：修「私聊 bot 回复永远判不出」（真机确认私聊走的就是短消息）。 */
-    private void onShortMessageUpdate(long peerUid, long fromUid, boolean isOut, String text) {
-        try {
-            if (peerUid == 0L) return;
-            if (isOut) return;                      // 自己发的，不处理
-            // 定位「哪个账号的这个会话在等结论」
-            int hitAcc = -1; String hitPrefix = null; Map<String, Object> hitTarget = null;
-            for (int slot : accountSlots()) {
-                String pfx = accountPrefix(slot);
-                java.util.List<Map<String, Object>> l = new java.util.ArrayList<Map<String, Object>>();
-                try { loadTargetsInto(pfx, l); } catch (Throwable ignored) {}
-                for (Map<String, Object> m : l) {
-                    if (entryDid(m) != peerUid) continue;
-                    String id = entryId(m);
-                    if (isSentPendingFresh(pfx, id) || isPendingFresh(pfx, id)) {
-                        hitAcc = slot; hitPrefix = pfx; hitTarget = m; break;
-                    }
-                }
-                if (hitTarget != null) break;
-            }
-            if (hitTarget == null) return;           // 没有在等的目标 → 与我们无关
-            final int _acc = hitAcc;
-            final String _pfx = hitPrefix;
-            final Map<String, Object> _tg = hitTarget;
-            final String _txt = text == null ? "" : text;
-            jlog("[短消息] 命中在等的目标 " + entryId(_tg) + " @" + accountLabel(_acc)
-                 + " 正文=" + clip(_txt, 60));
-            mainHandler.post(new Runnable() { @Override public void run() {
-                try {
-                    handleReplyText(_pfx, _acc, _tg, _txt);
-                } catch (Throwable t) { noteSwallowed("shortMsg-handle", t); }
-            } });
-        } catch (Throwable t) { noteSwallowed("onShortMessageUpdate", t); }
-    }
 
     /** 用一段回复文本对某个目标做判定（短消息路径用；与长消息判定链同源）。 */
     private void handleReplyText(String prefix, int account, Map<String, Object> m, String text) {
@@ -19847,6 +20004,208 @@ public final class TGAutoSignCore {
         } catch (Throwable t) { noteSwallowed("handleReplyText", t); }
     }
 
+    /** 通用「按会话找在等目标并判定」入口 —— 多个锚点共用。
+     *
+     *  各锚点（processUpdateArray / didReceiveNewMessages / 发送回执）都只做一件事：
+     *  把「某个会话收到一条对方发来的文本」归一化后丢进来。
+     *  本方法负责：① 遍历所有真实槽位找「该 peer 下已发出、等结论」的目标；
+     *             ② 跑统一词表判定；③ 命中/判不出按既有链路落状态。
+     *
+     *  为什么要有它：以前每个入口各自实现一遍判定，口径不一致且容易被单点改动漏掉。
+     *  现在判定只有一份，入口只是「消息从哪来」的不同管道。
+     *
+     *  @param source 日志溯源标记（哪条管道送进来的）
+     *  @return 命中的目标数（0 = 该会话没有在等的目标，与我们无关）
+     */
+    private int judgeReplyByPeer(long peerUid, String text, String source) {
+        try {
+            if (peerUid == 0L) return 0;
+            if (text == null || text.length() == 0) return 0;
+            // 早退：该会话不在「正在等结论」的集合里就直接返回。
+            // 群聊消息洪峰时（实测每分钟几十条无关消息），这一句把 90%+ 的调用挡在循环之前。
+            if (!awaitingPeers().contains(Long.valueOf(peerUid))) return 0;
+            int hitAcc = -1; String hitPrefix = null; Map<String, Object> hitTarget = null;
+            for (int slot : accountSlots()) {
+                String pfx = accountPrefix(slot);
+                java.util.List<Map<String, Object>> l = new java.util.ArrayList<Map<String, Object>>();
+                try { loadTargetsInto(pfx, l); } catch (Throwable ignored) {}
+                for (Map<String, Object> m : l) {
+                    if (!samePeerDid(entryDid(m), peerUid)) continue;
+                    String id = entryId(m);
+                    if (isSentPendingFresh(pfx, id) || isPendingFresh(pfx, id)) {
+                        hitAcc = slot; hitPrefix = pfx; hitTarget = m; break;
+                    }
+                }
+                if (hitTarget != null) break;
+            }
+            if (hitTarget == null) return 0;
+            final int _acc = hitAcc;
+            final String _pfx = hitPrefix;
+            final Map<String, Object> _tg = hitTarget;
+            final String _txt = text;
+            noteRecv(source, peerUid, 0L, _txt);
+            jlog("[" + source + "] 命中在等的目标 " + entryId(_tg) + " @" + accountLabel(_acc)
+                 + " 正文=" + clip(_txt, 60));
+            mainHandler.post(new Runnable() { @Override public void run() {
+                try { handleReplyText(_pfx, _acc, _tg, _txt); }
+                catch (Throwable t) { noteSwallowed("judgeReplyByPeer.handle", t); }
+            } });
+            return 1;
+        } catch (Throwable t) { noteSwallowed("judgeReplyByPeer", t); return 0; }
+    }
+
+    /** 从 TL_messages_botCallbackAnswer 回应里取出**真正的答案文本**。
+     *
+     *  为什么必须单独抽出来（2026-10-14 根因）：
+     *    botCallbackAnswer 的字段类型是
+     *        message : String      ← bot 的文字回答，答案在这里
+     *        alert   : boolean     ← 只是「要不要弹窗」的开关
+     *        url     : String      ← 跳转链接
+     *    旧代码写的是 `message == null ? alert : message` —— message 一空就把
+     *    boolean 的 alert 当答案读，于是日志里出现「返回: false」这种假回答，
+     *    既污染了就地对答的判定输入，又把真答案丢了。
+     *  现在：只认 String 类型的 message / url；alert 只作为「有回应」的标记。
+     *
+     *  @return 答案文本；没有可判定的文本时返回空串（绝不返回 "false"）。
+     */
+    private String callbackAnswerText(Object response) {
+        try {
+            if (response == null) return "";
+            Object msg = getFieldValSafe(response, "message");
+            if (msg instanceof String) {
+                String s = ((String) msg).trim();
+                if (s.length() > 0) return s;
+            }
+            // 少数 bot 把结果塞在 url 里（如 t.me/...?start=…）—— 只取有文本的部分
+            Object url = getFieldValSafe(response, "url");
+            if (url instanceof String) {
+                String s = ((String) url).trim();
+                if (s.length() > 0 && !s.startsWith("http")) return s;
+            }
+            return "";
+        } catch (Throwable t) { noteSwallowed("callbackAnswerText", t); return ""; }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  锚点 B：NotificationCenter.didReceiveNewMessages（消息到达广播）
+    //
+    //  为什么要有第二条锚点：锚点 A 依赖 MessagesController.processUpdate*，
+    //  锚点 B 依赖 MessageObject 已构造完成。两条入口一道失效时另一道还在。
+    //  这是「不赌单一方法名」的核心 —— TG 换 fork / 大版本重构，
+    //  框架级入口不会同时消失（消失了自己就崩）。
+    //
+    //  入口：MessagesController.didReceivedNotification(int id, int account, Object[] args)
+    //  当 id == NotificationCenter.didReceiveNewMessages 时：
+    //      args[0] = Long dialogId（会话）
+    //      args[1] = ArrayList<MessageObject>（本批消息）
+    //  我们从每个 MessageObject 取 messageOwner 的 (peer_id, from_id, out, message)，
+    //  归一化后交给 judgeReplyByPeer —— 与锚点 A 同一份判定逻辑。
+    // ════════════════════════════════════════════════════════════════
+
+    /** 锚点 B 入口：didReceiveNewMessages 通知。
+     *  @param account  账号索引（控制器实例自带的 currentAccount）
+     *  @param args     通知参数 { Long dialogId, ArrayList<MessageObject> }
+     *  @return 判定到的目标数 */
+    public int onDidReceiveNewMessages(int account, Object[] args) {
+        try {
+            // 无条件计数（不受诊断限时开关影响）——自检面板靠它证明锚点 B 活着
+            anchorBSeen.incrementAndGet();
+            if (args == null || args.length < 2) return 0;
+            long dialogId = 0L;
+            try { Object d = args[0]; if (d instanceof Number) dialogId = ((Number) d).longValue(); }
+            catch (Throwable ignored) {}
+            Object batch = args[1];
+            if (!(batch instanceof java.util.List)) return 0;
+            int hits = 0;
+            int size = ((java.util.List<?>) batch).size();
+            long seen = anchorBSeen.get();
+            if (seen <= 8L) {
+                jlog("[锚点B] 收到通知 acc=" + account + " dialog=" + dialogId
+                     + " 消息数=" + size + "（第 " + seen + " 次）");
+            }
+            for (Object o : (java.util.List<?>) batch) {
+                if (o == null) continue;
+                try {
+                    if (handleOneMessageObject(dialogId, o) != 0) hits++;
+                } catch (Throwable t) { noteSwallowed("anchorB.one", t); }
+            }
+            return hits;
+        } catch (Throwable t) { noteSwallowed("onDidReceiveNewMessages", t); return 0; }
+    }
+
+    /** 锚点 B（发送端）：NotificationCenter.postNotificationName 的 didReceiveNewMessages 分支。
+     *
+     *  为什么改到发送端：原实现在 MessagesController.didReceivedNotification 上拦截，
+     *  但那要求「该控制器恰好注册了 id=1 这个观察者」——官方 13.0.1 实测不成立，
+     *  钩子挂上了却一次都没触发。发送端是所有人的必经之路，只要有人 post 就能截到。
+     *
+     *  postNotificationName 的常见签名是 (int id, Object... args)，args 已是 Object[]。
+     *
+     *  @param args postNotificationName 的变参（Object[]）
+     *  @return 判定到的目标数
+     */
+    public int onPostNotification(int id, Object[] args) {
+        try {
+            anchorBSeen.incrementAndGet();
+            if (args == null || args.length < 2) return 0;
+            long dialogId = 0L;
+            try { Object d = args[0]; if (d instanceof Number) dialogId = ((Number) d).longValue(); }
+            catch (Throwable ignored) {}
+            Object batch = args[1];
+            if (!(batch instanceof java.util.List)) return 0;
+            java.util.List<?> list = (java.util.List<?>) batch;
+            if (list.isEmpty()) return 0;
+            long seen = anchorBSeen.get();
+            if (seen <= 8L) {
+                jlog("[锚点B] 收到通知 id=" + id + " dialog=" + dialogId
+                     + " 消息数=" + list.size() + "（第 " + seen + " 次）");
+            }
+            int hits = 0;
+            for (Object o : list) {
+                if (o == null) continue;
+                try {
+                    if (handleOneMessageObject(dialogId, o) != 0) hits++;
+                } catch (Throwable t) { noteSwallowed("anchorB.post.one", t); }
+            }
+            return hits;
+        } catch (Throwable t) { noteSwallowed("onPostNotification", t); return 0; }
+    }
+
+    /** 处理单个 MessageObject（锚点 B 用）。返回 1 表示该消息被判到某个在等的目标。 */
+    private int handleOneMessageObject(long dialogIdHint, Object mo) {
+        try {
+            Object owner = getFieldValSafe(mo, "messageOwner");
+            if (owner == null) return 0;
+            // 自己发的消息一律不处理
+            Object outObj = getFieldValSafe(owner, "out");
+            if (Boolean.TRUE.equals(outObj)) return 0;
+            // peer / from
+            long peerUid = 0L, fromUid = 0L;
+            try { peerUid = resolveDialogIdFromPeer(getFieldValSafe(owner, "peer_id")); } catch (Throwable ignored) {}
+            try { fromUid = resolveFromDid(getFieldValSafe(owner, "from_id")); } catch (Throwable ignored) {}
+            if (peerUid == 0L) peerUid = dialogIdHint;
+            if (peerUid == 0L) return 0;
+            // 私聊要求发送者就是会话本人（群聊不要求）
+            if (peerUid > 0L && fromUid != 0L && fromUid != peerUid) return 0;
+            // 正文：优先 MessageObject.messageText（已渲染，含纯文本），回退 owner.message
+            String text = "";
+            try {
+                Object mt = getFieldValSafe(mo, "messageText");
+                if (mt != null) text = String.valueOf(mt);
+            } catch (Throwable ignored) {}
+            if (text.length() == 0) {
+                try {
+                    Object m = getFieldValSafe(owner, "message");
+                    if (m != null) text = String.valueOf(m);
+                } catch (Throwable ignored) {}
+            }
+            if (text.length() == 0) return 0;
+            // 日志刻意只在「命中在等目标」时由 judgeReplyByPeer 落一条 ——
+            // 群消息量大，每条都记会淹没日志（实测一次刷屏几十行）。
+            return judgeReplyByPeer(peerUid, text, "锚点B");
+        } catch (Throwable t) { noteSwallowed("handleOneMessageObject", t); return 0; }
+    }
+
     /** 事件所属账号的**兜底解析**：ctrlAcc 拿不到时，遍历所有真实槽位，
      *  找出「该 peer 下存在『已发出、等结论』目标」的那个账号。
      *  2026-10-14：修「全账号签到里非当前账号判不出结果」——
@@ -19871,7 +20230,7 @@ public final class TGAutoSignCore {
         return -1;
     }
 
-    private int accountOfController(Object mc) {
+    public int accountOfController(Object mc) {
         if (mc == null) return -1;
         // Try 1: old TG (<12.9) — MessagesController has currentAccount field (BaseController)
         try {
@@ -19976,41 +20335,6 @@ public final class TGAutoSignCore {
             if (u == null) continue;
             String un = u.getClass().getName();
 
-            // ── 2026-10-14 修复：私聊「短消息」类型的 update ──
-            // 真机实测（TG 13.0.1）：私聊 bot 的回复不是 TL_updateNewMessage，
-            // 而是 **TL_updateShortMessage**（扁平结构：user_id / message / out 直接是字段，
-            // 没有嵌套的 message 对象、也没有 peer_id）。原来只认
-            // updateNewMessage / updateNewChannelMessage → 私聊回复全被 continue 掉，
-            // 表现为「bot 明明回了，模块永远已发出 / 回复判不出」。
-            // 这里把它**归一化成与 updateNewMessage 等价的形态**继续走判定链：
-            //   peerUid = user_id（会话就是这个人）、fromUid = user_id（发送者同）、
-            //   out = out 标志、正文直接用 message 字段。
-            if (un.contains("TL_updateShortMessage") || un.contains("TL_updateShortChatMessage")) {
-                try {
-                    Object _uid = getFieldValSafe(u, "user_id");
-                    Object _cid = getFieldValSafe(u, "chat_id");
-                    Object _out = getFieldValSafe(u, "out");
-                    Object _txt = getFieldValSafe(u, "message");
-                    Object _mid = getFieldValSafe(u, "id");
-                    long _peer = 0L;
-                    if (un.contains("TL_updateShortChatMessage")) {
-                        // 群短消息：会话是 chat_id（负数），发送者 user_id
-                        try {
-                            Object c = _cid;
-                            if (c instanceof Number) _peer = -((Number) c).longValue();
-                        } catch (Throwable ignored) {}
-                    } else {
-                        try { if (_uid instanceof Number) _peer = ((Number) _uid).longValue(); } catch (Throwable ignored) {}
-                    }
-                    long _from = 0L;
-                    try { if (_uid instanceof Number) _from = ((Number) _uid).longValue(); } catch (Throwable ignored) {}
-                    boolean _isOut = Boolean.TRUE.equals(_out);
-                    jlog("[短消息] peer=" + _peer + " from=" + _from + " out=" + _isOut
-                         + " id=" + _mid + " text=" + clip(String.valueOf(_txt), 40));
-                    onShortMessageUpdate(_peer, _from, _isOut, String.valueOf(_txt));
-                } catch (Throwable _eShort) { noteSwallowed("shortMessage", _eShort); }
-                continue;   // 已单独处理，不再走下面（下面依赖 msg 对象，短消息没有）
-            }
 
             // ── 2026-10-14 诊断 v3：记录**所有** update 类型（限时开关，默认开 5 分钟）──
             // 目的：确认私聊 bot 的「引用回复」到底以哪种 update 投递。
@@ -20786,6 +21110,19 @@ public final class TGAutoSignCore {
     }
 
     /** 日志截断，避免把整段长回复写进日志。 */
+    /** 把「距今多少毫秒」说成人话（自检面板用）。 */
+    private static String humanAge(long ms) {
+        if (ms < 0L) return "?";
+        if (ms < 1000L) return ms + " 毫秒";
+        long s = ms / 1000L;
+        if (s < 60L) return s + " 秒";
+        long mn = s / 60L;
+        if (mn < 60L) return mn + " 分钟";
+        long h = mn / 60L;
+        if (h < 48L) return h + " 小时";
+        return (h / 24L) + " 天";
+    }
+
     private static String clip(String t, int max) {
         if (t == null) return "";
         String v = t.replace("\n", " ").trim();
@@ -21778,7 +22115,7 @@ public final class TGAutoSignCore {
             } catch (Throwable ignored) {}
         } };
         final TextView styTip = new TextView(act);
-        styTip.setTextSize(Theme.TS_CAPTION); styTip.setTextColor(Theme.termFaint(act));
+        styTip.setTextSize(Theme.TS_CAPTION); styTip.setTextColor(Theme.txtMuted(act));
         styTip.setTypeface(Theme.text());
         styTip.setPadding(dp(4), dp(4), dp(4), 0);
 
@@ -21813,7 +22150,7 @@ public final class TGAutoSignCore {
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(-1, -2);
         tlp.topMargin = dp(8);
         card0.addView(tbSw, tlp);
-        TextView tTip = new TextView(act); tTip.setTextSize(Theme.TS_CAPTION); tTip.setTextColor(Theme.termFaint(act));
+        TextView tTip = new TextView(act); tTip.setTextSize(Theme.TS_CAPTION); tTip.setTextColor(Theme.txtMuted(act));
         tTip.setTypeface(Theme.text());
         tTip.setText(Lang.tr("配色与明暗相互独立；自动 = 读宿主当前配色（取不到再看系统深色）。均保存后生效。"));
         tTip.setPadding(dp(4), dp(4), dp(4), 0);
@@ -21823,7 +22160,7 @@ public final class TGAutoSignCore {
         // 界面语言：跟随系统 / 中文 / English
         final int[] lMode = { Lang.MODE };
         final Button lbSw = mkBtn(act); lbSw.setTextSize(Theme.TS_BODY);
-        final TextView lTip = new TextView(act); lTip.setTextSize(Theme.TS_CAPTION); lTip.setTextColor(Theme.termFaint(act)); lTip.setTypeface(Theme.text());
+        final TextView lTip = new TextView(act); lTip.setTextSize(Theme.TS_CAPTION); lTip.setTextColor(Theme.txtMuted(act)); lTip.setTypeface(Theme.text());
         final Runnable refreshL = new Runnable() { @Override public void run() {
             lbSw.setText(Lang.tr(lMode[0] == 0 ? "界面语言：跟随系统" : (lMode[0] == 1 ? "界面语言：中文" : "界面语言：English")));
         } };
@@ -21867,7 +22204,7 @@ public final class TGAutoSignCore {
 
         final TextView calTip = new TextView(act);
         calTip.setTextSize(Theme.TS_CAPTION);
-        calTip.setTextColor(Theme.termFaint(act));
+        calTip.setTextColor(Theme.txtMuted(act));
         calTip.setTypeface(Theme.text());
         calTip.setPadding(dp(4), dp(5), dp(4), 0);
         calRow.addView(calTip);
@@ -21967,7 +22304,7 @@ public final class TGAutoSignCore {
         R.notifyFailSw = swRow(act, "只通知失败", NOTIFY_FAIL_ONLY);
         R.notifyFailSw.setTextSize(Theme.TS_BODY);
         cardN.addView(R.notifyFailSw);
-        TextView nTip = new TextView(act); nTip.setTextSize(Theme.TS_CAPTION); nTip.setTextColor(Theme.termFaint(act));
+        TextView nTip = new TextView(act); nTip.setTextSize(Theme.TS_CAPTION); nTip.setTextColor(Theme.txtMuted(act));
         nTip.setTypeface(Theme.text());
         nTip.setText(Lang.tr("每账号每天一条摘要，发到自己的「收藏夹」（不弹系统通知）。目标连续 3 天失败会额外提醒。"));
         nTip.setPadding(dp(4), dp(4), dp(4), 0);
@@ -21998,7 +22335,7 @@ public final class TGAutoSignCore {
         cardExt.addView(extT);
         TextView extTip = new TextView(act);
         extTip.setTextSize(Theme.TS_CAPTION);
-        extTip.setTextColor(Theme.termFaint(act));
+        extTip.setTextColor(Theme.txtMuted(act));
         extTip.setTypeface(Theme.text());
         extTip.setText(Lang.tr("说明：TG 进程被杀时收藏夹也收不到，外部通道才能兜底"));
         extTip.setPadding(dp(4), dp(2), dp(4), dp(6));
@@ -22085,14 +22422,14 @@ public final class TGAutoSignCore {
         cardBk.addView(bkAuto);
         TextView bkTip = new TextView(act);
         bkTip.setTextSize(Theme.TS_CAPTION);
-        bkTip.setTextColor(Theme.termFaint(act));
+        bkTip.setTextColor(Theme.txtMuted(act));
         bkTip.setTypeface(Theme.text());
         bkTip.setText(Lang.tf("自动备份：每天首次打开面板时执行一次，并只保留最近 {0} 份", BACKUP_KEEP));
         bkTip.setPadding(dp(4), dp(4), dp(4), 0);
         cardBk.addView(bkTip);
         TextView bkPath = new TextView(act);
         bkPath.setTextSize(Theme.TS_CAPTION);
-        bkPath.setTextColor(Theme.termFaint(act));
+        bkPath.setTextColor(Theme.txtMuted(act));
         bkPath.setTypeface(android.graphics.Typeface.MONOSPACE);
         bkPath.setText(Lang.tf("备份位置：{0}", "/Download/TGAutoSign-backup/"));
         bkPath.setPadding(dp(4), dp(2), dp(4), 0);
@@ -22119,7 +22456,7 @@ public final class TGAutoSignCore {
         R.timerSw = swRow(act, "定时签到", TIMER_ENABLED);
         R.timerSw.setTextSize(Theme.TS_BODY);
         card1.addView(R.timerSw);
-        TextView tmSub = new TextView(act); tmSub.setTextSize(Theme.TS_CAPTION); tmSub.setTextColor(Theme.termFaint(act)); tmSub.setTypeface(Theme.text());
+        TextView tmSub = new TextView(act); tmSub.setTextSize(Theme.TS_CAPTION); tmSub.setTextColor(Theme.txtMuted(act)); tmSub.setTypeface(Theme.text());
         tmSub.setText(Lang.tr("开 = 窗口内按随机时刻逐个签（防风控，推荐）；关 = 检测到未签就马上签（限窗口内）"));
         tmSub.setPadding(dp(4), 0, dp(4), dp(6));
         card1.addView(tmSub);
@@ -22156,7 +22493,7 @@ public final class TGAutoSignCore {
         wRow.addView(wSep, new LinearLayout.LayoutParams(-2, -2));
         wRow.addView(wb2, new LinearLayout.LayoutParams(0, -2, 1.2f));
         card1.addView(wRow);
-        TextView wTip = new TextView(act); wTip.setTextSize(Theme.TS_CAPTION); wTip.setTextColor(Theme.termFaint(act)); wTip.setTypeface(Theme.text());
+        TextView wTip = new TextView(act); wTip.setTextSize(Theme.TS_CAPTION); wTip.setTextColor(Theme.txtMuted(act)); wTip.setTypeface(Theme.text());
         wTip.setText(Lang.tr("每目标在窗口内各占一段随机时刻，互不重叠"));
         wTip.setPadding(dp(4), 0, dp(4), dp(6));
         card1.addView(wTip);
@@ -22212,14 +22549,14 @@ public final class TGAutoSignCore {
         gapRow.addView(R.gapEd, ge);
         gapRow.addView(gapPlus, gp);
         card1.addView(gapRow);
-        TextView gapTip = new TextView(act); gapTip.setTextSize(Theme.TS_CAPTION); gapTip.setTextColor(Theme.termFaint(act)); gapTip.setTypeface(Theme.text());
+        TextView gapTip = new TextView(act); gapTip.setTextSize(Theme.TS_CAPTION); gapTip.setTextColor(Theme.txtMuted(act)); gapTip.setTypeface(Theme.text());
         gapTip.setText(Lang.tr("0=按目标数自动均分；如设 30，则相邻目标至少隔 30 分钟"));
         gapTip.setPadding(dp(4), 0, dp(4), dp(2));
         card1.addView(gapTip);
         R.missBackSw = swRow(act, "错过补签", MISS_BACK);
         R.missBackSw.setTextSize(Theme.TS_BODY);
         card1.addView(R.missBackSw);
-        TextView mbTip = new TextView(act); mbTip.setTextSize(Theme.TS_CAPTION); mbTip.setTextColor(Theme.termFaint(act)); mbTip.setTypeface(Theme.text());
+        TextView mbTip = new TextView(act); mbTip.setTextSize(Theme.TS_CAPTION); mbTip.setTextColor(Theme.txtMuted(act)); mbTip.setTypeface(Theme.text());
         mbTip.setText(Lang.tr("关掉 TG 期间错过的签到点：开=错过后随机延迟 1~5 分钟自动补；关=错过即跳过（默认）"));
         mbTip.setPadding(dp(4), 0, dp(4), dp(2));
         card1.addView(mbTip);
@@ -22242,7 +22579,7 @@ public final class TGAutoSignCore {
         refreshMd.run();
         mdRow.addView(mdb, new LinearLayout.LayoutParams(0, -2, 1.2f));
         card1.addView(mdRow);
-        TextView mdTip = new TextView(act); mdTip.setTextSize(Theme.TS_CAPTION); mdTip.setTextColor(Theme.termFaint(act)); mdTip.setTypeface(Theme.text());
+        TextView mdTip = new TextView(act); mdTip.setTextSize(Theme.TS_CAPTION); mdTip.setTextColor(Theme.txtMuted(act)); mdTip.setTypeface(Theme.text());
         mdTip.setText(Lang.tr("窗口结束后仍会补签到到这个时间（如 23:00），过了才真正放弃；仅「错过补签」开启时生效"));
         mdTip.setPadding(dp(4), 0, dp(4), dp(2));
         card1.addView(mdTip);
@@ -22385,13 +22722,13 @@ public final class TGAutoSignCore {
                         time.setTextColor(Theme.termCyan(act));
                     } else {
                         time.setText(Lang.tr("明日排"));
-                        time.setTextColor(Theme.termFaint(act));
+                        time.setTextColor(Theme.txtMuted(act));
                     }
                     row.addView(time, new LinearLayout.LayoutParams(-2, -2));
                     pl.addView(row);
                 }
                 TextView foot = new TextView(act);
-                foot.setTextSize(Theme.TS_CAPTION); foot.setTextColor(Theme.termFaint(act)); foot.setTypeface(Theme.text());
+                foot.setTextSize(Theme.TS_CAPTION); foot.setTextColor(Theme.txtMuted(act)); foot.setTypeface(Theme.text());
                 foot.setText(Lang.tf("已签 {0} / {1} · 已签=实际签上时刻 / 待签=计划时刻", doneN, all.size()));
                 foot.setPadding(dp(4), dp(6), dp(4), 0);
                 pl.addView(foot);
@@ -22415,19 +22752,19 @@ public final class TGAutoSignCore {
         card2.setLayoutParams(c2lp);
         R.autoLearnSw = swRow(act, "按钮学习", AUTO_LEARN);
         card2.addView(R.autoLearnSw);
-        TextView alSub = new TextView(act); alSub.setTextSize(Theme.TS_CAPTION); alSub.setTextColor(Theme.termFaint(act)); alSub.setTypeface(Theme.text());
+        TextView alSub = new TextView(act); alSub.setTextSize(Theme.TS_CAPTION); alSub.setTextColor(Theme.txtMuted(act)); alSub.setTypeface(Theme.text());
         alSub.setText(Lang.tr("点一下 bot 按钮就自动加到列表"));
         alSub.setPadding(dp(4), 0, dp(4), dp(4));
         card2.addView(alSub);
         R.autoLearnNetSw = swRow(act, "网络学习", AUTO_LEARN_NET);
         card2.addView(R.autoLearnNetSw);
-        TextView anSub = new TextView(act); anSub.setTextSize(Theme.TS_CAPTION); anSub.setTextColor(Theme.termFaint(act)); anSub.setTypeface(Theme.text());
+        TextView anSub = new TextView(act); anSub.setTextSize(Theme.TS_CAPTION); anSub.setTextColor(Theme.txtMuted(act)); anSub.setTypeface(Theme.text());
         anSub.setText(Lang.tr("自动识别你在 bot 里发的签到文本"));
         anSub.setPadding(dp(4), 0, dp(4), dp(4));
         card2.addView(anSub);
         R.autoLearnNetCfmSw = swRow(act, "网络学习需确认", AUTO_LEARN_NET_CONFIRM);
         card2.addView(R.autoLearnNetCfmSw);
-        TextView anCfgSub = new TextView(act); anCfgSub.setTextSize(Theme.TS_CAPTION); anCfgSub.setTextColor(Theme.termFaint(act)); anCfgSub.setTypeface(Theme.text());
+        TextView anCfgSub = new TextView(act); anCfgSub.setTextSize(Theme.TS_CAPTION); anCfgSub.setTextColor(Theme.txtMuted(act)); anCfgSub.setTypeface(Theme.text());
         anCfgSub.setText(Lang.tr("命中后先进「待确认」列表，你手动确认才加入（防验证码类 bot 误加）"));
         anCfgSub.setPadding(dp(4), 0, dp(4), dp(4));
         card2.addView(anCfgSub);
@@ -22439,7 +22776,7 @@ public final class TGAutoSignCore {
         // 关掉本开关即回到「点什么学什么」。
         R.skipNavSw = swRow(act, "忽略导航按钮", LEARN_SKIP_NAV);
         card2.addView(R.skipNavSw);
-        TextView navSub = new TextView(act); navSub.setTextSize(Theme.TS_CAPTION); navSub.setTextColor(Theme.termFaint(act)); navSub.setTypeface(Theme.text());
+        TextView navSub = new TextView(act); navSub.setTextSize(Theme.TS_CAPTION); navSub.setTextColor(Theme.txtMuted(act)); navSub.setTypeface(Theme.text());
         navSub.setText(Lang.tr("「主菜单 / 返回 / 关闭」这类导航按钮不学。只按文案判断，不会误挡签到按钮；关掉即「点什么学什么」"));
         navSub.setPadding(dp(4), 0, dp(4), dp(4));
         card2.addView(navSub);
@@ -22449,7 +22786,7 @@ public final class TGAutoSignCore {
         // 打开后：点按钮先进「待添加」列表，你确认了才成为签到目标。
         R.btnConfirmSw = swRow(act, "按钮学习需确认", BUTTON_LEARN_CONFIRM);
         card2.addView(R.btnConfirmSw);
-        TextView bcSub = new TextView(act); bcSub.setTextSize(Theme.TS_CAPTION); bcSub.setTextColor(Theme.termFaint(act)); bcSub.setTypeface(Theme.text());
+        TextView bcSub = new TextView(act); bcSub.setTextSize(Theme.TS_CAPTION); bcSub.setTextColor(Theme.txtMuted(act)); bcSub.setTypeface(Theme.text());
         bcSub.setText(Lang.tr("开：点按钮后先进「待添加」，你确认了才成为签到目标。\n关：点什么学什么（旧行为）。"));
         bcSub.setPadding(dp(4), 0, dp(4), dp(4));
         card2.addView(bcSub);
@@ -22462,7 +22799,7 @@ public final class TGAutoSignCore {
         card2.addView(R.delAfterSw);
         TextView delSub = new TextView(act);
         delSub.setTextSize(Theme.TS_CAPTION);
-        delSub.setTextColor(Theme.termFaint(act));
+        delSub.setTextColor(Theme.txtMuted(act));
         delSub.setTypeface(Theme.text());
         delSub.setText(Lang.tr("判为成功后，撤掉模块自己发出的那条签到指令，群里不留痕。"
                              + "只删自己发的，失败或判不出时保留现场。"));
@@ -22482,7 +22819,7 @@ public final class TGAutoSignCore {
         R.learnForceEd.setMinLines(2);
         card2.addView(R.learnForceEd);
         TextView lfTip = new TextView(act); lfTip.setTextSize(Theme.TS_CAPTION);
-        lfTip.setTextColor(Theme.termFaint(act)); lfTip.setTypeface(Theme.text());
+        lfTip.setTextColor(Theme.txtMuted(act)); lfTip.setTypeface(Theme.text());
         lfTip.setText(Lang.tr("匹配按钮文案与回调 data。普通词按子串（不分大小写）；\n用 / 包裹当正则，如 /^(每日|每天).*(签|领)/ 。# 开头为注释。"));
         lfTip.setPadding(dp(4), dp(4), dp(4), dp(2));
         card2.addView(lfTip);
@@ -22526,7 +22863,7 @@ public final class TGAutoSignCore {
         R.excludeEd.setMinLines(2);
         card3.addView(R.excludeEd);
         TextView exTip = new TextView(act);
-        exTip.setTextSize(Theme.TS_CAPTION); exTip.setTextColor(Theme.termFaint(act));
+        exTip.setTextSize(Theme.TS_CAPTION); exTip.setTextColor(Theme.txtMuted(act));
         exTip.setTypeface(Theme.text());
         exTip.setText(Lang.tr("匹配 bot 回复正文 + 按钮文案。普通关键词按子串（不分大小写）；\n用 / 包裹当正则，如 /^每日.*点击/ 。# 开头为注释。"));
         exTip.setPadding(dp(4), dp(4), dp(4), dp(2));
@@ -22545,7 +22882,7 @@ public final class TGAutoSignCore {
         R.looseSw = swRow(act, "宽松模式（来者不拒）", LOOSE_MODE);
         card3.addView(R.looseSw);
         TextView loTip = new TextView(act); loTip.setTextSize(Theme.TS_CAPTION);
-        loTip.setTextColor(Theme.termFaint(act)); loTip.setTypeface(Theme.text());
+        loTip.setTextColor(Theme.txtMuted(act)); loTip.setTypeface(Theme.text());
         loTip.setText(Lang.tr("开：点什么学什么；判定时**只要机器人有回复就算成功**，\n但命中明确失败词（活动已结束 / 请先关注 / 未绑定 等）仍判失败。\n适合判定词千奇百怪的机器人。关：完全按下面的规则判定。"));
         loTip.setPadding(dp(4), dp(2), dp(4), dp(6));
         card3.addView(loTip);
@@ -22596,7 +22933,7 @@ public final class TGAutoSignCore {
 
         TextView fbTip = new TextView(act);
         fbTip.setTextSize(Theme.TS_CAPTION);
-        fbTip.setTextColor(Theme.termFaint(act));
+        fbTip.setTextColor(Theme.txtMuted(act));
         fbTip.setTypeface(Theme.text());
         fbTip.setPadding(dp(4), dp(2), dp(4), dp(6));
         fbTip.setText(Lang.tr("严格：判不出就攒到「未识别回复」等你学词。\n放行：只要机器人回了就算成功（失败词仍判失败）。\n拦截：判不出就当失败，撤销已签并重试。"));
@@ -22612,7 +22949,7 @@ public final class TGAutoSignCore {
         R.judgeSw = swRow(act, "自动判定成功 / 失败", JUDGE_ENABLED);
         card3.addView(R.judgeSw);
         TextView rvTip = new TextView(act); rvTip.setTextSize(Theme.TS_CAPTION);
-        rvTip.setTextColor(Theme.termFaint(act)); rvTip.setTypeface(Theme.text());
+        rvTip.setTextColor(Theme.txtMuted(act)); rvTip.setTypeface(Theme.text());
         rvTip.setText(Lang.tr("开着：按内置词表判断机器人回复是成功还是失败。\n关掉：只记录回复、不判成败（目标需要你自己确认）。"));
         rvTip.setPadding(dp(4), dp(4), dp(4), dp(2));
         card3.addView(rvTip);
@@ -22644,7 +22981,7 @@ public final class TGAutoSignCore {
         blLab.setPadding(dp(2), dp(10), dp(2), dp(4));
         card3.addView(blLab);
         final TextView blVal = new TextView(act);
-        blVal.setTextSize(Theme.TS_CAPTION); blVal.setTextColor(Theme.termFaint(act));
+        blVal.setTextSize(Theme.TS_CAPTION); blVal.setTextColor(Theme.txtMuted(act));
         blVal.setTypeface(Theme.text());
         final Runnable refreshBl = new Runnable() { @Override public void run() {
             if (LEARN_BLOCKED_DIDS.isEmpty()) blVal.setText(Lang.tr("(未排除任何 bot)"));

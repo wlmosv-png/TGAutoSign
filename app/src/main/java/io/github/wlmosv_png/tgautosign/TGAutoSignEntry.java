@@ -125,6 +125,8 @@ public final class TGAutoSignEntry extends XposedModule {
         hookSendRequest();
         hookChatActivityOnResume();
         hookProcessUpdate();
+        hookDidReceiveNewMessages();
+        hookPostNotification();
         hookLaunchActivity();
         hookNagramProxyRotationFix();
     }
@@ -395,6 +397,7 @@ public final class TGAutoSignEntry extends XposedModule {
                     hooked++;
                 } catch (Throwable ignored) {}
             }
+            CORE.anchorCHooked = true;
             logInfo("hooked ConnectionsManager.sendRequest（匹配 " + hooked + " 个方法）");
             if (hooked == 0) logError("未找到 " + "ConnectionsManager.sendRequest" + "，该触发源在此宿主上无效", null);
         } catch (Throwable t) {
@@ -481,9 +484,104 @@ public final class TGAutoSignEntry extends XposedModule {
                 } catch (Throwable ignored) {}
             }
             logInfo("hooked MessagesController.processUpdate*（匹配 " + hooked + " 个方法）");
+            if (hooked > 0) CORE.anchorAHooked = true;
             if (hooked == 0) logError("未找到 " + "MessagesController.processUpdate*" + "，该触发源在此宿主上无效", null);
         } catch (Throwable t) {
             logError("hook processUpdate failed", t);
+        }
+    }
+
+    // 触发源 3.6（锚点 B）：NotificationCenter.didReceiveNewMessages
+    //
+    // 为什么要有它：锚点 A（processUpdate*）是协议层入口，锚点 B 是「消息已入库」的事件层。
+    // 两者互不依赖 —— TG 换 fork 或大版本重构时，不可能同时消失（消失了自己就崩）。
+    // 这条不依赖任何 TL update 类型名，只认 NotificationCenter 的通知 id（十年未变）。
+    //
+    // 入口选 MessagesController.didReceivedNotification：它是 NotificationCenterDelegate
+    // 的已实现方法，所有通知都会经过它，比 hook 接口方法稳（接口要遍历所有实现者）。
+    private void hookDidReceiveNewMessages() {
+        try {
+            Class<?> mc = loadClass("org.telegram.messenger.MessagesController");
+            Class<?> ncCls = loadClass("org.telegram.messenger.NotificationCenter");
+            // 读取 didReceiveNewMessages 通知 id（public static final int）
+            final int ID_DID_RECEIVE = ncCls.getField("didReceiveNewMessages").getInt(null);
+            Method m = findMethod(mc, "didReceivedNotification", int.class, int.class, Object[].class);
+            if (m == null) {
+                logError("MessagesController.didReceivedNotification not found，锚点 B 在此宿主上无效", null);
+                return;
+            }
+            m.setAccessible(true);
+            String key = "didReceiveNewMessages#" + m.toGenericString();
+            synchronized (HOOKED_METHODS) {
+                if (HOOKED_METHODS.contains(key)) return;
+                HOOKED_METHODS.add(key);
+            }
+            hook(m)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(chain -> {
+                        try {
+                            int id = ((Number) chain.getArg(0)).intValue();
+                            // 只关心「新消息到达」这一条通知；其余立刻放行，开销可忽略。
+                            if (id == ID_DID_RECEIVE) {
+                                Object account = chain.getArg(1);
+                                Object args = chain.getArg(2);
+                                Object ctrl = null;
+                                try { ctrl = chain.getThisObject(); } catch (Throwable ignored) {}
+                                int acc = CORE.accountOfController(ctrl);
+                                int accFinal = acc >= 0 ? acc
+                                        : (account instanceof Number ? ((Number) account).intValue() : -1);
+                                if (args instanceof Object[]) {
+                                    try { CORE.onDidReceiveNewMessages(accFinal, (Object[]) args); }
+                                    catch (Throwable ignored) {}
+                                }
+                            }
+                        } catch (Throwable ignored) {}
+                        return chain.proceed();
+                    });
+            CORE.anchorBHooked = true;
+            logInfo("hooked MessagesController.didReceivedNotification（锚点 B，id=" + ID_DID_RECEIVE + "）");
+        } catch (Throwable t) {
+            logError("hook didReceiveNewMessages failed", t);
+        }
+    }
+
+    // 触发源 3.7（锚点 B 发送端）：NotificationCenter.postNotificationName
+    //
+    // 与原「实现端」钩子并存：实现端依赖「谁注册了 id=1」，发送端不依赖任何注册关系。
+    // 两者都成功时按 (peer, msgId) 天然去重（同一条消息判定两次结果一致、幂等）。
+    private void hookPostNotification() {
+        try {
+            Class<?> ncCls = loadClass("org.telegram.messenger.NotificationCenter");
+            final int ID_DID_RECEIVE = ncCls.getField("didReceiveNewMessages").getInt(null);
+            Method m = findMethod(ncCls, "postNotificationName", int.class, Object[].class);
+            if (m == null) {
+                logError("NotificationCenter.postNotificationName(int,Object[]) not found，锚点 B 发送端无效", null);
+                return;
+            }
+            m.setAccessible(true);
+            String key = "postNotificationName#" + m.toGenericString();
+            synchronized (HOOKED_METHODS) {
+                if (HOOKED_METHODS.contains(key)) return;
+                HOOKED_METHODS.add(key);
+            }
+            hook(m)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(chain -> {
+                        try {
+                            Object a0 = chain.getArg(0);
+                            if (a0 instanceof Number && ((Number) a0).intValue() == ID_DID_RECEIVE) {
+                                Object a1 = chain.getArg(1);
+                                if (a1 instanceof Object[]) {
+                                    try { CORE.onPostNotification(ID_DID_RECEIVE, (Object[]) a1); }
+                                    catch (Throwable ignored) {}
+                                }
+                            }
+                        } catch (Throwable ignored) {}
+                        return chain.proceed();
+                    });
+            logInfo("hooked NotificationCenter.postNotificationName（锚点 B 发送端，id=" + ID_DID_RECEIVE + "）");
+        } catch (Throwable t) {
+            logError("hook postNotificationName failed", t);
         }
     }
 
@@ -535,6 +633,20 @@ public final class TGAutoSignEntry extends XposedModule {
         while (c != null && c != Object.class) {
             try {
                 Method m = c.getDeclaredMethod(name);
+                return m;
+            } catch (NoSuchMethodException ignored) {}
+            c = c.getSuperclass();
+        }
+        return null;
+    }
+
+    // 带参数类型的重载：按签名精确定位（同名重载多时用）。
+    // 找不到返回 null，不抛 —— 调用方自己决定「缺失是否致命」。
+    private static Method findMethod(Class<?> cls, String name, Class<?>... paramTypes) {
+        Class<?> c = cls;
+        while (c != null && c != Object.class) {
+            try {
+                Method m = c.getDeclaredMethod(name, paramTypes);
                 return m;
             } catch (NoSuchMethodException ignored) {}
             c = c.getSuperclass();
