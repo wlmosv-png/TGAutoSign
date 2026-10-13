@@ -827,6 +827,22 @@ public final class SignLogicTest {
         tru("无关文本不算结果", !SignLogic.looksLikeSignResult("这是 EmbyPulse 用户自助服务机器人"));
         tru("空串不算结果", !SignLogic.looksLikeSignResult(""));
         tru("null 不算结果", !SignLogic.looksLikeSignResult(null));
+
+        // ── 命令菜单/使用说明识别（2026-10-14 用户反馈的「hope 那种问题」）──
+        // hope 社工库首次交互推的是「可用命令 /start /my /sign …」这类菜单，
+        // 含 sign 字样会被 looksLikeSignResult 判成「像结果」，进而归「回复判不出」。
+        // 用户看到「未识别」以为坏了，其实它就不是签到结果。
+        tru("hope 菜单被识别", SignLogic.looksLikeMenuHelp(
+                "🎉 欢迎使用 hope社工机器人\n📌 可用命令\n/start - 🚀注册账户\n"
+              + "/my - 👤个人信息\n/sign - 📅今日签到\n/help - ℹ️使用说明"));
+        tru("「可用命令」+「使用说明」算菜单", SignLogic.looksLikeMenuHelp("可用命令 /help 使用说明"));
+        tru("只有单个 help 不算菜单", !SignLogic.looksLikeMenuHelp("签到 help"));
+        tru("「签到成功」不算菜单", !SignLogic.looksLikeMenuHelp("签到成功"));
+        tru("null 不算菜单", !SignLogic.looksLikeMenuHelp(null));
+        tru("空串不算菜单", !SignLogic.looksLikeMenuHelp(""));
+        // 组合判定：菜单不应再被判成「像签到结果」
+        String _menu = "📌 可用命令 /start 注册账户 /my 个人信息 /help 使用说明";
+        tru("菜单不算结果(组合)", !(SignLogic.looksLikeSignResult(_menu) && !SignLogic.looksLikeMenuHelp(_menu)));
     }
 
     /**

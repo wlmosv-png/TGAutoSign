@@ -285,6 +285,10 @@ public final class SignStateStore {
         try {
             store.tx(ed -> ed
                     .remove(Keys.opt(prefix, id))
+                    // sent_at_ 必须一起清：isSentPendingFresh 先看 opt_ 再看 sent_at_，
+                    // 只清 opt_ 会让「有结论了却还被当成在飞」的窗口残留在别处读到
+                    //（实测：已签目标 30 分钟内仍被判成「已发出」）。
+                    .remove(Keys.sentAt(prefix, id))
                     .remove(Keys.pendingCfm(prefix, id))
                     .remove(Keys.pendingDay(prefix, id))
                     .remove(Keys.pendingNote(prefix, id))

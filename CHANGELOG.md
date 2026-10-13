@@ -26,6 +26,22 @@
   旧代码在 message 为空时把 `alert` 当成答案读，于是日志里出现「返回: false」这种假回答，
   既污染判定输入、又把真答案丢了。现在只认文本字段。
 
+- **按钮反复失效后状态卡在「已发出」**
+  *Fixed targets stuck at "sent" after repeated stale-button failures.*
+  熔断按钮重试时，写失败计数、写归类、写结果三步挤在一起，前一步抛异常
+  会让后两步被跳过，于是「已发出」标记残留、界面没有处置入口。
+  现在三步各自独立，并且无论如何都会清掉「已发出」标记。
+
+- **「已发出」与「已签」状态指向同一目标时显示混乱**
+  *Fixed stale "sent" marker lingering after a successful check-in.*
+  收尾清理漏掉了发送时刻，导致已签目标在半小时内仍被判成「在等结论」。
+
+- **命令菜单被误判成「回复判不出」**
+  *Command menus no longer reported as unreadable replies.*
+  bot 首次交互常推「可用命令 /start /my /sign … 使用说明」，含 sign 字样
+  会被当成签到结果，于是归类成「未识别」——用户以为模块坏了。
+  现在单独识别菜单/说明类回复，直接跳过、继续等真正的结果。
+
 - **删掉一段基于错误假设的「短消息」处理**
   *Removed a dead code path built on a wrong assumption.*
   客户端 APK 里根本不存在 `TL_updateShortMessage`（服务端下发后早已被展开成

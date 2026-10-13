@@ -1533,6 +1533,34 @@ public final class SignLogic {
         return false;
     }
 
+    /** 「命令菜单 / 使用说明」类回复的特征词。
+     *
+     *  为什么单独一类（2026-10-14 用户反馈「hope 那种问题」）：
+     *  很多 bot 首次交互会推一大段「可用命令 /start /my /sign ... 使用说明」。
+     *  这段文字**含有 sign 字样**，于是 looksLikeSignResult 返回 true，
+     *  被归类成「回复判不出」→ 用户看到「未识别」以为模块坏了。
+     *  实际上它压根不是签到结果，只是功能菜单。单独识别后直接归「不适用」。
+     */
+    private static final String[] MENU_HELP_WORDS = {
+            "可用命令", "使用说明", "命令列表", "使用示例", "使用帮助",
+            "注册账户", "个人信息", "邀请链接", "自助充值", "联系我们",
+            "使用教程", "功能说明", "指令列表", "菜单如下", "回复数字选择",
+            "/help", "/start", "help", "menu"
+    };
+
+    /** 这条回复是否像「命令菜单 / 使用说明」而不是签到结果。 */
+    public static boolean looksLikeMenuHelp(String reply) {
+        if (reply == null || reply.length() == 0) return false;
+        int hits = 0;
+        String lr = reply.toLowerCase(java.util.Locale.US);
+        for (String w : MENU_HELP_WORDS) {
+            String lw = w.toLowerCase(java.util.Locale.US);
+            if (lr.contains(lw)) hits++;
+            if (hits >= 2) return true;      // 至少两个特征词才算菜单，避免误伤
+        }
+        return false;
+    }
+
     /**
      * 这条回复是否**可能**是签到结果（含签到类字眼）。
      * 用于区分「菜单/查询类回复（正常，不该烦用户）」与

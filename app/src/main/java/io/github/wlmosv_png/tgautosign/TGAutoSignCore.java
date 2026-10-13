@@ -4572,7 +4572,12 @@ public final class TGAutoSignCore {
             Button t = menuItem(act, b, "flask", "测试签到", "先跑前置命令 → 点按钮 → 看返回", 0);
             t.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ testEntry(id); } });
         }
-        Button sBtn = menuItem(act, b, "bolt", "立即签到", null, 1);
+        // 「立即签到」：已签目标仍可点（有的 bot 允许多签 / 用户想复签），
+        // 但文案必须如实反映「今天已经签过了」，否则用户会以为模块没生效、反复点。
+        final boolean alreadySigned = stateStore.isSignedToday(accountPrefix(), id);
+        Button sBtn = menuItem(act, b, "bolt",
+                alreadySigned ? "今日已签 · 重新签" : "立即签到",
+                alreadySigned ? "今天已判定成功；再点是重新发送一次" : null, 1);
         sBtn.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ toastAfterSign(sendSign(m, currentAccount()), m); } });
 
         // ── 组 2：设置 ─────────────────────────────────────────────
@@ -6055,9 +6060,9 @@ public final class TGAutoSignCore {
                                     // 计数必须在**所有** panelStale 路径上累加。
                                     // 旧位置在 else 分支里，但正常路径（fPres 非空）总走"拉新面板重试"
                                     // 那条，永远进不到 else → 计数恒 0 → 熔断形同虚设。
-                                    int _staleNow = panelStaleCount(fPrefix, fId) + 1;
-                                    prefs.edit().putInt(fPrefix + "panelstale_" + fId, _staleNow)
-                                         .putString(fPrefix + "panelstale_day_" + fId, todayStr()).apply();
+                                    // 计数只在这里之后统一 +1 一次（见下方 _rt）——
+                                    // 旧代码在此处先 +1、随后 _rt 又 +1，每次过期计数 +2，
+                                    // 熔断阈值形同减半（本该重发 2 次，实际第 1 次就停）。
                                     // 熔断前置判断：已经反复点不动就别再重发了。
                                     // 证据（22:33 日志）：按钮过期 → 800ms 后发 /start → 面板更新
                                     // → 面板事件又点按钮 → 又过期……对该 bot（服务端拒绝代点）
@@ -6091,9 +6096,20 @@ public final class TGAutoSignCore {
                                         prefs.edit().putInt(kRetry(fPrefix, fId), RETRY_LIMIT)
                                              .putString(kRetryDay(fPrefix, fId), todayStr()).apply();
                                         loge("按钮反复失效（第 " + _rt + " 次，" + errText + "）：已停止重试 " + fId);
-                                        noteFailStreak(fAccount, fPrefix, fId, fDialogId, "按钮失效");
-                                        markResultCode(fPrefix, fId, SignLogic.R_BTN_STALE);
-                                        noteResult(fAccount, false);
+                                        // 三步各自独立 try：任一步抛异常都不能让状态卡在「已发出」。
+                                        // 历史事故：noteFailStreak 内部发通知消息（可能抛）排在前面，
+                                        // 一旦抛出，后面的 markResultCode 被跳过 → opt_ 残留 →
+                                        // 界面永远显示「已发出」且无处置入口（用户实测）。
+                                        try { noteFailStreak(fAccount, fPrefix, fId, fDialogId, "按钮失效"); }
+                                        catch (Throwable _eFS) { noteSwallowed("btnStale.streak", _eFS); }
+                                        try { markResultCode(fPrefix, fId, SignLogic.R_BTN_STALE); }
+                                        catch (Throwable _eRC) { noteSwallowed("btnStale.result", _eRC); }
+                                        // 兜底：无论 markResultCode 是否成功，opt_/sent_at_ 都要清。
+                                        // 不清就等于「这一轮没有结论」，而实际上已经有结论（按钮失效）了。
+                                        try { stateStore.clearPostSignState(fPrefix, fId); }
+                                        catch (Throwable _eCS) { noteSwallowed("btnStale.clear", _eCS); }
+                                        try { noteResult(fAccount, false); }
+                                        catch (Throwable _eNR) { noteSwallowed("btnStale.noteResult", _eNR); }
                                         return null;
                                     }
                                     // 面板没就绪 → **不发必然失败的请求**，等新消息推过来
@@ -20923,7 +20939,8 @@ public final class TGAutoSignCore {
                     }
 
                     boolean progress = SignLogic.looksLikeProgress(replyText);
-                    boolean looksLikeResult = SignLogic.looksLikeSignResult(replyText);
+                    boolean menuHelp = SignLogic.looksLikeMenuHelp(replyText);
+                    boolean looksLikeResult = SignLogic.looksLikeSignResult(replyText) && !menuHelp;
                     /* 记下「bot 确实回了内容」这一事实（2026-10-01 补）。
                        为什么必须在这里写：promoteSilentToPending 靠 answered_ 区分
                        「bot 表态了但判不出」与「bot 完全没理」——
@@ -21007,7 +21024,9 @@ public final class TGAutoSignCore {
                         // 措辞要准确：bot 一次交互常发多条消息（先菜单/广告、后结果），
                         // 这条只是"不是签到结果"，**不是最终结论** —— 后续回复仍可能命中。
                         // 以前写"没识别到签到响应，已忽略"，用户看到以为失败了，其实后面会翻盘。
-                        logd("【回复判定】" + did + " 本条不是签到结果（继续等后续回复）: " + clip(replyText, 50));
+                        logd("【回复判定】" + did + (menuHelp
+                                ? " 这是命令菜单/使用说明（不是签到结果，继续等）: "
+                                : " 本条不是签到结果（继续等后续回复）: ") + clip(replyText, 50));
                         // 2026-10-04 扩采集：本条不含签到字样，但该目标本轮确实发过请求
                         // 且还在等结论 —— 那它就是对本次签到的回话，judge 认不出就该沉淀。
                         // 否则「您都还没有绑定xxx呢」这类前置条件回复永远进不了池（用户实测反馈）。
