@@ -620,6 +620,7 @@ public final class Lang {
         EN.put("TGAutoSign 一直免费维护，如果你觉得好用，去 GitHub 点个 \u2b50 就是最大的鼓励", "TGAutoSign is maintained for free. If it helps you, a \u2b50 on GitHub means a lot.");
         EN.put("去 Star \u203a", "Star it \u203a");
         EN.put("打开链接失败: {0}", "Could not open link: {0}");
+        EN.put("已发出 {0} 分钟仍未结案（bot 可能已回复但未被识别）", "Sent {0} min ago but still unresolved (bot may have replied but was not recognised)");
         EN.put("{0} 条需要处理（点右侧按钮逐一处置）", "{0} need attention (handle each on the right)");
         EN.put("{0}：已发起签到", "{0}: check-in started");
         EN.put("今天不再处理它", "Skip it for today");
