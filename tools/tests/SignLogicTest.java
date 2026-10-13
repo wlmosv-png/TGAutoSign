@@ -283,6 +283,17 @@ public final class SignLogicTest {
         eq("无关回复 → UNKNOWN", SignLogic.verdictOf("你好，有什么可以帮你？", null, null, null), SignLogic.V_UNKNOWN);
         eq("空 → UNKNOWN", SignLogic.verdictOf("", null, null, null), SignLogic.V_UNKNOWN);
         eq("null → UNKNOWN", SignLogic.verdictOf(null, null, null, null), SignLogic.V_UNKNOWN);
+
+        // ── 「按钮型收到回复即成功」必须被拒绝语拦住（2026-10-14 用户质疑）──
+        // 用户原话：「按钮类型的只要收到消息就是成功？那签到失败呢？」
+        // 质疑成立：拒绝语绝不能被当成成功。这些必须判 V_FAILED。
+        eq("请先加入频道 → 失败", SignLogic.verdictOf("⚠️ 请先加入以下1个频道才能使用功能", null, null, null), SignLogic.V_FAILED);
+        eq("未绑定账号 → 失败", SignLogic.verdictOf("您还没有绑定账号", null, null, null), SignLogic.V_FAILED);
+        eq("已过期 → 失败", SignLogic.verdictOf("您的会员已过期", null, null, null), SignLogic.V_FAILED);
+        eq("没有签到成功 → 失败", SignLogic.verdictOf("没有签到成功", null, null, null), SignLogic.V_FAILED);
+        eq("禁止签到 → 失败", SignLogic.verdictOf("您已被禁止签到", null, null, null), SignLogic.V_FAILED);
+        eq("no permission → 失败", SignLogic.verdictOf("no permission to use this bot", null, null, null), SignLogic.V_FAILED);
+        eq("failed → 失败", SignLogic.verdictOf("checkin failed, try again", null, null, null), SignLogic.V_FAILED);
         // 顺序：已签过必须优先于成功（"已签到"含"签到"）
         eq("顺序：已签到不判成刚成功", SignLogic.verdictOf("您今日已签到成功过", null, null, null), SignLogic.V_SIGNED);
         // 自定义词表覆盖

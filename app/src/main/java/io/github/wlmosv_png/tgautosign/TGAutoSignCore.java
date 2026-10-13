@@ -19980,63 +19980,64 @@ public final class TGAutoSignCore {
         handleReplyText(prefix, account, m, text, false);
     }
 
-    /** 用一段回复文本对某个目标做判定；isMedia=true 表示这是媒体消息（图/贴纸/视频…）。 */
+    /** 用一段回复文本对某个目标做判定；isMedia=true 表示这是媒体消息（图/贴纸/视频…）。
+     *
+     *  判定顺序（2026-10-14 修正，此前过于宽松）：
+     *    ① 统一判定链 judgeWithScopes —— 失败词**优先**于成功词
+     *       （内置 + 用户自定义，含「未绑定」「请先加入」「已过期」这类拒绝语义）
+     *    ② 菜单 / 进度提示 → 不是结论，跳过继续等
+     *    ③ 媒体消息（按钮型）→ 只有在①②都没结论时才认成功：
+     *       图/贴纸没有文字，不可能是否定句；按钮型 bot 回图就是结果页。
+     *    ④ 其余 → 判不出，沉淀给用户处置。
+     *
+     *  为什么删掉「按钮型收到任何回复即成功」：
+     *    那条兜底会把「你今天已经签过了」以外的**拒绝语**（请先加入频道、
+     *    未绑定账号、额度不足…）一律算成成功 —— 用户第二天直接断签。
+     *    用户当场质疑「签到失败呢？」，质疑成立。
+     */
     private void handleReplyText(String prefix, int account, Map<String, Object> m, String text, boolean isMedia) {
         try {
             String id = entryId(m);
             long did = entryDid(m);
-            // ── 媒体消息 = 按钮回调的「结果页」（2026-10-14）──
-            // 按钮型 bot 点完按钮回一张图，图里就是结果 —— 文本层永远读不到内容。
-            // 用户明确知道这是成功了，模块记成「回复判不出」只会误导。
-            // 判据收紧到「按钮型目标」，避免文本型 bot 的图片推广被误判成功。
+
+            // ① 统一判定链：失败优先，含所有内置词与用户自定义词
+            try {
+                Object[] vd = judgeWithScopes(prefix, did, 0L, id, text);
+                int v = ((Integer) vd[0]).intValue();
+                String hit = String.valueOf(vd[1]);
+                if (v == SignLogic.V_SIGNED) {
+                    jlog("【回复判定】" + did + " 命中「" + hit + "」→ 计入已签");
+                    markSigned(prefix, id);
+                    clearPendingConfirm(prefix, id);
+                    return;
+                }
+                if (v == SignLogic.V_FAILED) {
+                    jlog("【回复判定】" + did + " 命中失败词「" + hit + "」→ 判定未成功: " + clip(text, 40));
+                    markResultCode(prefix, id, SignLogic.R_FAILED);
+                    return;
+                }
+            } catch (Throwable _eJV) { noteSwallowed("handleReplyText.judge", _eJV); }
+
+            // ② 菜单 / 进度：不是结论
+            if (SignLogic.looksLikeMenuHelp(text)) {
+                jlog("【回复判定】" + did + " 这是命令菜单/使用说明（不是结果，继续等）: " + clip(text, 50));
+                return;
+            }
+            if (SignLogic.looksLikeProgress(text)) {
+                jlog("【回复判定】" + did + " 这是进度提示（继续等结果）: " + clip(text, 50));
+                return;
+            }
+
+            // ③ 媒体消息 + 按钮型目标：图里就是结果，文字层读不到内容。
+            //    放在失败词之后 —— 带说明文字的图（caption 含「失败」）已被①拦下。
             if (isMedia && KIND_CB.equals(entryKind(m))) {
                 jlog("【回复判定】" + did + " 收到媒体消息（图片/贴纸）→ 按钮型目标视为签到成功");
                 markSigned(prefix, id);
                 clearPendingConfirm(prefix, id);
                 return;
             }
-            // 复用统一的判定词逻辑：先取有效词表（全局/Bot/目标级），再看命中
-            String okWords = cfgStr("ok_words", "");
-            String failWords = cfgStr("fail_words", "");
-            String[] oks = SignLogic.parseExtraWords(okWords);
-            String[] fails = SignLogic.parseExtraWords(failWords);
-            String hitOk = null, hitFail = null;
-            if (oks != null) for (String w : oks) { if (w != null && w.length() > 0 && text.contains(w)) { hitOk = w; break; } }
-            if (fails != null) for (String w : fails) { if (w != null && w.length() > 0 && text.contains(w)) { hitFail = w; break; } }
-            if (hitOk != null) {
-                jlog("【回复判定】" + did + " 命中「" + hitOk + "」→ 计入已签（1 条）");
-                markSigned(prefix, id);
-                clearPendingConfirm(prefix, id);
-                return;
-            }
-            if (hitFail != null) {
-                jlog("【回复判定】" + did + " 命中「" + hitFail + "」→ 判定未成功");
-                markResultCode(prefix, id, SignLogic.R_FAILED);
-                return;
-            }
-            // ── 判不出时的收敛（2026-10-14）──
-            // 1) 菜单/使用说明类：只是功能列表，不是结果 —— 跳过，别记「判不出」。
-            if (SignLogic.looksLikeMenuHelp(text)) {
-                jlog("【回复判定】" + did + " 这是命令菜单/使用说明（不是结果，继续等）: " + clip(text, 50));
-                return;
-            }
-            // 2) 进度提示：还在处理中，继续等真正的结果。
-            if (SignLogic.looksLikeProgress(text)) {
-                jlog("【回复判定】" + did + " 这是进度提示（继续等结果）: " + clip(text, 50));
-                return;
-            }
-            // 3) 按钮型目标：按钮点击已把请求送达，bot 之后回的任何非菜单/非进度文本
-            //    都是对这次点击的回应 —— 词表认不出不代表失败。
-            //    用户实测：流光画廊机器人回图片、其它 bot 回「今日已领取」都被误判「判不出」，
-            //    而用户明确知道那是签到成功。
-            if (KIND_CB.equals(entryKind(m))) {
-                jlog("【回复判定】" + did + " 按钮型目标收到回复（词表未命中，按已响应计入已签）: "
-                     + clip(text, 60));
-                markSigned(prefix, id);
-                clearPendingConfirm(prefix, id);
-                return;
-            }
-            // 4) 文本型目标：确实无法从这段文字判断结果 → 沉淀「未识别回复」给用户处置。
+
+            // ④ 判不出：沉淀到「未识别回复」，给用户处置
             jlog("【回复判定】" + did + " 回复认不出，已记录一条（可去「设置 → 回复判定词」补词）："
                  + clip(text, 60));
             markResultCode(prefix, id, SignLogic.R_REPLIED_UNK);
