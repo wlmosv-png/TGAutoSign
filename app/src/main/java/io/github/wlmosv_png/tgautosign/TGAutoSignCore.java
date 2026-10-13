@@ -1381,14 +1381,17 @@ public final class TGAutoSignCore {
             String _pfx = accountPrefix(i);
             int[] rp = roundProgressOf(_pfx);
             boolean hasRound = rp[1] > 0;
-            int _done = hasRound ? rp[0] : sig;
-            int _tot  = hasRound ? rp[1] : tot;
-            int _prob = hasRound ? rp[3] : 0;
+            // 「需处理」直接扫目标（不依赖本轮状态表）——本轮没发出也要能看到历史卡住的
+            int _prob = 0;
+            try { _prob = roundProblemsOf(_pfx).size(); } catch (Throwable ignored) {}
+            // 进度口径：本轮有数据用本轮；否则用全天（已签 + 卡住 = 已了结）
+            int _tot  = hasRound ? rp[1] : (tot + _prob);
+            int _done = hasRound ? rp[0] : (sig + _prob);
             StatsCharts.AccProgressDrawable d = accBars.get(Integer.valueOf(i));
             if (d != null) {
                 float r = _tot <= 0 ? 0f : (float) _done / _tot;
                 d.setRatio(r);
-                d.setDone(_tot > 0 && _done >= _tot && _prob == 0);
+                d.setDone(_tot > 0 && _done >= _tot && _prob == 0);   // 有卡住 → 不算「完成」
                 d.setRunning(en && _tot > 0 && _done < _tot);
                 int col;
                 if (!en) col = Theme.termMuted(act);
@@ -6566,14 +6569,68 @@ public final class TGAutoSignCore {
     }
     private void roundClear() { roundStates.clear(); roundStartAt = 0L; }
 
-    /** 该账号在本轮里"需处理"的目标（判不出/未回复/发送失败/面板过期）。 */
+    /** 该账号"需处理"的目标列表（2026-10-14 重做）。
+     *
+     *  改前只查本轮内存状态表 → 但「本轮发出 0」时（目标都已被闸跳过）
+     *  表是空的，界面就看不到任何卡住项 —— 而用户关心的恰恰是**那些一直卡着的**。
+     *  现在改为**扫该账号全部目标**，按**持久状态**判定是否"卡住"：
+     *    · 待确认（pendcfm_）：bot 没回 / 判不出，等人处置
+     *    · 已发出但超时未结案（sent_at_ 过期且未签）
+     *    · 今日已判失败 / 达重试上限
+     *  再叠加本轮内存状态（有则用最新原因），保证「刚发生的问题」也能立刻看到。 */
     private java.util.List<RoundState> roundProblemsOf(String prefix) {
-        java.util.List<RoundState> out = new java.util.ArrayList<RoundState>();
+        java.util.LinkedHashMap<String, RoundState> map = new java.util.LinkedHashMap<String, RoundState>();
+        long now = System.currentTimeMillis();
+        String today = todayStr();
+        try {
+            java.util.List<Map<String, Object>> list = new java.util.ArrayList<Map<String, Object>>();
+            loadTargetsInto(prefix, list);
+            for (Map<String, Object> m : list) {
+                String id = entryId(m);
+                long did = entryDid(m);
+                if (isFrozen(prefix, id) || isSnoozed(prefix, id)) continue;
+                boolean signedToday = today.equals(prefs.getString(kLast(prefix, id), ""));
+                int state = -1; String note = null;
+                if (signedToday) {
+                    state = RS_SIGNED;
+                } else if (isPendingConfirm(prefix, id)) {
+                    // 待确认 = bot 未回复 / 回复判不出（持久标记）
+                    state = RS_UNKNOWN;
+                    note = prefs.getString(prefix + "pendcfm_note_" + id, "");
+                    if (note == null || note.isEmpty()) note = "已发出但未得到结论，等处置";
+                } else {
+                    long sent = prefs.getLong(prefix + "sent_at_" + id, 0L);
+                    if (sent > 0 && now - sent > PENDING_TTL_MS) {
+                        state = RS_NO_REPLY; note = "已发出但未等到回复";
+                    } else {
+                        int rc = resultCodeOf(prefix, id);
+                        if (rc == SignLogic.R_REPLIED_UNK) { state = RS_UNKNOWN; note = "回复认不出，可补判定词"; }
+                        else if (rc == SignLogic.R_NO_REPLY) { state = RS_NO_REPLY; note = "bot 未回复"; }
+                        else if (rc == SignLogic.R_BTN_STALE) { state = RS_PANEL; note = "面板已过期"; }
+                        else if (rc == SignLogic.R_FAILED) { state = RS_SENDFAIL; note = "签到失败"; }
+                    }
+                }
+                if (state < 0 || state == RS_SIGNED) continue;   // 已签 / 无问题 → 不进"需处理"
+                RoundState rs = new RoundState(prefix, id, did, targetTitle(did));
+                rs.state = state; rs.note = note == null ? "" : note;
+                rs.at = prefs.getLong(prefix + "sent_at_" + id, 0L);
+                if (rs.at <= 0) rs.at = now;
+                map.put(id, rs);
+            }
+        } catch (Throwable t) { noteSwallowed("roundProblemsOf-scan", t); }
+        // 叠加本轮内存状态（更新原因，且把本轮新卡住的补进来）
         for (RoundState rs : roundStates.values()) {
             if (!prefix.equals(rs.prefix)) continue;
             if (rs.state == RS_NO_REPLY || rs.state == RS_UNKNOWN
-                    || rs.state == RS_SENDFAIL || rs.state == RS_PANEL) out.add(rs);
+                    || rs.state == RS_SENDFAIL || rs.state == RS_PANEL) {
+                RoundState cur = map.get(rs.id);
+                if (cur == null) { map.put(rs.id, rs); }
+                else { cur.state = rs.state; if (rs.note != null && rs.note.length() > 0) cur.note = rs.note; }
+            } else if (rs.state == RS_SIGNED) {
+                map.remove(rs.id);   // 本轮已签 → 从"需处理"移除
+            }
         }
+        java.util.List<RoundState> out = new java.util.ArrayList<RoundState>(map.values());
         java.util.Collections.sort(out, new java.util.Comparator<RoundState>() {
             @Override public int compare(RoundState a, RoundState b) { return Long.compare(a.at, b.at); }
         });
