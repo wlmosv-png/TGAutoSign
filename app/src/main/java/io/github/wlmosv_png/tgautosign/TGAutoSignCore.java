@@ -1325,6 +1325,7 @@ public final class TGAutoSignCore {
         List<Map<String, Object>> exist = new ArrayList<Map<String, Object>>();
         try { loadTargetsInto(prefix, exist); } catch (Throwable ignored) {}
         int added = 0, skipped = 0;
+        int activated = 0;
         for (Map<String, Object> m : src) {
             try {
                 String kind = entryKind(m);
@@ -1338,68 +1339,97 @@ public final class TGAutoSignCore {
                 }
                 if (dup) { skipped++; continue; }
                 Map<String, Object> cp = new HashMap<String, Object>(m);
-                // 跨账号复制：把源账号里的 access_hash 一起带上。
-                // 这样目标在账号2 即使从没开过会话，也能用 did+ahash 直接构造 InputPeer 发消息。
-                try {
-                    long ha = captureAccessHash(fromAccount, m);
-                    if (ha != 0L) cp.put("ahash", Long.valueOf(ha));
-                } catch (Throwable ignored) {}
+                // 跨账号复制：把源账号里的 access_hash / username 一起带上。
+                // access_hash：did+ahash 兜底构造 InputPeer（临时/部分可用）；
+                // username：目标账号可用 UserNameResolver.resolve 主动拉取该 bot 写入本地（根治）。
+                try { captureIdentity(fromAccount, m, cp); } catch (Throwable ignored) {}
                 persistEntry(prefix, cp);
                 added++;
+                // 复制完成即请求目标账号从服务器拉取该 bot（异步，TG 会把 user 写入账号2 users 表）
+                Object un = cp.get("uname");
+                if (un != null) {
+                    try { resolveUsernameInto(account, String.valueOf(un)); activated++; } catch (Throwable ignored) {}
+                }
             } catch (Throwable ignored) {}
         }
-        String msg = accountLabel(account) + "：新增 " + added + " 个目标" + (skipped > 0 ? "（跳过重复 " + skipped + " 个）" : "");
+        String msg = accountLabel(account) + "：新增 " + added + " 个目标"
+                + (activated > 0 ? "（已触发 " + activated + " 个 bot 的身份拉取）" : "")
+                + (skipped > 0 ? "（跳过重复 " + skipped + " 个）" : "");
         if (added == 0) logw("【复制目标】" + msg + "——一个都没加，可能已经复制过了");
         else logs("【复制目标】" + accountLabel(fromAccount) + " → " + msg);
         toast(added == 0 ? Lang.tr("没有需要复制的新目标（可能早就复制过了）")
                 : Lang.tf("已复制到 {0}：新增 {1} 个", accountLabel(account), added));
     }
 
-    /** 从某账号内存/数据库/会话里取该 did 的 access_hash（跨账号复制时使用）。
-     *  access_hash 是 TG 对象的全局访问哈希，不随账号变化 —— 从源账号拷来，
-     *  目标账号即使用 did+ahash 直接构造 InputPeer 也能发消息。返回 0 表示取不到。 */
-    private long captureAccessHash(int account, Map<String, Object> m) {
+    /** 从某账号内存/数据库/会话里取该 did 的 access_hash 与 username（跨账号复制时使用）。
+     *  access_hash：目标账号未与 bot 建立会话时，用 did+ahash 兜底构造 InputPeer。
+     *  username：目标账号可用 UserNameResolver.resolve(username) 主动从服务器拉取该 user
+     *            （含当前有效的 access_hash）写入本地 users 表 —— 这是根治手段。
+     *  结果直接写入 out（"ahash"/"uname"），无则不动。 */
+    private void captureIdentity(int account, Map<String, Object> m, Map<String, Object> out) {
         try {
             long did = entryDid(m);
-            if (did == 0L) return 0L;
+            if (did == 0L) return;
             boolean isChat = "chat".equals(entryPeerKind(m));
             Object mc = getMessagesController(account);
-            if (mc == null) return 0L;
+            if (mc == null) return;
+            Object obj = null;
             if (isChat) {
-                // 群/频道：getChat
-                Object chat = null;
-                try { chat = invoke(mc, "getChat", new Class<?>[]{Long.class}, new Object[]{Long.valueOf(did)}); } catch (Throwable ignored) {}
-                if (chat != null) {
-                    Object ah = getFieldValSafe(chat, "access_hash");
-                    if (ah instanceof Number) return ((Number) ah).longValue();
-                }
-                if (chat == null) {
+                try { obj = invoke(mc, "getChat", new Class<?>[]{Long.class}, new Object[]{Long.valueOf(did)}); } catch (Throwable ignored) {}
+                if (obj == null) {
                     try {
                         Object ms = getMessagesStorage(account);
-                        if (ms != null) chat = invoke(ms, "getChat", new Class<?>[]{long.class}, new Object[]{Long.valueOf(did)});
+                        if (ms != null) obj = invoke(ms, "getChat", new Class<?>[]{long.class}, new Object[]{Long.valueOf(did)});
                     } catch (Throwable ignored) {}
-                    if (chat != null) {
-                        Object ah = getFieldValSafe(chat, "access_hash");
-                        if (ah instanceof Number) return ((Number) ah).longValue();
-                    }
                 }
-                return 0L;
+            } else {
+                try { obj = invoke(mc, "getUser", new Class<?>[]{Long.class}, new Object[]{Long.valueOf(did)}); } catch (Throwable ignored) {}
+                if (obj == null) {
+                    try {
+                        Object ms = getMessagesStorage(account);
+                        if (ms != null) obj = invoke(ms, "getUser", new Class<?>[]{long.class}, new Object[]{Long.valueOf(did)});
+                    } catch (Throwable ignored) {}
+                }
             }
-            // 私聊 bot：getUser（内存 → 数据库）
-            Object user = null;
-            try { user = invoke(mc, "getUser", new Class<?>[]{Long.class}, new Object[]{Long.valueOf(did)}); } catch (Throwable ignored) {}
-            if (user == null) {
-                try {
-                    Object ms = getMessagesStorage(account);
-                    if (ms != null) user = invoke(ms, "getUser", new Class<?>[]{long.class}, new Object[]{Long.valueOf(did)});
-                } catch (Throwable ignored) {}
+            if (obj == null) return;
+            Object ah = getFieldValSafe(obj, "access_hash");
+            if (ah instanceof Number && ((Number) ah).longValue() != 0L) {
+                out.put("ahash", Long.valueOf(((Number) ah).longValue()));
             }
-            if (user != null) {
-                Object ah = getFieldValSafe(user, "access_hash");
-                if (ah instanceof Number) return ((Number) ah).longValue();
+            if (!isChat) {
+                Object un = getFieldValSafe(obj, "username");
+                if (un != null) {
+                    String us = String.valueOf(un);
+                    if (us.length() > 0 && !"null".equals(us)) out.put("uname", us);
+                }
             }
-            return 0L;
-        } catch (Throwable t) { return 0L; }
+        } catch (Throwable t) { noteSwallowed("captureIdentity", t); }
+    }
+
+    /** 用 UserNameResolver.resolve(username) 主动从服务器拉取该 bot 的 user 并写入本账号。
+     *  这是跨账号复制后「让新账号认识这些 bot」的根治手段：拉取成功后 TG 会把 user
+     *  （含当前有效的 access_hash）写进本账号 users 表，之后的 getUser / getInputPeer 全部正常。 */
+    private void resolveUsernameInto(int account, final String username) {
+        if (username == null || username.length() == 0) return;
+        try {
+            Class<?> urCls = classEx("org.telegram.messenger.UserNameResolver");
+            if (urCls == null) return;
+            Object ur = urCls.getConstructor(int.class).newInstance(Integer.valueOf(account));
+            Class<?> cbCls = classEx("org.telegram.messenger.Utilities$Callback");
+            Object cb = java.lang.reflect.Proxy.newProxyInstance(cl, new Class<?>[]{cbCls},
+                new java.lang.reflect.InvocationHandler() {
+                    @Override public Object invoke(Object proxy, java.lang.reflect.Method method, Object[] args) {
+                        return null;
+                    }
+                });
+            // resolve(String username, String referer, boolean force, Callback<Long>)
+            java.lang.reflect.Method m = urCls.getMethod("resolve",
+                    String.class, String.class, boolean.class, cbCls);
+            m.invoke(ur, username, null, Boolean.FALSE, cb);
+            logd("[复制激活] 已请求拉取 " + username + " @账号" + account);
+        } catch (Throwable t) {
+            noteSwallowed("resolveUsernameInto", t);
+        }
     }
 
     /** 用 did + 保存的 access_hash 手工构造 InputPeer（新账号未开过会话、getUser 拿不到时的兜底）。 */
@@ -2931,6 +2961,13 @@ public final class TGAutoSignCore {
             long _savedA = numLong(prefix + "ahash_" + id, 0L);
             if (_savedA != 0L) e.remove(prefix + "ahash_" + id);
         }
+        // 跨账号复制带过来的 @username（用于目标账号主动拉取该 bot）
+        Object _un = m.get("uname");
+        if (_un != null && String.valueOf(_un).length() > 0 && !"null".equals(String.valueOf(_un))) {
+            e.putString(prefix + "uname_" + id, String.valueOf(_un));
+        } else {
+            e.remove(prefix + "uname_" + id);
+        }
         // 群/频道目标：记下 peer 类型与显示名（群聊 getChat 而非 getUser）
         String pk = entryPeerKind(m);
         if (!"user".equals(pk)) e.putString(prefix + "peerkind_" + id, pk);
@@ -2960,6 +2997,7 @@ public final class TGAutoSignCore {
             .remove(prefix + "data_" + id)
             .remove(prefix + "hash_" + id)
             .remove(prefix + "ahash_" + id)
+            .remove(prefix + "uname_" + id)
             .remove(prefix + "msg_id_" + id)
             .remove(kLast(prefix, id))
             .remove(kRetry(prefix, id))
@@ -2969,7 +3007,7 @@ public final class TGAutoSignCore {
     }
 
     private static final String[] ENTRY_MARKERS =
-        {"learned_","kind_","did_","data_","hash_","ahash_","msg_id_","pre_","loc_","last_","retry_","retry_at_","retry_day_","sent_at_"};
+        {"learned_","kind_","did_","data_","hash_","ahash_","uname_","msg_id_","pre_","loc_","last_","retry_","retry_at_","retry_day_","sent_at_"};
     private static final Set<String> GLOBAL_KEYS = new HashSet<String>(Arrays.asList(
         "jmb_keywords","jmb_retry","jmb_wake_cmd","jmb_alfilter","jmb_autolearn","jmb_autolearn_net","jmb_tut_seen","jmb_prompt_day","update_cooldown_at","update_seen_code","update_last_notice","update_last_error"));
 
@@ -4833,6 +4871,8 @@ public final class TGAutoSignCore {
                     if (pkv != null && pkv.length() > 0) m.put("peerKind", pkv);
                     long ahv = numLong(prefix + "ahash_" + id, 0L);
                     if (ahv != 0L) m.put("ahash", Long.valueOf(ahv));
+                    String unv = strOf(prefix + "uname_" + id);
+                    if (unv != null && unv.length() > 0) m.put("uname", unv);
                     String ttlv = strOf(prefix + "title_" + id);
                     if (ttlv != null && ttlv.length() > 0) m.put("title", ttlv);
                     if (KIND_CB.equals(kind)) {
