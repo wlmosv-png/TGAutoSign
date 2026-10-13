@@ -4692,19 +4692,22 @@ public final class TGAutoSignCore {
     // 而它被每条群消息调用一次。目标一多，群一活跃，主线程就被反复拖。
     // 这里加一层 2 秒有效期的缓存：写入路径主动失效，读路径直接命中。
     private volatile List<Map<String, Object>> _tCache = null;
+    private volatile String _tCachePrefix = null;
     private volatile long _tCacheAt = 0L;
     private static final long TARGET_CACHE_MS = 2000L;
 
     /** 任何改动目标的路径都应调用它，避免读到旧数据。 */
     private void invalidateTargetCache() {
-        _tCache = null; _tCacheAt = 0L;
+        _tCache = null; _tCachePrefix = null; _tCacheAt = 0L;
     }
 
     private void loadTargetsInto(String prefix, List<Map<String, Object>> out) {
-        // 先试缓存
+        // 先试缓存 —— **缓存绑定账号前缀**：只有同一账号的 2 秒内命中，
+        // 否则会把 A 账号的目标串给 B 账号（2026-10-13 修多账号串目标）。
         try {
             List<Map<String, Object>> c = _tCache;
-            if (c != null && System.currentTimeMillis() - _tCacheAt < TARGET_CACHE_MS) {
+            if (c != null && prefix != null && prefix.equals(_tCachePrefix)
+                    && System.currentTimeMillis() - _tCacheAt < TARGET_CACHE_MS) {
                 out.addAll(c);
                 return;
             }
@@ -4713,6 +4716,7 @@ public final class TGAutoSignCore {
         loadTargetsIntoUncached(prefix, tmp);
         try {
             _tCache = tmp;
+            _tCachePrefix = prefix;
             _tCacheAt = System.currentTimeMillis();
         } catch (Throwable ignored) {}
         out.addAll(tmp);
