@@ -36,6 +36,12 @@
   *Fixed stale "sent" marker lingering after a successful check-in.*
   收尾清理漏掉了发送时刻，导致已签目标在半小时内仍被判成「在等结论」。
 
+- **按钮型目标收到图片/贴纸被误报「回复判不出」**
+  *Image-only replies no longer reported as unreadable.*
+  按钮型 bot 点完按钮常回一张结果图，界面文字层只能读到「图片」两个字，
+  于是被判成「认不出」。这类目标只要收到回复（非菜单、非进度），
+  就说明这次点击已被响应 —— 现在直接计入已签。
+
 - **命令菜单被误判成「回复判不出」**
   *Command menus no longer reported as unreadable replies.*
   bot 首次交互常推「可用命令 /start /my /sign … 使用说明」，含 sign 字样

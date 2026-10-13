@@ -1548,6 +1548,25 @@ public final class SignLogic {
             "/help", "/start", "help", "menu"
     };
 
+    /** MessageObject.messageText 对「无文字的媒体消息」的渲染值。
+     *  实测（TG 13.0.1）：纯图片消息渲染成「图片」，贴纸/视频同理。 */
+    private static final String[] MEDIA_PLACEHOLDER = {
+            "图片", "照片", "贴纸", "视频", "动画", "文件", "音频", "语音", "视频消息",
+            "photo", "sticker", "video", "animation", "document", "audio", "voice"
+    };
+
+    /** 这段文本是否只是「媒体占位符」（不是真实回复内容）。 */
+    public static boolean isMediaPlaceholderText(String text) {
+        if (text == null) return false;
+        String t = text.trim();
+        if (t.length() == 0 || t.length() > 8) return false;
+        String lt = t.toLowerCase(java.util.Locale.US);
+        for (String w : MEDIA_PLACEHOLDER) {
+            if (t.equals(w) || lt.equals(w)) return true;
+        }
+        return false;
+    }
+
     /** 这条回复是否像「命令菜单 / 使用说明」而不是签到结果。 */
     public static boolean looksLikeMenuHelp(String reply) {
         if (reply == null || reply.length() == 0) return false;

@@ -843,6 +843,16 @@ public final class SignLogicTest {
         // 组合判定：菜单不应再被判成「像签到结果」
         String _menu = "📌 可用命令 /start 注册账户 /my 个人信息 /help 使用说明";
         tru("菜单不算结果(组合)", !(SignLogic.looksLikeSignResult(_menu) && !SignLogic.looksLikeMenuHelp(_menu)));
+
+        // ── 媒体占位符（2026-10-14 流光画廊机器人：点完按钮回一张图）──
+        // messageText 对纯图片渲染成「图片」；旧逻辑当文本判定 → 判不出 → 误报「回复判不出」。
+        tru("「图片」是媒体占位符", SignLogic.isMediaPlaceholderText("图片"));
+        tru("「贴纸」是媒体占位符", SignLogic.isMediaPlaceholderText("贴纸"));
+        tru("「photo」是媒体占位符", SignLogic.isMediaPlaceholderText("photo"));
+        tru("「签到成功」不是占位符", !SignLogic.isMediaPlaceholderText("签到成功"));
+        tru("长文本不是占位符", !SignLogic.isMediaPlaceholderText("恭喜您签到成功，获得积分+10"));
+        tru("null 不是占位符", !SignLogic.isMediaPlaceholderText(null));
+        tru("空串不是占位符", !SignLogic.isMediaPlaceholderText(""));
     }
 
     /**
