@@ -754,6 +754,56 @@ public final class TGAutoSignCore {
         } catch (Throwable t) { toast(Lang.tf("打开作者主页失败: {0}", t)); }
     }
 
+    /** Star 请求横幅（每个版本只显示一次）。挂在 /jmb 主面板顶部。
+     *  2026-10-13 新增：用户要求「更新后提示一次，请去 GitHub 点 Star」。
+     *  做成**面板顶部一次性横幅**而非群聊消息：只在用户主动发 /jmb 时出现，不打扰签到。
+     *  去重：jmb_star_prompt_ver 记录已提示过的版本号；同一版本永不重复。 */
+    private void buildStarBanner(Activity act, LinearLayout parent) {
+        try {
+            String curVer = io.github.wlmosv_png.tgautosign.update.UpdateChecker.VERSION_NAME;
+            String shownVer = prefs.getString("jmb_star_prompt_ver", "");
+            if (curVer == null || curVer.length() == 0 || curVer.equals(shownVer)) return;
+            // 标记为已提示（先写，避免用户反复进入面板时重复出现）
+            prefs.edit().putString("jmb_star_prompt_ver", curVer).commit();
+            LinearLayout st = new LinearLayout(act);
+            st.setOrientation(LinearLayout.HORIZONTAL);
+            st.setGravity(Gravity.CENTER_VERTICAL);
+            st.setBackground(termBorder(act, Theme.withAlpha(Theme.termPink(act), 0x12),
+                    Theme.withAlpha(Theme.termPink(act), 0x66)));
+            st.setPadding(dp(12), dp(10), dp(12), dp(10));
+            LinearLayout.LayoutParams stlp = new LinearLayout.LayoutParams(-1, -2);
+            stlp.setMargins(0, dp(2), 0, dp(8));
+            st.setLayoutParams(stlp);
+            TextView stt = new TextView(act);
+            stt.setTextSize(Theme.TS_BODY);
+            stt.setTextColor(Theme.termPink(act));
+            stt.setTypeface(Theme.monoBold());
+            stt.setText(Lang.tr("TGAutoSign 一直免费维护，如果你觉得好用，去 GitHub 点个 \u2b50 就是最大的鼓励"));
+            st.addView(stt, new LinearLayout.LayoutParams(0, -2, 1f));
+            TextView star = new TextView(act);
+            star.setTextSize(Theme.TS_BODY);
+            star.setTextColor(Theme.termPink(act));
+            star.setTypeface(Theme.monoBold());
+            star.setText(Lang.tr("去 Star \u203a"));
+            star.setPadding(dp(8), 0, 0, 0);
+            st.addView(star, new LinearLayout.LayoutParams(-2, -2));
+            st.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ openStarPage(); } });
+            parent.addView(st);
+            jlog("[界面] 已显示 Star 请求横幅（v" + curVer + "）");
+        } catch (Throwable _eStar) { noteSwallowed("buildStarBanner", _eStar); }
+    }
+
+    /** 打开源码仓库（Star 用）。 */
+    private void openStarPage() {
+        try {
+            android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse("https://github.com/wlmosv-png/TGAutoSign"));
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            appContext.startActivity(i);
+            jlog("[界面] 打开仓库（Star）github.com/wlmosv-png/TGAutoSign");
+        } catch (Throwable t) { toast(Lang.tf("打开链接失败: {0}", t)); }
+    }
+
     /** 加入 TG 交流群（私有邀请链接，ACTION_VIEW 让系统路由到 Telegram） */
     private static final String GROUP_LINK = "https://t.me/+V2Oyu8pSubs4ZjE0";
     // 分享文案：写清楚卖点 + 官方下载入口，便于他人直接安装
@@ -3058,7 +3108,7 @@ public final class TGAutoSignCore {
     private static final String[] ENTRY_MARKERS =
         {"learned_","kind_","did_","data_","hash_","ahash_","uname_","msg_id_","pre_","loc_","last_","retry_","retry_at_","retry_day_","sent_at_"};
     private static final Set<String> GLOBAL_KEYS = new HashSet<String>(Arrays.asList(
-        "jmb_keywords","jmb_retry","jmb_wake_cmd","jmb_alfilter","jmb_autolearn","jmb_autolearn_net","jmb_tut_seen","jmb_prompt_day","update_cooldown_at","update_seen_code","update_last_notice","update_last_error"));
+        "jmb_keywords","jmb_retry","jmb_wake_cmd","jmb_alfilter","jmb_autolearn","jmb_autolearn_net","jmb_tut_seen","jmb_prompt_day","jmb_star_prompt_ver","update_cooldown_at","update_seen_code","update_last_notice","update_last_error"));
 
     /**
      * 条目相关键前缀。
@@ -3087,6 +3137,7 @@ public final class TGAutoSignCore {
     private static final Set<String> KEEP_ON_CLEAR = new HashSet<String>(Arrays.asList(
             "jmb_keywords", "jmb_retry", "jmb_wake_cmd", "jmb_alfilter", "jmb_autolearn",
             "jmb_autolearn_net", "jmb_autolearn_net_confirm", "jmb_skip_nav", "jmb_tut_seen", "jmb_prompt_day",
+            "jmb_star_prompt_ver",
             "jmb_theme", "jmb_lang", "jmb_notify", "jmb_notify_fail_only", "jmb_notify_all_acc",
             "jmb_sort", "jmb_fx", "jmb_judge", "jmb_judge_custom", "jmb_loose",
             "jmb_ok_words", "jmb_fail_words", "jmb_blocked_dids", "jmb_exclude", "jmb_config_ts",
@@ -7857,6 +7908,7 @@ public final class TGAutoSignCore {
         LinearLayout root = new LinearLayout(act);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(Theme.dp(act,10), Theme.dp(act,6), Theme.dp(act,10), Theme.dp(act,6));
+        buildStarBanner(act, root);
         LinearLayout head = new LinearLayout(act);
         head.setOrientation(LinearLayout.VERTICAL);
         head.setBackground(Theme.header(act));
@@ -12058,6 +12110,7 @@ public final class TGAutoSignCore {
             pc.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ showPendingConfirm(act); } });
             box.addView(pc);
         }
+
 
         // ── 目标 / 统计 / 日志 三个 Tab（2026-10-03）──
         // 用户要求：统计别另开大卡片，就做成这里的第三个 Tab。
