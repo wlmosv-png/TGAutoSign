@@ -7026,7 +7026,7 @@ public final class TGAutoSignCore {
             // 同样原地刷新（见筛选 chip 的说明）：切排序也不该重建窗口。
             if (mode.equals(SORT_MODE)) return;
             SORT_MODE = mode;
-            try { prefs.edit().putString("jmb_sort", mode).apply(); } catch (Throwable ignored) {}
+            try { prefs.edit().putString("jmb_sort", mode).commit(); } catch (Throwable ignored) {}
             refreshSortChips(act);
             fillTargetRows(act);
         } });
@@ -7759,7 +7759,7 @@ public final class TGAutoSignCore {
         // 直接静态显示，避免来回进出时反复闪。
         // 2026-10-03：曾试过"一天只播一次"，会让面板显得太死，已回退。
         TITLE_FX = (TITLE_FX + 1) % 4;
-        try { prefs.edit().putInt("jmb_fx", TITLE_FX).apply(); } catch (Throwable ignored) {}
+        try { prefs.edit().putInt("jmb_fx", TITLE_FX).commit(); } catch (Throwable ignored) {}
 
         // 自动备份：每天首次打开面板时跑一次（2026-10-03）。
         // 放这里而不是"定时任务"：备份是数据安全，跟"用户是否在用"无关；
@@ -8419,7 +8419,7 @@ public final class TGAutoSignCore {
                 logPlain = !logPlain;
                 logShowDebug = !logPlain;
                 // 持久化：下次打开日志页保持同一档（2026-10-10）
-                try { prefs.edit().putBoolean("jmb_log_plain", logPlain).apply(); } catch (Throwable ignored) {}
+                try { prefs.edit().putBoolean("jmb_log_plain", logPlain).commit(); } catch (Throwable ignored) {}
                 // 原地改按钮外观
                 int col = logPlain ? Theme.termGreen(act) : Theme.termMuted(act);
                 plainChip.setText(logPlain ? Lang.tr("易懂") : Lang.tr("详细"));
@@ -9243,8 +9243,8 @@ public final class TGAutoSignCore {
                 @Override public void toast(String msg) { showToastSafeShort(msg); }
                 @Override public void setJudgeWords(String okJoined, String failJoined) {
                     try {
-                        if (okJoined != null) prefs.edit().putString("jmb_ok_words", okJoined).apply();
-                        if (failJoined != null) prefs.edit().putString("jmb_fail_words", failJoined).apply();
+                        if (okJoined != null) prefs.edit().putString("jmb_ok_words", okJoined).commit();
+                        if (failJoined != null) prefs.edit().putString("jmb_fail_words", failJoined).commit();
                     } catch (Throwable ignored) {}
                 }
                 @Override public void addJudgeWordScoped(String word, boolean isOk, String scope, long did, String targetId) {
@@ -9387,7 +9387,7 @@ public final class TGAutoSignCore {
 
             if (!JUDGE_USE_CUSTOM) {
                 JUDGE_USE_CUSTOM = true;
-                prefs.edit().putBoolean("jmb_judge_custom", true).apply();
+                prefs.edit().putBoolean("jmb_judge_custom", true).commit();
                 jlog("[学习] 已打开「使用我的自定义词」开关");
             }
             jlog("[判定] scope=" + scope + " key=" + key + " word=" + w
@@ -9403,17 +9403,17 @@ public final class TGAutoSignCore {
             if (okWords != null && okWords.length > 0) {
                 String cur = prefs.getString("jmb_ok_words", "");
                 String merged = mergeWords(cur, okWords);
-                prefs.edit().putString("jmb_ok_words", merged).apply();
+                prefs.edit().putString("jmb_ok_words", merged).commit();
             }
             if (failWords != null && failWords.length > 0) {
                 String cur = prefs.getString("jmb_fail_words", "");
                 String merged = mergeWords(cur, failWords);
-                prefs.edit().putString("jmb_fail_words", merged).apply();
+                prefs.edit().putString("jmb_fail_words", merged).commit();
             }
             // 关键：写了词必须打开自定义词开关，否则不生效
             if (!JUDGE_USE_CUSTOM) {
                 JUDGE_USE_CUSTOM = true;
-                prefs.edit().putBoolean("jmb_judge_custom", true).apply();
+                prefs.edit().putBoolean("jmb_judge_custom", true).commit();
                 jlog("[判定词学习] 已自动打开「使用我的自定义词」开关");
             }
         } catch (Throwable t) {
@@ -9452,7 +9452,7 @@ public final class TGAutoSignCore {
                 if (sb.length() > 0) sb.append("\n");
                 sb.append(s);
             }
-            prefs.edit().putString("jmb_unk_ignore", sb.toString()).apply();
+            prefs.edit().putString("jmb_unk_ignore", sb.toString()).commit();
         } catch (Throwable t) {
             jlog("写入忽略表失败: " + t);
         }
@@ -14051,10 +14051,10 @@ public final class TGAutoSignCore {
             }
             String cur = prefs.getString("jmb_ok_words", "");
             String merged = mergeWords(cur, new String[]{word});
-            prefs.edit().putString("jmb_ok_words", merged).apply();
+            prefs.edit().putString("jmb_ok_words", merged).commit();
             if (!JUDGE_USE_CUSTOM) {
                 JUDGE_USE_CUSTOM = true;
-                prefs.edit().putBoolean("jmb_judge_custom", true).apply();
+                prefs.edit().putBoolean("jmb_judge_custom", true).commit();
             }
             // 学到的词「已消化」的凭据是 last_unk_<id>，清它即可。
             // 不能按文本删池条目 —— 池是 did 维度共享的，
@@ -14483,7 +14483,16 @@ public final class TGAutoSignCore {
         // 改为按真实账号槽位精确 contains 查（槽位极少，均 O(1) 命中，不再全表复制）。
         try {
             String body = "cfg_" + suffix;       // 例：cfg_timer
+            // 先用已知真实槽位
             for (int slot : accountSlots()) {
+                String k = "acc" + slot + "_" + body;
+                if (prefs.contains(k)) return k;
+            }
+            // 再兜底扫 0..15：accountSlots() 依赖宿主反射（activeAccounts/isValidAccount），
+            // 在部分客户端/启动早期会返回不全，导致「值明明存在却读不到 → 回退默认」
+            // （用户反馈「设置保存了却显示关闭 / 重开丢失」的成因之一）。
+            // contains 是 O(1)，扫 16 个槽位开销可忽略，换来读取的可靠性。
+            for (int slot = 0; slot < 16; slot++) {
                 String k = "acc" + slot + "_" + body;
                 if (prefs.contains(k)) return k;
             }
@@ -14534,18 +14543,21 @@ public final class TGAutoSignCore {
             int n = slots.length;
             String[] keys = {"window", "timer", "gap", "missback", "missdead"};
             android.content.SharedPreferences.Editor ed = null;
+            // 2026-10-13 性能：原实现在内层循环里 prefs.getAll()（每账号×每键一次全表复制）。
+            // 提到循环外取一次快照。
+            java.util.Map<String, ?> snap = prefs.getAll();
             for (int i : slots) {
                 String p = accountPrefix(i);
                 for (String k : keys) {
                     String accKey = p + "cfg_" + k;
                     String gKey = "jmb_" + k;
-                    if (prefs.contains(accKey)) continue;      // 已配置过，不动
-                    if (!prefs.contains(gKey)) continue;       // 全局也没有，用代码默认
+                    if (snap.containsKey(accKey)) continue;    // 已配置过，不动
+                    Object v = snap.get(gKey);
+                    if (v == null) continue;                   // 全局也没有，用代码默认
                     if (ed == null) ed = prefs.edit();
-                    Object v = prefs.getAll().get(gKey);
                     if (v instanceof Boolean) ed.putBoolean(accKey, (Boolean) v);
                     else if (v instanceof Integer) ed.putInt(accKey, (Integer) v);
-                    else if (v != null) ed.putString(accKey, String.valueOf(v));
+                    else ed.putString(accKey, String.valueOf(v));
                 }
             }
             if (ed != null) { ed.apply(); jlog("【配置】已把全局默认配置迁移到各账号"); }
@@ -15989,7 +16001,7 @@ public final class TGAutoSignCore {
             Theme.mode = R.themeMode;
             try {
                 prefs.edit().putInt("jmb_theme", THEME_MODE = R.themeMode)
-                            .putString("jmb_theme_style", Theme.styleKey()).apply();
+                            .putString("jmb_theme_style", Theme.styleKey()).commit();
             } catch (Throwable ignored) {}
             Theme.freeze(act);                          // ① 钉住，防采样
             // ── 2026-10-09 交叉淡入 ──
@@ -16231,7 +16243,7 @@ public final class TGAutoSignCore {
                 Theme.mode = THEME_MODE;
                 Theme.styleId = Theme.clampStyle(R.themeStyle);   // 2026-10-09 多主题
                 settingsDraft = new SettingsDraft();             // 已落盘，草稿作废
-                try { android.content.SharedPreferences.Editor le = prefs.edit(); le.putInt("jmb_lang", Lang.MODE); le.apply(); } catch (Throwable ignored) {}
+                try { android.content.SharedPreferences.Editor le = prefs.edit(); le.putInt("jmb_lang", Lang.MODE); le.commit(); } catch (Throwable ignored) {}
                 MISS_BACK = R.missBackSw.isChecked();
                 try { MISS_DEADLINE = R.missDeadlineMin; if (MISS_DEADLINE < 0) MISS_DEADLINE = 0; if (MISS_DEADLINE > 24 * 60 - 1) MISS_DEADLINE = 24 * 60 - 1; } catch (Throwable ignored) {}
                 scheduleTickLoop();   // 确保心跳在跑（开启补签后立即可用，不等触发源）
@@ -20428,7 +20440,7 @@ public final class TGAutoSignCore {
             if (!cur.remove(pattern)) return;
             StringBuilder sb = new StringBuilder();
             for (String x : cur) { if (sb.length() > 0) sb.append('\n'); sb.append(x); }
-            prefs.edit().putString("jmb_unk_ignore", sb.toString()).apply();
+            prefs.edit().putString("jmb_unk_ignore", sb.toString()).commit();
         } catch (Throwable t) { noteSwallowed("removeIgnoredPattern", t); }
     }
 
