@@ -1338,6 +1338,12 @@ public final class TGAutoSignCore {
                 }
                 if (dup) { skipped++; continue; }
                 Map<String, Object> cp = new HashMap<String, Object>(m);
+                // 跨账号复制：把源账号里的 access_hash 一起带上。
+                // 这样目标在账号2 即使从没开过会话，也能用 did+ahash 直接构造 InputPeer 发消息。
+                try {
+                    long ha = captureAccessHash(fromAccount, m);
+                    if (ha != 0L) cp.put("ahash", Long.valueOf(ha));
+                } catch (Throwable ignored) {}
                 persistEntry(prefix, cp);
                 added++;
             } catch (Throwable ignored) {}
@@ -1347,6 +1353,72 @@ public final class TGAutoSignCore {
         else logs("【复制目标】" + accountLabel(fromAccount) + " → " + msg);
         toast(added == 0 ? Lang.tr("没有需要复制的新目标（可能早就复制过了）")
                 : Lang.tf("已复制到 {0}：新增 {1} 个", accountLabel(account), added));
+    }
+
+    /** 从某账号内存/数据库/会话里取该 did 的 access_hash（跨账号复制时使用）。
+     *  access_hash 是 TG 对象的全局访问哈希，不随账号变化 —— 从源账号拷来，
+     *  目标账号即使用 did+ahash 直接构造 InputPeer 也能发消息。返回 0 表示取不到。 */
+    private long captureAccessHash(int account, Map<String, Object> m) {
+        try {
+            long did = entryDid(m);
+            if (did == 0L) return 0L;
+            boolean isChat = "chat".equals(entryPeerKind(m));
+            Object mc = getMessagesController(account);
+            if (mc == null) return 0L;
+            if (isChat) {
+                // 群/频道：getChat
+                Object chat = null;
+                try { chat = invoke(mc, "getChat", new Class<?>[]{Long.class}, new Object[]{Long.valueOf(did)}); } catch (Throwable ignored) {}
+                if (chat != null) {
+                    Object ah = getFieldValSafe(chat, "access_hash");
+                    if (ah instanceof Number) return ((Number) ah).longValue();
+                }
+                if (chat == null) {
+                    try {
+                        Object ms = getMessagesStorage(account);
+                        if (ms != null) chat = invoke(ms, "getChat", new Class<?>[]{long.class}, new Object[]{Long.valueOf(did)});
+                    } catch (Throwable ignored) {}
+                    if (chat != null) {
+                        Object ah = getFieldValSafe(chat, "access_hash");
+                        if (ah instanceof Number) return ((Number) ah).longValue();
+                    }
+                }
+                return 0L;
+            }
+            // 私聊 bot：getUser（内存 → 数据库）
+            Object user = null;
+            try { user = invoke(mc, "getUser", new Class<?>[]{Long.class}, new Object[]{Long.valueOf(did)}); } catch (Throwable ignored) {}
+            if (user == null) {
+                try {
+                    Object ms = getMessagesStorage(account);
+                    if (ms != null) user = invoke(ms, "getUser", new Class<?>[]{long.class}, new Object[]{Long.valueOf(did)});
+                } catch (Throwable ignored) {}
+            }
+            if (user != null) {
+                Object ah = getFieldValSafe(user, "access_hash");
+                if (ah instanceof Number) return ((Number) ah).longValue();
+            }
+            return 0L;
+        } catch (Throwable t) { return 0L; }
+    }
+
+    /** 用 did + 保存的 access_hash 手工构造 InputPeer（新账号未开过会话、getUser 拿不到时的兜底）。 */
+    private Object buildPeerFromSavedHash(long did, long ahash, boolean isChat) {
+        try {
+            if (isChat) {
+                Object ip = newTlObject(classEx("org.telegram.tgnet.TLRPC$TL_inputPeerChannel"));
+                long raw = -did;
+                long bare = raw;
+                if (raw > 1000000000000L) bare = raw - 1000000000000L;
+                setFieldVal(ip, "channel_id", Long.valueOf(bare));
+                setFieldVal(ip, "access_hash", Long.valueOf(ahash));
+                return ip;
+            }
+            Object iu = newTlObject(classEx("org.telegram.tgnet.TLRPC$TL_inputPeerUser"));
+            setFieldVal(iu, "user_id", Long.valueOf(did));
+            setFieldVal(iu, "access_hash", Long.valueOf(ahash));
+            return iu;
+        } catch (Throwable t) { noteSwallowed("buildPeerFromSavedHash", t); return null; }
     }
 
     public TGAutoSignCore(Context appContext, ClassLoader cl) {
@@ -2849,6 +2921,16 @@ public final class TGAutoSignCore {
         e.putString(kLearned(prefix, id), entryText(m));
         e.putString(prefix + "kind_" + id, entryKind(m));
         e.putLong(prefix + "did_" + id, entryDid(m));
+        // 跨账号复制的会话身份：access_hash 不随账号变，从源账号拷来即可在新账号发消息
+        // （账号2 从未与这些 bot 开过会话，本地没有 User 记录 → getUser 拿不到 → 发不了。
+        //   存下 access_hash 后，resolveInputPeer 兜底可用 did+ahash 直接构造 InputPeer。）
+        Object _ah = m.get("ahash");
+        if (_ah instanceof Number && ((Number)_ah).longValue() != 0L) {
+            e.putLong(prefix + "ahash_" + id, ((Number)_ah).longValue());
+        } else {
+            long _savedA = numLong(prefix + "ahash_" + id, 0L);
+            if (_savedA != 0L) e.remove(prefix + "ahash_" + id);
+        }
         // 群/频道目标：记下 peer 类型与显示名（群聊 getChat 而非 getUser）
         String pk = entryPeerKind(m);
         if (!"user".equals(pk)) e.putString(prefix + "peerkind_" + id, pk);
@@ -2877,6 +2959,7 @@ public final class TGAutoSignCore {
             .remove(prefix + "did_" + id)
             .remove(prefix + "data_" + id)
             .remove(prefix + "hash_" + id)
+            .remove(prefix + "ahash_" + id)
             .remove(prefix + "msg_id_" + id)
             .remove(kLast(prefix, id))
             .remove(kRetry(prefix, id))
@@ -2886,7 +2969,7 @@ public final class TGAutoSignCore {
     }
 
     private static final String[] ENTRY_MARKERS =
-        {"learned_","kind_","did_","data_","hash_","msg_id_","pre_","loc_","last_","retry_","retry_at_","retry_day_","sent_at_"};
+        {"learned_","kind_","did_","data_","hash_","ahash_","msg_id_","pre_","loc_","last_","retry_","retry_at_","retry_day_","sent_at_"};
     private static final Set<String> GLOBAL_KEYS = new HashSet<String>(Arrays.asList(
         "jmb_keywords","jmb_retry","jmb_wake_cmd","jmb_alfilter","jmb_autolearn","jmb_autolearn_net","jmb_tut_seen","jmb_prompt_day","update_cooldown_at","update_seen_code","update_last_notice","update_last_error"));
 
@@ -4748,6 +4831,8 @@ public final class TGAutoSignCore {
                     m.put("kind", kind);
                     String pkv = strOf(prefix + "peerkind_" + id);
                     if (pkv != null && pkv.length() > 0) m.put("peerKind", pkv);
+                    long ahv = numLong(prefix + "ahash_" + id, 0L);
+                    if (ahv != 0L) m.put("ahash", Long.valueOf(ahv));
                     String ttlv = strOf(prefix + "title_" + id);
                     if (ttlv != null && ttlv.length() > 0) m.put("title", ttlv);
                     if (KIND_CB.equals(kind)) {
@@ -5360,6 +5445,13 @@ public final class TGAutoSignCore {
             // 群 / 频道目标：走 chat 支路（getUser 对群聊无效）
             peer = resolveInputPeerAny(dialogId, account, "chat");
             if (peer == null) {
+                // 跨账号复制兜底：本地没有该群/频道，但复制时存了 access_hash → 用 did+ahash 构造
+                Object _ah = entry.get("ahash");
+                if (_ah instanceof Number && ((Number)_ah).longValue() != 0L) {
+                    peer = buildPeerFromSavedHash(dialogId, ((Number)_ah).longValue(), true);
+                }
+            }
+            if (peer == null) {
                 noteSwallowed("群peer解析(did=" + dialogId + ")", null);
                 countSoftFail(entry, account, "取不到该群/频道的会话数据（先进该群发一条消息再试）");
                 return SignLogic.SKIP_SEND_FAIL;
@@ -5383,6 +5475,13 @@ public final class TGAutoSignCore {
                 catch (Throwable t) { peer = null; }
             }
             if (peer == null) peer = peerFromDialogs(dialogId, account);
+            if (peer == null) {
+                // 跨账号复制兜底：本地没有该 bot 的 User 记录，但复制时存了 access_hash → 用 did+ahash 构造
+                Object _ah = entry.get("ahash");
+                if (_ah instanceof Number && ((Number)_ah).longValue() != 0L) {
+                    peer = buildPeerFromSavedHash(dialogId, ((Number)_ah).longValue(), false);
+                }
+            }
             if (peer == null) {
                 // 诊断：目标其实是群/频道却被当成私聊 bot（多因旧数据缺 peerKind）
                 if (isChatOrChannel(dialogId, account)) {
