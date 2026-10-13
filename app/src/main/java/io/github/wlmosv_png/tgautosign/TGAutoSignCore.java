@@ -19388,6 +19388,30 @@ public final class TGAutoSignCore {
      *
      * @return 账号索引；拿不到返回 -1（调用方回退全局值）。
      */
+    /** 事件所属账号的**兜底解析**：ctrlAcc 拿不到时，遍历所有真实槽位，
+     *  找出「该 peer 下存在『已发出、等结论』目标」的那个账号。
+     *  2026-10-14：修「全账号签到里非当前账号判不出结果」——
+     *  原实现回退 currentAccount()（界面账号），界面账号与事件账号不一致时
+     *  会用错前缀做回复判定 → 判不出 → 目标永远停在「已发出」。
+     *  返回 -1 表示无法确定（调用方可再回退界面账号）。 */
+    private int resolveEventAccount(int ctrlAcc, long peerUid) {
+        try {
+            if (ctrlAcc >= 0) return ctrlAcc;
+            if (peerUid == 0L) return -1;
+            for (int slot : accountSlots()) {
+                String pfx = accountPrefix(slot);
+                java.util.List<Map<String, Object>> l = new java.util.ArrayList<Map<String, Object>>();
+                try { loadTargetsInto(pfx, l); } catch (Throwable ignored) {}
+                for (Map<String, Object> m : l) {
+                    if (!samePeerDid(entryDid(m), peerUid)) continue;
+                    String id = entryId(m);
+                    if (isSentPendingFresh(pfx, id) || isPendingFresh(pfx, id)) return slot;
+                }
+            }
+        } catch (Throwable t) { noteSwallowed("resolveEventAccount", t); }
+        return -1;
+    }
+
     private int accountOfController(Object mc) {
         if (mc == null) return -1;
         // Try 1: old TG (<12.9) — MessagesController has currentAccount field (BaseController)
@@ -19399,9 +19423,19 @@ public final class TGAutoSignCore {
             }
         } catch (Throwable t) { /* fall through to Try 2 */ }
         // Try 2: TG 12.9+ / NagramX — iterate getInstance(i) to match by identity
+        //
+        // 2026-10-14 修「全账号签到只有当前账号能判出结果」：
+        //   原实现用 activatedAccounts()（**账号数量**，本例=2）去遍历 0..total-1，
+        //   但真实槽位可能是跳号的（实测本机为 0 与 3）。于是账号2（槽位3）
+        //   永远匹配不到 → 返回 -1 → 调用方回退 currentAccount()（界面账号）
+        //   → 拿另一个账号的前缀去做回复判定 → 判不出、永远停在「已发出」。
+        //   改为遍历**真实槽位** accountSlots()，再兜底扫 0..15，确保不跳号漏配。
         try {
-            int total = activatedAccounts();
-            for (int i = 0; i < Math.min(total, 8); i++) {
+            for (int i : accountSlots()) {
+                Object inst = getMessagesController(i);
+                if (inst == mc) return i;
+            }
+            for (int i = 0; i < 16; i++) {
                 Object inst = getMessagesController(i);
                 if (inst == mc) return i;
             }
@@ -19434,9 +19468,13 @@ public final class TGAutoSignCore {
             } catch (Throwable t2) { /* fall through */ }
         }
         // Try 2: TG 12.9+ / NagramX — iterate getInstance by identity
+        // 同上（2026-10-14）：必须用**真实槽位**而非账号数量，否则跳号槽位匹配不到。
         try {
-            int total = activatedAccounts();
-            for (int i = 0; i < Math.min(total, 8); i++) {
+            for (int i : accountSlots()) {
+                Object inst = getConnectionsManager(i);
+                if (inst == cm) return i;
+            }
+            for (int i = 0; i < 16; i++) {
                 Object inst = getConnectionsManager(i);
                 if (inst == cm) return i;
             }
@@ -19563,9 +19601,10 @@ public final class TGAutoSignCore {
             // 都会被判成目标回复、同群多 bot 互相污染。现在走 resolveReplyTarget：
             //   REPLY_TO → BOT_DID → PEER_TTL → FALLBACK（群聊不兜底）
             final java.util.List<Map<String, Object>> replyTargets = new ArrayList<Map<String, Object>>();
-            try { loadTargetsInto(ctrlAcc >= 0 ? accountPrefix(ctrlAcc) : accountPrefix(), replyTargets); }
+            final int _rtAcc = resolveEventAccount(ctrlAcc, peerUid);
+            try { loadTargetsInto(_rtAcc >= 0 ? accountPrefix(_rtAcc) : accountPrefix(), replyTargets); }
             catch (Throwable _eRT) { noteSwallowed("onUpdateProcessed(loadTargets)", _eRT); }
-            final String _rtPrefix = ctrlAcc >= 0 ? accountPrefix(ctrlAcc) : accountPrefix();
+            final String _rtPrefix = _rtAcc >= 0 ? accountPrefix(_rtAcc) : accountPrefix();
             // ── 2026-10-09 群聊短路：这个会话没在等结论，就什么都别做 ──
             //
             // 用户原话：「群聊签到 我只需要在我发送签到指令 或者自动发送后
@@ -19681,7 +19720,7 @@ public final class TGAutoSignCore {
             mainHandler.post(() -> {
                 try {
                     // 用 hook 实例锁定的账号；拿不到（旧调用点）才回退全局值
-                    String prefix = ctrlAcc >= 0 ? accountPrefix(ctrlAcc) : accountPrefix();
+                    String prefix = _rtAcc >= 0 ? accountPrefix(_rtAcc) : accountPrefix();
                     // 目标列表必须**按这个 prefix 现场重载**，不能用 targetsSnapshot()。
                     // 反例（用户实测）：内存 targets 是按 lastAccount 装载的，而一条 update
                     // 可能来自另一个账号（全账号签到/多窗口），两者不同步时 prefix 指向账号2
