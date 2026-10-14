@@ -1321,6 +1321,10 @@ public final class Lang {
         EN.put("还有 {0} 条需要处理（处置后本窗口自动刷新）", "{0} item(s) to handle (this window refreshes in place)");
         EN.put("状态：{0}{1}", "Status: {0}{1}");
         EN.put("签到失败", "Check-in failed");
+        EN.put("bot 明确说没签上（如「请先加入」），按提示处理后重试",
+               "The bot explicitly said it did not check in (e.g. \"please join first\"). Follow its prompt, then retry.");
+        EN.put("今日重试已用尽（{0} 次），可手动重试或忽略",
+               "Daily retries exhausted ({0}). Retry manually or ignore.");
         // ── 「从不应答」状态（1.6.7）──
         EN.put("从不应答（这类 bot 不回文字）", "Never replies (this kind of bot sends no text)");
         // ── humanAge 单位词（1.6.7）──

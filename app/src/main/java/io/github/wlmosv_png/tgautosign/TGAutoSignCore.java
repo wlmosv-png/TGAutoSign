@@ -1361,6 +1361,13 @@ public final class TGAutoSignCore {
                     words.setText(Lang.tr("补判定词（让下次能认出来）"));
                     words.setTextSize(Theme.TS_CAPTION);
                     words.setOnClickListener(v -> {
+                        // 先收起本面板再开「未识别回复」，否则两个框叠在一起
+                        // （用户关一次只关掉最上面那个，会觉得「要关好几次」）。
+                        try {
+                            roundProbBox = null;
+                            dismissOne(roundProbDlg);
+                            roundProbDlg = null;
+                        } catch (Throwable ignored) {}
                         try { showLearnPage(act); } catch (Throwable ignored) {}
                     });
                     LinearLayout.LayoutParams wp = new LinearLayout.LayoutParams(-1, -2);
@@ -6875,9 +6882,24 @@ public final class TGAutoSignCore {
                         else if (rc == SignLogic.R_NO_REPLY) { state = RS_NO_REPLY; note = "bot 未回复"; }
                         else if (rc == SignLogic.R_BTN_STALE) { state = RS_PANEL; note = "面板已过期"; }
                         else if (rc == SignLogic.R_FAILED) { state = RS_SENDFAIL; note = "签到失败"; }
+                        else {
+                            // ── 2026-10-14：补齐「已放弃 / 退避中」──
+                            // statusOf() 会显示这两个状态，但本函数（需处理列表/角标口径）
+                            // 原先完全不认它们 → 用户看到「盒武器：已放弃」，
+                            // 点「⚠ N 条卡住」却在里面找不到它（口径漏了一支）。
+                            String rdDay = prefs.getString(kRetryDay(prefix, id), "");
+                            int retries = todayStr().equals(rdDay) ? prefs.getInt(kRetry(prefix, id), 0) : 0;
+                            if (retries >= RETRY_LIMIT) {
+                                state = RS_SENDFAIL; note = Lang.tf("今日重试已用尽（{0} 次），可手动重试或忽略", retries);
+                            } else if (System.currentTimeMillis() < prefs.getLong(kRetryAt(prefix, id), 0L)) {
+                                state = RS_WAITING; note = "退避中，等下次自动重试";
+                            }
+                        }
                     }
                 }
-                if (state < 0 || state == RS_SIGNED) continue;   // 已签 / 无问题 → 不进"需处理"
+                // 已签 / 无问题 → 不进「需处理」。
+                // 注意 RS_WAITING 在此**保留**（退避中属于「有事发生」，用户应看到）。
+                if (state < 0 || state == RS_SIGNED || state == RS_SKIPPED) continue;
                 RoundState rs = new RoundState(prefix, id, did, targetTitle(did));
                 rs.state = state; rs.note = note == null ? "" : note;
                 rs.at = prefs.getLong(prefix + "sent_at_" + id, 0L);
@@ -10096,6 +10118,10 @@ public final class TGAutoSignCore {
             Theme.freeze(act);
             try { page = _lp.build(); } finally { Theme.unfreeze(); }
             long _tBuild = System.currentTimeMillis();
+            // 打开学习页前收起同类面板（两个方向都做，保证不叠层）
+            try {
+                if (roundProbDlg != null) { dismissOne(roundProbDlg); roundProbDlg = null; roundProbBox = null; }
+            } catch (Throwable ignored) {}
             learnDialog = showDialog(act, "未识别回复", page, "关闭");
             long _tDlg = System.currentTimeMillis();
             logd("[性能] 打开学习页 build=" + (_tBuild - _tOpen0)
@@ -14468,21 +14494,22 @@ public final class TGAutoSignCore {
      *
      * @return 需要处置的目标数；0 表示不显示这条
      */
+    /** 「需要处理」的目标数。
+     *
+     *  2026-10-14 统一口径：以前这里**只数 isPendingConfirm（待确认）**，
+     *  而账号一览和卡住面板用的是 roundProblemsOf（扫全部异常状态）——
+     *  同一屏两个数字不一致（用户会看到「N 个目标需要处理」与
+     *  「⚠ M 条卡住」对不上）。现在三处都走 roundProblemsOf，只有一个真相。
+     */
     private int countNeedsAttention(String prefix) {
-        int n = 0;
-        try {
-            List<Map<String, Object>> list = new ArrayList<Map<String, Object>>();
-            loadTargetsInto(prefix, list);
-            for (Map<String, Object> m : list) {
-                if (isPendingConfirm(prefix, entryId(m))) n++;
-            }
-        } catch (Throwable t) { noteSwallowed("countNeedsAttention", t); }
-        return n;
+        try { return roundProblemsOf(prefix).size(); }
+        catch (Throwable t) { noteSwallowed("countNeedsAttention", t); return 0; }
     }
 
     /** 归类 → 用户可读的处置说明（聚合条里逐条显示）。 */
     private String attentionHint(String prefix, String id) {
         int rc = resultCodeOf(prefix, id);
+        if (rc == SignLogic.R_FAILED)       return Lang.tr("bot 明确说没签上（如「请先加入」），按提示处理后重试");
         if (rc == SignLogic.R_BTN_STALE)    return Lang.tr("按钮已失效，等 bot 推新面板后可重试");
         if (rc == SignLogic.R_REPLIED_UNK)  return Lang.tr("bot 回复了，但判定词认不出结果");
         if (rc == SignLogic.R_NO_REPLY)     return Lang.tr("bot 全程没回复");
@@ -14494,6 +14521,8 @@ public final class TGAutoSignCore {
     /** 归类的显示名（聚合条左侧标签）。 */
     private String attentionLabel(String prefix, String id) {
         int rc = resultCodeOf(prefix, id);
+        // 与 statusOf 的分支保持一一对应（少一支就会显示成「结果未知」）
+        if (rc == SignLogic.R_FAILED)       return Lang.tr("签到失败");
         if (rc == SignLogic.R_BTN_STALE)    return Lang.tr("按钮失效");
         if (rc == SignLogic.R_REPLIED_UNK)  return Lang.tr("回复判不出");
         if (rc == SignLogic.R_NO_REPLY)     return Lang.tr("bot 未回复");
