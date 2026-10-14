@@ -1306,6 +1306,16 @@ public final class Lang {
         EN.put("我已进群发过消息，重发", "I've sent a message in the group \u2014 retry now");
         EN.put("清掉失败计数后立即重试", "Clear the failure count and retry immediately");
         EN.put("已重发，请看状态变化", "Resent \u2014 watch the status");
+        // ── 维护：删除本账号目标（1.6.7）──
+        EN.put("删除本账号全部目标", "Delete all targets of this account");
+        EN.put("只删当前账号，可重加", "This account only; can be re-added");
+        EN.put("将删除 {0} 的全部 {1} 个签到目标。\n\n其他账号不受影响。\n此操作不可撤销。",
+               "This deletes all {1} check-in targets of {0}.\n\nOther accounts are unaffected.\nThis cannot be undone.");
+        EN.put("已删除 {0} 个目标", "Deleted {0} targets");
+        EN.put("删除失败: {0}", "Delete failed: {0}");
+        EN.put("[维护] 删除 {0} 全部目标：{1} 个", "[Maintain] Cleared all targets of {0}: {1}");
+        // ── 单账号签到反馈（1.6.7）──
+        EN.put("{0}：已发起签到（本轮 {1} 个）", "{0}: check-in started ({1} this round)");
         // ── 「从不应答」状态（1.6.7）──
         EN.put("从不应答（这类 bot 不回文字）", "Never replies (this kind of bot sends no text)");
         // ── humanAge 单位词（1.6.7）──

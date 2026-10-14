@@ -1122,8 +1122,17 @@ public final class TGAutoSignCore {
                             accOverviewStartMs = System.currentTimeMillis();
                             roundClear();
                             // 只签这一个账号：复用 trySignAllFor（force=true 表示用户明确要求）
-                            trySignAllFor("单账号/" + accountLabel(acc), true, acc, true);
-                            toast(Lang.tf("{0}：已发起签到", accountLabel(acc)));
+                            int _fired = trySignAllFor("单账号/" + accountLabel(acc), true, acc, true);
+                            // 明确区分「发出去了」与「一个都没发」——旧版只 toast「已发起签到」，
+                            // 若整轮被闸门拦下（全已签/无网/停用）用户会以为按钮坏了。
+                            if (_fired > 0) {
+                                toast(Lang.tf("{0}：已发起签到（本轮 {1} 个）", accountLabel(acc), _fired));
+                            } else {
+                                String _why = lastRound != null ? lastRound
+                                        : accountLabel(acc) + "：本轮无需签到（可能已全部签过）";
+                                logw("[单账号] " + _why);
+                                toast(_why);
+                            }
                             startAccOverviewTick(act, slots, overall);
                             startAccPulse();
                         } catch (Throwable t) { toast(Lang.tf("发起失败: {0}", t)); }
@@ -1277,6 +1286,7 @@ public final class TGAutoSignCore {
                         roundMark(prefix, rs.id, RS_WAITING, "已重试，等待发出");
                         toast(Lang.tr("已重试"));
                         refreshAccOverview(act, accountSlots());
+                        reopenRoundProblems(act, prefix, accName);
                     } catch (Throwable t) { toast(Lang.tf("重试失败: {0}", t)); }
                 } });
                 btns.addView(retry, new LinearLayout.LayoutParams(0, -2, 1f));
@@ -1288,6 +1298,7 @@ public final class TGAutoSignCore {
                         roundMark(prefix, rs.id, RS_SIGNED, "已手动确认");
                         toast(Lang.tr("已记为已签"));
                         refreshAccOverview(act, accountSlots());
+                        reopenRoundProblems(act, prefix, accName);
                     } catch (Throwable t) { toast(Lang.tf("操作失败: {0}", t)); }
                 } });
                 LinearLayout.LayoutParams b2 = new LinearLayout.LayoutParams(0, -2, 1f);
@@ -1301,6 +1312,7 @@ public final class TGAutoSignCore {
                         roundMark(prefix, rs.id, RS_SKIPPED, "今天忽略");
                         toast(Lang.tr("今天不再处理它"));
                         refreshAccOverview(act, accountSlots());
+                        reopenRoundProblems(act, prefix, accName);
                     } catch (Throwable t) { toast(Lang.tf("操作失败: {0}", t)); }
                 } });
                 LinearLayout.LayoutParams b3 = new LinearLayout.LayoutParams(0, -2, 1f);
@@ -1323,8 +1335,29 @@ public final class TGAutoSignCore {
                 box.addView(card);
             }
 
-            showDialog(act, Lang.tf("卡住的目标 · {0}", accName), box, Lang.tr("关闭"));
+            // 存进 pendingDialog：否则 reopenPendingWork / 其它处置路径的
+            // dismissOne(pendingDialog) 关不到它 → 用户处置一条后旧框还在，
+            // 得手动关好几次（2026-10-14 用户反馈）。
+            dismissOne(pendingDialog);
+            pendingDialog = showDialog(act, Lang.tf("卡住的目标 · {0}", accName), box, Lang.tr("关闭"));
         } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
+    }
+
+    /** 处置一条后重建「卡住的目标」框（留在原处，不跳回目标列表）。
+     *
+     *  为什么不用 refreshAccOverview 收尾就完事：那只会刷新账号一览，
+     *  用户点「记为已签」后整个框消失/跳走，跟他正在做的事对不上；
+     *  期望是「处置完这条，框里少一条，继续处理下一条」。
+     */
+    private void reopenRoundProblems(final Activity act, final String prefix, final String accName) {
+        mainHandler.postDelayed(new Runnable() {
+            @Override public void run() {
+                try {
+                    if (act == null || act.isFinishing()) return;
+                    showRoundProblems(act, prefix, accName);
+                } catch (Throwable t) { noteSwallowed("reopenRoundProblems", t); }
+            }
+        }, 120L);
     }
 
     /** 实时状态的界面文案。 */
@@ -1385,8 +1418,12 @@ public final class TGAutoSignCore {
             int _prob = 0;
             try { _prob = roundProblemsOf(_pfx).size(); } catch (Throwable ignored) {}
             // 进度口径：本轮有数据用本轮；否则用全天（已签 + 卡住 = 已了结）
-            int _tot  = hasRound ? rp[1] : (tot + _prob);
-            int _done = hasRound ? rp[0] : (sig + _prob);
+            // 分母必须是「目标总数」（tot）——旧写法写成 tot + _prob，
+            // 而 _prob 扫出来的异常目标**本来就在 tot 里**，等于重复计入，
+            // 分母虚高 → 进度条永远差一截（用户实测「签了那么多条却不满」）。
+            // 分子 = 已签 + 已了结的异常项（异常也算「处理过了」，不该一直拖着）。
+            int _tot  = hasRound ? rp[1] : tot;
+            int _done = hasRound ? rp[0] : Math.min(tot, sig + _prob);
             StatsCharts.AccProgressDrawable d = accBars.get(Integer.valueOf(i));
             if (d != null) {
                 float r = _tot <= 0 ? 0f : (float) _done / _tot;
@@ -1535,6 +1572,47 @@ public final class TGAutoSignCore {
     private void paintAccOverviewCurrent(Activity act, int[] slots, TextView overall) {
         if (accNameTv == null) return;
         paintAccOverview(act, slots, accNameTv, accStatTv, accCurTv, accToggleBtns, overall);
+    }
+
+    /** 删除「当前账号」的全部目标（不动别的账号）。
+     *
+     *  为什么要它：跨账号复制后若发现复制错了/不需要了，旧版本只能逐个删，
+     *  或者用「清空配置」把**所有账号**一起清掉 —— 后者代价太大。
+     *  这里只清 accountPrefix() 这一份。
+     */
+    private void confirmClearTargetsThisAccount(final Activity act) {
+        try {
+            final String pfx = accountPrefix();
+            final int acc = currentAccount();
+            final int n = acctTargetCount(acc);
+            new android.app.AlertDialog.Builder(act)
+                .setTitle(Lang.tr("删除本账号全部目标"))
+                .setMessage(Lang.tf("将删除 {0} 的全部 {1} 个签到目标。\n\n其他账号不受影响。\n此操作不可撤销。",
+                        accountLabel(acc), n))
+                .setPositiveButton(Lang.tr("删除"), (d, w) -> {
+                    try {
+                        int removed = clearTargetsOfAccount(pfx, acc);
+                        toast(Lang.tf("已删除 {0} 个目标", removed));
+                        logs(Lang.tf("[维护] 删除 {0} 全部目标：{1} 个", accountLabel(acc), removed));
+                        refreshListFrom(act);
+                    } catch (Throwable t) { toast(Lang.tf("删除失败: {0}", t)); }
+                })
+                .setNegativeButton(Lang.tr("取消"), null)
+                .show();
+        } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
+    }
+
+    /** 清掉某账号分区下所有目标条目（只动 learned_\/kind_\/did_\/data_… 这些目标键）。 */
+    private int clearTargetsOfAccount(String prefix, int account) {
+        java.util.List<Map<String, Object>> list = new java.util.ArrayList<Map<String, Object>>();
+        loadTargetsIntoUncached(prefix, list);
+        int removed = 0;
+        for (Map<String, Object> m : list) {
+            try { removeEntryKeys(prefix, entryId(m)); removed++; } catch (Throwable ignored) {}
+        }
+        try { invalidateTargetCache(); } catch (Throwable ignored) {}
+        try { pendingSigns.clear(); } catch (Throwable ignored) {}
+        return removed;
     }
 
     private void showCopyTargets(final Activity act) {
@@ -8376,6 +8454,7 @@ public final class TGAutoSignCore {
             sectionHeader(root, act, "▍维护");
             android.widget.GridLayout g5 = new android.widget.GridLayout(act); g5.setColumnCount(2); root.addView(g5);
             addTile(g5, act, "clean", "清空配置", "跨账号彻底清", "clear_all");
+            addTile(g5, act, "trash", "删除本账号全部目标", "只删当前账号，可重加", "clear_targets_this_acc");
             }
 
             ScrollView scv = new ScrollView(act);
@@ -11472,6 +11551,7 @@ public final class TGAutoSignCore {
         if ("sign_all_accounts".equals(action)) { signAllAccounts(); return; }
         if ("accounts".equals(action)) { showAccountOverview(act); return; }
         if ("copy_targets".equals(action)) { showCopyTargets(act); return; }
+        if ("clear_targets_this_acc".equals(action)) { confirmClearTargetsThisAccount(act); return; }
         if ("log".equals(action)) { showLog(act); return; }
         if ("settings".equals(action)) { showSettings(act); return; }
         if ("exclude".equals(action)) { showExcludeManager(act); return; }
