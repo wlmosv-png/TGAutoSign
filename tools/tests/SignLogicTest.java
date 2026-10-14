@@ -881,6 +881,24 @@ public final class SignLogicTest {
         tru("长文本不是占位符", !SignLogic.isMediaPlaceholderText("恭喜您签到成功，获得积分+10"));
         tru("null 不是占位符", !SignLogic.isMediaPlaceholderText(null));
         tru("空串不是占位符", !SignLogic.isMediaPlaceholderText(""));
+
+        // ── 带说明文字的图：caption 必须参与判定（2026-10-14 回归事故）──
+        // 流光画廊机器人回「请先加入用户群，再签到…」+ 一张图，被判成「已签」。
+        // 根因：正文只取 messageText（带图时是占位符「图片」），
+        // 真正的 caption 在 messageOwner.message 里，被丢掉了 → 拒绝语从未进入判定链。
+        // 现在 caption 优先，下面这些必须判失败。
+        eq("请先加入用户群 → 失败（带图的拒绝语）",
+           SignLogic.verdictOf("请先加入用户群，再签到、抢红包或兑换邀请码。", null, null, null),
+           SignLogic.V_FAILED);
+        eq("请先加入频道 → 失败",
+           SignLogic.verdictOf("⚠️ 请先加入以下1个频道才能使用功能", null, null, null),
+           SignLogic.V_FAILED);
+        eq("请先加入用户群（带表情换行）→ 失败",
+           SignLogic.verdictOf("😇 官方频道 @x\n😇 请先加入用户群再签到", null, null, null),
+           SignLogic.V_FAILED);
+        // 而「图片」这种占位符本身不该被当成结果
+        tru("「图片」是占位符而非结果",
+            SignLogic.isMediaPlaceholderText("图片"));
     }
 
     /**

@@ -4735,13 +4735,23 @@ public final class TGAutoSignCore {
             final String _eid0 = entryId(m);
             final long _did0 = entryDid(m);
             final int _rc0 = resultCodeOf(_pp, _eid0);
+            // 「已放弃」= 当天重试用尽（retry_ 撞上限）。它同样需要处置入口：
+            // 用户看到「已放弃」但点进去什么都没有，只能手动改数据（用户实测反馈）。
+            // 判据直接复刻 statusOf 的那一段，保证「状态显示什么」与「能处置什么」一致。
+            final String _rdDay = prefs.getString(kRetryDay(_pp, _eid0), "");
+            final int _retries0 = todayStr().equals(_rdDay)
+                    ? prefs.getInt(kRetry(_pp, _eid0), 0) : 0;
+            final boolean _giveUp = _retries0 >= RETRY_LIMIT;
+            final boolean _backoff = System.currentTimeMillis()
+                    < prefs.getLong(kRetryAt(_pp, _eid0), 0L);
             boolean _needsAction = isPendingConfirm(_pp, _eid0)
                     || _rc0 == SignLogic.R_FAILED
                     || _rc0 == SignLogic.R_BTN_STALE
                     || _rc0 == SignLogic.R_NO_REPLY
                     || _rc0 == SignLogic.R_REPLIED_UNK
                     || sentButStale(_pp, _eid0)
-                    || isPendingFresh(_pp, _eid0);
+                    || isPendingFresh(_pp, _eid0)
+                    || _giveUp || _backoff;
             if (_needsAction) {
                 final long _pd = entryDid(m);
                 final String _pi = entryId(m);
@@ -4760,7 +4770,8 @@ public final class TGAutoSignCore {
                 // 针对「取不到会话数据（先进该群发一条消息再试）」这类发送失败：
                 // 用户已经照做（进群发过消息了），需要一个「立刻再试一次」的入口，
                 // 否则只能等下一轮调度，或者去账号一览绕一圈。
-                if (_rc0 == SignLogic.R_FAILED || isPendingFresh(_pp, _eid0) || sentButStale(_pp, _eid0)) {
+                if (_rc0 == SignLogic.R_FAILED || isPendingFresh(_pp, _eid0)
+                        || sentButStale(_pp, _eid0) || _giveUp || _backoff) {
                     Button rb2 = menuItem(act, b, "bolt", "我已进群发过消息，重发", "清掉失败计数后立即重试", 0);
                     rb2.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
                         try {
@@ -20485,34 +20496,48 @@ public final class TGAutoSignCore {
             if (peerUid == 0L) return 0;
             // 私聊要求发送者就是会话本人（群聊不要求）
             if (peerUid > 0L && fromUid != 0L && fromUid != peerUid) return 0;
-            // 正文：优先 MessageObject.messageText（已渲染，含纯文本），回退 owner.message
-            String text = "";
+            // ── 正文抽取（2026-10-14 重写，修「带说明文字的图」误判）──
+            // 事故：流光画廊机器人回「请先加入用户群，再签到…」+ 一张图，
+            // 模块却判成「已签」。原因是正文只取了 MessageObject.messageText，
+            // 而带图消息的 messageText 是占位符「图片」——真正的说明文字
+            // 在 messageOwner.message（= caption）里，被丢掉了。
+            // 于是「请先加入用户群」这句拒绝语从未进入判定链，
+            // 只剩「图片」两字 → 判不出 → 落到媒体分支 → 当成签到成功。
+            //
+            // 现在的顺序：**caption（owner.message）优先** —— 它才是人写的那句；
+            // 只有在 caption 为空时才退到 messageText（可能只是「图片」占位符）。
+            String caption = "";
+            try {
+                Object m = getFieldValSafe(owner, "message");
+                if (m != null) caption = String.valueOf(m).trim();
+            } catch (Throwable ignored) {}
+            String rendered = "";
             try {
                 Object mt = getFieldValSafe(mo, "messageText");
-                if (mt != null) text = String.valueOf(mt);
+                if (mt != null) rendered = String.valueOf(mt).trim();
             } catch (Throwable ignored) {}
-            if (text.length() == 0) {
-                try {
-                    Object m = getFieldValSafe(owner, "message");
-                    if (m != null) text = String.valueOf(m);
-                } catch (Throwable ignored) {}
-            }
-            // ── 媒体消息识别（2026-10-14）──
-            // 按钮回调型 bot 点完按钮常回一张结果图，messageText 只渲染出「图片」两字。
-            // 当普通文本送判定 → 判不出 → 误报「回复判不出」，而图里就是签到结果。
-            boolean isMedia = false;
+
+            // 媒体对象是否存在（webPage 不算「内容」）
+            boolean hasMedia = false;
             try {
                 Object media = getFieldValSafe(owner, "media");
-                if (media != null) {
-                    String mn = media.getClass().getName();
-                    if (!mn.contains("webPage")) isMedia = true;   // webPage 不算「内容」
-                }
+                if (media != null && !media.getClass().getName().contains("webPage")) hasMedia = true;
             } catch (Throwable ignored) {}
-            if (text.length() == 0) {
-                if (!isMedia) return 0;          // 无文本又非媒体 → 无可判定内容
-            } else if (SignLogic.isMediaPlaceholderText(text)) {
-                isMedia = true;
+
+            String text;
+            boolean isMedia = false;
+            if (caption.length() > 0) {
+                // 有说明文字：用它判定，**且不算媒体** ——
+                // 带文字的图必须走完整判定链（拒绝语/成功词都能命中）。
+                text = caption;
+            } else if (rendered.length() > 0 && !SignLogic.isMediaPlaceholderText(rendered)) {
+                text = rendered;
+            } else {
+                // 真·纯图（无 caption）：才交给媒体分支处理
+                text = rendered;
+                isMedia = hasMedia || (rendered.length() > 0);
             }
+            if (text.length() == 0 && !isMedia) return 0;   // 无文本又非媒体 → 无可判定内容
             // ── 引用回复的目标消息 id（bot 引用我们发出的那条时给出的硬关联依据）──
             int replyToId = 0;
             try {
