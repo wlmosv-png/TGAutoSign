@@ -7459,6 +7459,9 @@ public final class TGAutoSignCore {
         // 用户看到「待确认」只知道有事，不知道该干嘛；而且这个词还被网络学习候选池占用。
         // 现在按归类给出**明确文案**，用户一眼知道发生了什么。
         int _rc = resultCodeOf(prefix, id);
+        // 明确失败（命中失败词 / 前置条件未满足）——以前没有这一支，
+        // 「签到失败」会一路掉到最后的「待签」，用户以为压根没尝试过。
+        if (_rc == SignLogic.R_FAILED)      return Lang.tr("签到失败");
         if (_rc == SignLogic.R_BTN_STALE)   return Lang.tr("按钮失效");
         if (_rc == SignLogic.R_REPLIED_UNK) return Lang.tr("回复判不出");
         if (_rc == SignLogic.R_NO_REPLY)    return Lang.tr("bot 未回复");
@@ -20237,6 +20240,12 @@ public final class TGAutoSignCore {
                 if (v == SignLogic.V_FAILED) {
                     jlog("【回复判定】" + did + " 命中失败词「" + hit + "」→ 判定未成功: " + clip(text, 40));
                     markResultCode(prefix, id, SignLogic.R_FAILED);
+                    // 与长消息链（onUpdateProcessed 的失败分支）同口径：
+                    // 失败要记连续失败天数、撤销已签、按退避安排重试 ——
+                    // 否则「命中失败词」只写个归类，既不重试也不预警，
+                    // 用户看到「签到失败」却永远等不到第二次尝试。
+                    try { scheduleRetryAfterFail(prefix, id, did, "回复判定失败：" + clip(hit, 20)); }
+                    catch (Throwable _eRT) { noteSwallowed("handleReplyText.retry", _eRT); }
                     return;
                 }
             } catch (Throwable _eJV) { noteSwallowed("handleReplyText.judge", _eJV); }
@@ -20271,6 +20280,24 @@ public final class TGAutoSignCore {
                         todayStr(), id, did);
             } catch (Throwable ignored) {}
         } catch (Throwable t) { noteSwallowed("handleReplyText", t); }
+    }
+
+    /** 判定失败后的统一收尾：撤销已签 + 记失败 + 按退避安排下一次重试。
+     *
+     *  抽出来是为了让「长消息链」与「锚点B（handleReplyText）」用同一套 ——
+     *  以前只有长消息链会重试，锚点B 只写归类，导致同一件事两个结果。
+     */
+    private void scheduleRetryAfterFail(String prefix, String id, long did, String why) {
+        try {
+            int cur = prefs.getInt(kRetry(prefix, id), 0);
+            if (cur > 0 && !todayStr().equals(prefs.getString(kRetryDay(prefix, id), ""))) cur = 0;
+            boolean blocked = bumpFailsToday(prefix, id, false);
+            prefs.edit().remove(kLast(prefix, id))
+                 .putInt(kRetry(prefix, id), blocked ? RETRY_LIMIT : Math.min(cur + 1, RETRY_LIMIT))
+                 .putLong(kRetryAt(prefix, id), System.currentTimeMillis() + backoffDelay(Math.max(cur, 1)))
+                 .putString(kRetryDay(prefix, id), todayStr()).commit();
+            noteFailStreak(accountOfPrefix(prefix), prefix, id, did, why);
+        } catch (Throwable t) { noteSwallowed("scheduleRetryAfterFail", t); }
     }
 
     /** 通用「按会话找在等目标并判定」入口 —— 多个锚点共用。

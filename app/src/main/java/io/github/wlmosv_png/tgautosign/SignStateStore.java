@@ -164,6 +164,14 @@ public final class SignStateStore {
             store.tx(ed -> {
                 ed.remove(Keys.opt(prefix, id));
                 ed.remove(Keys.sentAt(prefix, id));
+                // ── 2026-10-14：归类码无条件落一份（独立键）──
+                // 以前只有 needsAttention(result) 为真才写 pendcfm_result_，
+                // 而 R_FAILED 不在其中 → 「签到失败」这个归类**根本没地方存** →
+                // 界面 statusOf() 读不到 → 落回「待签」（用户实测：
+                // 日志明明写着「命中失败词 → 判定未成功」，列表却显示待签）。
+                // 现在 result_ 独立存，任何归类都能如实显示。
+                ed.putString("result_" + id, SignLogic.resultCode(result));
+                ed.putString("result_day_" + id, today());
                 if (SignLogic.needsAttention(result)) {
                     ed.putBoolean(Keys.pendingCfm(prefix, id), true);
                     // 同时记"哪天标的"：sweepStalePendingConfirm 靠它区分
@@ -196,6 +204,15 @@ public final class SignStateStore {
 
     /** 读取归类码；无归类返回 -1。 */
     public int resultOf(String prefix, String id) {
+        try {
+            // 独立键优先（按天有效；跨天视为无归类）
+            String d = store.s("result_day_" + id, "");
+            if (d != null && d.equals(today())) {
+                int r = SignLogic.resultOfCode(store.s("result_" + id, ""));
+                if (r >= 0) return r;
+            }
+        } catch (Throwable ignored) {}
+
         try {
             if (!store.b(Keys.pendingCfm(prefix, id), false)) return -1;
             return SignLogic.resultOfCode(store.s(Keys.pendingResult(prefix, id), ""));
