@@ -1306,6 +1306,18 @@ public final class TGAutoSignCore {
                         rs.note == null || rs.note.length() == 0 ? "" : " · " + rs.note));
                 card.addView(t2);
 
+                // 第三行：处置提示（告诉用户「该做什么」，而不只是「出什么事了」）
+                String hintText = attentionHint(prefix, rs.id);
+                if (hintText != null && hintText.length() > 0) {
+                    TextView t3 = new TextView(act);
+                    t3.setTextSize(Theme.TS_CAPTION);
+                    t3.setTextColor(Theme.txtMuted(act));
+                    t3.setTypeface(Theme.text());
+                    t3.setPadding(0, 0, 0, dp(8));
+                    t3.setText(hintText);
+                    card.addView(t3);
+                }
+
                 LinearLayout btns = new LinearLayout(act);
                 btns.setOrientation(LinearLayout.HORIZONTAL);
                 btns.setGravity(Gravity.CENTER_VERTICAL);
@@ -14533,31 +14545,6 @@ public final class TGAutoSignCore {
 
 
     /**
-     * 处置完一条后重新打开「待处理」（2026-09-28）。
-     *
-     * 为什么要单独一个方法：处置后要么还剩别的待处理（重开自己），
-     * 要么已经清空（回目标列表）。两条路都**只操作对话框**，
-     * 不碰 Activity —— 见 showPendingWork 里关于 finish() 的说明。
-     *
-     * 用 postDelayed 而不是立即执行：对话框 dismiss 与新建之间有动画，
-     * 立即新建会叠在正在消失的旧框上（既有 scheduleDismiss 也是 160ms）。
-     */
-    private void reopenPendingWork(final Activity act) {
-        final Object old = pendingDialog;
-        pendingDialog = null;
-        dismissOne(old);
-        mainHandler.postDelayed(new Runnable() {
-            @Override public void run() {
-                try {
-                    if (act == null || act.isFinishing()) return;
-                    // 2026-10-04 修闪跳：原来这里会「有待处理就再弹一次」，
-                    // 而关闭待处理本身也会走到这里 → 关/开死循环（实测一抽一抽）。
-                    // 现在只刷新列表，是否重开待处理由调用方显式决定。
-                    refreshListFrom(act);
-                } catch (Throwable t) { noteSwallowed("reopenPendingWork", t); }
-            }
-        }, 180L);
-    }
 
     /**
      * 集中处置界面：一次列出所有需要处理的目标，每条三个动作。
@@ -14565,158 +14552,15 @@ public final class TGAutoSignCore {
      * 动作与旧的内联按钮完全一致（确认已签 / 重试 / 忽略今天），
      * 只是从"每行都塞"改成"想看时才展开"。
      */
+    /** 「待处理」面板 —— 直接复用自持处置面板的渲染。
+     *
+     *  2026-10-14 统一：这个方法原来自己实现了一套「只列 isPendingConfirm」的列表，
+     *  而目标列表顶部的计数走 roundProblemsOf（扫全部异常状态）——
+     *  于是出现「顶部说 3 个需要处理，点进去却写『待处理（0）』」的荒唐画面
+     *  （用户实测截图）。现在两者共用同一份渲染与同一份判据。
+     */
     private void showPendingWork(final Activity act) {
-        final String pfx = accountPrefix();
-        final LinearLayout box = new LinearLayout(act);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(2), dp(2), dp(2), dp(2));
-
-        /* top hint (2026-09-29) */
-        TextView topHint = new TextView(act);
-        topHint.setTextSize(Theme.TS_CAPTION);
-        topHint.setTextColor(Theme.txtMuted(act));
-        topHint.setTypeface(Theme.text());
-        topHint.setText(Lang.tr("以下目标发出后未得到明确结论，需要你判断。"));
-        topHint.setPadding(dp(4), dp(2), dp(4), dp(4));
-        box.addView(topHint);
-
-        final List<Map<String, Object>> list = new ArrayList<Map<String, Object>>();
-        try { loadTargetsInto(pfx, list); } catch (Throwable ignored) {}
-
-        int shown = 0;
-        for (final Map<String, Object> m : list) {
-            final String eid = entryId(m);
-            if (!isPendingConfirm(pfx, eid)) continue;
-            shown++;
-            final long edid = entryDid(m);
-            final String itemText = entryText(m);
-
-            /* card: 4-row layout */
-            LinearLayout card = new LinearLayout(act);
-            card.setOrientation(LinearLayout.VERTICAL);
-            card.setPadding(dp(12), dp(10), dp(12), dp(10));
-            card.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termAmber(act), 0x33)));
-
-            /* row 1: name + tag + time */
-            LinearLayout head = new LinearLayout(act);
-            head.setOrientation(LinearLayout.HORIZONTAL);
-            head.setGravity(Gravity.CENTER_VERTICAL);
-            TextView nm = new TextView(act);
-            nm.setTextSize(Theme.TS_SUBTITLE);
-            nm.setTextColor(Theme.termTxt(act));
-            nm.setText(targetTitle(edid));
-            nm.setTypeface(Theme.text());
-            nm.setSingleLine(true);
-            nm.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            head.addView(nm, new LinearLayout.LayoutParams(0, -2, 1f));
-
-            TextView tag = badgeChip(act, attentionLabel(pfx, eid), Theme.termAmber(act), false);
-            head.addView(tag);
-            head.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(dp(6), 1));
-
-            long issueAt = prefs.getLong(pfx + "sent_at_" + eid, 0L);
-            if (issueAt > 0L) {
-                TextView ts = new TextView(act);
-                ts.setTextSize(Theme.TS_CAPTION);
-                ts.setTextColor(Theme.txtMuted(act));
-                ts.setTypeface(Theme.text());
-                ts.setText(new java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(new java.util.Date(issueAt)));
-                head.addView(ts);
-            }
-            card.addView(head);
-
-            /* row 2: entry text */
-            if (itemText != null && itemText.trim().length() > 0) {
-                TextView tx = new TextView(act);
-                tx.setTextSize(Theme.TS_CAPTION);
-                tx.setTextColor(Theme.termMuted(act));
-                tx.setTypeface(android.graphics.Typeface.MONOSPACE);
-                tx.setSingleLine(true);
-                tx.setEllipsize(android.text.TextUtils.TruncateAt.END);
-                tx.setText("\u25b8 " + itemText.trim().replace("\n", " "));
-                tx.setPadding(0, dp(2), 0, 0);
-                card.addView(tx);
-            }
-
-            /* row 3: hint */
-            TextView hint = new TextView(act);
-            hint.setTextSize(Theme.TS_CAPTION);
-            hint.setTextColor(Theme.txtMuted(act));
-            hint.setText(attentionHint(pfx, eid));
-            hint.setTypeface(Theme.text());
-            hint.setPadding(0, dp(4), 0, dp(8));
-            card.addView(hint);
-
-            /* separator */
-            View sep = new View(act);
-            sep.setBackgroundColor(Theme.withAlpha(Theme.termAmber(act), 0x18));
-            LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, 1);
-            slp.setMargins(0, 0, 0, dp(8));
-            card.addView(sep, slp);
-
-            /* row 4: three equal-width buttons */
-            LinearLayout acts = new LinearLayout(act);
-            acts.setOrientation(LinearLayout.HORIZONTAL);
-            acts.setGravity(Gravity.CENTER_VERTICAL);
-
-            Button bOk = mkBtn(act);
-            bOk.setText(Lang.tr("确认已签"));
-            bOk.setTextSize(Theme.TS_CAPTION);
-            bOk.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
-                pendConfirmAsSigned(pfx, eid, edid);
-                reopenPendingWork(act);
-            } });
-            acts.addView(bOk, new LinearLayout.LayoutParams(0, -2, 1f));
-            acts.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(dp(6), 1));
-
-            Button bRe = mkBtn(act);
-            bRe.setText(Lang.tr("重试"));
-            bRe.setTextSize(Theme.TS_CAPTION);
-            bRe.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
-                pendConfirmRetry(pfx, eid, edid);
-                reopenPendingWork(act);
-            } });
-            acts.addView(bRe, new LinearLayout.LayoutParams(0, -2, 1f));
-            acts.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(dp(6), 1));
-
-            Button bIg = mkBtn(act);
-            bIg.setText(Lang.tr("忽略今天"));
-            bIg.setTextSize(Theme.TS_CAPTION);
-            bIg.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
-                pendConfirmIgnoreToday(pfx, eid, edid);
-                reopenPendingWork(act);
-            } });
-            acts.addView(bIg, new LinearLayout.LayoutParams(0, -2, 1f));
-
-            card.addView(acts);
-            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
-            clp.setMargins(0, dp(4), 0, dp(4));
-            card.setLayoutParams(clp);
-            box.addView(card);
-        }
-
-        if (shown == 0) {
-            TextView e = new TextView(act);
-            e.setTextSize(Theme.TS_SECOND);
-            e.setTextColor(Theme.txtMuted(act));
-            e.setText(Lang.tr("(没有需要处理的目标)\n按钮失效、回复判不出、bot 未回复时，这里会出现条目。"));
-            e.setPadding(dp(6), dp(12), dp(6), dp(12));
-            box.addView(e);
-        }
-
-        android.widget.ScrollView sv = new android.widget.ScrollView(act);
-        sv.addView(box);
-        // 2026-10-04 自然过渡：
-        // 旧窗**淡出**而不是立即 dismiss，新窗随后**淡入** ——
-        // 避免原来"啪"地消失又"啪"地出现（用户反馈一抽一抽）。
-        final Object oldP = pendingDialog;
-        final int shownFinal = shown;
-        fadeOutDismiss(oldP, 120L, new Runnable() { @Override public void run() {
-            try {
-                pendingDialog = showDialog(act, Lang.tf("待处理（{0}）", shownFinal), sv, "关闭");
-                fadeInDialog(pendingDialog, 160L);
-            } catch (Throwable ignored) {}
-        } });
+        showRoundProblems(act, accountPrefix(), accountLabel(currentAccount()));
     }
 
     /** 账号级待确认池键。唯一真相源在 Keys，这里只做转发（勿再内联字面量）。 */
