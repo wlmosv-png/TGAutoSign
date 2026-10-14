@@ -1634,12 +1634,25 @@ public final class TGAutoSignCore {
             if (mc == null) return;
             Object obj = null;
             if (isChat) {
-                try { obj = invoke(mc, "getChat", new Class<?>[]{Long.class}, new Object[]{Long.valueOf(did)}); } catch (Throwable ignored) {}
-                if (obj == null) {
-                    try {
-                        Object ms = getMessagesStorage(account);
-                        if (ms != null) obj = invoke(ms, "getChat", new Class<?>[]{long.class}, new Object[]{Long.valueOf(did)});
-                    } catch (Throwable ignored) {}
+                // ── 2026-10-14 修「复制过去的群打不开」根因 ──
+                // Telegram 的 getChat 要的是 channel_id（裸值），不是带 -100 前缀的 chatId。
+                // 旧写法直接传 did=-1003892656176 → getChat 找不到 → 拿不到 chat 对象 →
+                // access_hash 从来没被写进目标条目 → 复制到另一个账号后无法构造 InputPeer
+                // → 每次签到都「取不到该群/频道的会话数据（先进该群发一条消息再试）」。
+                // 实测：acc3_ 下 14 个 bot 目标有 ahash_，群目标一个都没有。
+                long raw = -did;                 // did 形如 -100XXXXXXXXXX
+                long bare = raw;
+                if (raw > 1000000000000L) bare = raw - 1000000000000L;   // 去 -100 前缀
+                long[] candidates = { bare, did, raw };
+                for (long cand : candidates) {
+                    if (obj != null) break;
+                    try { obj = invoke(mc, "getChat", new Class<?>[]{Long.class}, new Object[]{Long.valueOf(cand)}); } catch (Throwable ignored) {}
+                    if (obj == null) {
+                        try {
+                            Object ms = getMessagesStorage(account);
+                            if (ms != null) obj = invoke(ms, "getChat", new Class<?>[]{long.class}, new Object[]{Long.valueOf(cand)});
+                        } catch (Throwable ignored) {}
+                    }
                 }
             } else {
                 try { obj = invoke(mc, "getUser", new Class<?>[]{Long.class}, new Object[]{Long.valueOf(did)}); } catch (Throwable ignored) {}
@@ -4591,7 +4604,22 @@ public final class TGAutoSignCore {
         // 「待确认」处置（v1.6.0）：长按菜单里也放一份，两条路径都能处理
         try {
             final String _pp = accountPrefix();
-            if (isPendingConfirm(_pp, entryId(m))) {
+            // 哪些目标该出现「处置」按钮：不只「待确认」——
+            //   发送失败（取不到会话）/ 按钮失效 / bot 未回复 / 回复判不出
+            //   同样是「有事发生」，用户在目标列表点进来必须能直接处理。
+            // 历史问题：条件只写 isPendingConfirm，于是「发送失败」的目标点进去
+            //   只有签到/编辑/删除，没有任何处置项 —— 用户只能去账号一览绕一圈。
+            final String _eid0 = entryId(m);
+            final long _did0 = entryDid(m);
+            final int _rc0 = resultCodeOf(_pp, _eid0);
+            boolean _needsAction = isPendingConfirm(_pp, _eid0)
+                    || _rc0 == SignLogic.R_FAILED
+                    || _rc0 == SignLogic.R_BTN_STALE
+                    || _rc0 == SignLogic.R_NO_REPLY
+                    || _rc0 == SignLogic.R_REPLIED_UNK
+                    || sentButStale(_pp, _eid0)
+                    || isPendingFresh(_pp, _eid0);
+            if (_needsAction) {
                 final long _pd = entryDid(m);
                 final String _pi = entryId(m);
                 Button pk = menuItem(act, b, "warn", "确认已签", "待确认", 0);
@@ -4606,6 +4634,32 @@ public final class TGAutoSignCore {
                 pi2.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
                     pendConfirmIgnoreToday(_pp, _pi, _pd); dismissOne(entryActionsDlg[0]); showList(act);
                 } });
+                // 针对「取不到会话数据（先进该群发一条消息再试）」这类发送失败：
+                // 用户已经照做（进群发过消息了），需要一个「立刻再试一次」的入口，
+                // 否则只能等下一轮调度，或者去账号一览绕一圈。
+                if (_rc0 == SignLogic.R_FAILED || isPendingFresh(_pp, _eid0) || sentButStale(_pp, _eid0)) {
+                    Button rb2 = menuItem(act, b, "bolt", "我已进群发过消息，重发", "清掉失败计数后立即重试", 0);
+                    rb2.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
+                        try {
+                            // 清掉「今天已达上限」与归类，否则会被闸门拦住
+                            clearSendAttempts(_pp, _pi);
+                            prefs.edit().remove(kRetry(_pp, _pi))
+                                 .remove(kRetryAt(_pp, _pi))
+                                 .remove(kRetryDay(_pp, _pi)).apply();
+                            // 软失败计数就落在 kRetry/kRetryDay（上面已清）；
+                            // softfail_n_ 只是日志降噪用的「今天记过几次」，一并清零。
+                            try {
+                                prefs.edit().remove("softfail_n_" + _pp + "_" + _pi)
+                                     .remove("softfail_n_" + _pp + "_" + _pi + "_d").apply();
+                            } catch (Throwable ignored) {}
+                            stateStore.clearPostSignState(_pp, _pi);
+                        } catch (Throwable ignored) {}
+                        dismissOne(entryActionsDlg[0]);
+                        try { sendSign(m, currentAccount(), true); } catch (Throwable ignored) {}
+                        toast(Lang.tr("已重发，请看状态变化"));
+                        showList(act);
+                    } });
+                }
             }
         } catch (Throwable _eP2) { noteSwallowed("showEntryActions(pendcfm)", _eP2); }
 

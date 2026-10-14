@@ -1302,6 +1302,10 @@ public final class Lang {
         EN.put("结论：锚点全绿 = 模块这边没问题；若仍判不出，是那个 bot 没回可识别的内容。", "Verdict: all anchors green = the module is fine; if results still can't be read, that bot simply didn't reply with anything recognisable.");
         EN.put("刷新链路", "Refresh link check");
         EN.put("已刷新", "Refreshed");
+        // ── 目标处置（1.6.7）──
+        EN.put("我已进群发过消息，重发", "I've sent a message in the group \u2014 retry now");
+        EN.put("清掉失败计数后立即重试", "Clear the failure count and retry immediately");
+        EN.put("已重发，请看状态变化", "Resent \u2014 watch the status");
         // ── 「从不应答」状态（1.6.7）──
         EN.put("从不应答（这类 bot 不回文字）", "Never replies (this kind of bot sends no text)");
         // ── humanAge 单位词（1.6.7）──
