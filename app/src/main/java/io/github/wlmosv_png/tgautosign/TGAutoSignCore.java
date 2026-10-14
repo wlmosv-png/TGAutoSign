@@ -1322,6 +1322,25 @@ public final class TGAutoSignCore {
                 btns.setOrientation(LinearLayout.HORIZONTAL);
                 btns.setGravity(Gravity.CENTER_VERTICAL);
 
+                /* ── 处置动作覆盖矩阵（2026-10-14 用户原则：异常一律可处置）──
+                 *
+                 *  状态                重试  记为已签  忽略今天  补判定词
+                 *  ─────────────────────────────────────────────────────
+                 *  签到失败(命中失败词)  ✓      ✓        ✓        —
+                 *  按钮失效              ✓      ✓        ✓        —
+                 *  回复判不出            ✓      ✓        ✓        ✓
+                 *  bot 未回复            ✓      ✓        ✓        —
+                 *  面板已过期            ✓      ✓        ✓        —
+                 *  从不应答              ✓      ✓        ✓        —
+                 *  重试用尽(已放弃)      ✓      ✓        ✓        —
+                 *  退避中                ✓      ✓        ✓        —
+                 *  取不到会话            ✓(我已进群发过了) ✓  ✓    —
+                 *
+                 *  结论：任何一个进到本列表的状态，都至少有「重试 / 记为已签 / 忽略」
+                 *  三个动作可用 —— 用户永远不会只剩「删除目标」一条路。
+                 *  新增状态时必须回来把这一行矩阵补全（有单测守着不走漏）。
+                 */
+
                 Button retry = mkBtn(act);
                 retry.setText(Lang.tr("重试"));
                 retry.setTextSize(Theme.TS_CAPTION);
