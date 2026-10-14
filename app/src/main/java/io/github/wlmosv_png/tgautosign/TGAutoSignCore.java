@@ -1221,11 +1221,20 @@ public final class TGAutoSignCore {
      */
     private void showRoundProblems(final Activity act, final String prefix, String accName) {
         try {
-            // 已在显示就直接重绘，不重复弹窗（防叠层 / 防闪）
-            if (roundProbBox != null && roundProbDlg != null) {
+            // ── 只有「确实还在显示」才复用句柄 ──
+            // 旧写法用 `roundProbBox != null && roundProbDlg != null` 判「已显示」，
+            // 但 showDialog 在导出模式(SHOT_MODE) 或 act 已结束时**返回 null**，
+            // 句柄就永远非空而窗口并不存在 → 之后怎么点都只「重绘一个不可见的框」，
+            // 表现就是入口点不开（2026-10-14 用户实测）。
+            // 现在用对话框自己的 isShowing 判定，拿不到就当没显示。
+            if (roundProbBox != null && roundProbDlg != null && dialogShowing(roundProbDlg)) {
                 renderRoundProblems(roundProbBox, act, prefix, accName);
                 return;
             }
+            // 陈旧句柄先清掉，避免与接下来新建的窗口叠层
+            if (roundProbDlg != null) { try { dismissOne(roundProbDlg); } catch (Throwable ignored) {} }
+            roundProbDlg = null;
+            roundProbBox = null;
             LinearLayout box = new LinearLayout(act);
             box.setOrientation(LinearLayout.VERTICAL);
             box.setPadding(dp(4), dp(2), dp(4), dp(2));
@@ -1591,22 +1600,52 @@ public final class TGAutoSignCore {
             final String pfx = accountPrefix();
             final int acc = currentAccount();
             final int n = acctTargetCount(acc);
-            new android.app.AlertDialog.Builder(act)
-                .setTitle(Lang.tr("删除本账号全部目标"))
-                .setMessage(Lang.tf("将删除 {0} 的全部 {1} 个签到目标。\n\n其他账号不受影响。\n此操作不可撤销。",
-                        accountLabel(acc), n))
-                .setPositiveButton(Lang.tr("删除"), (d, w) -> {
-                    try {
-                        int removed = clearTargetsOfAccount(pfx, acc);
-                        toast(Lang.tf("已删除 {0} 个目标", removed));
-                        logs(Lang.tf("[维护] 删除 {0} 全部目标：{1} 个", accountLabel(acc), removed));
-                        refreshListFrom(act);
-                    } catch (Throwable t) { toast(Lang.tf("删除失败: {0}", t)); }
-                })
-                .setNegativeButton(Lang.tr("取消"), null)
-                .show();
+            // 用模块自己的对话框（与其它面板同一套视觉），不用系统 AlertDialog ——
+            // 系统框在模块里显得格格不入（字体/圆角/配色全是另一套）。
+            LinearLayout box = new LinearLayout(act);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(4), dp(2), dp(4), dp(2));
+
+            TextView warn = new TextView(act);
+            warn.setTextSize(Theme.TS_BODY);
+            warn.setTextColor(Theme.termTxt(act));
+            warn.setTypeface(Theme.text());
+            warn.setPadding(0, dp(4), 0, dp(10));
+            warn.setText(Lang.tf("将删除 {0} 的全部 {1} 个签到目标。\n\n其他账号不受影响。\n此操作不可撤销。",
+                    accountLabel(acc), n));
+            box.addView(warn);
+
+            LinearLayout btns = new LinearLayout(act);
+            btns.setOrientation(LinearLayout.HORIZONTAL);
+
+            Button cancel = mkBtn(act);
+            cancel.setText(Lang.tr("取消"));
+            cancel.setOnClickListener(v -> dismissOne(clearTargetsDlg));
+            btns.addView(cancel, new LinearLayout.LayoutParams(0, -2, 1f));
+
+            Button del = mkBtn(act);
+            del.setText(Lang.tr("删除"));
+            del.setTextColor(0xFFE05252);
+            del.setOnClickListener(v -> {
+                try {
+                    int removed = clearTargetsOfAccount(pfx, acc);
+                    toast(Lang.tf("已删除 {0} 个目标", removed));
+                    logs(Lang.tf("[维护] 删除 {0} 全部目标：{1} 个", accountLabel(acc), removed));
+                } catch (Throwable t) { toast(Lang.tf("删除失败: {0}", t)); }
+                dismissOne(clearTargetsDlg);
+                clearTargetsDlg = null;
+            });
+            LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(0, -2, 1f);
+            dlp.leftMargin = dp(8);
+            btns.addView(del, dlp);
+
+            box.addView(btns);
+            clearTargetsDlg = showDialog(act, Lang.tr("删除本账号全部目标"), box, Lang.tr("关闭"));
         } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
     }
+
+    /** 「删除本账号全部目标」对话框句柄。 */
+    private Object clearTargetsDlg = null;
 
     /** 清掉某账号分区下所有目标条目（只动 learned_\/kind_\/did_\/data_… 这些目标键）。 */
     private int clearTargetsOfAccount(String prefix, int account) {
@@ -10906,6 +10945,15 @@ public final class TGAutoSignCore {
         return null;
     }
 
+    /** 对话框是否真的还在显示（反射调 isShowing；拿不到一律当「不在显示」）。 */
+    private boolean dialogShowing(Object d) {
+        if (d == null) return false;
+        try {
+            Object r = call(d, "isShowing", new Class<?>[0], new Object[0]);
+            return Boolean.TRUE.equals(r);
+        } catch (Throwable t) { return false; }
+    }
+
     private void dismissOne(Object d) {
         if (d == null) return;
         try { call(d, "dismiss", new Class<?>[0], new Object[0]); }
@@ -14917,8 +14965,12 @@ public final class TGAutoSignCore {
             // 日志要在清理之后打，并复述真实状态 —— 以前无论 markSigned 是否早退都报"计入今日已签"，
             // 用户看到"成功"提示却发现按钮还在，就是这条假日志造成的认知错位。
             logs("用户确认已签 → 已记为今日已签并停止今日重试（" + entryLabel(prefix, id) + "）");
-            toast(Lang.tr("已记为今日已签"));
-            try { refreshListFrom(lastActivity); } catch (Throwable ignored) {}
+            // ── 2026-10-14：这里**不能**刷新界面 ──
+            // refreshListFrom 内部是 showList()，会**弹出目标列表对话框**。
+            // 于是在「卡住的目标」面板里点「记为已签」→ 界面被目标列表顶掉，
+            // 用户还以为自己跳错了地方（而且弹的可能是另一个账号的列表 →
+            // 看到「没有目标」）。
+            // 界面刷新是调用方的事：目标列表自己会重建，自持面板只重绘内容。
         } catch (Throwable t) { noteSwallowed("pendConfirmAsSigned", t); }
     }
 
