@@ -1123,6 +1123,16 @@ public final class SignLogic {
                 if (g.signedToday) return SKIP_ALREADY_SIGNED;
                 if (g.sentPendingFresh) return SKIP_SENT_PENDING;
             }
+            // ── 2026-10-14：manual 也必须遵守「当日发送上限」与「退避」──
+            // 事故：用户点「签全部账号」是 manual(force=true)，而 manual 分支
+            // 完全没查 sendAttemptsExhausted / retryExhausted / inBackoff，
+            // 于是连点两次就绕过全部上限 —— 日志实测同一目标发到第 10 次，
+            // 每次 sendSign 都有同步落盘的 commit()，界面因此明显卡顿。
+            // manual 的语义是「用户明确要求，跳过『已签/在途』这类状态判断」，
+            // 不是「可以无限重复发送」。
+            if (g.sendAttemptsExhausted) return SKIP_SEND_ATTEMPTS_EXHAUST;
+            if (g.retryExhausted) return SKIP_RETRY_EXHAUST;
+            if (g.inBackoff) return SKIP_BACKOFF;
             if (g.disabled) return SKIP_DISABLED;
         }
         return SKIP_NONE;

@@ -496,14 +496,26 @@ public final class SignLogicTest {
         g.inFlight = true;
         eq("在途 + manual → 仍跳过", SignLogic.decideSign(g), SignLogic.SKIP_IN_FLIGHT);
 
-        // manual 豁免今日进度类限制
+        // manual 豁免「已签 / 在途」这类**进度状态**（用户明确要求重发就该发），
+        // 但**不豁免** retryExhausted / inBackoff / sendAttemptsExhausted ——
+        // 那三个是「别再打了」的硬闸，豁免会导致连点按钮把同一目标发到十几次
+        // （2026-10-14 用户实测：全账号签到连点两次，日志出现「已发送 10 次」，
+        //   每次都同步落盘，界面明显卡顿）。
         g = new SignLogic.SignGate();
         g.manual = true;
         g.signedToday = true;
         g.sentPendingFresh = true;
+        eq("manual 豁免已签/在途 → 放行", SignLogic.decideSign(g), SignLogic.SKIP_NONE);
+
+        g = new SignLogic.SignGate();
+        g.manual = true;
         g.retryExhausted = true;
+        eq("manual 不豁免重试用尽", SignLogic.decideSign(g), SignLogic.SKIP_RETRY_EXHAUST);
+
+        g = new SignLogic.SignGate();
+        g.manual = true;
         g.inBackoff = true;
-        eq("manual 豁免进度限制 → 放行", SignLogic.decideSign(g), SignLogic.SKIP_NONE);
+        eq("manual 不豁免退避", SignLogic.decideSign(g), SignLogic.SKIP_BACKOFF);
 
         // manual 不豁免 disabled
         g = new SignLogic.SignGate();
@@ -646,13 +658,18 @@ public final class SignLogicTest {
         g.inFlight = true;
         eq("批量 + 在途 → 跳过", SignLogic.decideSign(g), SignLogic.SKIP_IN_FLIGHT);
 
-        // ⑨ skipSigned 不豁免重试上限/退避（那是自动路径的限制，manual 本来就不受）
+        // ⑨ 批量（manual）同样受「重试用尽 / 退避」约束 —— 见上方 2026-10-14 说明。
         g = new SignLogic.SignGate();
         g.manual = true;
         g.skipSigned = true;
         g.retryExhausted = true;
+        eq("批量 + 重试用尽 → 跳过", SignLogic.decideSign(g), SignLogic.SKIP_RETRY_EXHAUST);
+
+        g = new SignLogic.SignGate();
+        g.manual = true;
+        g.skipSigned = true;
         g.inBackoff = true;
-        eq("批量 + 重试用尽/退避 → 放行（manual 豁免）", SignLogic.decideSign(g), SignLogic.SKIP_NONE);
+        eq("批量 + 退避中 → 跳过", SignLogic.decideSign(g), SignLogic.SKIP_BACKOFF);
     }
 
     /** 时间口径：补签判定、HH:MM 格式化、相对时间文案。 */
@@ -913,12 +930,14 @@ public final class SignLogicTest {
         g = new SignLogic.SignGate();
         g.sendAttemptsExhausted = true;
         eq("次数已满 -> 跳过", SignLogic.decideSign(g), SignLogic.SKIP_SEND_ATTEMPTS_EXHAUST);
+        // 2026-10-14 反转：manual **不再豁免**次数上限。
+        // 旧断言（豁免）是造成「连点两次发到 10 次、界面卡」的直接原因。
         g = new SignLogic.SignGate();
         g.manual = true; g.sendAttemptsExhausted = true;
-        eq("manual 豁免次数上限", SignLogic.decideSign(g), SignLogic.SKIP_NONE);
+        eq("manual 不豁免次数上限", SignLogic.decideSign(g), SignLogic.SKIP_SEND_ATTEMPTS_EXHAUST);
         g = new SignLogic.SignGate();
         g.manual = true; g.skipSigned = true; g.sendAttemptsExhausted = true;
-        eq("批量 manual 同样豁免", SignLogic.decideSign(g), SignLogic.SKIP_NONE);
+        eq("批量 manual 同样受限", SignLogic.decideSign(g), SignLogic.SKIP_SEND_ATTEMPTS_EXHAUST);
         g = new SignLogic.SignGate();
         g.pendingUnconfirmed = true; g.sendAttemptsExhausted = true;
         eq("待确认优先于次数上限", SignLogic.decideSign(g), SignLogic.SKIP_PENDING_CONFIRM);

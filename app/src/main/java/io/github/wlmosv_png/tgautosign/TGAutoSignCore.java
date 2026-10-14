@@ -1208,12 +1208,49 @@ public final class TGAutoSignCore {
 
     /** 「卡住的目标」小面板（2026-10-14 新增）。
      *  按真实原因分类展示，每条给出可执行的处置，不让用户只看到一个「卡住」。 */
+    /** 「卡住的目标」处置窗口 —— **自持面板**，不复用目标列表那一套。
+     *
+     *  设计约束（2026-10-14 用户明确要求）：
+     *    ① 处置完一条，**留在本窗口**，继续处理下一条 —— 不跳回目标列表；
+     *    ② 全程**不闪动**：只重建框内的列表内容，不 dismiss 再 show；
+     *    ③ 与目标列表的处置逻辑**互不干扰**（那里走 showEntryActions，
+     *       这里独立刷新，不共用 pendingDialog / refreshListFrom）。
+     *
+     *  实现：把「渲染列表」抽成 itemRender(container)，处置后只 clear + 重渲染，
+     *  弹窗句柄一旦建立就不再变 —— 所以不会闪。
+     */
     private void showRoundProblems(final Activity act, final String prefix, String accName) {
         try {
-            final java.util.List<RoundState> list = roundProblemsOf(prefix);
+            // 已在显示就直接重绘，不重复弹窗（防叠层 / 防闪）
+            if (roundProbBox != null && roundProbDlg != null) {
+                renderRoundProblems(roundProbBox, act, prefix, accName);
+                return;
+            }
             LinearLayout box = new LinearLayout(act);
             box.setOrientation(LinearLayout.VERTICAL);
             box.setPadding(dp(4), dp(2), dp(4), dp(2));
+            roundProbBox = box;
+            renderRoundProblems(box, act, prefix, accName);
+            ScrollView scv = new ScrollView(act);
+            scv.addView(box, new android.widget.ScrollView.LayoutParams(-1, -2));
+            roundProbDlg = showDialog(act, Lang.tf("卡住的目标 · {0}", accName), scv, Lang.tr("关闭"), () -> {
+                // 关闭时清句柄，下次打开重建
+                roundProbBox = null;
+                roundProbDlg = null;
+            });
+        } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
+    }
+
+    /** 框内列表句柄（自持面板用；与 pendingDialog 无关，互不干扰）。 */
+    private LinearLayout roundProbBox = null;
+    private Object roundProbDlg = null;
+
+    /** 只渲染「卡住的目标」列表内容到给定容器（可反复调用，不产生新窗口）。 */
+    private void renderRoundProblems(final LinearLayout box, final Activity act,
+                                     final String prefix, final String accName) {
+        try {
+            box.removeAllViews();
+            final java.util.List<RoundState> list = roundProblemsOf(prefix);
 
             if (list.isEmpty()) {
                 TextView ok = new TextView(act);
@@ -1222,9 +1259,8 @@ public final class TGAutoSignCore {
                 ok.setTypeface(Theme.monoBold());
                 ok.setGravity(Gravity.CENTER);
                 ok.setPadding(0, dp(18), 0, dp(18));
-                ok.setText(Lang.tr("这一轮没有卡住的目标"));
+                ok.setText(Lang.tr("没有需要处理的了"));
                 box.addView(ok);
-                showDialog(act, accName, box, Lang.tr("关闭"));
                 return;
             }
 
@@ -1233,131 +1269,101 @@ public final class TGAutoSignCore {
             sum.setTextColor(Theme.termAmber(act));
             sum.setTypeface(Theme.monoBold());
             sum.setPadding(dp(2), 0, dp(2), dp(8));
-            sum.setText(Lang.tf("{0} 条需要处理（点右侧按钮逐一处置）", list.size()));
+            sum.setText(Lang.tf("还有 {0} 条需要处理（处置后本窗口自动刷新）", list.size()));
             box.addView(sum);
 
             for (final RoundState rs : list) {
                 LinearLayout card = new LinearLayout(act);
                 card.setOrientation(LinearLayout.VERTICAL);
                 card.setPadding(dp(12), dp(10), dp(12), dp(10));
-                LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
-                clp.setMargins(0, dp(3), 0, dp(3));
-                card.setLayoutParams(clp);
-                int col = rs.state == RS_SENDFAIL ? Theme.termPink(act)
-                        : rs.state == RS_PANEL ? Theme.termAmber(act) : Theme.termCyan(act);
-                card.setBackground(termBorder(act, Theme.withAlpha(col, 0x10), Theme.withAlpha(col, 0x55)));
+                card.setBackground(termBorder(act, Theme.termCard(act),
+                        Theme.withAlpha(Theme.termAmber(act), 0x33)));
 
-                // 第一行：目标名 + 状态徽章
-                LinearLayout l1 = new LinearLayout(act);
-                l1.setOrientation(LinearLayout.HORIZONTAL);
-                l1.setGravity(Gravity.CENTER_VERTICAL);
-                TextView nm = new TextView(act);
-                nm.setTextSize(Theme.TS_SUBTITLE);
-                nm.setTextColor(Theme.termTxt(act));
-                nm.setTypeface(Theme.monoBold());
-                nm.setText(rs.name == null || rs.name.isEmpty() ? String.valueOf(rs.did) : rs.name);
-                nm.setSingleLine(true);
-                l1.addView(nm, new LinearLayout.LayoutParams(0, -2, 1f));
-                TextView badge = new TextView(act);
-                badge.setTextSize(Theme.TS_CAPTION);
-                badge.setTextColor(col);
-                badge.setTypeface(Theme.monoBold());
-                badge.setText(roundStateLabel(rs.state));
-                l1.addView(badge, new LinearLayout.LayoutParams(-2, -2));
-                card.addView(l1);
+                TextView t1 = new TextView(act);
+                t1.setTextSize(Theme.TS_SUBTITLE);
+                t1.setTextColor(Theme.termTxt(act));
+                t1.setTypeface(Theme.text());
+                t1.setSingleLine(true);
+                t1.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                t1.setText(targetTitle(rs.did));
+                card.addView(t1);
 
-                // 第二行：原因说明
-                TextView why = new TextView(act);
-                why.setTextSize(Theme.TS_CAPTION);
-                why.setTextColor(Theme.termMuted(act));
-                why.setTypeface(Theme.text());
-                why.setPadding(0, dp(4), 0, dp(8));
-                why.setText(rs.note == null || rs.note.isEmpty() ? Lang.tr("（无更多信息）") : rs.note);
-                card.addView(why);
+                TextView t2 = new TextView(act);
+                t2.setTextSize(Theme.TS_CAPTION);
+                t2.setTextColor(Theme.termAmber(act));
+                t2.setTypeface(Theme.text());
+                t2.setPadding(0, dp(3), 0, dp(8));
+                t2.setText(Lang.tf("状态：{0}{1}", roundStateLabel(rs.state),
+                        rs.note == null || rs.note.length() == 0 ? "" : " · " + rs.note));
+                card.addView(t2);
 
-                // 第三行：处置按钮
                 LinearLayout btns = new LinearLayout(act);
                 btns.setOrientation(LinearLayout.HORIZONTAL);
                 btns.setGravity(Gravity.CENTER_VERTICAL);
-                Button retry = mkBtn(act); retry.setText(Lang.tr("重试")); retry.setTextSize(Theme.TS_CAPTION);
-                retry.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+
+                Button retry = mkBtn(act);
+                retry.setText(Lang.tr("重试"));
+                retry.setTextSize(Theme.TS_CAPTION);
+                retry.setOnClickListener(v -> {
                     try {
                         pendConfirmRetry(prefix, rs.id, rs.did);
                         roundMark(prefix, rs.id, RS_WAITING, "已重试，等待发出");
+                        // 关键：只重绘本框内容，不关窗、不跳列表 —— 所以不闪
+                        renderRoundProblems(box, act, prefix, accName);
                         toast(Lang.tr("已重试"));
-                        refreshAccOverview(act, accountSlots());
-                        reopenRoundProblems(act, prefix, accName);
                     } catch (Throwable t) { toast(Lang.tf("重试失败: {0}", t)); }
-                } });
+                });
                 btns.addView(retry, new LinearLayout.LayoutParams(0, -2, 1f));
 
-                Button asSigned = mkBtn(act); asSigned.setText(Lang.tr("记为已签")); asSigned.setTextSize(Theme.TS_CAPTION);
-                asSigned.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                Button asSigned = mkBtn(act);
+                asSigned.setText(Lang.tr("记为已签"));
+                asSigned.setTextSize(Theme.TS_CAPTION);
+                asSigned.setOnClickListener(v -> {
                     try {
                         pendConfirmAsSigned(prefix, rs.id, rs.did);
                         roundMark(prefix, rs.id, RS_SIGNED, "已手动确认");
+                        renderRoundProblems(box, act, prefix, accName);
                         toast(Lang.tr("已记为已签"));
-                        refreshAccOverview(act, accountSlots());
-                        reopenRoundProblems(act, prefix, accName);
                     } catch (Throwable t) { toast(Lang.tf("操作失败: {0}", t)); }
-                } });
+                });
                 LinearLayout.LayoutParams b2 = new LinearLayout.LayoutParams(0, -2, 1f);
                 b2.leftMargin = dp(6);
                 btns.addView(asSigned, b2);
 
-                Button ignore = mkBtn(act); ignore.setText(Lang.tr("忽略今天")); ignore.setTextSize(Theme.TS_CAPTION);
-                ignore.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                Button ignore = mkBtn(act);
+                ignore.setText(Lang.tr("忽略今天"));
+                ignore.setTextSize(Theme.TS_CAPTION);
+                ignore.setOnClickListener(v -> {
                     try {
                         pendConfirmIgnoreToday(prefix, rs.id, rs.did);
                         roundMark(prefix, rs.id, RS_SKIPPED, "今天忽略");
+                        renderRoundProblems(box, act, prefix, accName);
                         toast(Lang.tr("今天不再处理它"));
-                        refreshAccOverview(act, accountSlots());
-                        reopenRoundProblems(act, prefix, accName);
                     } catch (Throwable t) { toast(Lang.tf("操作失败: {0}", t)); }
-                } });
+                });
                 LinearLayout.LayoutParams b3 = new LinearLayout.LayoutParams(0, -2, 1f);
                 b3.leftMargin = dp(6);
                 btns.addView(ignore, b3);
+
                 card.addView(btns);
 
-                // 「补判定词」仅判不出时出现（另起一行，避免按钮过挤）
                 if (rs.state == RS_UNKNOWN) {
                     Button words = mkBtn(act);
-                    words.setText(Lang.tr("补判定词（让下次能认出来）")); words.setTextSize(Theme.TS_CAPTION);
-                    words.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                    words.setText(Lang.tr("补判定词（让下次能认出来）"));
+                    words.setTextSize(Theme.TS_CAPTION);
+                    words.setOnClickListener(v -> {
                         try { showLearnPage(act); } catch (Throwable ignored) {}
-                    } });
+                    });
                     LinearLayout.LayoutParams wp = new LinearLayout.LayoutParams(-1, -2);
                     wp.topMargin = dp(6);
                     card.addView(words, wp);
                 }
 
-                box.addView(card);
+                LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
+                clp.setMargins(0, 0, 0, dp(8));
+                box.addView(card, clp);
             }
-
-            // 存进 pendingDialog：否则 reopenPendingWork / 其它处置路径的
-            // dismissOne(pendingDialog) 关不到它 → 用户处置一条后旧框还在，
-            // 得手动关好几次（2026-10-14 用户反馈）。
-            dismissOne(pendingDialog);
-            pendingDialog = showDialog(act, Lang.tf("卡住的目标 · {0}", accName), box, Lang.tr("关闭"));
-        } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
-    }
-
-    /** 处置一条后重建「卡住的目标」框（留在原处，不跳回目标列表）。
-     *
-     *  为什么不用 refreshAccOverview 收尾就完事：那只会刷新账号一览，
-     *  用户点「记为已签」后整个框消失/跳走，跟他正在做的事对不上；
-     *  期望是「处置完这条，框里少一条，继续处理下一条」。
-     */
-    private void reopenRoundProblems(final Activity act, final String prefix, final String accName) {
-        mainHandler.postDelayed(new Runnable() {
-            @Override public void run() {
-                try {
-                    if (act == null || act.isFinishing()) return;
-                    showRoundProblems(act, prefix, accName);
-                } catch (Throwable t) { noteSwallowed("reopenRoundProblems", t); }
-            }
-        }, 120L);
+        } catch (Throwable t) { noteSwallowed("renderRoundProblems", t); }
     }
 
     /** 实时状态的界面文案。 */
@@ -6664,6 +6670,7 @@ public final class TGAutoSignCore {
                 gate.accountDisabled = !isAccountEnabled(account);
                 // 发送次数硬闸：与 sendSign 同一判据（见那里的说明）。
                 gate.sendAttemptsExhausted = isSendAttemptsExhausted(prefix, id);
+                // manual（全账号/单账号按钮）同样受限：见 SignLogic.decideSign 里的说明。
                 int skip = SignLogic.decideSign(gate);
                 if (skip != SignLogic.SKIP_NONE) {
                     if (skip == SignLogic.SKIP_ALREADY_SIGNED) signed++;
@@ -11092,7 +11099,15 @@ public final class TGAutoSignCore {
         return (int) (h * LIST_H_RATIO);
     }
 
+    /** 简单回调接口（避免依赖 java.util.function，兼容低版本）。 */
+    private interface AfterClose { void run(); }
+
     private Object showDialog(Activity act, String title, View view, String negLabel) {
+        return showDialog(act, title, view, negLabel, null);
+    }
+
+    /** 带关闭回调的版本：窗口关闭时回调（自持面板靠它清句柄，避免句柄悬空）。 */
+    private Object showDialog(Activity act, String title, View view, String negLabel, final AfterClose onClose) {
         // 导出模式：只记录页面 View 并让调用方尽快收手，不真正弹窗。
         // 取「本次页面构建的第一个 showDialog」，不靠标题匹配 ——
         // 页面标题会随语言变化（目标列表（11） / Targets (11)），匹配标题必然漏页。
@@ -11117,6 +11132,17 @@ public final class TGAutoSignCore {
             } catch (Throwable e1) {
                 logd("[对话框] setNegativeButton 未找到(忽略): " + e1);
                 try { call(b, "setCancelable", new Class<?>[]{boolean.class}, new Object[]{true}); } catch (Throwable ignored) {}
+            }
+            if (onClose != null) {
+                try {
+                    call(b, "setOnDismissListener",
+                            new Class<?>[]{android.content.DialogInterface.OnDismissListener.class},
+                            new Object[]{new android.content.DialogInterface.OnDismissListener() {
+                                @Override public void onDismiss(android.content.DialogInterface di) {
+                                    try { onClose.run(); } catch (Throwable ignored) {}
+                                }
+                            }});
+                } catch (Throwable ignored) {}
             }
             d = call(b, "create", new Class<?>[0], new Object[0]);
             if (d != null) call(d, "show", new Class<?>[0], new Object[0]);
