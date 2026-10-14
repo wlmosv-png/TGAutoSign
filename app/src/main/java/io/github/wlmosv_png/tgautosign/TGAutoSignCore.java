@@ -20064,6 +20064,20 @@ public final class TGAutoSignCore {
      *  @return 命中的目标数（0 = 该会话没有在等的目标，与我们无关）
      */
     private int judgeReplyByPeer(long peerUid, String text, String source) {
+        return judgeReplyByPeer(peerUid, text, source, 0);
+    }
+
+    /**
+     * 同上，但带「引用回复」目标消息 id。
+     *
+     *  为什么要带（2026-10-14）：同一会话挂多个目标时（一个 bot 多个按钮入口、
+     *  群里挂多个 bot），只按 peer 匹配会取到「第一个在等的」—— 张冠李戴。
+     *  bot 引用我们发出的那条消息时，reply_to_msg_id 是最硬的关联依据，
+     *  必须优先于 peer 匹配（与长消息链 resolveReplyTarget 的 ①REPLY_TO 同判据）。
+     *
+     *  @param replyToId bot 这条消息的 reply_to_msg_id（0 = 不是引用回复）
+     */
+    private int judgeReplyByPeer(long peerUid, String text, String source, int replyToId) {
         try {
             if (peerUid == 0L) return 0;
             if (text == null || text.length() == 0) return 0;
@@ -20071,18 +20085,54 @@ public final class TGAutoSignCore {
             // 群聊消息洪峰时（实测每分钟几十条无关消息），这一句把 90%+ 的调用挡在循环之前。
             if (!awaitingPeers().contains(Long.valueOf(peerUid))) return 0;
             int hitAcc = -1; String hitPrefix = null; Map<String, Object> hitTarget = null;
-            for (int slot : accountSlots()) {
-                String pfx = accountPrefix(slot);
-                java.util.List<Map<String, Object>> l = new java.util.ArrayList<Map<String, Object>>();
-                try { loadTargetsInto(pfx, l); } catch (Throwable ignored) {}
-                for (Map<String, Object> m : l) {
-                    if (!samePeerDid(entryDid(m), peerUid)) continue;
-                    String id = entryId(m);
-                    if (isSentPendingFresh(pfx, id) || isPendingFresh(pfx, id)) {
-                        hitAcc = slot; hitPrefix = pfx; hitTarget = m; break;
+            // ── 精确优先：引用回复按 msg_id_ 对上「我们发出的那条」──
+            if (replyToId > 0) {
+                for (int slot : accountSlots()) {
+                    String pfx = accountPrefix(slot);
+                    java.util.List<Map<String, Object>> l = new java.util.ArrayList<Map<String, Object>>();
+                    try { loadTargetsInto(pfx, l); } catch (Throwable ignored) {}
+                    for (Map<String, Object> m : l) {
+                        if (!samePeerDid(entryDid(m), peerUid)) continue;
+                        String rid = entryId(m);
+                        if (!(isSentPendingFresh(pfx, rid) || isPendingFresh(pfx, rid))) continue;
+                        int sent = prefs.getInt(pfx + "msg_id_" + rid, 0);
+                        if (sent > 0 && sent == replyToId) { hitAcc = slot; hitPrefix = pfx; hitTarget = m; break; }
+                    }
+                    if (hitTarget != null) break;
+                }
+                if (hitTarget != null) {
+                    jlog("[引用回复] reply_to=" + replyToId + " 精确命中 " + entryId(hitTarget));
+                }
+            }
+            // 未命中（非引用回复 / msg_id_ 没记上）→ 退回 peer 匹配。
+            // ── 唯一性约束（2026-10-14）──
+            //  同一会话挂多个「已发出」目标时，只按 peer 取第一个会张冠李戴
+            //  （一个 bot 有多个按钮入口、同一群里多个目标）。
+            //  做法与长消息链 PHASE-1 一致：候选 == 1 才关联，> 1 一律不猜，
+            //  落日志让人能看到；宁可漏判（用户可手动处置），也不把 A 的回复判给 B。
+            if (hitTarget == null) {
+                int cand = 0;
+                Map<String, Object> only = null; String onlyPfx = null; int onlyAcc = -1;
+                for (int slot : accountSlots()) {
+                    String pfx = accountPrefix(slot);
+                    java.util.List<Map<String, Object>> l = new java.util.ArrayList<Map<String, Object>>();
+                    try { loadTargetsInto(pfx, l); } catch (Throwable ignored) {}
+                    for (Map<String, Object> m : l) {
+                        if (!samePeerDid(entryDid(m), peerUid)) continue;
+                        String id = entryId(m);
+                        if (!(isSentPendingFresh(pfx, id) || isPendingFresh(pfx, id))) continue;
+                        cand++;
+                        only = m; onlyPfx = pfx; onlyAcc = slot;
                     }
                 }
-                if (hitTarget != null) break;
+                if (cand == 1) {
+                    hitTarget = only; hitPrefix = onlyPfx; hitAcc = onlyAcc;
+                } else if (cand > 1) {
+                    jlog("[" + source + "] 会话 " + peerUid + " 有 " + cand
+                         + " 个在等结论的目标且这条不是引用回复 → 不猜，等更明确的信号"
+                         + (replyToId > 0 ? "（reply_to=" + replyToId + " 未匹配上）" : ""));
+                    return 0;
+                }
             }
             if (hitTarget == null) return 0;
             final int _acc = hitAcc;
@@ -20235,10 +20285,31 @@ public final class TGAutoSignCore {
                     if (m != null) text = String.valueOf(m);
                 } catch (Throwable ignored) {}
             }
-            if (text.length() == 0) return 0;
+            // ── 媒体消息识别（2026-10-14）──
+            // 按钮回调型 bot 点完按钮常回一张结果图，messageText 只渲染出「图片」两字。
+            // 当普通文本送判定 → 判不出 → 误报「回复判不出」，而图里就是签到结果。
+            boolean isMedia = false;
+            try {
+                Object media = getFieldValSafe(owner, "media");
+                if (media != null) {
+                    String mn = media.getClass().getName();
+                    if (!mn.contains("webPage")) isMedia = true;   // webPage 不算「内容」
+                }
+            } catch (Throwable ignored) {}
+            if (text.length() == 0) {
+                if (!isMedia) return 0;          // 无文本又非媒体 → 无可判定内容
+            } else if (SignLogic.isMediaPlaceholderText(text)) {
+                isMedia = true;
+            }
+            // ── 引用回复的目标消息 id（bot 引用我们发出的那条时给出的硬关联依据）──
+            int replyToId = 0;
+            try {
+                Object rt = getFieldValSafe(owner, "reply_to_msg_id");
+                if (rt instanceof Number) replyToId = ((Number) rt).intValue();
+            } catch (Throwable ignored) {}
             // 日志刻意只在「命中在等目标」时由 judgeReplyByPeer 落一条 ——
             // 群消息量大，每条都记会淹没日志（实测一次刷屏几十行）。
-            return judgeReplyByPeer(peerUid, text, "锚点B");
+            return judgeReplyByPeer(peerUid, text, isMedia ? "锚点B:media" : "锚点B", replyToId);
         } catch (Throwable t) { noteSwallowed("handleOneMessageObject", t); return 0; }
     }
 

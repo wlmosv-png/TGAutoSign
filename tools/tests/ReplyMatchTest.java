@@ -26,6 +26,7 @@ public final class ReplyMatchTest {
 
     public static void main(String[] args) {
         replyToWins();
+        anchorBReplyTo();
         botDidWins();
         peerTtlUnique();
         peerTtlAmbiguous();
@@ -158,6 +159,39 @@ public final class ReplyMatchTest {
         Result r = resolve(l, group, 555L, true, 777, p);
         eq("REPLY_TO 优先选中 g_2", r.targetId, "g_2");
         eq("方法为 REPLY_TO", r.method, "REPLY_TO");
+    }
+
+    /** 锚点 B（judgeReplyByPeer）的引用回复关联语义。
+     *
+     *  与长消息链不同，锚点 B 的候选集是「本会话所有『已发出、等结论』的目标」，
+     *  没有 BOT_DID / AMBIGUOUS 这套，所以**引用回复的精确匹配必须排在最前**，
+     *  否则同一会话挂多个目标时会取到第一个在等的 —— 张冠李戴。
+     *  （2026-10-14 加：锚点 B 原实现完全没有 reply_to 判据。）
+     */
+    private static void anchorBReplyTo() {
+        // 同一私聊会话（同一 bot）挂了两个按钮目标：cb1 / cb2
+        long peer = 7971054954L;
+        List<T> l = new ArrayList<T>();
+        l.add(new T("cb1", peer, null));
+        l.add(new T("cb2", peer, null));
+        Map<String, Object> p = prefs(
+            "sent_at_cb1", System.currentTimeMillis(),
+            "sent_at_cb2", System.currentTimeMillis(),
+            "msg_id_cb1", Integer.valueOf(111),
+            "msg_id_cb2", Integer.valueOf(222));
+        // bot 引用回复了 cb2 发出的那条 → 必须精确命中 cb2
+        Result r = resolve(l, peer, peer, true, 222, p);
+        eq("锚点B: 引用回复精确命中 cb2", r.targetId, "cb2");
+        eq("锚点B: 方法为 REPLY_TO", r.method, "REPLY_TO");
+        // 引用 cb1
+        Result r2 = resolve(l, peer, peer, true, 111, p);
+        eq("锚点B: 引用 cb1 命中 cb1", r2.targetId, "cb1");
+        // 非引用回复（reply_to=0）时，本复刻函数（群聊语义，带唯一性约束）
+        // 对「同一会话两个候选」会判 AMBIGUOUS 不关联。
+        // 生产代码 judgeReplyByPeer 是私聊语义、取第一个在等的目标 —— 两者在这里
+        // 有意不同：私聊里同一 bot 的多个按钮共用会话，必须先靠引用回复区分。
+        Result r3 = resolve(l, peer, peer, true, 0, p);
+        eq("锚点B: 非引用时本复刻函数判不关联（生产取第一个）", r3.targetId, null);
     }
 
     private static void botDidWins() {
