@@ -154,4 +154,39 @@ final class StatsData {
     static int streak(int stored, String lastDate, String today, String yesterday) {
         return SignLogic.streakDisplay(stored, lastDate, today, yesterday);
     }
+
+    /**
+     * 自然月布局数据（供「月历」区块使用）。
+     *
+     * 与 dateRange(weekCols) 的区别：那个是「以今天结尾往前推 N 天」的滚动窗口；
+     * 这个是**自然月**——1 号到月末，按星期对齐到网格，月首月尾留空。
+     * 月历要的正是这种对齐：空格让「哪几天断了」一目了然。
+     *
+     * @param today yyyy-MM-dd
+     * @return [0] 本月每天的 yyyy-MM-dd（下标 0 = 1 号，长度 = 当月天数）
+     *         [1] 本月 1 号是周几（0=周一 … 6=周日，用于网格前置留白）
+     *         [2] 今天在本月中的下标（今天不在本月则 -1）
+     *         [3] 今天是否在查看的这个月（0/1）
+     */
+    static Object[] monthLayout(String today) {
+        java.util.List<String> days = new ArrayList<String>();
+        int firstDow = 0;
+        int todayIdx = -1;
+        boolean inMonth = false;
+        try {
+            java.time.LocalDate t = java.time.LocalDate.parse(today, DateUtils.YMD);
+            java.time.LocalDate first = t.withDayOfMonth(1);
+            int len = first.lengthOfMonth();
+            // DayOfWeek: MONDAY=1 … SUNDAY=7 → 换算成 0..6（周一=0）
+            firstDow = first.getDayOfWeek().getValue() - 1;
+            for (int d = 0; d < len; d++) {
+                java.time.LocalDate cur = first.plusDays(d);
+                days.add(cur.format(DateUtils.YMD));
+                if (cur.equals(t)) { todayIdx = d; inMonth = true; }
+            }
+        } catch (Throwable ignored) {}
+        return new Object[]{days, Integer.valueOf(firstDow), Integer.valueOf(todayIdx),
+                Integer.valueOf(inMonth ? 1 : 0)};
+    }
+
 }

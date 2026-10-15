@@ -1155,6 +1155,26 @@ public final class Lang {
         EN.put("今日 {0}/{1} · 连续 {2} 天", "{0}/{1} today · {2}d streak");
         EN.put("各目标", "TARGETS");
         EN.put("近 30 天", "last 30d");
+        // ── 统计页 v5：本周/本月对比 + 主面板战报（2026-10-16）──
+        EN.put("本周 / 本月", "WEEK / MONTH");
+        EN.put("本周", "This week");
+        EN.put("本月", "This month");
+        EN.put("今日 {0}/{1} 已签完", "{0}/{1} done today");
+        EN.put("今日 {0}/{1} 已签完 · 连续 {2} 天", "{0}/{1} done today · {2}d streak");
+        EN.put("今日 {0}/{1} 已签 · 还剩 {2} 个", "{0}/{1} signed today · {2} left");
+        // ── 统计页 v4：月历 + 里程碑（2026-10-16）──
+        EN.put("本月月历", "THIS MONTH");
+        EN.put("没有日期数据", "No date data");
+        EN.put("本月 {0}/{1} 天已签", "{0}/{1} days signed this month");
+        EN.put("里程碑", "MILESTONES");
+        EN.put("10 天", "10 days");
+        EN.put("30 天", "30 days");
+        EN.put("百天", "100 days");
+        EN.put("一年", "1 year");
+        EN.put("一年半", "1.5 years");
+        EN.put("三年", "3 years");
+        EN.put("全部里程碑已点亮", "All milestones lit");
+        EN.put("距下一个里程碑还差 {0} 天", "{0}d to the next milestone");
         EN.put("天", "d");
         EN.put("一", "M");
         EN.put("二", "T");

@@ -100,6 +100,9 @@ final class StatsView {
         addSafe(box, act, Lang.tr("近 30 天趋势"), new Block() {
             @Override public View make() { return trend(act, s, animate, out); }
         });
+        addSafe(box, act, Lang.tr("本周 / 本月"), new Block() {
+            @Override public View make() { return periodCompare(act, s, animate, out); }
+        });
         addSafe(box, act, Lang.tr("近 90 天打卡"), new Block() {
             @Override public View make() { return heat(act, s, animate, out); }
         });
@@ -114,6 +117,13 @@ final class StatsView {
         });
         addSafe(box, act, Lang.tr("各目标"), new Block() {
             @Override public View make() { return targetCards(act, s, animate, out); }
+        });
+        // ── 2026-10-16 新增两块 ──
+        addSafe(box, act, Lang.tr("本月月历"), new Block() {
+            @Override public View make() { return calendar(act, s, animate, out); }
+        });
+        addSafe(box, act, Lang.tr("里程碑"), new Block() {
+            @Override public View make() { return milestones(act, s, animate, out); }
         });
         if (animate) box.setTag(TAG_ANIMATED);
         return box;
@@ -254,6 +264,7 @@ final class StatsView {
         // 门面卡顶部扫过一条细线：整块像刚被"扫描建立"。
         // ScanLineDrawable 已带渐变头尾，短促（420ms）不拖沓。
         if (animate && out != null) {
+
             FrameLayout holder = new FrameLayout(act);
             holder.addView(card, new FrameLayout.LayoutParams(-1, -2));
             ImageView scan = new ImageView(act);
@@ -516,6 +527,45 @@ final class StatsView {
             meta.setGravity(Gravity.END);
             meta.setText(Lang.tf("今日 {0}/{1} · 连续 {2} 天", a.todaySigned, a.todayTotal, a.streak));
             head.addView(meta, new LinearLayout.LayoutParams(0, -2, 1f));
+            // ── 2026-10-16 新增：健康度徽章 ──
+            // 用里程碑同一套轨道环（缩小版），环填充 = 该账号 streak / 最近里程碑。
+            // 为什么放这里：账号一览原本是"每行一条进度条"，多账号时上下扫很难快速比；
+            //   一枚徽章能把"这个号状态好不好"变成一眼可见。
+            // 与目标列表的状态点不冲突：那里是"单条目标"，这里是"整个账号"。
+            try {
+                final int[] MARKS = {10, 30, 100, 365, 520, 1000};
+                int nextMark = -1;
+                for (int m : MARKS) { if (a.streak < m) { nextMark = m; break; } }
+                boolean maxed = (nextMark < 0);
+                float ratio = maxed ? 1f
+                        : Math.min(1f, a.streak / (float) (nextMark > 0 ? nextMark : 1));
+                int st;
+                if (maxed) st = StatsCharts.OrbitBadgeDrawable.ST_DONE;
+                else if (a.streak > 0) st = StatsCharts.OrbitBadgeDrawable.ST_PROGRESS;
+                else st = StatsCharts.OrbitBadgeDrawable.ST_LOCKED;
+                int bcol = maxed ? Theme.termGreen(act)
+                        : a.streak > 0 ? (a.current ? Theme.termCyan(act) : Theme.termMuted(act))
+                        : Theme.termFaint(act);
+                long period = (st == StatsCharts.OrbitBadgeDrawable.ST_LOCKED) ? 0L : 3200L;
+
+                final float bs = dp(act, 38);
+                FrameLayout bf = new FrameLayout(act);
+                ImageView biv = new ImageView(act);
+                biv.setImageDrawable(new StatsCharts.OrbitBadgeDrawable(st, bcol, bs, ratio, period));
+                bf.addView(biv, new FrameLayout.LayoutParams((int) bs, (int) bs));
+                TextView bn = new TextView(act);
+                bn.setTextSize(9.5f);
+                bn.setGravity(Gravity.CENTER);
+                bn.setSingleLine(true);
+                bn.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+                bn.setTextColor(bcol);
+                bn.setText(maxed ? "✓" : (a.streak > 0 ? String.valueOf(a.streak) : "·"));
+                bf.addView(bn, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+                LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams((int) bs, (int) bs);
+                blp.leftMargin = dp(act, 8);
+                head.addView(bf, blp);
+            } catch (Throwable ignored) {}
+
             row.addView(head);
 
             // 进度条 + 百分比（百分比带扫过动画）
@@ -749,6 +799,384 @@ final class StatsView {
                     + " · 失败 " + _failed + " · 输入 " + s.targets.size()); } catch (Throwable ignored) {}
         } catch (Throwable t) { swallow(t); }
         return box;
+    }
+
+    // ══════════════════════ ⑦ 本月月历 ══════════════════════
+
+    /**
+     * 本月月历（2026-10-16 新增）。
+     *
+     * 为什么在已有「近 90 天打卡」之外还要月历：
+     *   热力图是连续 90 天的方格带，看的是整体密度；
+     *   月历是自然月 + 星期对齐，月首月尾留白——
+     *   「这个月哪几天断了」一眼就能数出来，这是热力图给不了的。
+     *
+     * 视觉与现有语汇一致：等宽、主色实心格、描边空格、
+     * 今天加粗描边 + 四角准星；入场为逐格点亮（按日序）+ 一道扫描线。
+     */
+    private static View calendar(Activity act, StatsSnapshot s, boolean animate, Pending out) {
+        LinearLayout wrap = new LinearLayout(act);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        try {
+            Object[] lay = StatsData.monthLayout(s.today);
+            @SuppressWarnings("unchecked")
+            java.util.List<String> days = (java.util.List<String>) lay[0];
+            int firstDow = (Integer) lay[1];
+            int todayIdx = (Integer) lay[2];
+            if (days == null || days.isEmpty()) {
+                wrap.addView(hintText(act, Lang.tr("没有日期数据")));
+                return wrap;
+            }
+            final int n = days.size();
+            final boolean[] signed = new boolean[n];
+            final boolean[] future = new boolean[n];
+            int hits = 0;
+            for (int i = 0; i < n; i++) {
+                String d = days.get(i);
+                if (s.signDays != null && s.signDays.contains(d)) { signed[i] = true; hits++; }
+                // 严格大于今天 = 未来（字典序比较即可，yyyy-MM-dd）
+                if (s.today != null && d.compareTo(s.today) > 0) future[i] = true;
+            }
+
+            int cy = Theme.termCyan(act);
+            int dim = Theme.termMuted(act);
+            int faint = Theme.termFaint(act);
+
+            // 布局（2026-10-16 第三版，修「表头与点阵对不齐」）：
+            // 点阵的**列宽由 drawable 自己按 bounds.width()/7 算**（与表头的 7 等分父宽同基准），
+            // 所以这里不再传列宽、也不再依赖 contentWidth()（那是"猜"的宽度，与表头不同基准 → 越右越偏）。
+            // 行高只跟屏幕比例有关，独立给定即可。
+            final float cellH = Theme.dp(act, 30);
+
+            int totalCells = firstDow + n;
+            int rows = (totalCells + 6) / 7;
+
+            FrameLayout holder = new FrameLayout(act);
+            // 用 FrameLayout + 内部留白：月首留白靠 translateX 实现不好算，
+            // 直接把整块放进 FrameLayout，由 CalendarDrawable 内部处理列偏移。
+            ImageView iv = new ImageView(act);
+            final StatsCharts.CalendarDrawable cd =
+                    new StatsCharts.CalendarDrawable(signed, future, todayIdx, cy, dim, faint,
+                            0f, cellH, rows);   // 列宽改由 drawable 按 bounds 实时算
+            cd.setLit(animate ? 0f : 1f);
+            iv.setImageDrawable(cd);
+            // 星期表头（与格子对齐，放在网格上方）
+            String[] WL = {Lang.tr("一"), Lang.tr("二"), Lang.tr("三"), Lang.tr("四"),
+                    Lang.tr("五"), Lang.tr("六"), Lang.tr("日")};
+            LinearLayout ax = new LinearLayout(act);
+            ax.setOrientation(LinearLayout.HORIZONTAL);
+            ax.setPadding(0, 0, 0, dp(act, 7));
+            // 与网格同一套等分：表头与点阵列必须对齐
+
+            for (int wi = 0; wi < 7; wi++) {
+                TextView wt = new TextView(act);
+                wt.setTextSize(FS_SMALL);
+                wt.setTextColor(Theme.termFaint(act));
+                wt.setTypeface(Theme.text());
+                wt.setGravity(Gravity.CENTER);
+                wt.setText(WL[wi]);
+                ax.addView(wt, new LinearLayout.LayoutParams(0, -2, 1f));
+            }
+
+            int gridH = (int) (rows * cellH);
+            // 月首偏移：在 drawable 内部按第一天的星期做列偏移
+            cd.setColOffset(firstDow);
+            holder.addView(iv, new FrameLayout.LayoutParams(-1, gridH));
+            if (animate && out != null) {
+                out.add(holder, new Runnable() { @Override public void run() {
+                    try {
+                        android.animation.ValueAnimator va =
+                                android.animation.ValueAnimator.ofFloat(0f, 1f);
+                        va.setDuration(900);
+                        va.setInterpolator(new android.view.animation.DecelerateInterpolator(1.1f));
+                        va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                            @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                                try { cd.setLit((Float) a.getAnimatedValue()); } catch (Throwable ignored) {}
+                            }
+                        });
+                        va.start();
+                        // 扫描线：同期从上到下走一遍（与点亮错开一点）
+                        android.animation.ValueAnimator vs =
+                                android.animation.ValueAnimator.ofFloat(-1f, 1.15f);
+                        vs.setDuration(1100);
+                        vs.setInterpolator(new android.view.animation.LinearInterpolator());
+                        vs.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                            @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                                try { cd.setScan((Float) a.getAnimatedValue()); } catch (Throwable ignored) {}
+                            }
+                        });
+                        vs.start();
+                    } catch (Throwable ignored) {}
+                } }, 0);
+            }
+            wrap.addView(ax);   // 星期表头（在网格上方）
+            wrap.addView(holder, new LinearLayout.LayoutParams(-1, gridH));
+
+            // 尾注：本月已签 N 天 / 共 M 天
+            TextView foot = new TextView(act);
+            foot.setTextSize(FS_SMALL);
+            foot.setTextColor(Theme.termMuted(act));
+            foot.setTypeface(Theme.text());
+            foot.setPadding(0, dp(act, 6), 0, 0);
+            int past = 0;
+            for (int i = 0; i < n; i++) if (!future[i]) past++;
+            foot.setText(Lang.tf("本月 {0}/{1} 天已签", hits, past));
+            wrap.addView(foot);
+        } catch (Throwable t) { swallow(t); }
+        return wrap;
+    }
+
+    // ══════════════════════ ⑨ 本周 / 本月 ══════════════════════
+
+    /**
+     * 本周 / 本月对比条（2026-10-16 新增）。
+     *
+     * 为什么加：上面那条 30 天趋势是「连续的线」，看得出走势但读不出「这周到底比上周好还是差」。
+     *   StatsData.headTailHits() 其实早就实现了「前段 vs 后段」的对比，
+     *   但一直被埋在趋势那句文案里（只用来显示"在变好 / 在变差"）。
+     *   这里把它提出来做成两根横条，一眼见高低。
+     *
+     * 视觉：两根横条（本周 / 本月），右侧标 `已签/总数`，再右侧一个小箭头 + 差值。
+     *   条的颜色：本周用主色，本月用绿（与 hero 的语义一致）；
+     *   增长箭头绿、下降箭头琥珀 —— 不引入新色。
+     */
+    private static View periodCompare(Activity act, StatsSnapshot s, boolean animate, Pending out) {
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        try {
+            java.util.List<String> r7 = StatsData.dateRange(s.today, 7, false);
+            java.util.List<String> r14 = StatsData.dateRange(s.today, 14, false);
+            java.util.List<String> r30 = StatsData.dateRange(s.today, 30, false);
+            java.util.List<String> r60 = StatsData.dateRange(s.today, 60, false);
+
+            int thisWeek = StatsData.countHits(s.signDays, r7);
+            int lastWeek = StatsData.countHits(s.signDays, r14) - thisWeek;
+            int thisMonth = StatsData.countHits(s.signDays, r30);
+            int lastMonth = StatsData.countHits(s.signDays, r60) - thisMonth;
+
+            box.addView(compareRow(act, Lang.tr("本周"), thisWeek, 7, lastWeek,
+                    Theme.termCyan(act), animate, out, 0));
+            box.addView(compareRow(act, Lang.tr("本月"), thisMonth, r30.size(), lastMonth,
+                    Theme.termGreen(act), animate, out, 1));
+        } catch (Throwable t) { swallow(t); }
+        return box;
+    }
+
+    /** 一根对比条：标签 + 进度 + 计数 + 与上期差值。 */
+    private static View compareRow(Activity act, String label, int hit, int span, int prev,
+                                   int col, boolean animate, Pending out, int idx) {
+        LinearLayout row = new LinearLayout(act);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(0, dp(act, 5), 0, dp(act, 5));
+
+        LinearLayout head = new LinearLayout(act);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        TextView nm = new TextView(act);
+        nm.setTextSize(FS_MID);
+        nm.setTextColor(col);
+        nm.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        nm.setSingleLine(true);
+        nm.setText(label);
+        head.addView(nm, new LinearLayout.LayoutParams(-2, -2));
+        head.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(dp(act, 8), 1));
+
+        TextView cnt = new TextView(act);
+        cnt.setTextSize(FS_SMALL);
+        cnt.setTextColor(col);
+        cnt.setTypeface(Typeface.MONOSPACE);
+        cnt.setSingleLine(true);
+        cnt.setText(hit + "/" + span);
+        head.addView(cnt, new LinearLayout.LayoutParams(-2, -2));
+
+        // 与上期差值（绿=增长，琥珀=下降，持平不显示箭头）
+        int diff = hit - prev;
+        if (prev > 0 || diff != 0) {
+            TextView dv = new TextView(act);
+            dv.setTextSize(FS_SMALL);
+            dv.setTypeface(Typeface.MONOSPACE);
+            dv.setSingleLine(true);
+            dv.setGravity(Gravity.END);
+            if (diff > 0) {
+                dv.setTextColor(Theme.termGreen(act));
+                dv.setText(Lang.tf("↑ {0}", diff));
+            } else if (diff < 0) {
+                dv.setTextColor(Theme.termAmber(act));
+                dv.setText(Lang.tf("↓ {0}", -diff));
+            } else {
+                dv.setTextColor(Theme.termFaint(act));
+                dv.setText(Lang.tr("持平"));
+            }
+            LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(0, -2, 1f);
+            dlp.leftMargin = dp(act, 10);
+            head.addView(dv, dlp);
+        }
+        row.addView(head);
+
+        // 进度条
+        FrameLayout track = new FrameLayout(act);
+        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+        bg.setColor(Theme.withAlpha(col, 0x1A));
+        bg.setCornerRadius(dp(act, 2));
+        track.setBackground(bg);
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(-1, dp(act, 5));
+        tlp.topMargin = dp(act, 6);
+        View fill = new View(act);
+        android.graphics.drawable.GradientDrawable fg = new android.graphics.drawable.GradientDrawable();
+        fg.setColor(col);
+        fg.setCornerRadius(dp(act, 2));
+        fill.setBackground(fg);
+        track.addView(fill, new FrameLayout.LayoutParams(0, -1));
+        row.addView(track, tlp);
+
+        if (animate && out != null) {
+            final int fh = hit, fs = span, fi = idx;
+            out.add(track, new Runnable() { @Override public void run() {
+                setBar(track, fill, fh, fs, true, fi * 70);
+            } }, 0);
+        } else {
+            setBar(track, fill, hit, span, false, 0);
+        }
+        return row;
+    }
+
+    // ══════════════════════ ⑧ 里程碑 ══════════════════════
+
+    /**
+     * 里程碑墙（2026-10-16 新增）。
+     *
+     * 为什么做：「连续 N 天」在门面卡只是一个数字，
+     *   看不出自己走到了哪一站。徽章墙把里程摆出来，
+     *   已达成点亮、未达成线框，下一站还差多少一眼就知道。
+     *
+     * 里程取值与倒数日站同一套（10/30/100/365/520/1000）——
+     *   两边语言一致，用户不用记两套数字。
+     *   取 s.streak（当前连续天数）作为判定依据。
+     */
+    private static View milestones(Activity act, StatsSnapshot s, boolean animate, Pending out) {
+        LinearLayout wrap = new LinearLayout(act);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        try {
+            final int[] marks = {10, 30, 100, 365, 520, 1000};
+            int cg = Theme.termGreen(act);
+            int ca = Theme.termAmber(act);
+            int muted = Theme.termMuted(act);
+            int cur = s.streak;
+
+            // 「进行中」= 最小的那个尚未达成的档位；其余未达成的都是「未开始」
+            int progressMark = -1;
+            for (int m : marks) { if (cur < m) { progressMark = m; break; } }
+
+            final float badge = Theme.dp(act, 62);      // 含发光余量（环本体约 42dp）
+
+            android.widget.HorizontalScrollView hs = new android.widget.HorizontalScrollView(act);
+            hs.setHorizontalScrollBarEnabled(false);
+            LinearLayout row = new LinearLayout(act);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+
+            for (int i = 0; i < marks.length; i++) {
+                final int need = marks[i];
+                boolean done = cur >= need;
+                boolean inProgress = (need == progressMark);
+                int state = done ? StatsCharts.OrbitBadgeDrawable.ST_DONE
+                        : inProgress ? StatsCharts.OrbitBadgeDrawable.ST_PROGRESS
+                        : StatsCharts.OrbitBadgeDrawable.ST_LOCKED;
+                int col = done ? cg : inProgress ? ca : muted;
+                float ratio = Math.min(1f, cur / (float) need);
+                long period = done ? 2200L : inProgress ? 4000L : 0L;
+
+                LinearLayout cell = new LinearLayout(act);
+                cell.setOrientation(LinearLayout.VERTICAL);
+                cell.setGravity(Gravity.CENTER_HORIZONTAL);
+                LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-2, -2);
+                clp.setMargins(0, 0, dp(act, 10), 0);
+                cell.setLayoutParams(clp);
+
+                FrameLayout fh = new FrameLayout(act);
+                ImageView iv = new ImageView(act);
+                final StatsCharts.OrbitBadgeDrawable od =
+                        new StatsCharts.OrbitBadgeDrawable(state, col, badge, ratio, period);
+                iv.setImageDrawable(od);
+                fh.addView(iv, new FrameLayout.LayoutParams((int) badge, (int) badge));
+
+                // 中央数字：达成/未开始显示档位值；进行中显示 "cur/need"
+                TextView num = new TextView(act);
+                num.setGravity(Gravity.CENTER);
+                num.setSingleLine(true);
+                num.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+                if (inProgress) {
+                    num.setTextSize(11f);
+                    num.setText(cur + "/" + need);
+                } else {
+                    num.setTextSize(need >= 1000 ? 10.5f : need >= 100 ? 12f : 14f);
+                    num.setText(String.valueOf(need));
+                }
+                num.setTextColor(done ? cg : inProgress ? ca : Theme.termFaint(act));
+                FrameLayout.LayoutParams nlp = new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER);
+                fh.addView(num, nlp);
+
+                // 达成：右上角一枚小对钩（不挡中央数字）
+                if (done) {
+                    TextView ck = new TextView(act);
+                    ck.setText("\u2713");
+                    ck.setTextSize(11f);
+                    ck.setTextColor(Theme.termGreen(act));
+                    ck.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+                    ck.setGravity(Gravity.TOP | Gravity.END);
+                    ck.setPadding(0, dp(act, 6), dp(act, 8), 0);
+                    fh.addView(ck, new FrameLayout.LayoutParams(-1, -1));
+                }
+
+                cell.addView(fh, new LinearLayout.LayoutParams((int) badge, (int) badge));
+
+                // 档位名（进行中的改用「还差 N 天」，把原来吊在底部那行收进这里）
+                TextView lb = new TextView(act);
+                lb.setTextSize(FS_SMALL);
+                lb.setGravity(Gravity.CENTER);
+                lb.setSingleLine(true);
+                if (inProgress) {
+                    lb.setText(Lang.tf("\u8fd8\u5dee {0} \u5929", need - cur));
+                    lb.setTextColor(ca);
+                } else {
+                    lb.setText(namedMark(act, need));
+                    lb.setTextColor(done ? cg : Theme.termFaint(act));
+                }
+                lb.setTypeface(Theme.text());
+                LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(-2, -2);
+                llp.topMargin = dp(act, 6);
+                cell.addView(lb, llp);
+
+                row.addView(cell);
+            }
+            hs.addView(row);
+            wrap.addView(hs, new LinearLayout.LayoutParams(-1, -2));
+
+            // 底部只留一句总结（原来那行"距下一个里程碑还差 N 天"已收进进行中的徽章下）
+            int litN = 0;
+            for (int m : marks) if (cur >= m) litN++;
+            TextView foot = new TextView(act);
+            foot.setTextSize(FS_SMALL);
+            foot.setTextColor(Theme.termMuted(act));
+            foot.setTypeface(Theme.text());
+            foot.setPadding(0, dp(act, 8), 0, 0);
+            foot.setText(litN >= marks.length
+                    ? Lang.tr("\u5168\u90e8\u91cc\u7a0b\u7891\u5df2\u70b9\u4eae")
+                    : Lang.tf("\u5df2\u70b9\u4eae {0}/{1} \u4e2a\u91cc\u7a0b\u7891", litN, marks.length));
+            wrap.addView(foot);
+        } catch (Throwable t) { swallow(t); }
+        return wrap;
+    }
+
+    /** 档位的中文名（徽章下方那一行）。 */
+    private static String namedMark(Activity act, int need) {
+        if (need == 10) return Lang.tr("10 \u5929");
+        if (need == 30) return Lang.tr("30 \u5929");
+        if (need == 100) return Lang.tr("\u767e\u5929");
+        if (need == 365) return Lang.tr("\u4e00\u5e74");
+        if (need == 520) return Lang.tr("\u4e00\u5e74\u534a");
+        if (need == 1000) return Lang.tr("\u4e09\u5e74");
+        return need + " \u5929";
     }
 
     // ══════════════════════ 零件 ══════════════════════
