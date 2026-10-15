@@ -179,6 +179,20 @@ if [ "${TGAS_SKIP_SCOPE:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/check-scope-sync.py
   echo "== 宿主作用域一致性 =="
   python3 "$TGAS_SRC/tools/check-scope-sync.py" "$TGAS_SRC" || {
     echo "FATAL: Hosts.KNOWN / scope.list / module.prop 的宿主集合不一致（临时跳过：TGAS_SKIP_SCOPE=1）" >&2; exit 1; }
+
+# ── sent_at_ 新鲜度门禁（2026-10-16 新增，事故驱动）──
+# 事故：roundProblemsOf 读 sent_at_ 时只判「够不够久」、没判「是不是今天」，
+#   而 sent_at_ 是**裸毫秒、跨天不清** —— 几天前的残留会在第二天被无条件判成
+#   「未回复」，用户看到「全部目标待处理 / 已发出 4999 分钟」，而当天压根没发过。
+#   这类错误不报错、不崩溃、日志里一行都没有，只能靠门禁拦。
+# 判定：每处 getLong(sent_at_) 的邻近上下文必须出现「今天」判据（或 ≤30 分钟短窗口）。
+# 跳过：TGAS_SKIP_SENTAT=1
+if [ "${TGAS_SKIP_SENTAT:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/check-sentat-freshness.py" ]; then
+  echo "== sent_at_ 新鲜度 =="
+  python3 "$TGAS_SRC/tools/check-sentat-freshness.py" "$TGAS_SRC" || {
+    echo "FATAL: 有 sent_at_ 读取缺「今天」判据，跨天残留会被误判（临时跳过：TGAS_SKIP_SENTAT=1）" >&2; exit 1; }
+fi
+
 fi
 
 # ── README 同步门禁：README 的更新日志段必须与 CHANGELOG.md 一致 ──

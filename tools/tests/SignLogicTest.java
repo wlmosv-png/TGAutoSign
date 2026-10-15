@@ -395,6 +395,25 @@ public final class SignLogicTest {
         eq("sent_at_ 在未来 -> FRESH",
            SignLogic.sentPhase(true, T0 + 60_000L, T0, TTL), SignLogic.SENT_FRESH);
 
+        // ── 2026-10-16 事故回归：跨天残留的 sent_at_ 绝不能判成 STALE ──
+        // 现场：几天前发过、没走到"有结论"那一步 → sent_at_ 没被清。
+        //   旧代码只判 now-sent > 90s → 第二天打开面板时
+        //   把全部目标判成"已发出 4999 分钟未结案"。
+        //   不变式：**今天没发过 → 一律 SENT_NONE**，不管时间戳多久。
+        eq("昨天发的（跨天残留）-> NONE",
+           SignLogic.sentPhase(false, T0, T0 + 24 * 60 * 60_000L, TTL), SignLogic.SENT_NONE);
+        eq("三天前发的 -> NONE",
+           SignLogic.sentPhase(false, T0, T0 + 3 * 24 * 60 * 60_000L, TTL), SignLogic.SENT_NONE);
+        eq("几天前发的 + 短 TTL(90s) -> NONE",
+           SignLogic.sentPhase(false, T0, T0 + 83 * 60 * 60_000L, 90_000L), SignLogic.SENT_NONE);
+        // 反向保护：今天发的依然会 STALE（不能修成“从此不判未回复”）
+        eq("今天发的、超时 -> STALE",
+           SignLogic.sentPhase(true, T0, T0 + 5 * 60_000L, 90_000L), SignLogic.SENT_STALE);
+        // 升级判定同样不能被跨天残留触发
+        tru("跨天残留不升级（应为 false）",
+            !SignLogic.shouldPromoteToPending(false, T0, T0 + 24 * 60 * 60_000L, TTL,
+                                              false, false, false));
+
         // ── 升级判定：只有"发了+超时+今天没结论+没处置过"才升级 ──
         tru("超时且未签 -> 升级",
             SignLogic.shouldPromoteToPending(true, T0, T0 + TTL + 1, TTL, false, false, false));

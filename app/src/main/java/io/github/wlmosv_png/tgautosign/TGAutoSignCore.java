@@ -136,6 +136,18 @@ public final class TGAutoSignCore {
      */
     private final Map<String, Long> selfCbPending = new HashMap<String, Long>();
     private static final long SELF_REQ_TTL_MS = 60L * 1000L;
+
+    /**
+     * 「模块自己刚发出去的文本」登记（2026-10-16）。
+     *
+     * 为什么需要：这条链原来只覆盖按钮（selfCbPending 按 (did, data) 匹配），
+     *   **文本指令从未登记** —— 于是模块发出的每一条签到口令都会被自己的
+     *   网络层 hook 重新捞到，走 learnFromNetwork 进「待添加」。
+     *   现场：日志同一秒既有「文本指令已发出 /sign」又有「网络层学习·待确认 -> /sign」。
+     *   key = 账号 | did | 原文，TTL 90 秒（比按钮窗口长，因为文本要等自身 update 回来）。
+     */
+    private final Map<String, Long> selfSentText = new HashMap<String, Long>();
+    private static final long SELF_TEXT_TTL_MS = 90L * 1000L;
     // 调用环熔断用（见 sendSign 里的递归硬闸）
     private final Map<String, Long> signEnterAt = new HashMap<String, Long>();
     private final Map<String, Integer> signEnterCount = new HashMap<String, Integer>();
@@ -1069,6 +1081,42 @@ public final class TGAutoSignCore {
                 nm.setTextColor(Theme.termTxt(act));
                 nm.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
                 line1.addView(nm, new LinearLayout.LayoutParams(0, -2, 1f));
+                // ── 2026-10-16 新增：账号健康度徽章（轨道环缩小版）──
+                // 与统计页「各账号对比」用同一套组件；这里额外的好处是：
+                //   本页是 1 秒轮询、**不重建视图树**，所以徽章的绕行光点能一直转，
+                //   而统计页每 4 秒整树重建、相位反复归零，看起来反而像卡住。
+                android.widget.FrameLayout accBadge = new android.widget.FrameLayout(act);
+                android.widget.ImageView accBadgeIv = new android.widget.ImageView(act);
+                final int _stk = streakOf(accountPrefix(acc));
+                final int[] _MARKS = {10, 30, 100, 365, 520, 1000};
+                int _next = -1;
+                for (int _m : _MARKS) { if (_stk < _m) { _next = _m; break; } }
+                boolean _maxed = (_next < 0);
+                float _ratio = _maxed ? 1f : Math.min(1f, _stk / (float) (_next > 0 ? _next : 1));
+                int _bst;
+                if (_maxed) _bst = StatsCharts.OrbitBadgeDrawable.ST_DONE;
+                else if (_stk > 0) _bst = StatsCharts.OrbitBadgeDrawable.ST_PROGRESS;
+                else _bst = StatsCharts.OrbitBadgeDrawable.ST_LOCKED;
+                int _bcol = _maxed ? Theme.termGreen(act)
+                        : _stk > 0 ? (acc == currentAccount() ? Theme.termCyan(act) : Theme.termMuted(act))
+                        : Theme.termFaint(act);
+                long _period = (_bst == StatsCharts.OrbitBadgeDrawable.ST_LOCKED) ? 0L : 3200L;
+                final float _bs = dp(40);
+                accBadgeIv.setImageDrawable(
+                        new StatsCharts.OrbitBadgeDrawable(_bst, _bcol, _bs, _ratio, _period));
+                accBadge.addView(accBadgeIv, new android.widget.FrameLayout.LayoutParams((int) _bs, (int) _bs));
+                TextView accBadgeNum = new TextView(act);
+                accBadgeNum.setTextSize(10f);
+                accBadgeNum.setGravity(Gravity.CENTER);
+                accBadgeNum.setSingleLine(true);
+                accBadgeNum.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+                accBadgeNum.setTextColor(_bcol);
+                accBadgeNum.setText(_maxed ? "\u2713" : (_stk > 0 ? String.valueOf(_stk) : "\u00b7"));
+                accBadge.addView(accBadgeNum, new android.widget.FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+                LinearLayout.LayoutParams _blp = new LinearLayout.LayoutParams((int) _bs, (int) _bs);
+                _blp.rightMargin = dp(8);
+                line1.addView(accBadge, _blp);
+
                 TextView stt = new TextView(act);
                 stt.setTextSize(Theme.TS_CAPTION);
                 stt.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
@@ -3274,7 +3322,20 @@ public final class TGAutoSignCore {
     }
 
     /** 发请求前登记：告诉网络层 hook「这条是我发的」，别把它学成新目标。 */
-    private void markSelfCbRequest(long did, byte[] data) {
+    /** 含账号维度的 key（2026-10-16）：按钮按 (账号,did,data前缀) 匹配。
+     *  前缀匹配兜住「面板刷新 → 按钮 data 变化」——同类按钮 data 前缀通常相同
+     *  （前段是 bot 与动作标识，尾部常带 msg_id/时间戳）。加了账号，
+     *  账号 A 点的按钮绝不会误吞账号 B 的学习，也不会把 B 的学进 A。 */
+    private static String selfCbKey(String prefix, long did, byte[] data) {
+        if (data == null || data.length == 0) return null;
+        int pre = Math.min(12, data.length);   // 前缀前 12 字节
+        byte[] head = new byte[pre];
+        System.arraycopy(data, 0, head, 0, pre);
+        return prefix + "|" + did + "|" + Base64.getEncoder().encodeToString(head);
+    }
+
+
+    private void markSelfCbRequest(String prefix, long did, byte[] data) {
         try {
             String k = selfCbKey(did, data);
             if (k == null) return;
@@ -3290,7 +3351,7 @@ public final class TGAutoSignCore {
     }
 
     /** 该回调请求是否是模块自己发出的（是则**不学习**）。命中即消费掉，避免重复占用。 */
-    private boolean consumeSelfCbRequest(long did, byte[] data) {
+    private boolean consumeSelfCbRequest(String prefix, long did, byte[] data) {
         try {
             String k = selfCbKey(did, data);
             if (k == null) return false;
@@ -3301,6 +3362,37 @@ public final class TGAutoSignCore {
                 return false;
             }
             selfCbPending.remove(k);
+            return true;
+        } catch (Throwable t) { return false; }
+    }
+
+    /** 登记「这条文本是模块刚发出去的」。 */
+    private void markSelfSentText(int account, long did, String text) {
+        try {
+            if (text == null) return;
+            String k = account + "|" + did + "|" + text.trim();
+            long now = System.currentTimeMillis();
+            java.util.Iterator<Map.Entry<String, Long>> it = selfSentText.entrySet().iterator();
+            while (it.hasNext()) {
+                Map.Entry<String, Long> e = it.next();
+                if (now - (e.getValue() == null ? 0L : e.getValue().longValue()) > SELF_TEXT_TTL_MS) it.remove();
+            }
+            selfSentText.put(k, now);
+        } catch (Throwable t) { noteSwallowed("markSelfSentText", t); }
+    }
+
+    /** 这条文本是否正是模块刚发出去的（是则**不学习**）。命中即消费。 */
+    private boolean consumeSelfSentText(int account, long did, String text) {
+        try {
+            if (text == null) return false;
+            String k = account + "|" + did + "|" + text.trim();
+            Long ts = selfSentText.get(k);
+            if (ts == null) return false;
+            if (System.currentTimeMillis() - ts.longValue() > SELF_TEXT_TTL_MS) {
+                selfSentText.remove(k);
+                return false;
+            }
+            selfSentText.remove(k);
             return true;
         } catch (Throwable t) { return false; }
     }
@@ -5616,6 +5708,16 @@ public final class TGAutoSignCore {
         if (!AUTO_LEARN_NET || !LEARN_ENABLED) return;
         if (text == null) return;
         if (did == 0) return;   // 群 ID 是负数，合法
+        // ── 2026-10-16：模块自己刚发的文本，绝不能再被自己学一遍 ──
+        // 现场（日志同一秒两行）：
+        //   【网络层学习·待确认】8478468810 -> /sign（已入待确认池）
+        //   文本指令已发出，等待 bot 回复后判定 8478468810 text=/sign
+        // 命中即返回，且**消费掉**（避免同一登记长期占用、误吞用户后续手动发送）。
+        if (consumeSelfSentText(account, did, String.valueOf(text))) {
+            logd("[候选] uid=" + did + " msg=" + String.valueOf(text).trim()
+                 + "（是模块自己刚发出的，不学习）");
+            return;
+        }
         String t = String.valueOf(text).trim();
         final boolean _kb = keywordHit(t);
         if (_kb) logOnce("cand:" + did + ":" + t, LV_DEBUG, "[候选] did=" + did + " text=" + t);
@@ -6225,7 +6327,14 @@ public final class TGAutoSignCore {
                 byte[] _sentData = null;
                 try { Object _d = getFieldValSafe(req, "data"); if (_d instanceof byte[]) _sentData = (byte[]) _d; } catch (Throwable ignored) {}
                 if (_sentData == null) { try { _sentData = entryData(entry); } catch (Throwable ignored) {} }
-                markSelfCbRequest(dialogId, _sentData);
+                markSelfCbRequest(prefix, dialogId, _sentData);
+            }
+            // 2026-10-16：**文本也要登记**（原先只登记按钮）。
+            // 不登记的话，模块发出的签到口令会被自己的网络层 hook 重新捕获，
+            // 走 learnFromNetwork 变成「待添加」——用户看到「签全部账号」时
+            // 待添加里不断冒条目，连模块自己的命令群都会被学进去。
+            if (KIND_TEXT.equals(kind)) {
+                markSelfSentText(account, dialogId, fText);
             }
             try { prefs.edit().putLong(prefix + "sent_at_" + id, System.currentTimeMillis()).commit(); } catch (Throwable _e11) { noteSwallowed("sendSign", _e11); }
             try { roundMark(prefix, id, RS_SENT, "已发出，等回复"); } catch (Throwable ignored) {}
@@ -6880,6 +6989,15 @@ public final class TGAutoSignCore {
      *    · 已发出但超时未结案（sent_at_ 过期且未签）
      *    · 今日已判失败 / 达重试上限
      *  再叠加本轮内存状态（有则用最新原因），保证「刚发生的问题」也能立刻看到。 */
+    /** 毫秒 → yyyy-MM-dd（本地时区）。跨天判定用；与 todayStr() 同口径。 */
+    private static String msToYmd(long ms) {
+        try {
+            java.text.SimpleDateFormat f =
+                    new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
+            return f.format(new java.util.Date(ms));
+        } catch (Throwable t) { return ""; }
+    }
+
     private java.util.List<RoundState> roundProblemsOf(String prefix) {
         java.util.LinkedHashMap<String, RoundState> map = new java.util.LinkedHashMap<String, RoundState>();
         long now = System.currentTimeMillis();
@@ -6902,9 +7020,18 @@ public final class TGAutoSignCore {
                     if (note == null || note.isEmpty()) note = "已发出但未得到结论，等处置";
                 } else {
                     long sent = prefs.getLong(prefix + "sent_at_" + id, 0L);
-                    // 2026-10-14：界面口径的「卡住」阈值用 90 秒（业务上的 30 分钟太久，
-                    // 用户发完等一会看界面，应该就能看到「已在等回复 / 未结案」）。
-                    if (sent > 0 && now - sent > 90L * 1000L) {
+                    // ── 2026-10-16 修「全部目标都显示待处理 / 已发出 4999 分钟」──
+                    // 真凶：sent_at_ 是**裸毫秒**，没有按天语义。历史残留（昨天甚至更早发的、
+                    //   因故没被 clearPostSignState 清掉）在第二天打开面板时 now-sent 是几千分钟，
+                    //   旧代码只判「够不够久」→ 无条件判成「未回复」。
+                    //   而 statusOf() 那条路径有 sentButStale()（内含 sentToday 检查）兜底，
+                    //   所以**列表里的状态是对的**，只有走本函数的「需处理」聚合条与角标全错
+                    //   —— 用户看到的现象就是"一个都没签，却全部需要处理"。
+                    // 现在与 sentButStale 用同一口径：**只有今天确实发过**、且已过时效，才算未结案。
+                    boolean sentToday = today.equals(prefs.getString(Keys.opt(prefix, id), ""));
+                    boolean staleNoReply = sent > 0L
+                            && SignLogic.sentPhase(sentToday, sent, now, 90L * 1000L) == SignLogic.SENT_STALE;
+                    if (staleNoReply) {
                         state = RS_NO_REPLY;
                         note = Lang.tf("已发出 {0} 分钟仍未结案（bot 可能已回复但未被识别）", (now - sent) / 60000L);
                     } else {
@@ -6934,7 +7061,9 @@ public final class TGAutoSignCore {
                 RoundState rs = new RoundState(prefix, id, did, targetTitle(did));
                 rs.state = state; rs.note = note == null ? "" : note;
                 rs.at = prefs.getLong(prefix + "sent_at_" + id, 0L);
-                if (rs.at <= 0) rs.at = now;
+                // 2026-10-16：历史残留的 sent_at_（不是今天的）不能拿来排序 ——
+                // 否则今天新出现的问题会被旧的"陈年时间戳"排到列表最后。不是今天的就按 now 排。
+                if (rs.at <= 0 || !today.equals(msToYmd(rs.at))) rs.at = now;
                 map.put(id, rs);
             }
         } catch (Throwable t) { noteSwallowed("roundProblemsOf-scan", t); }
@@ -8456,6 +8585,11 @@ public final class TGAutoSignCore {
     private String listTab = "target";
     /** Tab 的内容容器（切 Tab / 刷新时重建它，不动窗口本身）。 */
     private LinearLayout listTabBody;
+    /** 目标列表的 Tab 按钮 / 指示条引用（战报条点击时要在原地切 Tab）。 */
+    private final java.util.List<TextView> listTabBtnRefs = new java.util.ArrayList<TextView>();
+    private final java.util.List<View> listTabIndRefs = new java.util.ArrayList<View>();
+    /** 本轮 TABS 的键（与 listTabBtnRefs 同序）。 */
+    private String[] listTabKeysRef = null;
     /**
      * 「目标」Tab 的容器：待处理条 + 过滤条 + 排序行 + 列表。
      *
@@ -13033,6 +13167,13 @@ public final class TGAutoSignCore {
             tabInds.add(ind);
             tabBar.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
         }
+        // 记录引用：战报条点击时要原地切到「统计」Tab（不能重建整个对话框，会闪）
+        listTabBtnRefs.clear(); listTabIndRefs.clear();
+        for (int _ti = 0; _ti < tabBtns.size(); _ti++) listTabBtnRefs.add(tabBtns.get(_ti));
+        for (int _ti = 0; _ti < tabInds.size(); _ti++) listTabIndRefs.add(tabInds.get(_ti));
+        listTabKeysRef = new String[TABS.length];
+        for (int _ti = 0; _ti < TABS.length; _ti++) listTabKeysRef[_ti] = TABS[_ti][0];
+
         // 构建完必须逐个上色（2026-10-03 修"深色模式看不见"）。
         // 此前只在**点击时**才调 styleListTab —— 于是首次打开时三个 Tab
         // 全是"未选"外观：文字用 termMuted、指示条透明。
@@ -13103,6 +13244,93 @@ public final class TGAutoSignCore {
                 } });
                 nb.addView(nbBtn);
                 listTargetContainer.addView(nb);
+            } else if (targets.size() > 0) {
+                // ── 2026-10-16 新增：今日战报条 ──
+                // 原来没有待处理时这块直接空着，用户"全部签完"的瞬间看不到任何反馈。
+                // 现在换成一条青色战报：已签 / 总数 + 连续天数，点进去到统计页。
+                // 与待处理条**二选一**（同一位置），不会同时出现两条。
+                try {
+                    final String _tp = accountPrefix();
+                    java.util.List<Map<String, Object>> _tl = new ArrayList<Map<String, Object>>();
+                    loadTargetsInto(_tp, _tl);
+                    final int _tot = activeTargetCount(_tp, _tl);
+                    final int _done = activeSignedCount(_tp, _tl, todayStr());
+                    if (_tot > 0) {
+                        final boolean allDone = _done >= _tot;
+                        int _c = allDone ? Theme.termGreen(act) : Theme.termCyan(act);
+
+                        LinearLayout rb = new LinearLayout(act);
+                        rb.setOrientation(LinearLayout.HORIZONTAL);
+                        rb.setGravity(Gravity.CENTER_VERTICAL);
+                        rb.setPadding(dp(12), dp(10), dp(10), dp(10));
+                        rb.setBackground(termBorder(act, Theme.termCard(act),
+                                Theme.withAlpha(_c, 0x40)));
+                        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
+                        rlp.setMargins(0, dp(2), 0, dp(8));
+                        rb.setLayoutParams(rlp);
+
+                        // 左侧一枚小圆点：签完是绿，未签完是青（纯色即可，不必上组件）
+                        View dot = new View(act);
+                        android.graphics.drawable.GradientDrawable dg =
+                                new android.graphics.drawable.GradientDrawable();
+                        dg.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+                        dg.setColor(_c);
+                        dg.setSize(dp(8), dp(8));
+                        dot.setBackground(dg);
+                        LinearLayout.LayoutParams dotLp = new LinearLayout.LayoutParams(dp(8), dp(8));
+                        dotLp.setMargins(0, 0, dp(9), 0);
+                        rb.addView(dot, dotLp);
+
+                        TextView rt = new TextView(act);
+                        rt.setTextSize(Theme.TS_SECOND);
+                        rt.setTextColor(_c);
+                        rt.setTypeface(Theme.text());
+                        rt.setSingleLine(true);
+                        int _streak = 0;
+                        try { _streak = SignLogic.streakDisplay(
+                                prefs.getInt(_tp + "streak", 0),
+                                prefs.getString(_tp + "last_sign_date", ""),
+                                todayStr(), yesterdayStr()); } catch (Throwable ignored) {}
+                        if (allDone) {
+                            rt.setText(_streak > 0
+                                    ? Lang.tf("今日 {0}/{1} 已签完 · 连续 {2} 天", _done, _tot, _streak)
+                                    : Lang.tf("今日 {0}/{1} 已签完", _done, _tot));
+                        } else {
+                            rt.setText(Lang.tf("今日 {0}/{1} 已签 · 还剩 {2} 个", _done, _tot, _tot - _done));
+                        }
+                        rb.addView(rt, new LinearLayout.LayoutParams(0, -2, 1f));
+
+                        TextView rgo = new TextView(act);
+                        rgo.setTextSize(Theme.TS_CAPTION);
+                        rgo.setTextColor(Theme.termMuted(act));
+                        rgo.setText("→");
+                        rgo.setTypeface(android.graphics.Typeface.MONOSPACE);
+                        rgo.setPadding(dp(6), 0, dp(2), 0);
+                        rb.addView(rgo, new LinearLayout.LayoutParams(-2, -2));
+
+                        rb.setClickable(true);
+                        rb.setOnClickListener(new View.OnClickListener() {
+                            @Override public void onClick(View v) {
+                                // 原地切到本页的「统计」Tab（不重建整个对话框 —— 那样会闪）
+                                try {
+                                    if (!"stats".equals(listTab)) {
+                                        listTab = "stats";
+                                        if (listTabKeysRef != null) {
+                                            for (int ti = 0; ti < listTabBtnRefs.size()
+                                                    && ti < listTabKeysRef.length; ti++) {
+                                                boolean on = "stats".equals(listTabKeysRef[ti]);
+                                                styleListTab(listTabBtnRefs.get(ti),
+                                                        listTabIndRefs.get(ti), act, on);
+                                            }
+                                            rebuildTabHost(tabBody, act);
+                                        }
+                                    }
+                                } catch (Throwable ignored) {}
+                            }
+                        });
+                        listTargetContainer.addView(rb);
+                    }
+                } catch (Throwable _eRB) { noteSwallowed("showList(reportBar)", _eRB); }
             }
         } catch (Throwable _eNB) { noteSwallowed("showList(pendingBar)", _eNB); }
 
@@ -20043,7 +20271,7 @@ public final class TGAutoSignCore {
                                 // ⓪ 模块自身发出的请求：**绝不学习**。
                                 //     面板按钮 data 常与目标旧 data 不同（bot 每次推送都换），
                                 //     findCbEntry 查不到就会被学成新目标 → 用户看到「目标自己冒出来」。
-                                boolean _selfReq = consumeSelfCbRequest(u, d);
+                                boolean _selfReq = consumeSelfCbRequest(accountPrefix(hookAccount), u, d);
                                 String deny = _selfReq ? "模块自身发出的请求（不学习）"
                                             : (!AUTO_LEARN ? "按钮学习已关闭（设置→学习行为→按钮学习）"
                                               : learnDenyReason(u, disp, new String(d, "UTF-8"), panelContext(u)));
