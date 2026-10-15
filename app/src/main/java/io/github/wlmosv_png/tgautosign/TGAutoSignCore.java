@@ -7880,6 +7880,7 @@ public final class TGAutoSignCore {
             try { android.content.SharedPreferences.Editor _e=prefs.edit(); putCfg(_e,"sort",mode); _e.commit(); } catch (Throwable ignored) {}
             refreshSortChips(act);
             fillTargetRows(act);
+            refitTargetList(act);      // 排序后行序/行数变化 → 重算高度（2026-10-16）
         } });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
         lp.setMargins(dp(3), 0, dp(3), 0);
@@ -12767,6 +12768,9 @@ public final class TGAutoSignCore {
                 // View 只能有一个父，切走时它会被 removeAllViews 拆下，
                 // 这里判断 parent 再决定是否加回，避免"已经在里面还再加一次"。
                 tabBody.addView(listTargetContainer);
+                // 2026-10-16：切回来必须重算高度 —— 期间容器被 detach，
+                // listSv 的 getTop()/chrome 都变了，旧高度会导致最后一条滚不到底。
+                refitTargetList(act);
             }
         } catch (Throwable t) { noteSwallowed("rebuildTabHost", t); }
     }
@@ -13136,6 +13140,7 @@ public final class TGAutoSignCore {
                         rebuildTabHost(tabBody, act);
                     }
                     fillTargetRows(act);
+                    refitTargetList(act);      // 搜索后行数变化 → 重算高度（2026-10-16）
                     return true;
                 }
             });
@@ -13167,6 +13172,7 @@ public final class TGAutoSignCore {
                         listFilter = f;
                         refreshFilterChips(act);
                         fillTargetRows(act);
+                        refitTargetList(act);  // 筛选后行数变化 → 重算高度（2026-10-16）
                     }
                 });
                 listFilterChips.add(chip);
@@ -13201,6 +13207,7 @@ public final class TGAutoSignCore {
         listSv.addView(listBox, new android.widget.ScrollView.LayoutParams(-1, -2));
 
         listRowsHost = listBox;          // 供筛选/排序原地刷新
+        listSvRef = listSv;              // 供筛选/切 Tab 后重算高度（2026-10-16）
         fillTargetRows(act);
         // ── 高度「够用就好」（2026-10-04）──
         // 旧写法无条件 0.64 屏：列表短时留一大片空白，
@@ -13340,20 +13347,60 @@ public final class TGAutoSignCore {
                         int avail = maxH - chrome;
                         if (avail < minOne) avail = minOne;
 
-                        // ③ 幂等：内容高与可用高都没变 → 不动
-                        if (lastContent[0] == contentH && lastAvail[0] == avail) return;
-                        lastContent[0] = contentH;
-                        lastAvail[0] = avail;
+                        // ── 2026-10-16 修「目标列表有时候划不到底」──
+                        // 真凶：chrome 是按 getTop() **实测**的，而 apply 只跑
+                        //   box.post / postDelayed(150)。Tab 栏、搜索行、筛选 chip 行、
+                        //   排序行这些 chrome 视图**量完的时间点不确定**：
+                        //     · 首帧 getTop() 常为 0（还没 layout）
+                        //     · 150ms 时列表行可能还在 staggerIn / 反射查对话名
+                        //   → chrome 偏小 → avail 偏大 → listSv 被设成**高于可视区**的高度
+                        //   → CapBox 把超出部分直接裁掉；滚动条按 listSv 高度算，
+                        //     但可视区只有 CapBox 的 0.72 屏高 → **最后一个目标滚不出来**。
+                        //   这正好解释「有时候」：取决于那一帧量到没量到。
+                        //
+                        // 修法（单向、幂等、无正反馈）：
+                        //   再用「CapBox 可视高 − 实测偏移」复核一次可用高，只做**收不放**。
+                        //   不可能出现「改高度→触发 layout→再改高度」的抖动引擎。
+                        // 独立证据：不用 getTop() 链（那与上面 chrome 同源，错也一起错），
+                        // 改用「CapBox 的实际高度 - 列表相对 CapBox 的实测偏移」。
+                        // CapBox 是 showDialog 建的内容区容器，它的 getHeight() 是**布局后真实值**，
+                        // 不受 chrome 估算误差影响 —— 这是与上面不同的证据来源。
+                        int realAvail = avail;
+                        try {
+                            if (lastCapBox != null && lastCapBox.getHeight() > 0) {
+                                int[] svLoc = new int[2];
+                                int[] capLoc = new int[2];
+                                listSv.getLocationInWindow(svLoc);
+                                lastCapBox.getLocationInWindow(capLoc);
+                                int offInCap = svLoc[1] - capLoc[1];
+                                int cand = lastCapBox.getHeight() - offInCap;
+                                if (cand > 0) realAvail = Math.min(realAvail, cand);
+                            }
+                        } catch (Throwable ignored) {}
+                        if (realAvail < minOne) realAvail = minOne;
 
-                        int target = Math.min(contentH, avail);
+                        int target = Math.min(contentH, realAvail);
                         if (target < minOne) target = minOne;
 
                         android.view.ViewGroup.LayoutParams lp = listSv.getLayoutParams();
-                        if (lp != null && lp.height != target) {
+                        if (lp == null) return;
+
+                        // 幂等：内容高与目标高都没变 → 本次不动
+                        if (lastContent[0] == contentH && lastAvail[0] == target) return;
+                        lastContent[0] = contentH;
+                        lastAvail[0] = target;
+
+                        boolean firstFit = (lp.height == android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                                         || lp.height == android.view.ViewGroup.LayoutParams.MATCH_PARENT);
+                        // 单向钳制：只处理「给多了」（curH > target）与「还没适配过」两种；
+                        // 已经 ≤ target 就不动，杜绝来回改高度造成的抖动。
+                        if (firstFit || lp.height > target) {
                             lp.height = target;
                             listSv.setLayoutParams(lp);
-                            logd("[列表适配] contentH=" + contentH + " chrome=" + chrome
-                                 + " maxH=" + maxH + " → listH=" + target
+                            logd("[列表适配]" + (firstFit ? "首设" : "收紧")
+                                 + " chrome=" + chrome + " maxH=" + maxH
+                                 + " avail=" + avail + " realAvail=" + realAvail
+                                 + " contentH=" + contentH + " → listH=" + target
                                  + " (listTop=" + listSv.getTop() + " contTop=" + container.getTop()
                                  + " boxH=" + box.getHeight() + ")");
                         }
@@ -13361,11 +13408,48 @@ public final class TGAutoSignCore {
                 }
             };
 
-            // 只算一次（首帧）+ 一次补算（等 chrome 视图量完）。
-            // 注意：**不加 OnLayoutChangeListener** —— 那会造成正反馈抖动。
+            // 三次采样：首帧 + 150ms + 400ms。
+            // 400ms 那次对齐统计页 fitScrollBox 的做法（它有第三次），
+            // 用来兜住「chrome 视图量得慢」与「列表行 staggerIn 未落定」。
+            // 注意：**不加 OnLayoutChangeListener** —— 那会造成正反馈抖动；
+            // 这里靠「有限次 + 只收不放」保证收敛。
             box.post(apply);
             box.postDelayed(apply, 150L);
+            box.postDelayed(apply, 400L);
         } catch (Throwable t) { noteSwallowed("fitListScroll(attach)", t); }
+    }
+
+    /** 当前目标列表的 ScrollView 引用，供筛选 / 切 Tab 后重算高度。 */
+    private ScrollView listSvRef;
+
+    /**
+     * 目标列表：筛选 / 搜索 / 排序 / 切 Tab 回来后**重跑一次高度适配**。
+     *
+     * 为什么必须有它（2026-10-16 修「有时候划不到底」）：
+     *   fitListScroll 只在 showList() 里挂一次。而下列操作会让
+     *   「列表之上的 chrome」或「内容高」当场变化：
+     *     · 点筛选 chip（需处理 0 条 ↔ 全部 11 条）
+     *     · 搜索回车 / 清空搜索
+     *     · 切到统计或日志、再切回目标 Tab
+     *   这些路径只重填了行（fillTargetRows），**不重算高度** ——
+     *   listSv 高度停留在上一轮旧值，「行变多了但滚动区没跟着长」，
+     *   表现就是最后一个目标滚不到底，且不是每次都复现（取决于旧值大小）。
+     *
+     * 做法：延迟一拍（等 removeAllViews / addView 的 layout 落定）再调
+     *   fitListScroll，复用同一套「实测 chrome + 只收不放」的算法，不引入第二套口径。
+     */
+    private void refitTargetList(final Activity act) {
+        try {
+            final ScrollView sv = listSvRef;
+            final View box = listRootBoxRef;
+            final LinearLayout container = listTargetContainer;
+            if (sv == null || box == null || container == null || listRowsHost == null) return;
+            box.postDelayed(new Runnable() {
+                @Override public void run() {
+                    fitListScroll(act, box, sv, container, listRowsHost);
+                }
+            }, 60L);
+        } catch (Throwable t) { noteSwallowed("refitTargetList", t); }
     }
 
     /**

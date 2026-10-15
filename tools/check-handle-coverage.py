@@ -39,7 +39,7 @@ for st in NEED_ACTION:
         missing.append(st)
 
 # 2) roundProblemsOf 必须覆盖到这些归类码
-rp = t.find('private java.util.List<RoundState> roundProblemsOf')
+rp = t.find('java.util.List<RoundState> roundProblemsOf')
 if rp < 0:
     print('FATAL: 找不到 roundProblemsOf'); sys.exit(1)
 rpBody = t[rp:rp + 6000]
