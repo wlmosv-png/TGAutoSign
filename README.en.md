@@ -183,11 +183,11 @@ You installed a debug build. Uninstall it, then install the official APK from th
 
 ### v1.6.7 (133) — 2026-10-17
 
-**New**: Link self-check. · Second, independent message entry point. · Dice / animated emoji check-in. · Emoji check-in panel. · Unified chat picker. · Accept @username directly. · Command reference. · Capture mode switch. · Separate switch for Saved Messages digest. · Statistics page expansion. · Handbook.
+**New**: Link self-check. · Second, independent message entry point. · Dice / animated emoji check-in. · Emoji check-in panel. · Unified chat picker. · Accept @username directly. · Command reference. · Capture mode switch. · Separate switch for Saved Messages digest. · Statistics page expansion. · Reworked check-in centre. · Account health badge. · Handbook.
 
 **Fixed**: Fixed replies that were received but never judged. · Fixed misreading the answer from callback responses. · Fixed "sent" marker lingering after repeated stale-button failures. · Fixed stale "sent" marker persisting after a successful check-in. · Image-only replies no longer reported as unreadable. · Command menus no longer treated as results. · Fixed the last row of the target list being unreachable. · Fixed all targets appearing stuck with an absurd elapsed time. · Fixed self-sent commands being learned as new candidates. · Fixed the whole panel closing after using the chat picker. · Fixed misleading timer log wording. · Fixed pure-emoji commands not being learned in groups. · Removed redundant toast when adding a target. · Loose mode no longer accepts replies for targets not sent today.
 
-**Improved**: Unified handling for abnormal states. · Unified "needs attention" criteria. · Manual triggers no longer blocked incorrectly. · Cross-account copy. · Multi-account reply attribution. · UI consistency. · Copy and prompts.
+**Improved**: Unified handling for abnormal states. · Unified "needs attention" criteria. · Manual triggers no longer blocked incorrectly. · Cross-account copy. · Multi-account reply attribution. · UI consistency. · Fixed missing feedback for single-account signing and inflated progress denominators. · Copy and prompts.
 
 ### v1.6.6 (132) — 2026-10-13
 
