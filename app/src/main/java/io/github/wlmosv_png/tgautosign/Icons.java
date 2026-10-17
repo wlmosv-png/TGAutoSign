@@ -196,6 +196,30 @@ final class Icons {
                 poly(s, new float[]{10f, 3f, 10f, 8.5f, 4.5f, 19.5f, 19.5f, 19.5f, 14f, 8.5f, 14f, 3f}, false);
                 poly(s, new float[]{8.5f, 3f, 15.5f, 3f}, false);
                 break;
+            case "dice":
+                // 骰子（2026-10-17）：圆角方 + 5 点，读作"骰子"但仍是纯几何。
+                // 为什么不直接画 emoji 字形：emoji 是位图彩字，在深/浅 6 套主题、
+                //   各种 DPI 下会掉色、发虚；矢量描边才跟这套图标一致。
+                // 外框用四段直线+四段小弧拼一个圆角方（24 网格，圆角 r=4.6）。
+                {
+                    float L = 4.2f, R = 19.8f, T = 4.2f, B = 19.8f, rr = 4.6f;
+                    // 上边 → 右上角 → 右边 → 右下角 → 下边 → 左下角 → 左边 → 左上角
+                    poly(s, new float[]{L + rr, T, R - rr, T}, false);
+                    arc(s, R - rr, T + rr, rr, -90f, 90f, false);
+                    poly(s, new float[]{R, T + rr, R, B - rr}, false);
+                    arc(s, R - rr, B - rr, rr, 0f, 90f, false);
+                    poly(s, new float[]{R - rr, B, L + rr, B}, false);
+                    arc(s, L + rr, B - rr, rr, 90f, 90f, false);
+                    poly(s, new float[]{L, B - rr, L, T + rr}, false);
+                    arc(s, L + rr, T + rr, rr, 180f, 90f, false);
+                    // 五点面（骰子的"5"）：中心 + 四角
+                    dot(f, 12f, 12f, 1.75f);
+                    dot(f, 7.8f, 7.8f, 1.55f);
+                    dot(f, 16.2f, 7.8f, 1.55f);
+                    dot(f, 7.8f, 16.2f, 1.55f);
+                    dot(f, 16.2f, 16.2f, 1.55f);
+                }
+                break;
             case "pulse":
                 poly(s, new float[]{3.5f, 12f, 7f, 12f, 9f, 6.5f, 12.5f, 17.5f, 14.5f, 12f, 20.5f, 12f}, false);
                 break;

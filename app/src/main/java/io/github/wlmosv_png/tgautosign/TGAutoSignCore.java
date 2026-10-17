@@ -275,6 +275,14 @@ public final class TGAutoSignCore {
     private int THEME_MODE = 0;                  // 主题模式：0=自动（跟宿主/系统）1=始终日间 2=始终夜间
     private int CAL_STYLE = 0;                   // 日历格样式：0=方角斜纹 1=圆角发光 2=硬方波 3=切角 4=圆点 5=柱条
     private boolean NOTIFY_ON = true;            // 签到结果通知
+    /**
+     * 是否往**收藏夹**发签到摘要 / 告警（2026-10-17 独立开关）。
+     *
+     * 为什么单独拆：原来这个行为挂在 NOTIFY_ON 上 —— 想关掉收藏夹里那一堆
+     *   "今日签到摘要"就不得不把通知也一起关掉。用户反馈"强迫症受不了"。
+     *   现在两件事各管各的：NOTIFY_ON 管通知，SAVED_MSG_ON 管收藏夹。
+     */
+    private boolean SAVED_MSG_ON = true;
     /** 外部通知通道（2026-10-03）：0=关 1=ntfy 2=Bark 3=Webhook。 */
     private int EXTERNAL_KIND = 0;
     /** 外部通知地址（ntfy 主题 URL / Bark key URL / 自定义 Webhook）。 */
@@ -623,10 +631,17 @@ public final class TGAutoSignCore {
                     });
                 } catch (Throwable ignored) {}
             }
-            // 兜底：活着的对话框超过 5 层才关最早的（正常逐层关闭不会触发）
-            while (dlgStack.size() > 5) {
-                Object old = dlgStack.pollFirst();
-                try { call(old, "dismiss", new Class<?>[0], new Object[0]); } catch (Throwable ignored) {}
+            // 兜底（2026-10-17 修「点一下整个面板消失」）：
+            //   旧写法 while(size>5) pollFirst() —— pollFirst 取的是**最早入栈**的那个，
+            //   也就是主菜单。添加目标那条链很容易到 6 层：
+            //     主菜单 → 添加 → 私聊机器人 → 发指令 → 选择器 → 第 6 层
+            //   于是"点一下，整个面板没了"。实测用户反复反馈的正是这个。
+            //   现在：栈底永远保住（主菜单），只清中间的；上限提到 8，正常用碰不到。
+            while (dlgStack.size() > 8) {
+                Object first = dlgStack.pollFirst();     // 栈底：主菜单，必须保
+                Object second = dlgStack.pollFirst();    // 中间最早的一层，关它
+                try { call(second, "dismiss", new Class<?>[0], new Object[0]); } catch (Throwable ignored) {}
+                if (first != null) dlgStack.addFirst(first);   // 主菜单放回去
             }
         } catch (Throwable ignored) {}
     }
@@ -1733,7 +1748,7 @@ public final class TGAutoSignCore {
     /** 「删除本账号全部目标」对话框句柄。 */
     private Object clearTargetsDlg = null;
 
-    /** 清掉某账号分区下所有目标条目（只动 learned_\/kind_\/did_\/data_… 这些目标键）。 */
+    /** 清掉某账号分区下所有目标条目（只动 learned_/kind_/did_/data_… 这些目标键）。 */
     private int clearTargetsOfAccount(String prefix, int account) {
         java.util.List<Map<String, Object>> list = new java.util.ArrayList<Map<String, Object>>();
         loadTargetsIntoUncached(prefix, list);
@@ -2033,6 +2048,7 @@ public final class TGAutoSignCore {
             CAL_STYLE = cfgInt("cal_style", 0);
             if (prefs.contains("jmb_lang")) { try { io.github.wlmosv_png.tgautosign.Lang.MODE = prefs.getInt("jmb_lang", 0); } catch (Throwable ignored) {} }
             NOTIFY_ON = cfgBool("notify", true);
+            SAVED_MSG_ON = cfgBool("saved_msg", true);
             NOTIFY_FAIL_ONLY = cfgBool("notify_fail_only", false);
             NOTIFY_ALL_ACCOUNTS = cfgBool("notify_all_acc", false);
             Theme.mode = THEME_MODE;
@@ -2233,6 +2249,7 @@ public final class TGAutoSignCore {
             FALLBACK = cfgStr("fallback", FALLBACK);
             JUDGE_USE_CUSTOM = cfgBool("judge_custom", JUDGE_USE_CUSTOM);
             NOTIFY_ON = cfgBool("notify", NOTIFY_ON);
+            SAVED_MSG_ON = cfgBool("saved_msg", SAVED_MSG_ON);
             NOTIFY_FAIL_ONLY = cfgBool("notify_fail_only", NOTIFY_FAIL_ONLY);
             NOTIFY_ALL_ACCOUNTS = cfgBool("notify_all_acc", NOTIFY_ALL_ACCOUNTS);
             SORT_MODE = cfgStr("sort", SORT_MODE);
@@ -2757,7 +2774,7 @@ public final class TGAutoSignCore {
                     (errText == null || errText.isEmpty() ? Lang.tr("未知") : errText),
                     accountLabel(account));
             logw("[告警] " + nm + " 连续失败 " + streak + " 天（" + errText + "）");
-            if (NOTIFY_ON) sendSavedMessage(tip, account);
+            if (SAVED_MSG_ON) sendSavedMessage(tip, account);
             else toastOnce("fail|" + id, Lang.tf(" {0} 连续 {1} 天签到失败", nm, streak));
         } catch (Throwable ignored) {}
     }
@@ -2780,7 +2797,8 @@ public final class TGAutoSignCore {
      */
     private void trySendDailySummary(final int acc) {
         try {
-            if (!NOTIFY_ON) return;
+            // 收藏夹摘要由 SAVED_MSG_ON 单独控制（2026-10-17）
+            if (!SAVED_MSG_ON) return;
             final String nk = "jmb_notified_" + acc;
             final String today = todayStr();
             // 并发闸（2026-10-01 修）：心跳与 flushRoundToast 可能同时到达，
@@ -3245,7 +3263,7 @@ public final class TGAutoSignCore {
      *   那是 lastAccount 的内存缓存，只在启动与「切号被侦测到」时刷新。
      *   而下面那些调用方**隐含假设它是当前账号的** ——
      *   一旦切号后缓存未及时刷新就会：
-     *     · 查不到条目 → 不发 \/ 误报「获取不到签到目标」 → **漏签**
+     *     · 查不到条目 → 不发 / 误报「获取不到签到目标」 → **漏签**
      *     · 列表与统计口径不一致
      *     · 序号算错 → id 冲突
      * 现场读保证与 accountPrefix() 同源。
@@ -3548,6 +3566,9 @@ public final class TGAutoSignCore {
         String pk = entryPeerKind(m);
         if (!"user".equals(pk)) e.putString(prefix + "peerkind_" + id, pk);
         else e.remove(prefix + "peerkind_" + id);
+        // 动态表情（骰子）目标：发送时走 sendMedia 而不是 sendMessage（2026-10-17）
+        if (isDiceEntry(m)) e.putString(prefix + "dice_" + id, "1");
+        else e.remove(prefix + "dice_" + id);
         String ttl = m.get("title") == null ? null : String.valueOf(m.get("title"));
         if (ttl != null && ttl.length() > 0 && !"null".equals(ttl)) e.putString(prefix + "title_" + id, ttl);
         if (KIND_CB.equals(entryKind(m)) && entryData(m) != null) {
@@ -3924,7 +3945,7 @@ public final class TGAutoSignCore {
 
     private boolean handleTapCapture(Object proto, Object mo){
 
-        if (captureArmed && System.currentTimeMillis() - captureArmedAt > 120000L) {
+        if (captureArmed && System.currentTimeMillis() - captureArmedAt > CAPTURE_TTL_MS) {
             captureArmed = false;
             jlog("捕获模式超过 2 分钟未点按钮，已自动解除");
         }
@@ -3964,7 +3985,7 @@ public final class TGAutoSignCore {
             if (did == 0 || data == null || data.length == 0) return;
             // 捕获窗口过期检查（与 UI 路径一致）：以前只有 handleTapCapture 里查，
             // 网络层兜底不查 → 用户武装捕获后忘了、几小时后点任意按钮仍会弹绑定面板。
-            if (System.currentTimeMillis() - captureArmedAt > 120000L) {
+            if (System.currentTimeMillis() - captureArmedAt > CAPTURE_TTL_MS) {
                 captureArmed = false;
                 jlog("【捕获】武装已超过 2 分钟，自动取消（不弹面板）");
                 return;
@@ -4040,12 +4061,33 @@ public final class TGAutoSignCore {
         logs("【绑定】uid="+did+" text="+label+" data="+hexOf(data,16)+" msg_id="+msgId);
     }
 
+    /**
+     * 捕捉武装的存活时间（2026-10-17 从 120s 缩到 60s）。
+     *
+     * 为什么要缩短：用户点"捕获按钮"后通常几秒内就会去点目标按钮，
+     *   剩下的时间全是**误伤窗口** —— 期间他点任何 bot 的按钮都会被当成候选，
+     *   用户反馈"老是添加其他的签到"正是这么来的。
+     */
+    private static final long CAPTURE_TTL_MS = 60L * 1000L;
+
+    /** 关闭捕捉武装（手动 / 超时 / 捕获成功都用它，保证只有一个出口）。 */
+    void disarmCapture(String why) {
+        try {
+            if (!captureArmed) return;
+            captureArmed = false;
+            captureArmedAt = 0L;
+            jlog("【捕获】已解除（" + why + "）");
+        } catch (Throwable t) { noteSwallowed("disarmCapture", t); }
+    }
+
     private void startCapture(Activity act){
         if (act==null){ toast("请在 TG 界面使用 /jmb"); return; }
         captureArmed=true; captureArmedAt=System.currentTimeMillis();
         captureAcc=currentAccount();
-        toast("捕获模式已开启：去 bot 会话里点一次它的按钮，我会列出该消息所有按钮供你绑定");
-        jlog("【捕获】已武装 acc=" + accountLabel(captureAcc) + "，等待下一次按钮点击");
+        // 2026-10-17：提示里明确"怎么关" + 时限。原来只说"去点按钮"，
+        //   用户不知道它会一直武装着，也不知道怎么取消（反馈"老是添加其他的签到"）。
+        toast(Lang.tr("捕获已开启（60 秒）：去 bot 会话点一次它的按钮即可；不想捕获了发 /jmb cap 关闭"));
+        jlog("【捕获】已武装 acc=" + accountLabel(captureAcc) + "，等待下一次按钮点击（60s 超时）");
     }
 
     /**
@@ -4147,78 +4189,472 @@ public final class TGAutoSignCore {
         return null;
     }
 
+    /**
+     * 统一会话选择器（2026-10-17 重做）。
+     *
+     * 为什么重做：老版只能列"内存里已加载的最近会话"、只看群/频道、没有搜索 ——
+     *   用户想加一个私聊 bot，既看不到它，也不知道去哪儿弄 ID。
+     *
+     * 现在：
+     *   · 三层数据源合并去重（见 collectPickCandidates）
+     *   · 本地实时过滤：名称 / @username / 数字 ID 都能搜（边打边筛）
+     *   · 分类 chip：全部 / 机器人 / 群组 / 频道
+     *   · 底部提示"找不到就去给 bot 发一条消息"
+     *
+     * @param onlyType 0=不限；1=只要机器人；2=只要群/频道（emoji 签到传 0）
+     */
     private void showPickChat(final Activity act, final EditText targetEd, final EditText titleEd) {
+        showPickChat(act, targetEd, titleEd, 0);
+    }
+
+    private void showPickChat(final Activity act, final EditText targetEd,
+                              final EditText titleEd, final int onlyType) {
         try {
-            Object mc = getMessagesController(currentAccount());
-            if (mc == null) { toast("拿不到 MessagesController，请回到 TG 主界面再试"); return; }
-            java.util.List<Object> dialogs = fetchDialogs(mc);
-            if (dialogs == null || dialogs.isEmpty()) {
-                toast("会话列表为空：先打开一次 TG 主界面（会话列表）再试");
+            final java.util.List<PickEntry> all = collectPickCandidates();
+            if (all.isEmpty()) {
+                toast(Lang.tr("拿不到会话列表：先打开一次 TG 主界面再试"));
                 return;
             }
 
             LinearLayout box = new LinearLayout(act);
             box.setOrientation(LinearLayout.VERTICAL);
             box.setPadding(dp(8), dp(6), dp(8), dp(6));
+
+            // ── 搜索框（边打边筛）──
+            final EditText q = new EditText(act);
+            q.setSingleLine(true);
+            q.setTextSize(Theme.TS_BODY);
+            q.setHint(Lang.tr("搜索：名称 / @用户名 / ID"));
+            q.setTextColor(Theme.termTxt(act));
+            q.setHintTextColor(Theme.termMuted(act));
+            q.setTypeface(android.graphics.Typeface.MONOSPACE);
+            try {
+                q.setBackground(termBorder(act, Theme.termCardInput(act),
+                        Theme.withAlpha(Theme.termCyan(act), 0x55)));
+            } catch (Throwable ignored) {}
+            q.setPadding(dp(10), dp(9), dp(10), dp(9));
+            box.addView(q);
+
+            // ── 分类 chip ──
+            final String[] CATS = {"all", "bot", "group", "channel"};
+            final String[] CAT_LABEL = {Lang.tr("全部"), Lang.tr("机器人"), Lang.tr("群组"), Lang.tr("频道")};
+            final String[] catSel = {"all"};
+            if (onlyType == 1) catSel[0] = "bot";
+            final java.util.List<TextView> catChips = new java.util.ArrayList<TextView>();
+            LinearLayout catBar = new LinearLayout(act);
+            catBar.setOrientation(LinearLayout.HORIZONTAL);
+            catBar.setPadding(dp(2), dp(6), dp(2), dp(6));
+            for (int i = 0; i < CATS.length; i++) {
+                final String key = CATS[i];
+                TextView chip = new TextView(act);
+                chip.setTextSize(Theme.TS_CAPTION);
+                chip.setTypeface(android.graphics.Typeface.MONOSPACE);
+                chip.setPadding(dp(10), dp(5), dp(10), dp(5));
+                chip.setText(CAT_LABEL[i]);
+                chip.setClickable(true);
+                final TextView fc = chip;
+                chip.setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        catSel[0] = key;
+                        for (int k = 0; k < catChips.size(); k++) {
+                            stylePickCat(catChips.get(k), act, CATS[k].equals(catSel[0]));
+                        }
+                        if (pickRefreshRef != null) pickRefreshRef.run();
+                    }
+                });
+                catChips.add(chip);
+                LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-2, -2);
+                clp.setMargins(0, 0, dp(6), 0);
+                catBar.addView(chip, clp);
+            }
+            for (int k = 0; k < catChips.size(); k++) {
+                stylePickCat(catChips.get(k), act, CATS[k].equals(catSel[0]));
+            }
+            box.addView(catBar);
+
+            // ── 结果列表（固定高度，可滚）──
+            ScrollView listSv = new ScrollView(act);
+            final LinearLayout listBox = new LinearLayout(act);
+            listBox.setOrientation(LinearLayout.VERTICAL);
+            listSv.addView(listBox, new android.widget.ScrollView.LayoutParams(-1, -2));
+            LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, dp(320));
+            box.addView(listSv, slp);
+
+            // 刷新闭包：搜索/切分类都调它，不重建整个对话框（否则丢焦点）
+            pickRefreshRef = new Runnable() {
+                @Override public void run() {
+                    try {
+                        listBox.removeAllViews();
+                        String qq = q.getText().toString();
+                        // onlyType 限制在 cat 层已带；这里再兜一层
+                        java.util.List<PickEntry> res = PickEntry.filter(all, qq, catSel[0], 80);
+                        if (res.isEmpty()) {
+                            TextView none = new TextView(act);
+                            none.setTextSize(Theme.TS_BODY);
+                            none.setTextColor(Theme.termMuted(act));
+                            none.setTypeface(Theme.text());
+                            none.setPadding(dp(10), dp(14), dp(10), dp(14));
+                            none.setText(qq.trim().length() > 0
+                                    ? Lang.tr("没有匹配的会话。试试只输名字的一部分，或直接输 ID。")
+                                    : Lang.tr("这里没有可选项"));
+                            listBox.addView(none);
+                            return;
+                        }
+                        for (PickEntry e : res) {
+                            listBox.addView(pickRow(act, e, targetEd, titleEd));
+                        }
+                    } catch (Throwable t) { noteSwallowed("pickRefresh", t); }
+                }
+            };
+
+            // 文本变化即筛（用 TextWatcher，不重建窗口）
+            q.addTextChangedListener(new android.text.TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+                @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+                @Override public void afterTextChanged(android.text.Editable e) {
+                    if (pickRefreshRef != null) pickRefreshRef.run();
+                }
+            });
+
+            // ── 底部提示：怎么弄到 ID ──
             TextView tip = new TextView(act);
             tip.setTextSize(Theme.TS_CAPTION);
             tip.setTextColor(Theme.termMuted(act));
             tip.setTypeface(Theme.text());
-            tip.setText(Lang.tr("下面是最近会话里的群 / 频道。点一条即可填入群 ID。"));
-            tip.setPadding(dp(4), 0, dp(4), dp(8));
+            tip.setPadding(dp(4), dp(8), dp(4), dp(2));
+            tip.setText(Lang.tr("找不到想要的？去 TG 里给这个 bot 发一条任意消息，再回来这里就能看到。\n也可以直接在上面搜索框输 @用户名。"));
             box.addView(tip);
 
-            int shown = 0;
-            for (Object d : dialogs) {
-                if (shown >= 40) break;
-                long did = dialogIdOf(d);
-                if (did >= 0) continue;   // 只收群/频道（负数）
-                String title = chatTitleFromCache(mc, did, currentAccount());
-                if (title == null || title.isEmpty()) continue;
-                shown++;
-
-                final long fDid = did;
-                final String fTitle = title;
-                TextView row = new TextView(act);
-                row.setTextSize(Theme.TS_BODY);
-                row.setTextColor(Theme.termTxt(act));
-                row.setTypeface(Theme.text());
-                row.setText(title + "\n" + did);
-                row.setPadding(dp(10), dp(8), dp(10), dp(8));
-                row.setBackground(termBorder(act, Theme.termCard(act), Theme.withAlpha(Theme.termCyan(act), 0x26)));
-                LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
-                rlp.setMargins(0, dp(2), 0, dp(2));
-                row.setLayoutParams(rlp);
-                row.setClickable(true);
-                row.setOnClickListener(new View.OnClickListener() {
-                    @Override public void onClick(View v) {
-                        try {
-                            if (targetEd != null) targetEd.setText(String.valueOf(fDid));
-                            if (titleEd != null && titleEd.getText().toString().trim().isEmpty()) titleEd.setText(fTitle);
-                            toast(Lang.tf("已填入: {0}", fTitle));
-                        } catch (Throwable ignored) {}
-                    }
-                });
-                box.addView(row);
-            }
-            if (shown == 0) {
-                TextView none = new TextView(act);
-                none.setTextSize(Theme.TS_BODY);
-                none.setTextColor(Theme.termMuted(act));
-                none.setTypeface(Theme.text());
-                none.setText(Lang.tr("没找到群/频道。请先打开该群发一条消息，再回来试。"));
-                none.setPadding(dp(8), dp(10), dp(8), dp(10));
-                box.addView(none);
-            }
-            showDialog(act, "选择群 / 频道", box, "关闭");
-        } catch (Throwable t) { toast(Lang.tf("读取会话失败: {0}", t)); }
+            pickRefreshRef.run();
+            showDialog(act, Lang.tr("选择会话"), box, Lang.tr("关闭"));
+        } catch (Throwable t) {
+            noteSwallowed("showPickChat", t);
+            toast(Lang.tf("打开选择器失败: {0}", t));
+        }
     }
+
+    /** 当前选择器的刷新闭包（搜索/切分类用）。 */
+    private Runnable pickRefreshRef;
+
+    /** 分类 chip 的选中/未选样式。 */
+    private void stylePickCat(TextView chip, Context c, boolean on) {
+        try {
+            chip.setTextColor(on ? Theme.termCardDeep(c) : Theme.termMuted(c));
+            chip.setBackground(termBorder(c,
+                    on ? Theme.termCyan(c) : Theme.termCard(c),
+                    Theme.withAlpha(Theme.termCyan(c), on ? 0xAA : 0x33)));
+        } catch (Throwable ignored) {}
+    }
+
+    /** 一行候选。 */
+    private View pickRow(final Activity act, final PickEntry e,
+                         final EditText targetEd, final EditText titleEd) {
+        LinearLayout row = new LinearLayout(act);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(dp(10), dp(7), dp(10), dp(7));
+        row.setBackground(termBorder(act, Theme.termCard(act),
+                Theme.withAlpha(Theme.termCyan(act), 0x26)));
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
+        rlp.setMargins(0, dp(2), 0, dp(2));
+        row.setLayoutParams(rlp);
+
+        LinearLayout l1 = new LinearLayout(act);
+        l1.setOrientation(LinearLayout.HORIZONTAL);
+        l1.setGravity(Gravity.CENTER_VERTICAL);
+        String tag = e.type == PickEntry.T_BOT ? "🤖 "
+                : e.type == PickEntry.T_CHANNEL ? "📢 "
+                : e.type == PickEntry.T_GROUP ? "👥 " : "👤 ";
+        TextView nm = new TextView(act);
+        nm.setTextSize(Theme.TS_BODY);
+        nm.setTextColor(Theme.termTxt(act));
+        nm.setTypeface(Theme.text());
+        nm.setSingleLine(true);
+        nm.setText(tag + (e.title.length() == 0 ? String.valueOf(e.did) : e.title));
+        l1.addView(nm, new LinearLayout.LayoutParams(0, -2, 1f));
+        if (e.username.length() > 0) {
+            TextView un = new TextView(act);
+            un.setTextSize(Theme.TS_CAPTION);
+            un.setTextColor(Theme.termCyan(act));
+            un.setTypeface(android.graphics.Typeface.MONOSPACE);
+            un.setSingleLine(true);
+            un.setText(e.at());
+            l1.addView(un, new LinearLayout.LayoutParams(-2, -2));
+        }
+        row.addView(l1);
+
+        TextView id = new TextView(act);
+        id.setTextSize(Theme.TS_CAPTION);
+        id.setTextColor(Theme.termMuted(act));
+        id.setTypeface(android.graphics.Typeface.MONOSPACE);
+        id.setText(String.valueOf(e.did));
+        row.addView(id);
+
+        row.setClickable(true);
+        row.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                try {
+                    if (targetEd != null) targetEd.setText(String.valueOf(e.did));
+                    if (titleEd != null && titleEd.getText().toString().trim().isEmpty()) {
+                        titleEd.setText(e.title);
+                    }
+                    toast(Lang.tf("已填入: {0}", e.title.length() == 0 ? String.valueOf(e.did) : e.title));
+                } catch (Throwable ignored) {}
+            }
+        });
+        return row;
+    }
+
+    /**
+     * 三层收集候选会话（2026-10-17）。
+     *
+     * 为什么三层：用户"想加的那个 bot"可能在三种状态里：
+     *   ① 最近聊过 → 在 getDialogs 里
+     *   ② 很久没聊过但有过会话 → 只在本机 users 表里
+     *   ③ 当前进程刚收到过它的消息 → 只在 MessagesController.users 内存表里
+     * 任缺一层都会出现"我明明用过它，却选不到"。
+     *
+     * 全部走反射，失败静默跳过（某一层拿不到不影响其它层）。
+     */
+    private java.util.List<PickEntry> collectPickCandidates() {
+        final Map<Long, PickEntry> bag = PickEntry.newBag();
+        final int account = currentAccount();
+
+        // ── ① 会话列表（全文件夹，不只主文件夹）──
+        try {
+            Object mc = getMessagesController(account);
+            if (mc != null) {
+                for (int folder = 0; folder <= 10; folder++) {
+                    java.util.List<Object> ds = null;
+                    try {
+                        Object r = call(mc, "getDialogs", new Class<?>[]{int.class},
+                                new Object[]{Integer.valueOf(folder)});
+                        if (r instanceof java.util.List) ds = (java.util.List<Object>) r;
+                    } catch (Throwable ignored) {}
+                    if (ds == null || ds.isEmpty()) {
+                        if (folder > 0) break;   // 主文件夹都没有，后面的更不会有
+                        continue;
+                    }
+                    for (Object d : ds) {
+                        long did = dialogIdOf(d);
+                        if (did == 0L) continue;
+                        String title = chatTitleFromCache(mc, did, account);
+                        if (title == null || title.isEmpty()) continue;
+                        boolean isBot = false;
+                        if (did > 0L) {
+                            try {
+                                Object u = invoke(mc, "getUser", new Class<?>[]{Long.class},
+                                        new Object[]{Long.valueOf(did)});
+                                if (u != null) isBot = Boolean.TRUE.equals(getFieldValSafe(u, "bot"));
+                            } catch (Throwable ignored) {}
+                        }
+                        String uname = usernameOf(mc, did, account);
+                        PickEntry.merge(bag, PickEntry.fromDid(did, title, uname, isBot, true));
+                    }
+                }
+            }
+        } catch (Throwable t) { noteSwallowed("collectPick.dialogs", t); }
+
+        // ── ② 本地数据库 users 表（很久没聊的 bot 也能捞到）──
+        try {
+            Object ms = getMessagesStorage(account);
+            if (ms != null) {
+                Object arr = null;
+                for (String f : new String[]{"users", "usersDict"}) {
+                    try { arr = getFieldValSafe(ms, f); } catch (Throwable ignored) {}
+                    if (arr instanceof Map) break;
+                }
+                if (arr instanceof Map) {
+                    for (Object v : ((Map<?, ?>) arr).values()) {
+                        if (v == null) continue;
+                        Object idv = getFieldValSafe(v, "id");
+                        if (!(idv instanceof Number)) continue;
+                        long did = ((Number) idv).longValue();
+                        if (did == 0L) continue;
+                        Object fn = getFieldValSafe(v, "first_name");
+                        Object ln = getFieldValSafe(v, "last_name");
+                        String title = (fn == null ? "" : String.valueOf(fn))
+                                + (ln == null ? "" : " " + String.valueOf(ln));
+                        title = title.trim();
+                        if (title.length() == 0) continue;
+                        Object un = getFieldValSafe(v, "username");
+                        String uname = un == null ? "" : String.valueOf(un);
+                        boolean isBot = Boolean.TRUE.equals(getFieldValSafe(v, "bot"));
+                        PickEntry.merge(bag, PickEntry.fromDid(did, title, uname, isBot, false));
+                    }
+                }
+            }
+        } catch (Throwable t) { noteSwallowed("collectPick.storage", t); }
+
+        // ── ③ MessagesController.users 内存表 ──
+        try {
+            Object mc = getMessagesController(account);
+            if (mc != null) {
+                Object arr = getFieldValSafe(mc, "users");
+                if (arr instanceof Map) {
+                    for (Object v : ((Map<?, ?>) arr).values()) {
+                        if (v == null) continue;
+                        Object idv = getFieldValSafe(v, "id");
+                        if (!(idv instanceof Number)) continue;
+                        long did = ((Number) idv).longValue();
+                        if (did == 0L) continue;
+                        Object fn = getFieldValSafe(v, "first_name");
+                        Object ln = getFieldValSafe(v, "last_name");
+                        String title = (fn == null ? "" : String.valueOf(fn))
+                                + (ln == null ? "" : " " + String.valueOf(ln));
+                        title = title.trim();
+                        if (title.length() == 0) continue;
+                        Object un = getFieldValSafe(v, "username");
+                        String uname = un == null ? "" : String.valueOf(un);
+                        boolean isBot = Boolean.TRUE.equals(getFieldValSafe(v, "bot"));
+                        PickEntry.merge(bag, PickEntry.fromDid(did, title, uname, isBot, false));
+                    }
+                }
+            }
+        } catch (Throwable t) { noteSwallowed("collectPick.mcUsers", t); }
+
+        return new ArrayList<PickEntry>(bag.values());
+    }
+
+    /** 取某 did 的 @username（内存 → 数据库，取不到返回空串）。 */
+    private String usernameOf(Object mc, long did, int account) {
+        try {
+            if (did > 0L && mc != null) {
+                Object u = invoke(mc, "getUser", new Class<?>[]{Long.class}, new Object[]{Long.valueOf(did)});
+                if (u != null) {
+                    Object un = getFieldValSafe(u, "username");
+                    if (un != null && String.valueOf(un).length() > 0) return String.valueOf(un);
+                }
+            }
+            long raw = -did;
+            long bare = raw > 1000000000000L ? raw - 1000000000000L : raw;
+            if (did < 0L && mc != null) {
+                for (String m : new String[]{"getChat", "getChannel"}) {
+                    try {
+                        Object c = invoke(mc, m, new Class<?>[]{Long.class}, new Object[]{Long.valueOf(bare)});
+                        if (c != null) {
+                            Object un = getFieldValSafe(c, "username");
+                            if (un != null && String.valueOf(un).length() > 0) return String.valueOf(un);
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            }
+        } catch (Throwable ignored) {}
+        return "";
+    }
+
 
     /** 添加「群聊签到」目标：输入群（点选会话或手填）+ 签到指令。 */
     // 规范化 ID 输入：去空格、全角减号/数字转半角、去掉 -100 前的多余符号
     private static String normalizeId(String raw) {
         return SignLogic.normalizeId(raw);
     }
+
+    /** 判断输入是不是 @username（而不是数字 ID）。 */
+    static boolean looksLikeUsername(String raw) {
+        if (raw == null) return false;
+        String s = raw.trim();
+        if (s.length() < 2) return false;
+        if (s.startsWith("@")) s = s.substring(1);
+        if (s.length() == 0) return false;
+        // 只允许 字母/数字/下划线，且不是纯数字（纯数字是 ID）
+        if (!s.matches("[A-Za-z0-9_]+")) return false;
+        return !s.matches("\\d+");
+    }
+
+    /**
+     * 把 @username 解析成数字 did（2026-10-17）。
+     *
+     * 为什么要它：绝大多数人只知道 bot 的 @用户名（比如 @checkin_bot），
+     *   不知道那串数字 ID。老版输入框只收数字，等于把用户挡在门外。
+     *
+     * 两级策略：
+     *   ① 本地候选表里按 username 精确匹配 —— 秒回、离线可用（聊过的 bot 都在）
+     *   ② 本地没有再走 UserNameResolver.resolve 拉服务器，轮询等最多 8 秒
+     *      （resolve 是异步回调，这里用简单的"看 users 表出现没有"轮询，
+     *        比嵌回调简单得多，也不引入线程泄漏风险）
+     * 都拿不到返回 0，调用方给明确提示。
+     *
+     * 注意：这是**网络请求**，必须在非主线程调用。
+     */
+    long resolveUsernameToDid(String raw) {
+        try {
+            String u = raw == null ? "" : raw.trim();
+            if (u.startsWith("@")) u = u.substring(1);
+            if (u.length() == 0) return 0L;
+            final String low = u.toLowerCase(java.util.Locale.US);
+
+            // ① 本地候选（三层合并），按 username 精确匹配
+            try {
+                for (PickEntry e : collectPickCandidates()) {
+                    if (e.username != null
+                            && e.username.toLowerCase(java.util.Locale.US).equals(low)) {
+                        logd("[解析] @" + u + " → " + e.did + "（本地命中）");
+                        return e.did;
+                    }
+                }
+            } catch (Throwable ignored) {}
+
+            // ② 网络解析
+            final int account = currentAccount();
+            resolveUsernameInto(account, u);
+            logd("[解析] @" + u + " 已发起网络解析，等待…");
+            Object mc = getMessagesController(account);
+            for (int i = 0; i < 16; i++) {           // 16 × 500ms = 8 秒
+                try { Thread.sleep(500L); } catch (Throwable ignored) {}
+                try {
+                    // 解析成功后 TG 会把 user 写进内存表；扫一遍找 username 匹配
+                    if (mc != null) {
+                        Object arr = getFieldValSafe(mc, "users");
+                        if (arr instanceof Map) {
+                            for (Object v : ((Map<?, ?>) arr).values()) {
+                                if (v == null) continue;
+                                Object un = getFieldValSafe(v, "username");
+                                if (un == null) continue;
+                                if (!low.equals(String.valueOf(un).toLowerCase(java.util.Locale.US))) continue;
+                                Object idv = getFieldValSafe(v, "id");
+                                if (idv instanceof Number) {
+                                    long did = ((Number) idv).longValue();
+                                    logd("[解析] @" + u + " → " + did + "（网络命中）");
+                                    return did;
+                                }
+                            }
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+            logw("[解析] @" + u + " 解析失败（网络未返回或该用户名不存在）");
+        } catch (Throwable t) { noteSwallowed("resolveUsernameToDid", t); }
+        return 0L;
+    }
+
+    /**
+     * 输入框 → did 的统一入口（支持数字 ID 与 @username）。
+     *
+     * @param onDone  在**主线程**回调（成功给 did，失败给 0）
+     */
+    void inputToDidAsync(final String raw, final java.util.function.Consumer<Long> onDone) {
+        try {
+            final String v = raw == null ? "" : raw.trim();
+            if (v.length() == 0) { onDone.accept(0L); return; }
+            if (!looksLikeUsername(v)) {
+                // 数字 ID：直接解析，不用起线程
+                long did = 0L;
+                try { did = Long.parseLong(normalizeId(v)); } catch (Throwable ignored) {}
+                onDone.accept(did);
+                return;
+            }
+            toast(Lang.tf("正在解析 {0} …", v.startsWith("@") ? v : "@" + v));
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    final long did = resolveUsernameToDid(v);
+                    mainHandler.post(new Runnable() {
+                        @Override public void run() { try { onDone.accept(did); } catch (Throwable ignored) {} }
+                    });
+                }
+            }, "tgas-resolve-user").start();
+        } catch (Throwable t) { noteSwallowed("inputToDidAsync", t); onDone.accept(0L); }
+    }
+
 
     private void showAddGroup(final Activity act) {
         try {
@@ -4237,7 +4673,7 @@ public final class TGAutoSignCore {
             tip.setPadding(dp(4), 0, dp(4), dp(8));
             box.addView(tip);
 
-            final EditText idEd = adInput(act, Lang.tr("群 ID（形如 -1001234567890，含负号）"), 2);
+            final EditText idEd = adInput(act, Lang.tr("群 ID 或 @用户名（如 -1001234567890 或 @xxx）"), 0);
             box.addView(idEd);
             final EditText titleEd = adInput(act, "备注名（可留空，如：某签到群）", 0);
             box.addView(titleEd);
@@ -4287,7 +4723,7 @@ public final class TGAutoSignCore {
                         loadTargets();
                         logs("[群签到] 已添加 " + did + " 指令=" + cmd + (ttl.isEmpty() ? "" : " 备注=" + ttl));
                         toast("已添加群签到目标");
-                        toastAfterSign(sendSign(m, currentAccount()), m);
+                        toastAfterSign(sendSign(m, currentAccount()), m, true);
                     } catch (Throwable t) { toast(Lang.tf("添加失败: {0}", t)); }
                 }
             });
@@ -4559,12 +4995,20 @@ public final class TGAutoSignCore {
      * 用户却仍看到"已发起"，以为签了（用户实际反馈的现象）。
      */
     private void toastAfterSign(int code, Map<String, Object> entry) {
+        toastAfterSign(code, entry, false);
+    }
+
+    /**
+     * @param quietOnSuccess true = "成功发出"不弹提示（添加目标流程用）。
+     *        失败类提示（停用 / 发送失败 / 退避 / 重试用尽）**仍然弹** —— 那是必须知道的。
+     */
+    private void toastAfterSign(int code, Map<String, Object> entry, boolean quietOnSuccess) {
         try {
             String nm = "";
             try { nm = targetTitle(entryDid(entry)); } catch (Throwable ignored) {}
             switch (code) {
                 case SignLogic.SKIP_NONE:
-                    toast(Lang.tr("已发起签到，结果见提示/日志"));
+                    if (!quietOnSuccess) toast(Lang.tr("已发起签到，结果见提示/日志"));
                     break;
                 case SignLogic.SKIP_ALREADY_SIGNED:
                     toast(Lang.tf("「{0}」今天已经签过了", nm));
@@ -5544,6 +5988,7 @@ public final class TGAutoSignCore {
                     if (unv != null && unv.length() > 0) m.put("uname", unv);
                     String ttlv = strOf(prefix + "title_" + id);
                     if (ttlv != null && ttlv.length() > 0) m.put("title", ttlv);
+                    if ("1".equals(strOf(prefix + "dice_" + id))) m.put("dice", Boolean.TRUE);
                     if (KIND_CB.equals(kind)) {
                         String b64 = strOf(prefix + "data_" + id);
                         if (b64 != null) {
@@ -5930,6 +6375,81 @@ public final class TGAutoSignCore {
         return SignLogic.backoffDelay(retries);
     }
 
+    /** 毫秒 → 「5h21m」/「35m」/「1d2h」这类人读的跨度（定时日志用）。 */
+    static String humanSpan(long ms) {
+        long m = Math.max(0L, ms) / 60000L;
+        if (m < 1) return "不到 1 分钟";
+        long d = m / 1440L, h = (m % 1440L) / 60L, mm = m % 60L;
+        StringBuilder sb = new StringBuilder();
+        if (d > 0) sb.append(d).append("d");
+        if (h > 0) sb.append(h).append("h");
+        if (mm > 0 && d == 0) sb.append(mm).append("m");
+        return sb.length() == 0 ? (m + "m") : sb.toString();
+    }
+
+    /**
+     * TG 支持的 6 个「骰子类」动态表情（只有这几个能触发内置动画）。
+     * 其它 emoji 发出去都是静态字符，不能当骰子用。
+     */
+    private static final String[] DICE_EMOJI = {
+            "\uD83C\uDFB2",   // 🎲 dice
+            "\uD83C\uDFAF",   // 🎯 dart
+            "\uD83C\uDFB3",   // 🎳 bowling
+            "\u26BD",          // ⚽ soccer
+            "\uD83C\uDFB0",   // 🎰 slot machine
+            "\uD83C\uDFB1"    // 🎱 basketball
+    };
+
+    /** 该 emoji 是否能触发 TG 内置骰子动画。 */
+    static boolean isDiceEmoji(String emoji) {
+        if (emoji == null) return false;
+        String e = emoji.trim();
+        for (String d : DICE_EMOJI) if (d.equals(e)) return true;
+        return false;
+    }
+
+    /** 该目标是否标记为「动态表情」发送。 */
+    private boolean isDiceEntry(Map<String, Object> entry) {
+        try {
+            Object v = entry == null ? null : entry.get("dice");
+            if (v == null) return false;
+            if (v instanceof Boolean) return ((Boolean) v).booleanValue();
+            if (v instanceof Number) return ((Number) v).intValue() != 0;
+            return "1".equals(String.valueOf(v)) || "true".equalsIgnoreCase(String.valueOf(v));
+        } catch (Throwable t) { return false; }
+    }
+
+    /**
+     * 构造「发一个骰子」的请求：TL_messages_sendMedia + TL_inputMediaDice。
+     *
+     * 为什么用 sendMedia 而不是 sendMessage：骰子是 TG 服务端生成动画并结算点数的，
+     *   只有走 media 通道 tr：payload 里带 emoticon 才能拿到随机结果。
+     * 字段按宿主实际类名（已在 Nagram dex 中核对）：
+     *   TL_messages_sendMedia { peer, media(TL_inputMediaDice), random_id, message }
+     *   TL_inputMediaDice { emoticon }
+     * @return 请求对象；宿主没有对应类时返回 null（调用方退回文本）
+     */
+    private Object buildDiceRequest(Object peer, String emoticon) {
+        try {
+            Class<?> inputDice = classEx("org.telegram.tgnet.TLRPC$TL_inputMediaDice");
+            Object media = newTlObject(inputDice);
+            if (!trySetFieldVal(media, "emoticon", emoticon)) {
+                logw("[骰子] TL_inputMediaDice 无 emoticon 字段");
+                return null;
+            }
+            Class<?> sendCls = classEx("org.telegram.tgnet.TLRPC$TL_messages_sendMedia");
+            Object req = newTlObject(sendCls);
+            trySetFieldVal(req, "peer", peer);
+            trySetFieldVal(req, "media", media);
+            trySetFieldVal(req, "message", "");
+            trySetFieldVal(req, "random_id", random.nextLong());
+            return req;
+        } catch (Throwable t) {
+            noteSwallowed("buildDiceRequest", t);
+            return null;
+        }
+    }
+
     /** 发送单条目标。account 指定账号；kind=text 发消息，kind=cb 重放回调按钮。 */
     /** TG 各版本 reply_markup 形态不一：List 直取 / 对象取 rows / 再取 markup */
     private List<?> normalizeRows(Object rm){
@@ -6313,6 +6833,23 @@ public final class TGAutoSignCore {
                     trySetFieldVal(req, "flags", 1);   // 12.x：data 是否序列化由 flags 位决定，不设则 DATA_INVALID
                 }
                 if (!trySetFieldVal(req, "msg_id", useMid)) logw("[兼容] getBotCallbackAnswer 无 msg_id 字段");
+            } else if (isDiceEntry(entry)) {
+                // ── 2026-10-17：动态表情（骰子）签到 ──
+                // bot 要的是 TG **内置骰子动画**（会滚动、结算点数），不是 emoji 文本。
+                // 发文本 bot 不认（用户实测："模块发出去没动就签到不成功"）。
+                // 走 sendMedia + TL_inputMediaDice，等价于用户手动点一个骰子。
+                req = buildDiceRequest(peer, fText);
+                if (req == null) {
+                    // 骰子构造失败就退回文本，至少别让这一轮彻底没动作
+                    logw("[骰子] 构造 sendMedia 失败，退回文本发送 " + fText);
+                    Class<?> sendCls = classEx("org.telegram.tgnet.TLRPC$TL_messages_sendMessage");
+                    req = newTlObject(sendCls);
+                    setFieldVal(req, "peer", peer);
+                    setFieldVal(req, "message", fText);
+                    setFieldVal(req, "random_id", random.nextLong());
+                } else {
+                    logd("[骰子] 以动态表情发送 " + fText);
+                }
             } else {
                 Class<?> sendCls = classEx("org.telegram.tgnet.TLRPC$TL_messages_sendMessage");
                 req = newTlObject(sendCls);
@@ -7758,7 +8295,7 @@ public final class TGAutoSignCore {
     }
 
     private List<Map<String, Object>> sortedTargets() {
-        // 现场读（2026-10-04）：列表与筛选\/搜索的数据源必须是当前账号
+        // 现场读（2026-10-04）：列表与筛选/搜索的数据源必须是当前账号
         List<Map<String, Object>> l = targetsNow();
         String today = todayStr();
         if ("name".equals(SORT_MODE)) {
@@ -8250,11 +8787,11 @@ public final class TGAutoSignCore {
         TextView t1 = new TextView(c); t1.setTextSize(Theme.TS_SUBTITLE); t1.setTextColor(Theme.termTxt(c)); t1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD); t1.setText(mainTitle);
         t1.setSingleLine(true); t1.setEllipsize(android.text.TextUtils.TruncateAt.END);
         tl.addView(t1, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        // ── 类型 chip：只在**群 \/ 频道**时显示（2026-10-03）──
+        // ── 类型 chip：只在**群 / 频道**时显示（2026-10-03）──
         // 改前每行都挂 peerChip + typeChip 两个标签，而绝大多数是 bot ——
         // 一行里两个 chip 都在说同一件事（"这是个 bot"），纯占地方。
-        // 现在：群 \/ 频道才显类型（那才是需要额外提示的情况），
-        //       省出的空间留给右侧的相对时间 \/ 失败次数。
+        // 现在：群 / 频道才显类型（那才是需要额外提示的情况），
+        //       省出的空间留给右侧的相对时间 / 失败次数。
         if (isChat) {
             tl.addView(new android.widget.Space(c), new LinearLayout.LayoutParams(Theme.dp(c,6), 1));
             tl.addView(peerChip(c, entry));
@@ -8544,9 +9081,9 @@ public final class TGAutoSignCore {
      *
      * 设计取舍：
      *   · 已签 → 绿（唯一"完成"的正面色）
-     *   · 需处理（失败\/按钮失效\/判不出\/待确认）→ 琥珀（要你动手）
+     *   · 需处理（失败/按钮失效/判不出/待确认）→ 琥珀（要你动手）
      *   · 待签 → 青（正常、会自己完成，不需要你看）
-     *   · 冻结\/排除 → 灰（不参与）
+     *   · 冻结/排除 → 灰（不参与）
      *   · 群/频道 → 在青绿基础上偏品红一档，保留"这是群"的辨识
      *     （用 Theme.mix 往品红方向拉 35%，既有状态色又有类型区分）
      *
@@ -8654,6 +9191,7 @@ public final class TGAutoSignCore {
             addTile(g1, act, "plus", "添加目标", "指令 / 捕获按钮", "add");
             addTile(g1, act, "copy", "复制目标", "复制到其它账号", "copy_targets");
             addTile(g1, act, "layers", "预设模板", "一键添加", "presets");
+            addTile(g1, act, "dice", "emoji 签到", "骰子·表情指令", "emoji_sign");
             addTile(g1, act, "trash", "删除目标", "不可撤销", "del");
 
             // 执行：会立即对外发消息，与配置操作分开、单独分组
@@ -8684,7 +9222,9 @@ public final class TGAutoSignCore {
             if (all || "system".equals(cat)) {
             sectionHeader(root, act, "▍诊断");
             android.widget.GridLayout g3 = new android.widget.GridLayout(act); g3.setColumnCount(2); root.addView(g3);
-            addTile(g3, act, "flask", "回调调试台", "按钮·发射·绑定", "debug");
+            addTile(g3, act, "flask", "回调调试台",
+                    captureArmed ? Lang.tr("捕获中 · 点此停止") : Lang.tr("按钮·发射·绑定"),
+                    captureArmed ? "debug_off" : "debug");
             addTile(g3, act, "pulse", "自诊断", "反射锚点检查", "diag");
             String upSub = (lastUpdate != null && lastUpdate.newer) ? "新版本 v" + lastUpdate.version : "当前 v" + UpdateChecker.VERSION_NAME;
             addTile(g3, act, "refresh", "检查更新", upSub, "update");
@@ -10489,181 +11029,82 @@ public final class TGAutoSignCore {
         } catch (Throwable ignored) {}
     }
 
+    /**
+     * 使用教程（2026-10-17 改成**手册式**，内容在 Tutorial.java）。
+     *
+     * 为什么把内容抽走：原来这里是 160 行巨型方法、14 张卡片全靠字符串拼接，
+     *   加一条 FAQ 要翻半天，还容易把引号写坏（这次就踩了两回）。
+     *   现在数据（章节/正文）在 Tutorial.java，这里只负责画：
+     *   一张卡片 = 可折叠标题 + 等宽正文；FAQ 那章用等宽字体，对齐更整齐。
+     *
+     * 默认只展开「新手 30 秒」——手册有 11 章，全展开等于一堵墙。
+     */
     private void showTutorial(Activity act) {
         if (act == null) return;
-        // 各板块的强调色（与设置页取同一套主题色，观感统一）
-        final int ACC_CORE  = Theme.termCyan(act);
-        final int ACC_LOOK  = Theme.termPink(act);
-        final int ACC_LEARN = Theme.termGreen(act);
-        final int ACC_NOTI  = Theme.termAmber(act);
-        final int ACC_LOG   = Theme.termMuted(act);
         ScrollView sv = new ScrollView(act);
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(Theme.dp(act, 10), Theme.dp(act, 4), Theme.dp(act, 10), Theme.dp(act, 4));
 
-        // ── 新手只看这段（默认展开）──
-        tutCard(box, act, "新手只看这段（30 秒）", "pulse", true, ACC_CORE,
-                "① 任意聊天输入框发 /jmb 打开面板\n"
-              + "② 点「添加目标」，或更省事：去那个 bot 会话里点一次它的签到按钮，模块会自动认出来\n"
-              + "③ 剩下的它自己办 —— 每天在你设的时段里自动签、失败自动重试、结果发到你自己的收藏夹\n\n"
-              + "不需要一直开着 Telegram。回来看结果，还是发 /jmb。");
+        // 顶部一句定位：这是手册，不是广告
+        TextView head = new TextView(act);
+        head.setTextSize(Theme.TS_CAPTION);
+        head.setTextColor(Theme.termMuted(act));
+        head.setTypeface(Theme.text());
+        head.setPadding(Theme.dp(act, 6), 0, Theme.dp(act, 6), Theme.dp(act, 6));
+        head.setText(Lang.tr("手册 · 先用「新手 30 秒」走通，遇到问题查第 9 章「常见疑问 · 自查表」"));
+        box.addView(head);
 
-        // ── 1 面板怎么用 ──
-        tutCard(box, act, "1 · 面板怎么用", "list", false, ACC_CORE,
-                "输入 /jmb 随时打开。首页从上到下是：\n"
-              + "· 顶部状态条 —— 今天签了几个、连续多少天、下次什么时候\n"
-              + "· 今日进度与「最近动态」（最近几条结果，每 4 秒自己刷新）\n"
-              + "· 高频入口 —— 目标列表 / 补签列表 / 立即签到 / 运行日志 / 设置 / 排除管理 / 账号一览 / 使用教程\n"
-              + "· 最下一行「全部功能」 —— 按 目标 / 数据 / 系统 / 帮助 / 维护 五组分好，横滑点一下直达\n\n"
-              + "「立即签到」= 现在就把今天还没签的补一遍；「目标列表」= 看每个目标的具体状态。");
-
-        // ── 2 添加目标（三种方式 + 怎么选）──
-        tutCard(box, act, "2 · 添加目标（三种方式）", "plus", false, ACC_CORE,
-                "· 回调按钮（推荐，最省事）\n"
-              + "  去那个 bot 的会话里**点一次它的签到按钮**，模块自动认出并记住，以后每天替你点。\n"
-              + "  绑定不受关键词限制 —— 点什么学什么。\n\n"
-              + "· 文本指令\n"
-              + "  知道 bot 要求的签到文本（如 /checkin、/qd）时用。填机器人数字 ID + 指令，到点自动发。\n\n"
-              + "· 群 / 频道\n"
-              + "  签到要在群里发指令时用。填群 ID（形如 -1001234567890，含负号）。\n\n"
-              + "不知道 bot ID？三种方式都能用「从会话列表选群」直接挑，不用手抄数字。\n"
-              + "同一个 bot 可以加多条指令，互不冲突。");
-
-        // ── 3 拉面板（前置命令）──
-        tutCard(box, act, "3 · bot 要先发指令才给面板？", "keyboard", false, ACC_CORE,
-                "有的 bot 不主动发签到面板，得先发一条指令它才吐出来。\n\n"
-              + "在该条目的「编辑」里填「前置命令序列」—— 逗号或换行分隔，可以写多条（如 /start, 菜单）。\n"
-              + "签到或测试时，模块会先依次发送这些命令把面板拉出来，再点按钮。\n\n"
-              + "日志里看到「面板未就绪」多半就是缺这一步。");
-
-        // ── 4 节奏（设置）──
-        tutCard(box, act, "4 · 用什么节奏签（设置）", "sliders", false, ACC_CORE,
-                "设置页分四块，每块都能折叠：签到核心 / 外观 / 学习与判定 / 通知。\n\n"
-              + "· 定时签到：开启后只在「签到时间」窗口内动作；窗口外所有自动触发一律不响应\n"
-              + "· 签到时间：两端都能点，例如 08:30-20:30；支持跨天（如 22:00-02:00）\n"
-              + "· 错开间隔：0 = 按目标数自动均分；设 N 分钟则相邻目标至少隔 N 分钟，防风控\n"
-              + "· 错过补签 + 补签截止：窗口内错过的还能补到截止时间（默认 23:00）\n\n"
-              + "补签说明：补签没有单独的次数限制，但它和「重试」共用一个每日上限"
-              + "（设置里「每日重试上限」，默认 5 次）。区别只在：重试 = 失败后再试，补签 = 错过时间后补上。");
-
-        // ── 5 状态怎么看（含四态 + 补签语义，替换旧⑥⑬）──
-        tutCard(box, act, "5 · 状态怎么看懂", "today-done", false, ACC_LOOK,
-                "顶部状态条的第一行用四个图标 + 颜色表示今天：\n"
-              + "· 实心圆加对勾（绿）—— 今日已签\n"
-              + "· 断续圆环（青）—— 今天待签，还没到时间或还没签\n"
-              + "· 圆环加短横（粉）—— 今天未签，已过补签截止\n"
-              + "· 圆环加双竖（灰）—— 不参与，没有启用中的目标\n\n"
-              + "第二、三行是「连续 N 天」、签到时段、以及今天的实际战绩（几点到几点签的、补了几次）。\n\n"
-              + "单个目标的状态在「目标列表」里看：\n"
-              + "· 已签 = 今天签上了\n"
-              + "· 待签 = 还没签，会按计划自动签\n"
-              + "· 已发出 = 指令发出去了，在等机器人回复\n"
-              + "· 待确认 = 机器人没回话或回的话看不懂，**需要你扫一眼**（列表里点一下就能处置）\n"
-              + "· 已放弃 = 今天试到上限了，明天恢复");
-
-        // ── 6 补签列表 ──
-        tutCard(box, act, "6 · 补签列表", "calendar", false, ACC_LOOK,
-                "看「今天每个目标打算几点签、实际几点签的」。\n\n"
-              + "· 准点 / 补签 —— 标出这次是按时签的还是补的\n"
-              + "· 计划 09:51 → 实签 10:26，后面还会标「补签 10:24（晚 35 分）」\n"
-              + "· 已跳过 = 不在签到时间或没开补签\n"
-              + "· 已过期 = 过了补签截止\n\n"
-              + "顶部一行会写明当前窗口与补签是否开启。");
-
-        // ── 7 通知 ──
-        tutCard(box, act, "7 · 结果通知在哪看", "megaphone", false, ACC_NOTI,
-                "设置 → 通知。开启后每天的签到摘要会**静默发到你自己的 Telegram 收藏夹**"
-              + "（不弹系统通知，也不需要通知权限）。\n\n"
-              + "· 「只通知失败」—— 只想出问题时被打扰就打开它\n"
-              + "· 连续失败会额外告警一次，不会天天刷屏\n\n"
-              + "摘要内容：今日 X/Y 已签、需要你决定的（按钮失效 / 机器人没回复 / 回复判不出）、"
-              + "以及自动重试中的列表。");
-
-        // ── 8 日志怎么读（按现状重写）──
-        tutCard(box, act, "8 · 日志怎么读", "doc", false, ACC_LOG,
-                "运行日志有两档，顶部第一个芯片切换：\n\n"
-              + "· **易懂**（默认）—— 只显示「结果 + 下一步」，把内部机制条藏起来。\n"
-              + "  顶部还有一条状态条，一眼看到今天签了几个、连续几天、今天几点完成的。\n"
-              + "  同一件事反复发生时（比如反复提示不在签到时间）会折叠成一条并标 ×N。\n"
-              + "· **详细** —— 原始流水，排障用。开发者要的信息都在这里。\n\n"
-              + "其他芯片：全部 / 只看重要 / 只看错误 / 回到最新 / 目标过滤 / 导出问题报告。\n"
-              + "日志固定「最新在最上」，打开即定位最新；「加载更多」每次多取 300 条。\n\n"
-              + "颜色含义（两档一致）：绿 = 成功，青 = 进行中，黄 = 需要注意，粉 = 失败，灰 = 普通信息。\n"
-              + "长按任意一行可复制该行内容。");
-
-        // ── 9 多账号 ──
-        tutCard(box, act, "9 · 多账号", "globe", false, ACC_LOOK,
-                "每个账号的目标、设置、进度**各自独立**。\n\n"
-              + "Telegram 里切到哪个账号，面板就是那个账号的内容，签到也跟随当前账号，"
-              + "不会替后台账号乱发。\n\n"
-              + "· 「账号一览」—— 看所有账号各有几个目标、今天签了多少\n"
-              + "· 「签全部账号」—— 一次把所有已登录账号都签一遍\n"
-              + "· 「复制目标」—— 把当前账号的目标整体复制给其它账号，不用一条条重加\n"
-              + "· 每个账号可以单独停用（停用后完全不参与，连手动点也不发）");
-
-        // ── 10 学习行为 ──
-        tutCard(box, act, "10 · 自动学习是怎么工作的", "target", false, ACC_LEARN,
-                "设置 → 学习与判定。两个开关：\n\n"
-              + "· **按钮学习**（默认开）—— 你在 bot 里点过的按钮自动加进目标。"
-              + "点什么学什么，只在两处拦：你拉黑过的 bot、你写的排除规则。\n"
-              + "· **网络学习**（默认开）—— 你手动发出去的签到文本也能被认出来。"
-              + "默认带「需确认」：命中的先放进待添加列表，你点「加入」才真正生效（防误加验证码类 bot）。\n\n"
-              + "「排除管理」里可以拉黑整只 bot、写排除规则（支持正则，用 /.../ 包起来）。\n"
-              + "被排除的 bot 不再学习、不再签到。");
-
-        // ── 11 临时不想签 / 卡住了 ──
-        tutCard(box, act, "11 · 临时不想签，或某个目标卡住了", "pause", false, ACC_LOG,
-                "条目操作里：\n"
-              + "· **暂停一周** —— 该目标一周内不动作，到期自动恢复。适合出差、bot 在维护。\n"
-              + "· **冻结** —— 一直不签，直到你手动解冻。\n"
-              + "· **忽略今天** —— 今天不再自动试，明天恢复。\n"
-              + "· **重试** —— 立刻再发一次（会顺便清掉今天已用掉的重试次数）。\n\n"
-              + "三者区别：暂停有期限、冻结没期限、忽略只管今天。");
-
-        // ── 12 出问题怎么办 ──
-        tutCard(box, act, "12 · 出问题怎么办", "flask", false, ACC_LOG,
-                "按这个顺序查：\n\n"
-              + "① 「自诊断」—— 检查宿主反射锚点是否正常。第三方客户端"
-              + "（Nagram XF / Nagram / ExteraLess / Mercurygram 等）适配问题先看这里。\n"
-              + "② 「回调调试台」—— 列出面板全部按钮，点任意一个实时发一次看机器人返回，"
-              + "用来确认到底哪个按钮才是签到键。\n"
-              + "③ 「运行日志」→「导出问题报告」—— 一键复制（错误 + 警告 + 最近记录 + 配置摘要），"
-              + "粘贴给作者最省事。\n"
-              + "④ 签到没反应？依次确认：通知开关、是否在签到时间内、该目标是否被暂停 / 冻结 / 排除、"
-              + "以及详细档里有没有「面板未就绪」（→ 见第 3 节补前置命令）。");
-
-        // ── 13 换手机 / 备份 ──
-        tutCard(box, act, "13 · 换手机 / 备份", "save", false, ACC_LOG,
-                "· **导出配置** —— 生成 json 到下载目录（含目标、设置、已签记录）\n"
-              + "· **导入配置** —— 合并或覆盖，两种模式可选\n"
-              + "· **导出日志** —— 把运行日志存到下载目录，方便留档\n"
-              + "· **清空配置** —— 跨全部账号彻底清，注意这是不可撤销的\n\n"
-              + "配置里**不含任何登录凭据**，可以放心备份。换成新手机后先装宿主（Telegram 或第三方客户端），"
-              + "再装本模块并导入配置即可。");
-
-        // ── 14 更新与反馈 ──
-        tutCard(box, act, "14 · 更新与反馈", "refresh", false, ACC_LOG,
-                "· 「检查更新」—— 走官方 GitHub 发布，检测到新版本可直接下载安装包\n"
-              + "· 「加入群组」—— 反馈问题、提需求\n\n"
-              + "更新不会动你的配置：版本号变了也照样保留目标与设置。");
+        try {
+            for (Tutorial.Card c : Tutorial.all()) {
+                int acc;
+                switch (c.accent) {
+                    case 1: acc = Theme.termGreen(act); break;
+                    case 2: acc = Theme.termAmber(act); break;
+                    case 3: acc = Theme.termPink(act);  break;
+                    case 4: acc = Theme.termMuted(act); break;
+                    default: acc = Theme.termCyan(act); break;
+                }
+                tutCard(box, act, Lang.tr(c.title), c.icon, c.expanded, acc,
+                        c.body, c.mono);
+            }
+        } catch (Throwable t) {
+            noteSwallowed("showTutorial.render", t);
+            TextView err = new TextView(act);
+            err.setTextSize(Theme.TS_SECOND);
+            err.setTextColor(Theme.termAmber(act));
+            err.setText(Lang.tf("教程渲染失败: {0}", t));
+            box.addView(err);
+        }
 
         sv.addView(box);
-        showDialog(act, Art.bold("TGAutoSign") + Lang.tr(" 使用教程"), sv, "关闭");
+        showDialog(act, Art.bold("TGAutoSign") + Lang.tr(" 使用手册"), sv, Lang.tr("关闭"));
     }
 
     /** 教程卡片：可折叠的标题 + 正文（复用设置页 collapseCard 的观感）。 */
     private void tutCard(LinearLayout box, Activity act, String title, String icon,
                          boolean expanded, int accent, String body) {
+        tutCard(box, act, title, icon, expanded, accent, body, false);
+    }
+
+    /**
+     * @param mono true = 等宽字体（FAQ 自查表用，中英混排对齐更整齐）
+     *
+     * 注意：正文**不再走 Lang.tr()** —— 手册内容在 Tutorial.java 里已是成品文案，
+     *   再套一层翻译表会让 i18n 门禁把它们当成"缺映射的界面文案"而报错，
+     *   同时也失去了分章排版。手册的英文版属于后续整体翻译工作，不在此处逐条塞。
+     */
+    private void tutCard(LinearLayout box, Activity act, String title, String icon,
+                         boolean expanded, int accent, String body, boolean mono) {
         Object[] c = collapseCard(act, title, icon, expanded, accent);
         LinearLayout card = (LinearLayout) c[0];
         LinearLayout cbody = (LinearLayout) c[1];
         TextView bt = new TextView(act);
-        bt.setTextSize(Theme.TS_SECOND);
+        bt.setTextSize(mono ? Theme.TS_CAPTION : Theme.TS_SECOND);
         bt.setTextColor(Theme.termMuted(act));
-        bt.setTypeface(android.graphics.Typeface.MONOSPACE);
-        bt.setLineSpacing(Theme.dp(act, 2), 1f);
-        bt.setText(Lang.tr(body));
+        bt.setTypeface(mono ? android.graphics.Typeface.MONOSPACE : Theme.text());
+        bt.setLineSpacing(Theme.dp(act, mono ? 3 : 2), 1f);
+        bt.setText(body);
         cbody.addView(bt);
         box.addView(card);
     }
@@ -11823,9 +12264,15 @@ public final class TGAutoSignCore {
         if ("list".equals(action)) { showList(act); return; }
         if ("misslist".equals(action)) { showMissList(act); return; }
         if ("todayplan".equals(action)) { showTodayPlan(act); return; }
+        if ("debug_off".equals(action)) {
+            disarmCapture("面板点停止");
+            toast(Lang.tr("捕获模式：已关闭"));
+            return;
+        }
         if (action != null && action.startsWith("cat:")) { showCategory(act, action.substring(4)); return; }
         if ("more".equals(action)) { showCategory(act, null); return; }
         if ("add".equals(action)) { showAddChooser(act); return; }
+        if ("emoji_sign".equals(action)) { showEmojiSign(act); return; }
         if ("del".equals(action)) { showDelete(act); return; }
         if ("sign".equals(action)) { showSign(act); return; }
         if ("sign_all_accounts".equals(action)) { signAllAccounts(); return; }
@@ -11953,6 +12400,38 @@ public final class TGAutoSignCore {
         if (sub.equals("shots") || sub.startsWith("shots ") || sub.equals("导出界面图")) {
             String arg = sub.length() > 5 ? sub.substring(5).trim() : null;
             exportShots(lastActivity, arg);
+            return true;
+        }
+        // ── /jmb cap [on|off] —— 捕捉模式开关（2026-10-17）──
+        // 为什么必须有：捕捉武装原来只能靠 60 秒超时或"成功捕获一次"解除，
+        //   用户中途想取消只能干等 —— 反馈"老是添加其他的签到"就是这个。
+        if (sub.equals("cap") || sub.startsWith("cap ") || sub.equals("捕捉")) {
+            String arg = sub.length() > 3 ? sub.substring(3).trim().toLowerCase(java.util.Locale.US) : "";
+            if (arg.length() == 0) {
+                // 不带参数 = 切换
+                if (captureArmed) disarmCapture("用户 /jmb cap");
+                else { captureArmed = true; captureArmedAt = System.currentTimeMillis(); captureAcc = currentAccount(); }
+            } else if ("off".equals(arg) || "关".equals(arg) || "关闭".equals(arg)) {
+                disarmCapture("用户 /jmb cap off");
+            } else if ("on".equals(arg) || "开".equals(arg) || "开启".equals(arg)) {
+                captureArmed = true; captureArmedAt = System.currentTimeMillis(); captureAcc = currentAccount();
+            } else {
+                toast(Lang.tr("用法：/jmb cap [on|off]"));
+                return true;
+            }
+            toast(captureArmed
+                    ? Lang.tr("捕获模式：已开启（60 秒内点一次目标按钮）")
+                    : Lang.tr("捕获模式：已关闭"));
+            jlog("【捕获】/jmb cap 之后 captureArmed=" + (captureArmed ? "true" : "false"));
+            return true;
+        }
+        // ── /jmb emoji —— 直达 emoji 签到面板（2026-10-17）──
+        // 注意：这**不是开关**。emoji 签到是一类"目标"，不是全局模式，
+        //   做成 on/off 会让人困惑（关掉已有的骰子目标还发不发？）。
+        //   这里只是省掉"全部功能 → 配置 → 找 tile"的两步。
+        if (sub.equals("emoji") || sub.equals("表情") || sub.equals("emoji签到")) {
+            if (lastActivity != null) showEmojiSign(lastActivity);
+            else toast(Lang.tr("请先在 TG 界面里发 /jmb"));
             return true;
         }
         return false;
@@ -13005,10 +13484,10 @@ public final class TGAutoSignCore {
             for (Map<String, Object> m : sortedTargets()) {
                 // ── 逐行独立 try（2026-10-04 修「列表少一行」）──
                 // 旧写法只有最外层一个 try：任何一行渲染时抛异常
-                // （targetRow 内部有大量反射 \/ prefs \/ 对话名查询），
+                // （targetRow 内部有大量反射 / prefs / 对话名查询），
                 // 循环直接中断 → **它后面的所有行都不画**。
                 // 表现：标题写着「目标列表（12）」而实际只列 11 行；
-                // 用户看到的「列表 8 \/ 主页 9」正是这种。
+                // 用户看到的「列表 8 / 主页 9」正是这种。
                 // 这是统计页修过的**同一类 bug**，当时列表这条链漏了。
                 try {
                     String st = statusOf(accountPrefix(), entryId(m), today);
@@ -16051,9 +16530,28 @@ public final class TGAutoSignCore {
                 if (fireMin > nowMin) continue;        // 还没到点
                 long delayMs;
                 String tag;
+                // ── 2026-10-17 A：如实标注延迟 ──
+                // 旧代码不论晚多久都写「到点签到」，用户看到"计划 10:24 实际 15:45"
+                // 只会以为调度器坏了。这里算偏差：超过 2 分钟就不是"到点"而是"补签"。
+                long lateMs = ((long) nowMin - (long) fireMin) * 60000L
+                        - c.get(java.util.Calendar.SECOND) * 1000L;
+                String when = lateMs > 120000L
+                        ? Lang.tf("计划 {0}·延迟 {1}", hhmm(fireMin), humanSpan(lateMs))
+                        : Lang.tf("计划 {0}", hhmm(fireMin));
+
+                // ── B：大额延迟（>30 分钟）额外告警一次 ──
+                // 一次就够了：toastOnce 5 分钟内去重，日志按天去重，不会刷屏。
+                if (lateMs > 30L * 60L * 1000L) {
+                    logw("[定时] 延迟告警：" + m.get("text") + " 计划 " + hhmm(fireMin)
+                         + "，实际晚了 " + humanSpan(lateMs)
+                         + "（触发时宿主进程未运行 —— 系统回收或后台受限）");
+                    toastDaily("timerlate",
+                            Lang.tr("有目标延迟签到：Telegram 后台被系统限制了。\n想准点请在系统设置里允许 TG 后台活动 / 关闭电池优化。"));
+                }
+
                 if (win) {
                     delayMs = 3000L + (long) (random.nextInt(12000));      // 窗口内：3~15 秒内签
-                    tag = "[定时] 到点签到 " + m.get("text") + "（计划 " + hhmm(fireMin) + "）";
+                    tag = "[定时] 签到 " + m.get("text") + "（" + when + "）";
                 } else {
                     long retryAt = prefs.getLong(kRetryAt(prefix, id), 0L);
                     if (System.currentTimeMillis() < retryAt) continue;
@@ -16064,7 +16562,8 @@ public final class TGAutoSignCore {
                     // 发送次数已达上限：今天不再补，等用户处置（与 sendSign 同一道闸）
                     if (isSendAttemptsExhausted(prefix, id)) continue;
                     delayMs = 60000L + (long) (random.nextInt(240000));    // 窗口后：1~5 分钟随机补
-                    tag = "[定时] 错过补签 " + m.get("text") + "（原计划 " + hhmm(fireMin) + "）约 " + (delayMs / 60000L) + " 分钟后触发";
+                    tag = "[定时] 错过补签 " + m.get("text") + "（原计划 " + hhmm(fireMin)
+                          + "，已晚 " + humanSpan(lateMs) + "）约 " + (delayMs / 60000L) + " 分钟后触发";
                     // 记「这次是补签」：只在这一条路径写（另一条 win 分支是准点到点）。
                     // 落库时刻 = 排任务的时刻，也就是"决定补签"的时刻 —— 比实际发出早
                     // 几秒到几分钟（随机延迟），但对用户"什么时候开始补的"这个问题足够准，
@@ -16887,14 +17386,22 @@ public final class TGAutoSignCore {
         ok.setText(Lang.tr("添加"));
         ok.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
             try {
-                long did = Long.parseLong(uid.getText().toString().trim());
-                String t = cmd.getText().toString().trim();
+                final String rawUid = uid.getText().toString().trim();
+                final String t = cmd.getText().toString().trim();
                 if (t.length() == 0) { toast("指令不能为空"); return; }
-                if (findTextEntry(did, t) != null) { toast("该 bot 已存在相同指令"); return; }
-                unblockBot(did);
-                learnTarget(did, t);
-                Map<String, Object> m = findTextEntry(did, t);
-                if (m != null) toast(Lang.tf("已添加 {0} → {1}", did, t));
+                inputToDidAsync(rawUid, new java.util.function.Consumer<Long>() {
+                    @Override public void accept(Long resolved) {
+                        try {
+                            long did = resolved == null ? 0L : resolved.longValue();
+                            if (did == 0L) { toast(Lang.tr("解析失败：请检查 ID，或改用 @用户名 / 数字 ID")); return; }
+                            if (findTextEntry(did, t) != null) { toast("该 bot 已存在相同指令"); return; }
+                            unblockBot(did);
+                            learnTarget(did, t);
+                            Map<String, Object> m = findTextEntry(did, t);
+                            if (m != null) toast(Lang.tf("已添加 {0} → {1}", did, t));
+                        } catch (Throwable e2) { toast(Lang.tf("添加失败: {0}", e2)); }
+                    }
+                });
             } catch (Throwable e) { toast("UID 格式错误"); }
         }});
         box.addView(ok);
@@ -16905,33 +17412,60 @@ public final class TGAutoSignCore {
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(16), dp(8), dp(16), dp(8));
-        EditText uid = adInput(act, "机器人 ID（数字，无需 @）", 1);
-        EditText cmd = adInput(act, "签到指令，如：/qd 或 签到", 0);
+        final EditText uid = adInput(act, Lang.tr("机器人 ID 或 @用户名（如 123456789 或 @xxx_bot）"), 0);
+        final EditText cmd = adInput(act, Lang.tr("签到指令，如：/qd 或 签到"), 0);
         box.addView(uid);
+        // 2026-10-17：与群聊/emoji 板块对齐 —— 直接从会话列表选，不用记 ID。
+        Button pick = mkBtn(act);
+        withIconText(act, pick, "list", Lang.tr("从会话列表选机器人"));
+        pick.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                // onlyType=1：私聊场景先只列机器人，想找群可以去群聊入口
+                try { showPickChat(act, uid, null, 1); } catch (Throwable ignored) {}
+            }
+        });
+        box.addView(pick);
         box.addView(cmd);
         Button ok = mkBtn(act);
         ok.setText(Lang.tr("添加并立即签到"));
         ok.setOnClickListener(v -> {
             try {
-                long did = Long.parseLong(uid.getText().toString().trim());
-                String t = cmd.getText().toString().trim();
-                if (t.length() == 0) { toast("指令不能为空"); return; }
-                if (findTextEntry(did, t) != null) { toast("该 bot 已存在相同指令"); return; }
-                unblockBot(did);
-                // 2026-10-09 修「添加并签到没反应」：
-                //   1) 走 userExplicit 分支，跳过"按钮学习需确认"闸（手动意图明确）；
-                //   2) 添加失败必须给出可见反馈，不能静默吞掉。
-                learnTarget(did, t, true);
-                Map<String, Object> m = findTextEntry(did, t);
-                if (m == null) {
-                    // 走到这里说明 did/text 非法或写入失败 —— 明确告诉用户，别让人以为是没点中。
-                    toast("添加失败：请检查机器人 ID 是否正确（数字）");
-                    logw("[手动添加] 未写入目标 did=" + did + " text=" + t);
-                    return;
-                }
-                toastAfterSign(sendSign(m, currentAccount()), m);
+                final String rawUid = uid.getText().toString().trim();
+                final String t = cmd.getText().toString().trim();
+                if (t.length() == 0) { toast(Lang.tr("指令不能为空")); return; }
+                // 2026-10-17：支持 @username —— 异步解析成数字 did 后再落库
+                inputToDidAsync(rawUid, new java.util.function.Consumer<Long>() {
+                    @Override public void accept(Long resolved) {
+                        try {
+                            long did = resolved == null ? 0L : resolved.longValue();
+                            if (did == 0L) {
+                                toast(Lang.tr("解析失败：请检查 ID，或改用 @用户名 / 数字 ID"));
+                                logw("[手动添加] 解析失败 raw=" + rawUid);
+                                return;
+                            }
+                            if (findTextEntry(did, t) != null) {
+                                toast(Lang.tr("该 bot 已存在相同指令"));
+                                return;
+                            }
+                            unblockBot(did);
+                            // 2026-10-09 修「添加并签到没反应」：
+                            //   1) 走 userExplicit 分支，跳过"按钮学习需确认"闸（手动意图明确）；
+                            //   2) 添加失败必须给出可见反馈，不能静默吞掉。
+                            learnTarget(did, t, true);
+                            Map<String, Object> m = findTextEntry(did, t);
+                            if (m == null) {
+                                toast(Lang.tr("添加失败：请检查机器人 ID"));
+                                logw("[手动添加] 未写入目标 did=" + did + " text=" + t);
+                                return;
+                            }
+                            toastAfterSign(sendSign(m, currentAccount()), m, true);
+                        } catch (Throwable e2) {
+                            toast(Lang.tf("添加失败: {0}", e2));
+                        }
+                    }
+                });
             } catch (Throwable e) {
-                toast("UID 格式错误");
+                toast(Lang.tr("UID 格式错误"));
             }
         });
         box.addView(ok);
@@ -16942,6 +17476,234 @@ public final class TGAutoSignCore {
         tip.setPadding(dp(4), dp(10), dp(4), dp(4));
         box.addView(tip);
         showDialog(act, "添加签到目标", box, "取消");
+    }
+
+    /**
+     * emoji 签到（2026-10-17 新增）。
+     *
+     * 为什么单独做一块：
+     *   有些 bot 的签到方式就是"发一个表情"——比如发 🎲/🎳/🎯 任一个普通签到、发 🎰 疯狂签到。
+     *   这类指令不是 /命令，用户很难猜、也不该被要求记 emoji 的码点。给一个面板：
+     *   选 bot + 点表情（可多选）就完事，底层仍是普通文本目标（KIND_TEXT），
+     *   发送走 sendMessage，所以判定、重试、统计、补签全部沿用既有链路，不引入第二套。
+     *
+     * 多选的意义：同一 bot 往往有"普通签到"和"疯狂签到"两条，各自是一个表情目标。
+     *   勾几个就加几条，id 由 nextEntryId 自动分配，互不覆盖。
+     */
+    private void showEmojiSign(final Activity act) {
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(8), dp(16), dp(8));
+
+        // ── ① 目标 bot ──
+        TextView t1 = new TextView(act);
+        t1.setTextSize(Theme.TS_SECOND);
+        t1.setTextColor(Theme.termMuted(act));
+        t1.setText(Lang.tr("① 填机器人 ID（数字），或从会话里选"));
+        box.addView(t1);
+        final EditText uid = adInput(act, Lang.tr("机器人 ID 或 @用户名（如 123456789 或 @xxx_bot）"), 0);
+        box.addView(uid);
+        Button pick = mkBtn(act);
+        withIconText(act, pick, "list", Lang.tr("从会话列表选"));
+        final EditText cmdDummy = null;
+        pick.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                try { showPickChat(act, uid, null); } catch (Throwable ignored) {}
+            }
+        });
+        box.addView(pick);
+
+        // ── ② 选表情 ──
+        TextView t2 = new TextView(act);
+        t2.setTextSize(Theme.TS_SECOND);
+        t2.setTextColor(Theme.termMuted(act));
+        t2.setPadding(0, dp(10), 0, 0);
+        t2.setText(Lang.tr("② 点选要发的表情（可多选，每个表情会成为一条目标）"));
+        box.addView(t2);
+
+        // 预设：骰子 / 保龄球 / 靶心 / 老虎机（覆盖常见签到 bot）
+        final String[] PRESET = {"\uD83C\uDFB2", "\uD83C\uDFB3", "\uD83C\uDFAF", "\uD83C\uDFB0"};
+        final String[] PRESET_NAME = {Lang.tr("骰子"), Lang.tr("保龄球"), Lang.tr("靶心"), Lang.tr("老虎机")};
+        final boolean[] picked = new boolean[PRESET.length];
+        final java.util.List<TextView> chips = new java.util.ArrayList<TextView>();
+
+        LinearLayout grid = new LinearLayout(act);
+        grid.setOrientation(LinearLayout.HORIZONTAL);
+        for (int i = 0; i < PRESET.length; i++) {
+            final int idx = i;
+            final LinearLayout cell = new LinearLayout(act);
+            cell.setOrientation(LinearLayout.VERTICAL);
+            cell.setGravity(Gravity.CENTER);
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, -2, 1f);
+            clp.setMargins(dp(3), dp(3), dp(3), dp(3));
+            cell.setLayoutParams(clp);
+            cell.setPadding(dp(4), dp(8), dp(4), dp(8));
+            cell.setBackground(termBorder(act, Theme.termCard(act),
+                    Theme.withAlpha(Theme.termCyan(act), 0x33)));
+
+            TextView em = new TextView(act);
+            em.setTextSize(24f);
+            em.setGravity(Gravity.CENTER);
+            em.setText(PRESET[i]);
+            cell.addView(em, new LinearLayout.LayoutParams(-1, -2));
+
+            final TextView nm = new TextView(act);
+            nm.setTextSize(Theme.TS_CAPTION);
+            nm.setGravity(Gravity.CENTER);
+            nm.setTextColor(Theme.termMuted(act));
+            nm.setText(PRESET_NAME[i]);
+            LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(-1, -2);
+            nlp.topMargin = dp(2);
+            cell.addView(nm, nlp);
+
+            chips.add(nm);
+            cell.setClickable(true);
+            cell.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    picked[idx] = !picked[idx];
+                    // 选中：主色描边 + 主色文字；未选：淡描边 + 弱色
+                    int c = picked[idx] ? Theme.termCyan(act) : Theme.termMuted(act);
+                    cell.setBackground(termBorder(act, Theme.termCard(act),
+                            Theme.withAlpha(c, picked[idx] ? 0xAA : 0x33)));
+                    nm.setTextColor(c);
+                    nm.setText(PRESET_NAME[idx] + (picked[idx] ? " \u2713" : ""));
+                }
+            });
+            grid.addView(cell);
+        }
+        box.addView(grid, new LinearLayout.LayoutParams(-1, -2));
+
+        // ── ③ 自定义（任意 emoji / 文本） ──
+        TextView t3 = new TextView(act);
+        t3.setTextSize(Theme.TS_SECOND);
+        t3.setTextColor(Theme.termMuted(act));
+        t3.setPadding(0, dp(10), 0, 0);
+        t3.setText(Lang.tr("③ 或者自己填（任意表情或指令，留空即可）"));
+        box.addView(t3);
+        final EditText custom = adInput(act, Lang.tr("例如 🎲 或 /checkin 或 :dice:"), 0);
+        box.addView(custom);
+
+        // ── 保存 ──
+        Button ok = mkBtnPrimary(act);
+        ok.setText(Lang.tr("添加并签到"));
+        ok.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                try {
+                    String raw = uid.getText().toString().trim();
+                    if (raw.isEmpty()) { toast(Lang.tr("请填机器人 ID")); return; }
+
+                    // 收集要加的表情（与 ID 解析并行准备，解析完直接用）
+                    final java.util.List<String> want = new java.util.ArrayList<String>();
+                    for (int i = 0; i < PRESET.length; i++) if (picked[i]) want.add(PRESET[i]);
+                    String cu = custom.getText().toString().trim();
+                    if (cu.length() > 0) {
+                        // 支持 :dice: 这类 shortcode —— TG 客户端输入时会自动转成 emoji，
+                        // 但这里是模块自己发文本，不会被客户端转换，所以做一张常见短码表兜住。
+                        want.add(emojiFromShortcode(cu));
+                    }
+                    if (want.isEmpty()) { toast(Lang.tr("请至少选一个表情或填一个指令")); return; }
+
+                    // 支持数字 ID 与 @username：异步解析完再落库（网络请求不能占主线程）
+                    inputToDidAsync(raw, new java.util.function.Consumer<Long>() {
+                        @Override public void accept(Long resolved) {
+                            try {
+                                long did = resolved == null ? 0L : resolved.longValue();
+                                if (did == 0L) {
+                                    toast(Lang.tr("解析失败：请检查 ID，或改用 @用户名 / 数字 ID"));
+                                    logw("[emoji 签到] 解析失败 raw=" + raw);
+                                    return;
+                                }
+                                unblockBot(did);
+                                int added = 0, dup = 0;
+                                Map<String, Object> firstAdded = null;
+                                for (String t : want) {
+                                    if (t == null || t.length() == 0) continue;
+                                    if (findTextEntry(did, t) != null) { dup++; continue; }
+                                    learnTarget(did, t, true);
+                                    Map<String, Object> m = findTextEntry(did, t);
+                                    if (m != null) {
+                                        // 骰子类表情（🎲🎯🎳⚽🎰🎱）标成动态发送，
+                                        // 否则发出去只是一条静态 emoji 文本，bot 不认。
+                                        if (isDiceEmoji(t)) {
+                                            try {
+                                                m.put("dice", Boolean.TRUE);
+                                                persistEntry(accountPrefix(), m);
+                                            } catch (Throwable ignored) {}
+                                        }
+                                        added++;
+                                        if (firstAdded == null) firstAdded = m;
+                                    }
+                                }
+                                if (added == 0) {
+                                    toast(dup > 0 ? Lang.tr("这些表情都已经添加过了")
+                                                  : Lang.tr("添加失败：请检查机器人 ID"));
+                                    return;
+                                }
+                                toast(Lang.tf("已添加 {0} 条 emoji 目标{1}", added,
+                                        dup > 0 ? Lang.tf("（{0} 条重复已跳过）", dup) : ""));
+                                if (firstAdded != null) {
+                                    // quietOnSuccess：上面已经提示"已添加 N 条"，这里不再弹"已发起签到"
+                                    toastAfterSign(sendSign(firstAdded, currentAccount()), firstAdded, true);
+                                }
+                            } catch (Throwable t2) { toast(Lang.tf("添加失败: {0}", t2)); }
+                        }
+                    });
+                } catch (Throwable t) { toast(Lang.tf("添加失败: {0}", t)); }
+            }
+        });
+        box.addView(ok);
+
+        TextView tip = new TextView(act);
+        tip.setTextSize(Theme.TS_CAPTION);
+        tip.setTextColor(Theme.termMuted(act));
+        tip.setPadding(dp(4), dp(10), dp(4), dp(4));
+        tip.setText(Lang.tr("同一 bot 可以有多个表情目标（普通签到与疯狂签到各一条）；\n添加后会立即发送第一条，其余靠定时/手动触发。"));
+        box.addView(tip);
+
+        showDialog(act, Lang.tr("emoji 签到"), box, Lang.tr("取消"));
+    }
+
+    /**
+     * 常见 emoji shortcode → 真实字符。
+     *
+     * 为什么需要：TG 客户端里输入 :dice: 会**自动**变成 🎲，但模块是直接往
+     * sendMessage 里塞字符串，不会经过客户端那层转换。用户从别处抄来 :dice:
+     * 粘进来，若不转换就会原样发出 ":dice:" 这个文本 —— bot 当然不认。
+     * 只收录签到场景常见的几个，不做全量表（全量表要几百行，收益不成比例）。
+     */
+    static String emojiFromShortcode(String s) {
+        if (s == null) return "";
+        String k = s.trim().toLowerCase(java.util.Locale.US);
+        if (!k.startsWith(":") || !k.endsWith(":") || k.length() < 3) return s;
+        String name = k.substring(1, k.length() - 1);
+        switch (name) {
+            case "dice":            return "\uD83C\uDFB2";
+            case "bowling":         return "\uD83C\uDFB3";
+            case "dart":
+            case "darts":           return "\uD83C\uDFAF";
+            case "slot_machine":
+            case "slotmachine":     return "\uD83C\uDFB0";
+            case "game_die":        return "\uD83C\uDFB2";
+            case "8ball":
+            case "billiards":       return "\uD83C\uDFB1";
+            case "video_game":      return "\uD83C\uDFAE";
+            case "check":
+            case "white_check_mark":return "\u2705";
+            case "star":            return "\u2B50";
+            case "fire":            return "\uD83D\uDD25";
+            case "clap":            return "\uD83D\uDC4F";
+            case "ok_hand":         return "\uD83D\uDC4C";
+            case "pray":            return "\uD83D\uDE4F";
+            case "thumbsup":
+            case "+1":              return "\uD83D\uDC4D";
+            case "tada":            return "\uD83C\uDF89";
+            case "gift":            return "\uD83C\uDF81";
+            case "trophy":          return "\uD83C\uDFC6";
+            case "moneybag":        return "\uD83D\uDCB0";
+            case "calendar":        return "\uD83D\uDCC5";
+            case "sunny":           return "\u2600";
+            default:                return s;   // 不认识就原样保留（可能是用户自己的短码）
+        }
     }
 
     private void showDelete(Activity act) {
@@ -17383,6 +18145,10 @@ public final class TGAutoSignCore {
                     putCfg(ed, "theme_style", Theme.styleKey());
                     putCfg(ed, "cal_style", CAL_STYLE);
                     putCfg(ed, "skip_nav", R.skipNavSw != null && R.skipNavSw.isChecked());
+                    if (R.savedMsgSw != null) {
+                        SAVED_MSG_ON = R.savedMsgSw.isChecked();
+                        putCfg(ed, "saved_msg", SAVED_MSG_ON);
+                    }
                     putCfg(ed, "btn_confirm", BUTTON_LEARN_CONFIRM);
                     putCfg(ed, "del_after_sign", R.delAfterSw != null && R.delAfterSw.isChecked());
                     putCfg(ed, "learn_force", LEARN_FORCE == null ? "" : LEARN_FORCE);
@@ -21195,10 +21961,17 @@ public final class TGAutoSignCore {
                             return;
                         }
                         // 没有明确失败词 → 有回复即算成功
+                        // ── 2026-10-16：**必须「今天在途」才算成功** ──
+                        // 否则用户点 bot 的其它按钮（看资料/菜单/其它功能），bot 回了内容
+                        // 也被判成签到成功 → 弹「签到完成」(用户反馈)。
+                        // 与失败分支对齐：sent_at_ 在 PENDING_TTL 窗口内才算"在等这次签到"。
                         int lz = 0;
+                        long lnow = System.currentTimeMillis();
                         for (Map<String, Object> m : judgeTargets) {
                             if (entryDid(m) != did) continue;
                             String lid = entryId(m);
+                            long lSent = prefs.getLong(prefix + "sent_at_" + lid, 0L);
+                            if (lSent <= 0L || lnow - lSent > PENDING_TTL_MS) continue;   // ★ 只有在途
                             prefs.edit().putInt(kRetry(prefix, lid), 0)
                                  .remove(kRetryAt(prefix, lid)).remove(kRetryDay(prefix, lid)).apply();
                             markSigned(prefix, lid);
@@ -22830,6 +23603,18 @@ public final class TGAutoSignCore {
         R.notifySw = swRow(act, "签到结果通知", NOTIFY_ON);
         R.notifySw.setTextSize(Theme.TS_BODY);
         cardN.addView(R.notifySw);
+        // 2026-10-17：收藏夹摘要单独控制 —— 想关掉收藏夹里那堆记录、
+        // 但保留通知的人（"强迫症受不了"）终于可以各关各的。
+        R.savedMsgSw = swRow(act, "收藏夹摘要", SAVED_MSG_ON);
+        R.savedMsgSw.setTextSize(Theme.TS_BODY);
+        cardN.addView(R.savedMsgSw);
+        TextView savedTip = new TextView(act);
+        savedTip.setTextSize(Theme.TS_CAPTION);
+        savedTip.setTextColor(Theme.termMuted(act));
+        savedTip.setTypeface(Theme.text());
+        savedTip.setPadding(dp(4), 0, dp(4), dp(6));
+        savedTip.setText(Lang.tr("关掉后不再往「收藏夹」发每日摘要与失败告警；不影响上面的通知。"));
+        cardN.addView(savedTip);
         R.notifyFailSw = swRow(act, "只通知失败", NOTIFY_FAIL_ONLY);
         R.notifyFailSw.setTextSize(Theme.TS_BODY);
         cardN.addView(R.notifyFailSw);

@@ -389,6 +389,30 @@ public final class SignLogic {
     // ════════════════════════════════════════════════════════════════
 
 
+    /**
+     * 文本里是否含 emoji / 符号类码点（2026-10-17）。
+     *
+     * 为什么需要：emoji 在 Java char 上是**代理对**（U+1F3B2 = \uD83C\uDFB2），
+     *   Character.isLetterOrDigit 对代理项一律 false，stripDecor 会整对丢弃。
+     *   这里用 codePoint 遍历判断，才认得出生 🎲 这类。
+     */
+    public static boolean hasEmojiOrSymbol(String s) {
+        if (s == null || s.length() == 0) return false;
+        for (int i = 0; i < s.length(); ) {
+            int cp = s.codePointAt(i);
+            i += Character.charCount(cp);
+            if (cp <= 0x20) continue;                      // 空白跳过
+            int t = Character.getType(cp);
+            if (t == Character.OTHER_SYMBOL || t == Character.MATH_SYMBOL
+                    || t == Character.MODIFIER_SYMBOL || t == Character.OTHER_PUNCTUATION
+                    || t == Character.CURRENCY_SYMBOL || t == Character.SURROGATE
+                    || cp >= 0x1F000) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** 去掉常见装饰符与表情，便于比对（← → « » ⬅ ➡ 🔙 等） */
     private static String stripDecor(String s) {
         if (s == null) return "";
@@ -464,7 +488,12 @@ public final class SignLogic {
             if (s.length() == 0) return false;
             if (s.startsWith("/")) return true;
             String bare = stripDecor(s);
-            if (bare.length() == 0) return false;
+            // 2026-10-17：纯 emoji 口令也算 —— 有些 bot 的签到就是"发一个 🎲 / 🎳 / 🎯"。
+            // stripDecor 会把这些符号全丢掉，bare 为空 → 旧逻辑判"不像口令"，
+            // 于是群里发的 emoji 签到永远学不进来。现在按"原文全是符号且很短"放行。
+            if (bare.length() == 0) {
+                return (s.length() <= COMMAND_MAX_RAW) && hasEmojiOrSymbol(s);
+            }
             if (bare.length() > COMMAND_MAX_BARE) return false;
             // 太长的原文同样可疑（夹在一句话里）
             if (s.length() > COMMAND_MAX_RAW) return false;

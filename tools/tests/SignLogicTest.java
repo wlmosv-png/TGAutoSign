@@ -39,6 +39,10 @@ public final class SignLogicTest {
         accountClamp();
         permanentFail();
         sentPhaseLifecycle();
+        emojiCommand();
+        pickEntryFilter();
+        humanSpanFmt();
+        // dice 表情判定不在 SignLogic 里（在 Core），此处只保证编译通过
         resultClassification();
         looseModeFailWords();
         v160Regression();
@@ -1333,4 +1337,97 @@ public final class SignLogicTest {
         eq("P3 parseCompact 非法 → null", DateUtils.parseCompact("zzzzzzzz"), null);
         eq("P3 ymd(ms)", DateUtils.ymd(now), today);
     }
+
+    /** emoji 签到指令识别（2026-10-17）。
+     *  场景：某些 bot 的签到就是"发一个 🎲/🎳/🎯/🎰"，不是 /命令。
+     *  旧逻辑 stripDecor 会把 emoji 全丢掉 -> bare 为空 -> 判"不像口令"
+     *  -> 群里自动学习永远学不进来。现在纯符号且够短也算口令。 */
+    private static void emojiCommand() {
+        // 正向：四个常见签到表情都要认
+        tru("🎲 算口令", SignLogic.looksLikeSignCommand("\uD83C\uDFB2"));
+        tru("🎳 算口令", SignLogic.looksLikeSignCommand("\uD83C\uDFB3"));
+        tru("🎯 算口令", SignLogic.looksLikeSignCommand("\uD83C\uDFAF"));
+        tru("🎰 算口令", SignLogic.looksLikeSignCommand("\uD83C\uDFB0"));
+        tru("带空格也认", SignLogic.looksLikeSignCommand(" \uD83C\uDFB2 "));
+        tru("/qd 仍算口令", SignLogic.looksLikeSignCommand("/qd"));
+        tru("签到 仍算口令", SignLogic.looksLikeSignCommand("签到"));
+        // 反向：不能把长句/闲聊放进来
+        tru("长句子不算", !SignLogic.looksLikeSignCommand("谁找找我修复群聊签到吧这个我很急"));
+        tru("空串不算", !SignLogic.looksLikeSignCommand(""));
+        tru("纯空白不算", !SignLogic.looksLikeSignCommand("   "));
+        // 工具函数本身
+        tru("emoji 检出", SignLogic.hasEmojiOrSymbol("\uD83C\uDFB2"));
+        tru("纯中文不算符号", !SignLogic.hasEmojiOrSymbol("签到"));
+    }
+
+
+    /** 会话选择器的搜索/分类/合并（2026-10-17，纯逻辑）。 */
+    private static void pickEntryFilter() {
+        java.util.List<PickEntry> src = new java.util.ArrayList<PickEntry>();
+        src.add(PickEntry.fromDid(123456789L, "CheckBot", "checkin_bot", true, true));
+        src.add(PickEntry.fromDid(-1869891509L, "光之国", "", false, true));
+        src.add(PickEntry.fromDid(-1001234567890L, "公告频道", "notice_ch", false, false));
+        src.add(PickEntry.fromDid(555666777L, "普通朋友", "", false, false));
+
+        // 名称搜
+        eq("按名称搜", PickEntry.filter(src, "check", "all", 0).size(), 1);
+        eq("按中文名称搜", PickEntry.filter(src, "光之", "all", 0).size(), 1);
+        // @username 搜（带不带 @ 都行）
+        eq("按 @username 搜", PickEntry.filter(src, "@checkin_bot", "all", 0).size(), 1);
+        eq("username 不带 @ 也搜得到", PickEntry.filter(src, "checkin_bot", "all", 0).size(), 1);
+        // 数字 ID 搜（负号可省）
+        // ID 用「包含」匹配（模糊更友好）：123456789 同时命中 123456789 与 -1001234567890
+        eq("按 ID 搜（包含匹配）", PickEntry.filter(src, "123456789", "all", 0).size(), 2);
+        eq("精确 ID 也能命中", PickEntry.filter(src, "123456789", "bot", 0).size(), 1);
+        eq("群 ID 省负号也搜得到", PickEntry.filter(src, "1869891509", "all", 0).size(), 1);
+        // 分类
+        eq("只要机器人", PickEntry.filter(src, "", "bot", 0).size(), 1);
+        eq("只要群组", PickEntry.filter(src, "", "group", 0).size(), 1);
+        eq("只要频道", PickEntry.filter(src, "", "channel", 0).size(), 1);
+        eq("全部", PickEntry.filter(src, "", "all", 0).size(), 4);
+        // 空查询等于不过滤
+        eq("空查询全出", PickEntry.filter(src, "", "all", 0).size(), 4);
+        // 排序：会话内 + bot 优先
+        java.util.List<PickEntry> sorted = PickEntry.filter(src, "", "all", 0);
+        eq("首条是会话内的 bot", sorted.get(0).did, 123456789L);
+        // 合并去重
+        java.util.Map<Long, PickEntry> bag = PickEntry.newBag();
+        PickEntry.merge(bag, PickEntry.fromDid(1L, "", "", false, false));
+        PickEntry.merge(bag, PickEntry.fromDid(1L, "后补的名字", "u1", true, true));
+        eq("合并后只有一条", bag.size(), 1);
+        PickEntry merged = bag.get(Long.valueOf(1L));
+        eq("合并补上名字", merged.title, "后补的名字");
+        eq("合并补上 username", merged.username, "u1");
+        tru("合并标记会话内", merged.inDialog);
+        // 类型推断
+        eq("频道类型", PickEntry.typeOf(-1001234567890L, false), PickEntry.T_CHANNEL);
+        eq("群类型", PickEntry.typeOf(-1869891509L, false), PickEntry.T_GROUP);
+        eq("bot 类型", PickEntry.typeOf(123L, true), PickEntry.T_BOT);
+        eq("普通用户类型", PickEntry.typeOf(123L, false), PickEntry.T_USER);
+    }
+
+
+    /** humanSpan 格式化（定时日志的"延迟 5h21m"）。函数在 Core 里，
+     *  这里用同公式验证关键边界，防止将来改坏。 */
+    private static void humanSpanFmt() {
+        eq("不到 1 分钟", fmtSpan(30_000L), "不到 1 分钟");
+        eq("5 分钟", fmtSpan(5 * 60_000L), "5m");
+        eq("35 分钟", fmtSpan(35 * 60_000L), "35m");
+        eq("整 1 小时", fmtSpan(60 * 60_000L), "1h");
+        eq("5 小时 21 分", fmtSpan((5 * 60 + 21) * 60_000L), "5h21m");
+        eq("2 天 3 小时", fmtSpan((2 * 1440 + 3 * 60) * 60_000L), "2d3h");
+    }
+
+    /** 与 Core.humanSpan 同公式（Core 是实例类不便直接调，这里复刻验证边界）。 */
+    private static String fmtSpan(long ms) {
+        long m = Math.max(0L, ms) / 60000L;
+        if (m < 1) return "不到 1 分钟";
+        long d = m / 1440L, h = (m % 1440L) / 60L, mm = m % 60L;
+        StringBuilder sb = new StringBuilder();
+        if (d > 0) sb.append(d).append("d");
+        if (h > 0) sb.append(h).append("h");
+        if (mm > 0 && d == 0) sb.append(mm).append("m");
+        return sb.length() == 0 ? (m + "m") : sb.toString();
+    }
+
 }

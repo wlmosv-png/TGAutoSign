@@ -1158,6 +1158,72 @@ public final class Lang {
         // ── 统计页 v5：本周/本月对比 + 主面板战报（2026-10-16）──
         EN.put("本周 / 本月", "WEEK / MONTH");
         EN.put("本周", "This week");
+        // ── emoji 签到（2026-10-17）──
+        EN.put("emoji 签到", "EMOJI SIGN-IN");
+        // ── 会话选择器（2026-10-17）──
+        EN.put("选择会话", "Pick a chat");
+        EN.put(" 使用手册", " Handbook");
+        EN.put("手册 · 先用「新手 30 秒」走通，遇到问题查第 9 章「常见疑问 · 自查表」",
+               "Handbook - start with Quick Start, then see chapter 9 FAQ for troubleshooting");
+        EN.put("教程渲染失败: {0}", "Failed to render handbook: {0}");
+        EN.put("计划 {0}", "planned {0}");
+        EN.put("计划 {0}·延迟 {1}", "planned {0}, delayed {1}");
+        EN.put("有目标延迟签到：Telegram 后台被系统限制了。\n想准点请在系统设置里允许 TG 后台活动 / 关闭电池优化。",
+               "Some targets signed late: Android limited Telegram in background.\nAllow background activity / disable battery optimisation for TG to get on-time signing.");
+        EN.put("捕获中 · 点此停止", "Capturing - tap to stop");
+        EN.put("捕获已开启（60 秒）：去 bot 会话点一次它的按钮即可；不想捕获了发 /jmb cap 关闭",
+               "Capture ON (60s): tap the target button in the bot chat; send /jmb cap to cancel");
+        EN.put("捕获模式：已关闭", "Capture mode: OFF");
+        EN.put("捕获模式：已开启（60 秒内点一次目标按钮）",
+               "Capture mode: ON (tap a target button within 60s)");
+        EN.put("用法：/jmb cap [on|off]", "Usage: /jmb cap [on|off]");
+        EN.put("请先在 TG 界面里发 /jmb", "Send /jmb inside Telegram first");
+        EN.put("收藏夹摘要", "Saved Messages digest");
+        EN.put("关掉后不再往「收藏夹」发每日摘要与失败告警；不影响上面的通知。",
+               "Stops sending daily digest and failure alerts to Saved Messages; notifications above are unaffected.");
+        EN.put("从会话列表选机器人", "Pick a bot from chats");
+        EN.put("签到指令，如：/qd 或 签到", "Sign command, e.g. /qd or checkin");
+        EN.put("机器人 ID 或 @用户名（如 123456789 或 @xxx_bot）",
+               "Bot ID or @username (e.g. 123456789 or @xxx_bot)");
+        EN.put("群 ID 或 @用户名（如 -1001234567890 或 @xxx）",
+               "Group ID or @username (e.g. -1001234567890 or @xxx)");
+        EN.put("正在解析 {0} …", "Resolving {0} ...");
+        EN.put("解析失败：请检查 ID，或改用 @用户名 / 数字 ID",
+               "Resolve failed: check the ID, or use @username / numeric ID");
+        EN.put("搜索：名称 / @用户名 / ID", "Search: name / @username / ID");
+        EN.put("全部", "All");
+        EN.put("机器人", "Bots");
+        EN.put("群组", "Groups");
+        EN.put("频道", "Channels");
+        EN.put("这里没有可选项", "Nothing to pick here");
+        EN.put("没有匹配的会话。试试只输名字的一部分，或直接输 ID。",
+               "No match. Try part of the name, or enter the ID directly.");
+        EN.put("拿不到会话列表：先打开一次 TG 主界面再试",
+               "Cannot read chats: open the Telegram chat list once and retry");
+        EN.put("打开选择器失败: {0}", "Failed to open picker: {0}");
+        EN.put("找不到想要的？去 TG 里给这个 bot 发一条任意消息，再回来这里就能看到。\n也可以直接在上面搜索框输 @用户名。",
+               "Cannot find it? Send any message to that bot in Telegram, then come back.\nYou can also type @username in the search box.");
+        EN.put("骰子·表情指令", "Dice / emoji command");
+        EN.put("① 填机器人 ID（数字），或从会话里选", "1) Enter bot ID (numeric), or pick a chat");
+        EN.put("机器人或群 ID（数字，无需 @）", "Bot or group ID (numeric, no @)");
+        EN.put("从会话列表选", "Pick from chats");
+        EN.put("② 点选要发的表情（可多选，每个表情会成为一条目标）", "2) Tap emoji to send (multi-select, each becomes a target)");
+        EN.put("骰子", "Dice");
+        EN.put("保龄球", "Bowling");
+        EN.put("靶心", "Dart");
+        EN.put("老虎机", "Slot machine");
+        EN.put("③ 或者自己填（任意表情或指令，留空即可）", "3) Or type your own (emoji or command, optional)");
+        EN.put("例如 🎲 或 /checkin 或 :dice:", "e.g. 🎲 or /checkin or :dice:");
+        EN.put("添加并签到", "Add & sign");
+        EN.put("请填机器人 ID", "Please enter the bot ID");
+        EN.put("ID 必须是数字", "ID must be numeric");
+        EN.put("请至少选一个表情或填一个指令", "Pick at least one emoji or enter a command");
+        EN.put("这些表情都已经添加过了", "These emoji targets already exist");
+        EN.put("添加失败：请检查机器人 ID", "Add failed: check the bot ID");
+        EN.put("已添加 {0} 条 emoji 目标{1}", "Added {0} emoji target(s){1}");
+        EN.put("（{0} 条重复已跳过）", " ({0} duplicate skipped)");
+        EN.put("同一 bot 可以有多个表情目标（普通签到与疯狂签到各一条）；\n添加后会立即发送第一条，其余靠定时/手动触发。",
+               "One bot can have several emoji targets (normal and crazy sign-in each);\nthe first one is sent immediately, the rest follow timers or manual triggers.");
         EN.put("本月", "This month");
         EN.put("今日 {0}/{1} 已签完", "{0}/{1} done today");
         EN.put("今日 {0}/{1} 已签完 · 连续 {2} 天", "{0}/{1} done today · {2}d streak");

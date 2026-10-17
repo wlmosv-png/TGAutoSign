@@ -31,6 +31,7 @@ public final class SettingsRefs {
     public Switch timerSw;      // 定时签到
     public Switch missBackSw;   // 错过补签
     public Switch notifySw;     // 签到结果通知
+    public Switch savedMsgSw;   // 收藏夹摘要（2026-10-17 独立开关）
     public Switch notifyFailSw; // 只通知失败
     public Switch autoLearnSw;  // 按钮学习
     public Switch autoLearnNetSw;       // 网络学习
