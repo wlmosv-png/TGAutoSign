@@ -235,7 +235,12 @@ public final class GroupScopeTest {
         // ④ 边角
         eq("空串", Boolean.FALSE, Boolean.valueOf(SignLogic.looksLikeSignCommand("")));
         eq("null", Boolean.FALSE, Boolean.valueOf(SignLogic.looksLikeSignCommand(null)));
-        eq("纯 emoji", Boolean.FALSE, Boolean.valueOf(SignLogic.looksLikeSignCommand("🌵🌵🌵")));
+        // 2026-10-17 反转：有 bot 的签到就是发一个 emoji，纯符号短串算口令。
+        eq("纯 emoji 短串 → 算口令", Boolean.TRUE,
+           Boolean.valueOf(SignLogic.looksLikeSignCommand("🌵🌵🌵")));
+        // 但超长 emoji 串仍不算（防刷屏/长句误学）
+        eq("超长 emoji 串 → 不算口令", Boolean.FALSE,
+           Boolean.valueOf(SignLogic.looksLikeSignCommand("🌵🌵🌵🌵🌵🌵🌵🌵🌵🌵🌵🌵🌵🌵🌵🌵🌵🌵🌵🌵")));
     }
 
     private static UnkPool.Item mkItem(String text, long chat, long from, String tid) {

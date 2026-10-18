@@ -54,6 +54,11 @@ public final class SignLogicTest {
         p0ComboFalsePositive();
         p2UpdateLogic();
         p3DateUtils();
+        bareFailContext();
+        announcementFilter();
+        poolFilterEdge();
+        scopedBareGuard();
+        autoAddButtonScope();
 
         System.out.println("----------------------------------------");
         System.out.println("通过 " + passed + " / 失败 " + failed.size());
@@ -1429,5 +1434,260 @@ public final class SignLogicTest {
         if (mm > 0 && d == 0) sb.append(mm).append("m");
         return sb.length() == 0 ? (m + "m") : sb.toString();
     }
+
+
+    /** ── 裸失败词语境守卫（2026-10-17）────────────────────────────
+     *
+     *  背景：用户反馈两个 bot 长期「失败」。
+     *  · 7601994292 每次命中「未注册」
+     *  · 8500640583 每次命中「拉黑」，连续 4 天 7 次
+     *  而 7601 同一秒又收到「您今天已经签到过了」——
+     *  说明判的是**模板句**，不是签到结论。
+     *
+     *  修法：裸短词命中后过语境校验（条件连词 / 短句 / 是否指向用户）。
+     */
+    private static void bareFailContext() {
+        // ── 真失败：必须仍判失败 ──
+        tru("你已被拉黑 → 失败",
+            SignLogic.verdictOf("你已被管理员拉黑，无法使用本功能",
+                null, new String[0], SignLogic.FAIL_WORDS_DEFAULT) == SignLogic.V_FAILED);
+        tru("未注册用户无法使用 → 失败",
+            SignLogic.verdictOf("您还未注册，请先 /start 完成注册后再使用",
+                null, new String[0], SignLogic.FAIL_WORDS_DEFAULT) == SignLogic.V_FAILED);
+        tru("短句 未注册 → 失败",
+            SignLogic.verdictOf("未注册", null, new String[0], SignLogic.FAIL_WORDS_DEFAULT)
+                == SignLogic.V_FAILED);
+        tru("短句 无权限操作 → 失败",
+            SignLogic.verdictOf("无权限操作", null, new String[0], SignLogic.FAIL_WORDS_DEFAULT)
+                == SignLogic.V_FAILED);
+        tru("禁止你使用 → 失败",
+            SignLogic.verdictOf("管理员已禁止你使用本机器人",
+                null, new String[0], SignLogic.FAIL_WORDS_DEFAULT) == SignLogic.V_FAILED);
+
+        // ── 模板句：不能判失败（本次修复的核心）──
+        tru("公告 点了会被拉黑 → 不作废为失败",
+            SignLogic.verdictOf("⚠️ 广告是骗子，点了会被拉黑，请注意甄别，保护好自己的账号安全",
+                null, new String[0], SignLogic.FAIL_WORDS_DEFAULT) != SignLogic.V_FAILED);
+        tru("公告 否则封禁 → 不判失败",
+            SignLogic.verdictOf("请勿重复刷屏，否则封禁处理，谢谢配合，祝您使用愉快",
+                null, new String[0], SignLogic.FAIL_WORDS_DEFAULT) != SignLogic.V_FAILED);
+        tru("公告 未注册用户无法使用(长句无主语) → 不判失败",
+            SignLogic.verdictOf("本机器人由情报部维护，未注册用户无法使用部分功能，请先完成注册流程",
+                null, new String[0], SignLogic.FAIL_WORDS_DEFAULT) != SignLogic.V_FAILED);
+        tru("公告 禁止刷屏 → 不判失败",
+            SignLogic.verdictOf("群内禁止刷屏禁止广告禁止私聊，违者踢出，感谢大家的配合与支持",
+                null, new String[0], SignLogic.FAIL_WORDS_DEFAULT) != SignLogic.V_FAILED);
+
+        // ── 用户自定义词不受守卫限制（用户亲自确认过的语义）──
+        tru("自定义词 拉黑 仍判失败",
+            SignLogic.verdictOf("广告是骗子点了会被拉黑请注意",
+                null, new String[0],
+                new String[]{"拉黑"}) == SignLogic.V_FAILED);
+
+        // ── 守卫纯函数直测 ──
+        tru("isBareFailWord 拉黑", SignLogic.isBareFailWord("拉黑"));
+        tru("isBareFailWord 未注册", SignLogic.isBareFailWord("未注册"));
+        tru("isBareFailWord 签到失败=false", !SignLogic.isBareFailWord("签到失败"));
+        tru("条件句 会被拉黑 → 不支持",
+            !SignLogic.bareFailSupported("广告是骗子点了会被拉黑请注意甄别", "拉黑"));
+        tru("短句 → 支持", SignLogic.bareFailSupported("无权限操作", "无权限"));
+        tru("有代词长句 → 支持",
+            SignLogic.bareFailSupported("您还未注册请先完成注册后再使用本机器人", "未注册"));
+        tru("长句无主语 → 不支持（不认可为真失败）",
+            !SignLogic.bareFailSupported("本机器人未注册用户无法使用部分功能请先完成注册流程", "未注册"));
+    }
+
+
+
+    /** ── 公告不进池（2026-10-18）────────────────────────────────
+     *
+     *  用例全部来自用户真实日志 / 截图里那批「废话回复」。
+     *  目标：广告、公告、免责、菜单一律不进未识别池；
+     *        而真正的签到结果哪怕措辞奇怪也必须进池（宁可漏挡不可误挡）。
+     */
+    private static void announcementFilter() {
+        // ── 必须判为公告（不进池）──
+        tru("防骗公告 → 公告",
+            SignLogic.isLikelyAnnouncement(
+                "上方出现广告🚫骗子请不要上当⛔️⚠️该广告非kali社工库官方投放机器人官方频道聊天中带"));
+        tru("价格表公告 → 公告",
+            SignLogic.isLikelyAnnouncement(
+                "抬头向上看咱们今日路线查询价格表如机器人提示被注销或无法使用可以尝试用下方的其他机器人"));
+        tru("邀请公告 → 公告",
+            SignLogic.isLikelyAnnouncement(
+                "邀请1位朋友点你的邀请链接可获得额外积分奖励多多益善"));
+        tru("命令菜单 → 公告",
+            SignLogic.isLikelyAnnouncement(
+                "请选择功能👇 签到 / 查询 / 商城 / 帮助，点击下方按钮开始使用"));
+        tru("免责声明 → 公告",
+            SignLogic.isLikelyAnnouncement(
+                "本机器人最终解释权归官方所有，谨防假冒，请认准官方频道，谢谢配合"));
+        tru("超长无结果词 → 公告",
+            SignLogic.isLikelyAnnouncement(
+                "这是一段非常长的说明文字用于测试长度阈值它是aaaaaaaaaaaaaaaaaaaa"
+              + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              + "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+              + "dddddddddddddddddddddddddddddddddddddddddddddddddddddddd"));
+
+        // ── 必须放行（真结果，要进池）──
+        tru("签到成功 → 不是公告",
+            !SignLogic.isLikelyAnnouncement("🎉 签到成功，您已获得 1 积分，当前积分 47 分"));
+        tru("已签到 → 不是公告",
+            !SignLogic.isLikelyAnnouncement("🌟 您已经签到过了！如果您还想继续增加积分，可使用 /cz 充值"));
+        tru("签到失败 → 不是公告",
+            !SignLogic.isLikelyAnnouncement("❌ 签到失败，原因是您的积分不足，请明日再试"));
+        tru("次数用完 → 不是公告",
+            !SignLogic.isLikelyAnnouncement("❌ 您本日的规则触发数量上限，请明日再试"));
+        tru("措辞奇怪但含结果 → 不是公告",
+            !SignLogic.isLikelyAnnouncement("任务达成！本次获得积分+2"));
+        tru("空串 → 不是公告",
+            !SignLogic.isLikelyAnnouncement(""));
+        tru("null → 不是公告",
+            !SignLogic.isLikelyAnnouncement(null));
+
+        // ── worthLearning 也要拦住公告 ──
+        tru("worthLearning 拦防骗公告",
+            !SignLogic.worthLearning(
+                "上方出现广告🚫骗子请不要上当该广告非官方投放机器人官方频道聊天中带"));
+        tru("worthLearning 放行真结果",
+            SignLogic.worthLearning("签到成功，获得积分+3"));
+    }
+
+
+
+    /** ── 公告过滤的边界情况（2026-10-18）─────────────────────── */
+    private static void poolFilterEdge() {
+        // 结果词 + 广告词混排：结果词优先，必须放行（否则真结论被吞）
+        tru("含「签到成功」+「广告」→ 放行",
+            !SignLogic.isLikelyAnnouncement("签到成功！顺便：下方广告是骗子请勿点击"));
+
+        // 纯公告但很短：仍按特征词判公告
+        tru("短公告「广告勿点」→ 公告",
+            SignLogic.isLikelyAnnouncement("广告勿点"));
+
+        // 菜单（含「签到」二字）：判公告，避免用户去给菜单学词
+        tru("菜单含签到 → 公告",
+            SignLogic.isLikelyAnnouncement("请选择功能：签到 / 查询 / 商城"));
+
+        // 真结果含「积分」但不含公告词
+        tru("积分结果 → 放行",
+            !SignLogic.isLikelyAnnouncement("本次签到获得积分 +5，当前 120 分"));
+
+        // 英文
+        tru("英文公告 → 公告",
+            SignLogic.isLikelyAnnouncement("This is an advertisement. Please join our official channel."));
+        tru("英文结果 → 放行",
+            !SignLogic.isLikelyAnnouncement("Check-in success! You earned 5 points."));
+
+        // ── 真机样本验证发现的两条，固化成回归用例 ──
+        // ① 教程句含「随机获得积分」，不是结果
+        tru("教程：可随机获得积分 → 公告",
+            SignLogic.isLikelyAnnouncement(
+                "发送三个emoji表情里的任意一个给机器人进行普通签到可以随机获得积分"));
+        // ② 「获得积分」必须带数字才是结果
+        tru("真结果：获得积分:2 → 放行",
+            !SignLogic.isLikelyAnnouncement("签到成功！此次签到获得积分:2"));
+        tru("真结果：获得积分+3 → 放行",
+            !SignLogic.isLikelyAnnouncement("任务达成！本次获得积分+3"));
+        tru("非结果：随机获得积分（无数字）→ 公告",
+            SignLogic.isLikelyAnnouncement("完成每日任务可以随机获得积分奖励"));
+
+        // worthLearning 与 isLikelyAnnouncement 不冲突
+        tru("worthLearning 与公告判定一致（公告）",
+            !SignLogic.worthLearning("广告勿点，谨防上当"));
+        tru("worthLearning 与公告判定一致（结果）",
+            SignLogic.worthLearning("签到成功，获得积分+1"));
+    }
+
+
+
+    /** ── scoped 路径的裸词守卫（2026-10-18 真 bug 回归）─────────────
+     *
+     *  bug：verdictDetail 加了守卫，但判定链实际走 verdictDetailScoped，
+     *       那里直接 return V_FAILED —— 守卫在真实路径上完全没生效。
+     *  教训：给判定链加规则，两个入口都必须验证。
+     */
+    private static void scopedBareGuard() {
+        String[] okD = SignLogic.OK_WORDS_DEFAULT;
+        String[] failD = SignLogic.FAIL_WORDS_DEFAULT;
+
+        // 合并表（判定链真实传法）：公告句不能判失败
+        tru("scoped·公告不被裸词误判",
+            ((Integer) SignLogic.verdictDetailScoped(
+                "点了会被拉黑，请注意甄别，保护好自己的账号安全",
+                okD, failD, null, null, null, null)[0]).intValue() != SignLogic.V_FAILED);
+
+        // 真失败仍判失败
+        tru("scoped·真拉黑判失败",
+            ((Integer) SignLogic.verdictDetailScoped(
+                "你已被管理员拉黑，无法使用本功能",
+                okD, failD, null, null, null, null)[0]).intValue() == SignLogic.V_FAILED);
+
+        // 合并表里用户新加的词 → 豁免守卫（用户表态优先）
+        String[] failMerged = new String[failD.length + 1];
+        System.arraycopy(failD, 0, failMerged, 0, failD.length);
+        failMerged[failD.length] = "今日已结算";
+        tru("scoped·用户新加词豁免守卫",
+            ((Integer) SignLogic.verdictDetailScoped(
+                "本次结果：今日已结算，欢迎下次",
+                okD, failMerged, null, null, null, null)[0]).intValue() == SignLogic.V_FAILED);
+
+        // 纯用户表（不含全部默认词）→ 整体豁免
+        tru("scoped·纯用户表豁免守卫",
+            ((Integer) SignLogic.verdictDetailScoped(
+                "点了会被拉黑请注意",
+                okD, new String[]{"拉黑"}, null, null, null, null)[0]).intValue() == SignLogic.V_FAILED);
+
+        // isUserAddedWord 直测
+        tru("纯表判为用户表", SignLogic.isUserAddedWord("拉黑", new String[]{"拉黑"}));
+        tru("默认表不判为用户表", !SignLogic.isUserAddedWord("拉黑", failD));
+    }
+
+
+
+    /** ── 「点按钮被偷偷加进签到列表」（2026-10-18 真事故回归）──────
+     *
+     *  根因：looksLikeSignButton 的 SIGN_WORDS 含「领取/奖励/积分」等宽词，
+     *        而 learnTarget 调用时 data 恒为 null，反向否决词无处发挥。
+     *        用户点「领取奖励」就被直接写进签到列表，不经待添加池。
+     *
+     *  原则：自动放行只用**强词**；宽词一律进待添加池让用户决定。
+     */
+    private static void autoAddButtonScope() {
+        // 强词：可以自动加入
+        tru("「签到」自动放行", SignLogic.looksLikeSignButton("签到", null));
+        tru("「每日签到」自动放行", SignLogic.looksLikeSignButton("每日签到", null));
+        tru("「打卡」自动放行", SignLogic.looksLikeSignButton("打卡", null));
+        tru("「报到」自动放行", SignLogic.looksLikeSignButton("报到", null));
+
+        // 宽词：必须进待添加（这是本次修复的核心）
+        tru("「领取奖励」不自动加", !SignLogic.looksLikeSignButton("领取奖励", null));
+        tru("「我的奖励」不自动加", !SignLogic.looksLikeSignButton("我的奖励", null));
+        tru("「领取」不自动加", !SignLogic.looksLikeSignButton("领取", null));
+        tru("「每日任务」不自动加", !SignLogic.looksLikeSignButton("每日任务", null));
+        tru("「积分兑换」不自动加", !SignLogic.looksLikeSignButton("积分兑换", null));
+
+        // 宽词仍记录在软词表里（供排序/展示，不用于放行）
+        boolean hasSoft = false;
+        for (String w : SignLogic.SIGN_SOFT_WORDS) {
+            if ("领取".equals(w)) { hasSoft = true; break; }
+        }
+        tru("软词表保留「领取」", hasSoft);
+
+        // 强词表不得包含宽词（防止以后又被加回去）
+        boolean leak = false;
+        for (String w : SignLogic.SIGN_SOFT_WORDS) {
+            if ("领取".equals(w) || "奖励".equals(w) || "积分".equals(w)) {
+                // 这些词绝不能同时出现在强词表里被放行
+                if (SignLogic.looksLikeSignButton("仅" + w, null)
+                        && !("签到".equals(w))) {
+                    // 「仅领取」若被判 true 说明强词表漏进了宽词
+                    leak = true;
+                }
+            }
+        }
+        tru("强词表未泄漏宽词", leak == false);
+    }
+
 
 }

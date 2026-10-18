@@ -603,10 +603,31 @@ public final class SignLogic {
      *      单字「签」纯属冗余宽词。
      *   ② 去掉重复的「签到」（原本出现两次，无功能影响，但说明该表未被复核）。
      */
+    /**
+     * 「签到按钮」强判据 —— 只放**不会被误用的词**。
+     *
+     * 2026-10-18 收窄（用户实测事故：「点了一些按钮被偷偷加进签到列表」）：
+     *   旧表含「领取」「奖励」「积分」「每日」「续期」「保号」「claim」「reward」，
+     *   这些词在**非签到**按钮上同样常见（「领取奖励」「我的奖励」「每日任务」）。
+     *   而 learnTarget 调 looksLikeSignButton 时 data 恒为 null，
+     *   反向否决词也无从发挥 → 用户随手点一下就进了签到列表。
+     *
+     *   现在只保留「几乎只可能出现在签到按钮上」的词。
+     *   宽的词移到 SIGN_SOFT_WORDS（下方），命中它们**一律走待确认**。
+     */
     private static final String[] SIGN_WORDS = {
-            "签到", "打卡", "签领", "领取", "每日", "报到",
-            // 2026-10-05 扩：常见措辞（这些词较宽，靠下面 REJECT_WORDS 反向否决防误伤）
-            "奖励", "积分", "续期", "保号", "签到领",
+            "签到", "打卡", "签领", "报到", "签到领",
+            "check in", "check-in", "sign in", "sign-in",
+    };
+
+    /**
+     * 「疑似签到」弱判据 —— 命中不算错，但不该自动放行。
+     *
+     * 用途：仅用于「待添加」列表排序/展示，以及判定链的宽松兜底。
+     * **绝不用于跳过待确认闸**（那正是 2026-10-18 事故的根因）。
+     */
+    public static final String[] SIGN_SOFT_WORDS = {
+            "领取", "每日", "奖励", "积分", "续期", "保号",
             "check", "sign", "clock", "daily", "reward", "claim", "bonus",
     };
 
@@ -726,11 +747,27 @@ public final class SignLogic {
         String lower = reply.toLowerCase();
 
         // 失败侧：具体级优先（目标 > Bot > 全局）
+        //
+        // 2026-10-17：这里**故意不做裸词语境守卫**。
+        // 三张表全部来自用户学习/手输（不是 FAIL_WORDS_DEFAULT），
+        // 属于「用户显式表态」——用户亲自把「拉黑」标成失败，
+        // 就该按原语义生效，不能被模板语境判断吞掉。
+        // 守卫只服务内置默认表（verdictDetail 的 FAIL 分支）。
         String[][] failChains = { failTarget, failBot, failGlobal };
         for (String[] words : failChains) {
             if (words == null || words.length == 0) continue;
             String m = matched(lower, words);
-            if (m != null) return new Object[]{Integer.valueOf(V_FAILED), m};
+            if (m == null) continue;
+            // ── 2026-10-18：scoped 也必须过裸词语境守卫 ──
+            // 改前这里直接 return V_FAILED，而判定链走的正是 scoped ——
+            // 于是 verdictDetail 里加的守卫在真实路径上完全没生效
+            // （行为验证 Flow 场景4 实测：公告句仍被判失败）。
+            // 与 verdictDetail 同一套判据：内置裸词要过语境，用户加的词豁免。
+            if (isBareFailWord(m) && !isUserAddedWord(m, words)
+                    && !bareFailSupported(lower.replace(" ", "").replace("\u3000", ""), m)) {
+                continue;   // 模板复述 → 不作数，继续看下一条链
+            }
+            return new Object[]{Integer.valueOf(V_FAILED), m};
         }
 
         // 成功侧：具体级优先（目标 > Bot > 全局）
@@ -794,9 +831,24 @@ public final class SignLogic {
         //
         // 失败优先不会反过来误伤：成功语里几乎不会内嵌失败词。
         String m = matched(lower, fail != null ? fail : FAIL_WORDS_DEFAULT);
-        if (m != null) return new Object[]{Integer.valueOf(V_FAILED), m};
+        // 2026-10-17：裸短词（拉黑/未注册/禁止…）要过语境校验 ——
+        // bot 的公告模板里也含这些字样，撞上就判失败属于误判（用户实测 7 次）。
+        // 用户自定义词（fail != null）不受此限：那是用户亲自确认过的语义。
+        // 2026-10-18 修：判据改为「命中的这个词是不是内置的」。
+        // 改前用 isCustomFailTable(fail) 判整表 —— 而判定链传的是
+        // mergeWords(FAIL_WORDS_DEFAULT, extraFail) 合并体，永远不等于默认表，
+        // 于是只要用户加过一个词，「拉黑」守卫就整个失效（行为验证实测到）。
+        if (m != null && (!isBareFailWord(m) || isUserAddedWord(m, fail) || bareFailSupported(
+                lower.replace(" ", "").replace("\u3000", ""), m))) {
+            return new Object[]{Integer.valueOf(V_FAILED), m};
+        }
         m = matched(lower, PERMANENT_FAIL_WORDS);
-        if (m != null) return new Object[]{Integer.valueOf(V_FAILED), m};
+        // 2026-10-17：同 FAIL 分支 —— 「未关注」「没有资格」在公告里也常见
+        // （「未关注公众号的用户没有资格参加」），需要语境校验才认可。
+        if (m != null && (!isBareFailWord(m) || bareFailSupported(
+                lower.replace(" ", "").replace("\u3000", ""), m))) {
+            return new Object[]{Integer.valueOf(V_FAILED), m};
+        }
         // 今日已用尽（2026-10-01 新增）：排在重复/成功词之前。
         // 这类回复常同时含"已"字（如"今日次数已用完"），若不抢先判定，
         // 会被组合判定当成"签到+已"误判成功；但它**不等于签到成功**。
@@ -982,6 +1034,140 @@ public final class SignLogic {
             "not", "no", "never", "haven't", "hasn't", "didn't", "don't", "won't",
             "cannot", "can't", "unable", "without", "fail", "failed",
     };
+
+    /**
+     * 「裸短词」失败词守卫（2026-10-17 新增）。
+     *
+     * 背景（用户反馈事故）：两个 bot 长期显示失败 ——
+     *   · 7601994292 每次「命中明确失败词"未注册"」
+     *   · 8500640583 每次「命中明确失败词"拉黑"」，连续 4 天 7 次
+     * 而 7601994292 在同一秒又收到「您今天已经签到过了」，
+     * 8500640583 几天前还明确回过「签到成功，积分+3」。
+     *
+     * 根因：FAIL_WORDS_DEFAULT 里「拉黑」「未注册」「禁止」「被封」都是**裸词**，
+     *   全文本 contains 匹配。而 bot 的模板/公告/防骗提示常含这类字样：
+     *     「广告是骗子，点了会被拉黑」「请勿重复签到，否则封禁」
+     *     「发送 /start 完成注册；未注册用户无法使用」
+     *   这类句子说的是**别人的条件**，不是这次签到的结论。
+     *   撞上就判失败并退避重试，比"判不出"更糟 —— 用户以为签不上。
+     *
+     * 判据（保守，宁可漏挡也不误挡真失败）：
+     *   裸词命中后检查整句语境，只有**不是条件句**且**指向用户**才算真失败。
+     *   任一不满足 → 该命中作废，落回后续判定继续等结论。
+     */
+    private static final String[] BARE_FAIL_WORDS = {
+            "拉黑", "未注册", "禁止", "被封", "封禁", "不可用", "无权限",
+            "未关注", "没有资格",
+    };
+
+    /** 指向用户的代词/限定语：出现才算这句话在说"你"。 */
+    private static final String[] SELF_REF_WORDS = {
+            "你", "您", "该账号", "此账号", "贵号",
+    };
+
+    /** 条件连词：命中词紧跟在它们后面时，是在描述"如果"，不是当前结论。 */
+    private static final String[] COND_WORDS = {
+            "否则", "如果", "如若", "才", "将会", "将被", "会被", "可能被",
+    };
+
+    /**
+     * 传入的失败词表是否为「用户自定义」。
+     *
+     * 2026-10-17：调用方（宽松模式、单测）总是显式传 FAIL_WORDS_DEFAULT，
+     *   若按 fail != null 判豁免，守卫永远不生效 —— 实测 5 条用例全挂。
+     * 正解：只有**确实不同于默认表**的才算用户自定义，才豁免守卫。
+     */
+    /**
+     * 命中的这个词，是不是**用户额外加的**（不在内置表里）？
+     *
+     * 2026-10-18：替代 isCustomFailTable 的整表比较。
+     * 判定链传进来的是「内置 + 用户」合并体，整表比较必然判成"自定义"，
+     * 导致裸词守卫被整体绕过（行为验证实测）。这里只看**词本身**归属。
+     */
+    static boolean isUserAddedWord(String word, String[] table) {
+        if (word == null || word.length() == 0) return false;
+        // ① 传入表完全不含内置词 → 这是「纯用户表」（用户亲自制定的规则），
+        //    整表豁免守卫。例：测试里传 new String[]{"拉黑"}，
+        //    语义是「用户要求出现拉黑就算失败」，不该被公告语境吃掉。
+        // 判定链传的是 mergeWords(FAIL_WORDS_DEFAULT, extra) —— 含**全部**默认词；
+        // 用户单独传的纯表（如 {"拉黑"}）只含个别默认词。
+        // 所以用「是否包含默认表全部词」来区分，而不是「含不含某个默认词」。
+        if (table != null && table.length > 0) {
+            boolean coversAll = true;
+            for (String b : FAIL_WORDS_DEFAULT) {
+                boolean found = false;
+                for (String t : table) {
+                    if (b.equals(t)) { found = true; break; }
+                }
+                if (!found) { coversAll = false; break; }
+            }
+            if (!coversAll) return true;   // 不是完整默认表 → 纯用户表 → 豁免
+        }
+
+        // ② 合并表 / 默认表：按**词本身**归属判断
+        for (String b : FAIL_WORDS_DEFAULT) {
+            if (b.equals(word)) return false;      // 内置词 → 不是用户加的
+        }
+        for (String b : PERMANENT_FAIL_WORDS) {
+            if (b.equals(word)) return false;
+        }
+        return true;                               // 不在内置表 → 用户加的
+    }
+
+    static boolean isCustomFailTable(String[] fail) {
+        if (fail == null) return false;
+        if (fail == FAIL_WORDS_DEFAULT) return false;
+        if (fail.length != FAIL_WORDS_DEFAULT.length) return true;
+        for (int i = 0; i < fail.length; i++) {
+            if (!fail[i].equals(FAIL_WORDS_DEFAULT[i])) return true;
+        }
+        return false;
+    }
+
+    /** 该词是否属于需要语境校验的裸短词。 */
+    static boolean isBareFailWord(String w) {
+        if (w == null) return false;
+        for (String b : BARE_FAIL_WORDS) {
+            if (b.equals(w)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 裸短词命中的语境校验。
+     *
+     * @param flat 已小写、已去空白的整句
+     * @param word 命中的裸词
+     * @return true = 语境支持"这是真失败"；false = 模板复述，作废
+     */
+    static boolean bareFailSupported(String flat, String word) {
+        if (flat == null || word == null || word.length() == 0) return true;
+        int idx = flat.indexOf(word);
+        if (idx < 0) return true;   // 不该发生；放行给原逻辑
+
+        // ① 条件连词前缀 → 说的是"如果"，不是当前结论（最典型的误判源）
+        int from = Math.max(0, idx - 4);
+        String before = flat.substring(from, idx);
+        for (String c : COND_WORDS) {
+            if (before.contains(c)) return false;
+        }
+
+        // ② 短句直接认可：整句（去空白）≤ 12 字几乎不可能是在复述公告
+        //    「无权限操作」「未注册」这类就是直接结论，不能因为没代词就被吞。
+        if (flat.length() <= 12) return true;
+
+        // ③ 句中有自称代词 → 在说用户
+        for (String s : SELF_REF_WORDS) {
+            if (flat.contains(s)) return true;
+        }
+        // ④ 无代词但明显指向读者
+        if (before.contains("已被") || before.contains("把你")
+                || before.contains("将你") || before.contains("你被")) {
+            return true;
+        }
+        // ⑤ 长句 + 无主语 → 大概率是公告/模板 → 作废
+        return false;
+    }
 
     /**
      * 组合判定：句子里同时出现「签到类行为词」与「成功类结果词」即判成功。
@@ -1446,6 +1632,12 @@ public final class SignLogic {
             for (String w : AD_WORDS) {
                 if (low.contains(w)) return false;
             }
+            // 2026-10-18：再接一层公告判定。
+            // AD_WORDS 只覆盖推广类，而 bot 的**公告尾巴**（防骗声明、价格表、
+            // 免责声明、命令列表）一个 AD_WORDS 都不含，长度也够不到 400 阈值，
+            // 于是全进池 —— 用户实测 10 条里 6 条。isLikelyAnnouncement 用
+            // 「结果词优先放行 + 公告强特征词」两段式，不会误伤真结果。
+            if (isLikelyAnnouncement(r)) return false;
             // 超长且不含签到语义 → 判为说明/规则长文，不收。
             // 2026-10-07：阈值 120 → 300。带排版的 bot 回复（说明+结果）常超 120，
             // 误杀会让用户遇到"判不出但学习页是空的"。
@@ -1630,6 +1822,90 @@ public final class SignLogic {
      *
      * 2026-09-28：进度提示词先行排除 —— 它们必然含「签到」，否则会全被误判。
      */
+    /**
+     * 这条「认不出」的回复，是不是**公告 / 广告 / 免责声明**？
+     *
+     * 2026-10-18 新增。为什么必须有：
+     *   未识别回复池原来只过滤「不像签到结果」，但 bot 的公告尾巴同样含
+     *   「签到」「积分」等字样，于是整段防骗声明全被收进池 ——
+     *   用户实测 10 条里 6 条是广告，真正要判的一条也没有，
+     *   既看不清该判哪条，也让渲染量翻几倍（卡顿的主因之一）。
+     *
+     * 设计原则：**宁可漏收，不可错收**。
+     *   只收录公告语料里高频、且几乎不会出现在「本次签到结论」里的词。
+     *   真结果会含「成功/失败/已签/获得/积分+N」——本函数里凡是带这些
+     *   结果词的句子，一律放行（返回 false），交给判定链去处理。
+     *
+     * @param reply 回复原文
+     * @return true = 公告类，不要进未识别池
+     */
+    public static boolean isLikelyAnnouncement(String reply) {
+        if (reply == null || reply.length() == 0) return false;
+        String lr = reply.toLowerCase(java.util.Locale.US);
+
+        // ① 先看有没有明确结果词 —— 有就当结果，绝不当公告
+        String[] RESULT_HINT = {
+                "签到成功", "打卡成功", "签到失败", "打卡失败", "已签到", "已打卡",
+                "已经签到", "已经打卡", "签到完成", "打卡完成", "积分+",
+                "领取成功", "次数已用完", "请明日再试", "明日再来",
+                "success", "failed", "already",
+        };
+        for (String h : RESULT_HINT) {
+            if (lr.contains(h)) return false;
+        }
+        // 「获得积分」不能当裸词 —— 教程句也含它：
+        //   「进行普通签到可以随机获得积分」（教怎么签到，不是结果）
+        // 真结果一定带数字：「获得积分:2」「获得积分 +3」「获得积分 5」。
+        int gi = lr.indexOf("获得积分");
+        while (gi >= 0) {
+            int p = gi + "获得积分".length();
+            // 跳过空格与分隔符后必须紧跟数字或 +/- 才算结果
+            while (p < lr.length() && (lr.charAt(p) == ' ' || lr.charAt(p) == ':'
+                    || lr.charAt(p) == '：' || lr.charAt(p) == '=')) p++;
+            if (p < lr.length()) {
+                char cc = lr.charAt(p);
+                if (Character.isDigit(cc) || cc == '+' || cc == '-') return false;
+            }
+            gi = lr.indexOf("获得积分", gi + 1);
+        }
+
+        // ② 公告强特征词：命中任意一个即判公告
+        String[] ANNOUNCE = {
+                // 防骗 / 广告
+                "广告", "骗子", "谨防", "防骗", "上当", "社工库", "非官方",
+                "不要点", "别点", "假冒", "冒充", "钓鱼",
+                // 免责 / 声明
+                "免责", "声明", "最终解释权", "官方频道", "请认准", "永久唯一",
+                "认准唯一", "谨记",
+                // 招募 / 推广
+                "邀请链接", "邀请1位", "邀请好友", "拉人", "推广", "招募",
+                // 教程 / 菜单 / 导航
+                "使用说明", "使用帮助", "命令列表", "查看全部", "怎么用",
+                "点击下方", "点击上方", "请选择功能", "请选择操作",
+                // 2026-10-18 单测抓出的漏网：bot 常把运维说明附在回复里，
+                // 用户截图那条「抬头向上看…价格表…提示被注销」就是。
+                "价格表", "查询价格", "路线查询", "提示被注销", "无法使用可以",
+                "其他机器人", "下方按钮", "抬头向上看", "配给领取",
+                // 2026-10-18 真机样本验证补漏：这类是**教程**（教怎么签到），不是结果
+                "可以随机获得", "可随机获得", "进行普通签到", "普通签到可以",
+                "任意一个给机器人", "给机器人进行", "表情给机器人",
+                // 商城 / 充值引导
+                "去商城", "去充值", "开通会员", "购买",
+                // 英文公告
+                "advertisement", "scam", "disclaimer", "official channel",
+        };
+        for (String w : ANNOUNCE) {
+            if (lr.contains(w)) return true;
+        }
+
+        // ③ 超长且无结果词 → 大概率是公告/说明
+        //    真结论通常很短（「✅ 签到成功，积分+3」）；
+        //    180 字以上还一个结果词都没有的，基本是模板。
+        if (reply.length() > 180) return true;
+
+        return false;
+    }
+
     public static boolean looksLikeSignResult(String reply) {
         if (reply == null || reply.length() == 0) return false;
         if (looksLikeProgress(reply)) return false;      // 进度 ≠ 结果

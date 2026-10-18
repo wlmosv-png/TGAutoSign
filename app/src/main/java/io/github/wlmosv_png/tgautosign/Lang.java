@@ -634,6 +634,37 @@ public final class Lang {
         EN.put("等回复", "Awaiting reply");
         EN.put("签到这个账号", "Sign in this account");
         EN.put("补判定词（让下次能认出来）", "Add judge words (so next time it's recognised)");
+        EN.put(" · 现已学会 {0} 条", " · {0} learned so far");
+        EN.put("下面两行只对「所有目标」生效（全局）。",
+               "The two lines below apply to ALL targets (global).");
+        EN.put("我已经学会的词（成功 {0} · 失败 {1}）  ",
+               "Words I have learned ({0} ok · {1} fail)  ");
+        // 2026-10-19 未识别回复页重设计新增文案
+        EN.put("帮我认一认", "Help me judge");
+        EN.put("{0} 条待判", "{0} to judge");
+        EN.put("算成功", "Success");
+        EN.put("算失败", "Failure");
+        EN.put("先不管", "Skip");
+        EN.put("这条回复出现过 {0} 次", "This reply appeared {0} times");
+        EN.put("点这里自定义判定词", "Tap to customise the word");
+        EN.put("填这句话里固定出现的文字", "Text that always appears in this reply");
+        EN.put("仅此bot ▾", "this bot ▾");
+        EN.put("仅此条 ▾", "this target ▾");
+        EN.put("所有目标 ▾", "all targets ▾");
+        EN.put("删除「{0}」？", "Delete \"{0}\"?");
+        EN.put("删掉后，以后同类回复就认不出来了。",
+           "After deleting, similar replies will not be recognised.");
+        EN.put("操作失败：{0}", "Operation failed: {0}");
+        EN.put("下面两个框 = **全局词**（对所有目标生效）：成功 {0} 条 / 失败 {1} 条。\n另有各 bot 专属：成功 {2} 条 / 失败 {3} 条（避免互相污染）。\n合计 成功 {4} 条 / 失败 {5} 条 —— 与「未识别回复」页顶部数字一致。",
+               "The two boxes below = **global words** (apply to all targets): {0} ok / {1} fail.\n"
+             + "Plus per-bot words: {2} ok / {3} fail (kept separate to avoid cross-contamination).\n"
+             + "Total {4} ok / {5} fail — matches the number at the top of \"Unrecognised replies\".");
+        EN.put("下面两个框 = 全局词（对所有目标生效）。",
+               "The two boxes below = global words (apply to all targets).");
+        EN.put("查看并管理全部判定词", "View and manage all judge words");
+        EN.put("待添加已清空", "Pending list cleared");
+        EN.put("下面两行只对「所有目标」生效（全局）。\n「未识别回复」里补的词默认只对那只机器人生效，不在这里显示。\n当前：全局 成功 {0} 条 / 失败 {1} 条；另有机型/目标专属 成功 {2} 条 / 失败 {3} 条。",
+               "The two lines below apply to ALL targets (global).\nWords learned under \"Unrecognised replies\" apply to that bot only and are not listed here.\nNow: global ok {0} / fail {1}; per-bot or per-target ok {2} / fail {3}.");
         EN.put("记为已签", "Mark as signed");
         EN.put("这一轮没有卡住的目标", "No stuck targets this round");
         EN.put("重试失败: {0}", "Retry failed: {0}");

@@ -6079,6 +6079,14 @@ public final class TGAutoSignCore {
 
         syncAccount();
 
+        // 2026-10-18 修：设置里的「按钮学习」开关此前**完全没被读**。
+        // AUTO_LEARN 只在配置读写与日志/徽章里出现，没有任何决策点用它，
+        // 真正生效的只有内部 LEARN_ENABLED（恒 true、无界面入口）。
+        // 于是用户关掉「按钮学习」后，点 bot 按钮照样被学走 —— 开关形同虚设。
+        if (!AUTO_LEARN) {
+            logd("[按钮学习] 已关闭，忽略 uid=" + dialogId);
+            return false;
+        }
         if (!LEARN_ENABLED) return false;
         if (data == null || data.length == 0) return false;
         if (dialogId == 0) return false;
@@ -6228,6 +6236,13 @@ public final class TGAutoSignCore {
             return;
         }
         if (AUTO_LEARN_NET_CONFIRM) {
+            // 2026-10-19：处理待添加期间**暂停入池**。
+            // 否则用户边忽略边有新候选冒进来（「忽略几个又出来几个」）。
+            // 判定链照常跑，只是不往待添加里塞 —— 等用户关掉待添加框再恢复。
+            if (pendingConfirmPanelOpen) {
+                logd("[候选] 待添加面板打开中，暂不入池: " + did + " -> " + t);
+                return;
+            }
             // 需确认：进入待确认池，不直接添加（防验证码类 bot 误加）
             // reason 写明来路，用户在待添加页一眼看出它是怎么来的。
             if (pendingConfirmAdd(account, did, t,
@@ -6300,7 +6315,15 @@ public final class TGAutoSignCore {
                     // 达到阈值（3 天）后状态改成「从不应答」—— 用户一眼能分辨
                     // 「这个 bot 特性如此」和「今天这条出问题了」。
                     int nr = 0;
-                    try { nr = prefs.getInt("nr_" + prefix + id, 0) + 1; } catch (Throwable ignored) {}
+                    try {
+                        // 2026-10-18 修：跨天必须归零。
+                        // 原来直接 getInt +1，昨天累计的 2 次会带进今天，
+                        // 今天只要 1 次无回复就凑满 3 → 错误标「从不应答」。
+                        // 与 silent_ 同一类问题（silent 已修）。
+                        String nrDay = prefs.getString("nrday_" + prefix + id, "");
+                        int prevNr = todayStr().equals(nrDay) ? prefs.getInt("nr_" + prefix + id, 0) : 0;
+                        nr = prevNr + 1;
+                    } catch (Throwable ignored) {}
                     try {
                         prefs.edit().putInt("nr_" + prefix + id, nr)
                              .putString("nrday_" + prefix + id, todayStr()).apply();
@@ -7107,7 +7130,12 @@ public final class TGAutoSignCore {
                                         // 「不回结果的 bot」识别：有些 bot 本来就不回复（查询类、菜单类），
                                         // 每天为它们等满超时纯属浪费，还会刷一屏日志。
                                         // 累计 3 次无响应就停手，并在目标上留个可见标记。
-                                        int silentN = prefs.getInt(fPrefix + "silent_" + fId, 0) + 1;
+                                        // 2026-10-18 修：改走 silentCount()。
+                                        // 原来裸读 prefs.getInt —— 绕过了跨天校验，
+                                        // 昨天的计数会带进今天继续累加，累计到 3 就被
+                                        // 错误打成「从不应答」并永久停重试（用户角度=莫名不签了）。
+                                        // 同文件 7095 那条分支本来就是 silentCount()+1，两处口径必须一致。
+                                        int silentN = silentCount(fPrefix, fId) + 1;
                                         prefs.edit().putInt(fPrefix + "silent_" + fId, silentN)
                                              .putString(fPrefix + "silent_day_" + fId, todayStr()).apply();
                                         if (silentN >= 3) {
@@ -10747,7 +10775,10 @@ public final class TGAutoSignCore {
 
     private void showLearnPage(Activity act) {
         if (act == null) return;
+        // 2026-10-18：分段计时（用户实测「3 条也卡」，必须量出卡在哪一段）。
+        long _tPurge0 = System.currentTimeMillis();
         purgeSelfCommandFromUnkPool();
+        long _tPurge1 = System.currentTimeMillis();
         // 构建标记：便于用户/排障时确认装的是哪一版（学习页历经三轮性能修复）
         logd("[学习] 打开学习页 · build=async-refresh-v4");
         final long _tOpen0 = System.currentTimeMillis();
@@ -10778,6 +10809,37 @@ public final class TGAutoSignCore {
                 @Override public void addJudgeWordScoped(String word, boolean isOk, String scope, long did, String targetId) {
                     addJudgeWordScopedInternal(word, isOk, scope, did, targetId);
                 }
+
+                /**
+                 * 判定词表变了 → 让「卡住的目标」那张卡重新评估。
+                 *
+                 * 2026-10-18（用户反馈）：从「补判定词」学完词回到列表，
+                 * 卡片上仍写着「判不出」。用户以为白学了。
+                 *
+                 * 这里只做两件事，都不打断用户：
+                 *   ① 把学到词的目标从「判不出」标回「等回复」——它确实还没结论；
+                 *   ② 若那个框正开着，原地重绘一次（不 dismiss、不闪）。
+                 */
+                @Override public void notifyWordsChanged() {
+                    try {
+                        final String p = accountPrefix();
+                        final Activity _a = lastActivity;
+                        // 学到词的通常是 RS_UNKNOWN 的目标：把它们放回「等回复」，
+                        // 让后续回复可以重新过一遍判定链。
+                        try {
+                            java.util.List<RoundState> rs = roundProblemsOf(p);
+                            for (RoundState r : rs) {
+                                if (r.state == RS_UNKNOWN) {
+                                    roundMark(p, r.id, RS_WAITING, "已补判定词，等下次回复重判");
+                                }
+                            }
+                        } catch (Throwable ignored) {}
+                        if (_a != null && roundProbBox != null && roundProbDlg != null
+                                && dialogShowing(roundProbDlg)) {
+                            renderRoundProblems(roundProbBox, _a, p, "");
+                        }
+                    } catch (Throwable t) { noteSwallowed("notifyWordsChanged", t); }
+                }
                 @Override public void dismissAndRefresh() {
                     // ── 2026-10-07 卡顿修复（第二轮）──
                     // 优先原地刷新：只清空内容容器重填，对话框不动。
@@ -10802,7 +10864,9 @@ public final class TGAutoSignCore {
                 }
 
                 @Override public void logPerf(String msg) {
-                    try { logd("[性能] " + msg); } catch (Throwable ignored) {}
+                    // 2026-10-18：改 logw。logd 受落盘采样影响，
+                    // 排障时经常看不到 —— 本轮定位卡顿因此绕了一圈。
+                    try { logw("[性能] " + msg); } catch (Throwable ignored) {}
                 }
 
                 @Override public void dismissAndRefreshFallback() {
@@ -10830,8 +10894,10 @@ public final class TGAutoSignCore {
             } catch (Throwable ignored) {}
             learnDialog = showDialog(act, "未识别回复", page, "关闭");
             long _tDlg = System.currentTimeMillis();
-            logd("[性能] 打开学习页 build=" + (_tBuild - _tOpen0)
-                 + "ms dialog=" + (_tDlg - _tBuild) + "ms total=" + (_tDlg - _tOpen0) + "ms");
+            // 用 logw：logd 受落盘采样影响，排障时常常看不到（踩过多次）。
+            logw("[性能] 打开学习页 purge=" + (_tPurge1 - _tPurge0)
+                 + "ms build=" + (_tBuild - _tPurge1)
+                 + "ms dialog=" + (_tDlg - _tBuild) + "ms total=" + (_tDlg - _tPurge0) + "ms");
         } catch (Throwable t) {
             jlog("打开未识别回复页失败: " + t);
             showToastSafe(Lang.tf("打开失败: {0}", String.valueOf(t)));
@@ -10932,15 +10998,18 @@ public final class TGAutoSignCore {
     /** 把学到的词追加进判定词表（去重、自动打开自定义词开关）。 */
     private void addJudgeWordsInternal(String[] okWords, String[] failWords) {
         try {
+            // 2026-10-18：改读/写**全局键**。
+            // 改前写 acc0_cfg_ok_words，而判定链读 jmb_ok_words ——
+            // 经这条路径学到的词从来没生效过（与设置页同一类 bug）。
             if (okWords != null && okWords.length > 0) {
-                String cur = cfgStr("ok_words", "");
+                String cur = prefs.getString(Keys.okWordsGlobal(), "");
                 String merged = mergeWords(cur, okWords);
-                { android.content.SharedPreferences.Editor _e=prefs.edit(); putCfg(_e,"ok_words",merged); _e.commit(); }
+                prefs.edit().putString(Keys.okWordsGlobal(), merged).commit();
             }
             if (failWords != null && failWords.length > 0) {
-                String cur = cfgStr("fail_words", "");
+                String cur = prefs.getString(Keys.failWordsGlobal(), "");
                 String merged = mergeWords(cur, failWords);
-                { android.content.SharedPreferences.Editor _e=prefs.edit(); putCfg(_e,"fail_words",merged); _e.commit(); }
+                prefs.edit().putString(Keys.failWordsGlobal(), merged).commit();
             }
             // 关键：写了词必须打开自定义词开关，否则不生效
             if (!JUDGE_USE_CUSTOM) {
@@ -11667,12 +11736,30 @@ public final class TGAutoSignCore {
             try { requestLayout(); invalidate(); } catch (Throwable ignored) {}
         }
         @Override protected void onMeasure(int wSpec, int hSpec) {
-            super.onMeasure(wSpec, android.view.View.MeasureSpec.makeMeasureSpec(0,
-                    android.view.View.MeasureSpec.UNSPECIFIED));
-            if (getMeasuredHeight() > maxH) {
-                super.onMeasure(wSpec, android.view.View.MeasureSpec.makeMeasureSpec(maxH,
-                        android.view.View.MeasureSpec.EXACTLY));
+            // ── 2026-10-18 性能修复（用户实测「只有 3 条也卡」）──
+            //
+            // 旧实现：
+            //   super.onMeasure(wSpec, UNSPECIFIED);      // ① 子树上按**无限高**完整排版
+            //   if (h > maxH) super.onMeasure(wSpec, EXACTLY(maxH));   // ② 再完整排版一遍
+            //
+            // 为什么慢：UNSPECIFIED 意味着「高度不限」，
+            //   里面的 ScrollView / 长文本 / EditText 都会**按内容的完整高度**排版一次；
+            //   ScrollView 的子树排版成本随内容线性增长，且这次排版的结果
+            //   在 ② 里被整个丢掉重做 —— 纯浪费，而且是在主线程。
+            //   实测总耗时 126ms（build=105 + dialog=21），布局阶段另算，
+            //   用户手感就是「点一下卡住」。
+            //
+            // 现在：直接用 AT_MOST(maxH)。
+            //   · 内容 ≤ maxH  → 量出来的高度与 UNSPECIFIED 完全一致（语义不变）
+            //   · 内容 > maxH  → 直接得到 maxH，**省掉第二次完整测量**
+            //   ScrollView 在 AT_MOST 下是标准工作状态，不存在副作用。
+            int limit = maxH > 0 ? maxH : 0;
+            if (limit <= 0) {
+                super.onMeasure(wSpec, hSpec);
+                return;
             }
+            super.onMeasure(wSpec, android.view.View.MeasureSpec.makeMeasureSpec(limit,
+                    android.view.View.MeasureSpec.AT_MOST));
         }
     }
 
@@ -12872,6 +12959,8 @@ public final class TGAutoSignCore {
     /** 待确认池界面：网络学习命中的目标，用户手动确认加入或忽略。 */
     private void showPendingConfirm(Activity act) {
         try {
+            // 2026-10-19：打开期间暂停网络层入池（见字段注释）
+            pendingConfirmPanelOpen = true;
             LinearLayout box = new LinearLayout(act);
             box.setOrientation(LinearLayout.VERTICAL);
             final Object[] curDlg = new Object[1];
@@ -12978,8 +13067,10 @@ public final class TGAutoSignCore {
                         if (pendingConfirmAccept(pendingAcc, did, text)) {
                             if (cbAuto.isChecked()) rememberBotAutoLearn(did);
                             if (cbNever.isChecked()) rememberBotNeverLearn(did);
-                            toast("已加入");
-                            dismissOne(curDlg[0]); showPendingConfirm(act);
+                            // 2026-10-19：处理后原地消失 + 剩余为 0 就关窗。
+                            // 改前无条件 dismiss + 重建 —— 处理最后一条时会弹出
+                            // 一个「待添加（0）」空框（用户实测截图），很突兀。
+                            afterPendingHandled(act, curDlg, card, pendingAcc, "已加入");
                         }
                         else toast("加入失败");
                     } });
@@ -12988,7 +13079,8 @@ public final class TGAutoSignCore {
 
                     Button ign = mkBtn(act); withIconText(act, ign, "x", "忽略");
                     ign.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){
-                        pendingConfirmRemoveAt(pendingAcc, _idx); toast("已忽略"); dismissOne(curDlg[0]); showPendingConfirm(act);
+                        pendingConfirmRemoveAt(pendingAcc, _idx);
+                        afterPendingHandled(act, curDlg, card, pendingAcc, "已忽略");
                     } });
                     acts.addView(ign);
 
@@ -13014,7 +13106,17 @@ public final class TGAutoSignCore {
                 clp2.topMargin = dp(8);
                 box.addView(clr, clp2);
             }
-            curDlg[0] = showDialog(act, Lang.tf("待添加（{0}）", total), box, "关闭");
+            // 2026-10-19：关窗时刷新主列表横幅，让「N 个待添加」实时跟上；
+            // 同时恢复网络层学习（关掉「正在处理」标志）。
+            curDlg[0] = showDialog(act, Lang.tf("待添加（{0}）", total), box, "关闭",
+                    new AfterClose() {
+                        @Override public void run() {
+                            try {
+                                pendingConfirmPanelOpen = false;
+                                refreshPendingBanner(act);
+                            } catch (Throwable ignored) {}
+                        }
+                    });
         } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
     }
 
@@ -13586,6 +13688,7 @@ public final class TGAutoSignCore {
             pc.setLayoutParams(pclp);
             TextView pct = new TextView(act); pct.setTextSize(Theme.TS_BODY); pct.setTextColor(Theme.termCyan(act)); pct.setTypeface(Theme.monoBold());
             pct.setText(Lang.tf("{0} 个新按钮待添加 —— 点此选择加入", pcTotal));
+            pendingBannerLabel = pct;   // 2026-10-19：记下引用，关待添加框后刷新它
             pc.addView(pct, new LinearLayout.LayoutParams(0, -2, 1f));
             pc.setOnClickListener(new View.OnClickListener(){ @Override public void onClick(View v){ showPendingConfirm(act); } });
             box.addView(pc);
@@ -15622,9 +15725,10 @@ public final class TGAutoSignCore {
                 logd("[学习] 确认已签：提不出关键词，仅标记今日已签（" + id + "）");
                 return;
             }
-            String cur = cfgStr("ok_words", "");
+            // 2026-10-18：同全局键，否则「确认已签」学到的词判定链读不到。
+            String cur = prefs.getString(Keys.okWordsGlobal(), "");
             String merged = mergeWords(cur, new String[]{word});
-            { android.content.SharedPreferences.Editor _e=prefs.edit(); putCfg(_e,"ok_words",merged); _e.commit(); }
+            prefs.edit().putString(Keys.okWordsGlobal(), merged).commit();
             if (!JUDGE_USE_CUSTOM) {
                 JUDGE_USE_CUSTOM = true;
                 { android.content.SharedPreferences.Editor _e=prefs.edit(); putCfg(_e,"judge_custom",true); _e.commit(); }
@@ -15887,10 +15991,12 @@ public final class TGAutoSignCore {
 
             // (2) 词表：2026-10-07（方案 1.1）改走统一入口 ——
             // 测试器必须与生产**完全一致**，否则用户在这里试出的结果与实际判定不符。
+            // 2026-10-18：规则测试器必须与生产判定链读**同一个键**，
+            // 否则用户在这里试出来的结果和实际签到不一致（旧版读的是废弃的 cfg_ 键）。
             String[] extraOk = JUDGE_USE_CUSTOM
-                    ? SignLogic.parseExtraWords(cfgStr("ok_words", "")) : null;
+                    ? SignLogic.parseExtraWords(prefs.getString(Keys.okWordsGlobal(), "")) : null;
             String[] extraFail = JUDGE_USE_CUSTOM
-                    ? SignLogic.parseExtraWords(cfgStr("fail_words", "")) : null;
+                    ? SignLogic.parseExtraWords(prefs.getString(Keys.failWordsGlobal(), "")) : null;
             String[] okMerged = mergeWords(SignLogic.OK_WORDS_DEFAULT, extraOk);
             String[] failMerged = mergeWords(SignLogic.FAIL_WORDS_DEFAULT, extraFail);
 
@@ -15996,6 +16102,37 @@ public final class TGAutoSignCore {
     private static String kMissBack() { return "jmb_missback"; }
 
     // ---- 配置按账号（多账号用户各账号独立设置；老键保留兼容与回滚）----
+    /**
+     * 历史判定词迁移（2026-10-18）。
+     *
+     * 旧版设置页把词写进 acc0_cfg_ok_words / acc0_cfg_fail_words，
+     * 但判定链只读 jmb_ok_words / jmb_fail_words ——
+     * 用户填的词**从来没生效过**。这里把残留值合并进全局键，避免用户重新填一遍。
+     *
+     * 只在该账号的历史键非空、且全局键里还没有这些词时才合并；跑完清标记。
+     */
+    private void migrateLegacyJudgeWords() {
+        try {
+            if (prefs.getBoolean("judge_words_migrated_v2", false)) return;
+            String legacyOk = prefs.getString(accountPrefix() + "cfg_ok_words", "");
+            String legacyFail = prefs.getString(accountPrefix() + "cfg_fail_words", "");
+            android.content.SharedPreferences.Editor ed = prefs.edit();
+            if (legacyOk != null && legacyOk.trim().length() > 0) {
+                String cur = prefs.getString(Keys.okWordsGlobal(), "");
+                ed.putString(Keys.okWordsGlobal(), mergeWords(cur, splitWordsStatic(legacyOk).toArray(new String[0])));
+            }
+            if (legacyFail != null && legacyFail.trim().length() > 0) {
+                String cur = prefs.getString(Keys.failWordsGlobal(), "");
+                ed.putString(Keys.failWordsGlobal(), mergeWords(cur, splitWordsStatic(legacyFail).toArray(new String[0])));
+            }
+            ed.putBoolean("judge_words_migrated_v2", true).commit();
+            if ((legacyOk != null && legacyOk.trim().length() > 0)
+                    || (legacyFail != null && legacyFail.trim().length() > 0)) {
+                jlog("[判定词] 已把历史设置页词表迁移到全局词表（旧键值不再使用）");
+            }
+        } catch (Throwable t) { noteSwallowed("migrateLegacyJudgeWords", t); }
+    }
+
     private String cfgStr(String name, String def) {
         try {
             // 2026-10-13 语义变更（用户要求「一个账号一份配置」）：
@@ -17195,19 +17332,37 @@ public final class TGAutoSignCore {
             box.addView(row2);
 
             // 今天格的脉冲：只用一个 ValueAnimator
+            // ── 今天格脉冲（2026-10-19 性能修复）──
+            // 主线程堆栈实证：setPulse → invalidateSelf 沿父链上抛 7 层 ViewGroup
+            // → ViewRootImpl.invalidate → 整棵视图树每帧重绘。
+            // 面板是叠在 TG 上的大对话框，树很大 → 主线程被压满，
+            // 表现就是「点一下卡一会、越开越卡」。
+            // 修：已签则不跑；降到 30fps；重建前 cancel 旧动画。
             final Icons.DayCellDrawable todayDraw = draws[13];
-            if (todayDraw != null) {
+            if (todayDraw != null) todayDraw.setPulse(0f);
+            if (dayPulseAnim != null) {
+                try { dayPulseAnim.cancel(); } catch (Throwable ignored) {}
+                dayPulseAnim = null;
+            }
+            if (todayDraw != null && !signedToday) {
                 android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(0f, 1f);
                 va.setDuration(1800);
                 va.setRepeatCount(android.animation.ValueAnimator.INFINITE);
                 va.setRepeatMode(android.animation.ValueAnimator.RESTART);
                 va.setInterpolator(new android.view.animation.LinearInterpolator());
                 va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                    private long lastTick = 0L;
                     @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
-                        todayDraw.setPulse((Float) a.getAnimatedValue());
+                        try {
+                            long nowT = android.os.SystemClock.uptimeMillis();
+                            if (nowT - lastTick < 33L) return;   // 30fps
+                            lastTick = nowT;
+                            todayDraw.setPulse(((Float) a.getAnimatedValue()).floatValue());
+                        } catch (Throwable ignored) {}
                     }
                 });
                 va.start();
+                dayPulseAnim = va;
             }
 
             // ── 摘要行（2026-09-30 方案 B）──
@@ -17396,7 +17551,11 @@ public final class TGAutoSignCore {
                             if (did == 0L) { toast(Lang.tr("解析失败：请检查 ID，或改用 @用户名 / 数字 ID")); return; }
                             if (findTextEntry(did, t) != null) { toast("该 bot 已存在相同指令"); return; }
                             unblockBot(did);
-                            learnTarget(did, t);
+                            // 2026-10-18：这是「预设模板 → 添加」，用户亲手填的 ID + 指令，
+                            // 属明确意图，必须豁免「按钮学习需确认」闸。
+                            // 原来没传 userExplicit → 指令不像签到文案时（如 /qd）
+                            // 会被静默拦进待添加池，用户看到的是"点了没反应"。
+                            learnTarget(did, t, true);
                             Map<String, Object> m = findTextEntry(did, t);
                             if (m != null) toast(Lang.tf("已添加 {0} → {1}", did, t));
                         } catch (Throwable e2) { toast(Lang.tf("添加失败: {0}", e2)); }
@@ -18159,8 +18318,12 @@ public final class TGAutoSignCore {
                     putCfg(ed, "loose", LOOSE_MODE);
                     putCfg(ed, "fallback", FALLBACK);
                     putCfg(ed, "judge_custom", JUDGE_USE_CUSTOM);
-                    putCfg(ed, "ok_words", R.okWordsEd.getText().toString().trim());
-                    putCfg(ed, "fail_words", R.failWordsEd.getText().toString().trim());
+                    // 2026-10-18：判定词统一写**全局级键**。
+                    // 改前写 acc0_cfg_ok_words，而判定链/学习页读 jmb_ok_words ——
+                    // 两套键互不相认，用户「填了词却不生效、列表里也没有」。
+                    // 现在设置页就是全局级的唯一入口，三处读同一个键。
+                    ed.putString(Keys.okWordsGlobal(), R.okWordsEd.getText().toString().trim());
+                    ed.putString(Keys.failWordsGlobal(), R.failWordsEd.getText().toString().trim());
                     putCfg(ed, "notify", NOTIFY_ON);
                     putCfg(ed, "notify_fail_only", NOTIFY_FAIL_ONLY);
                     putCfg(ed, "notify_all_acc", NOTIFY_ALL_ACCOUNTS);
@@ -18554,6 +18717,17 @@ public final class TGAutoSignCore {
      *   既做出明暗层次，又天然跟随主题色（不写死色值）。
      *   面板不可见时暂停，不耗电。
      */
+    /**
+     * 「正在处理待添加」标志（2026-10-19）。
+     * 打开待添加框时置 true，关闭时 false。
+     * 网络层学习在 true 期间**不入待添加池** —— 否则用户边忽略边有新候选冒进来，
+     * 永远清不完（用户实测「忽略几个又出来几个」）。
+     */
+    private volatile boolean pendingConfirmPanelOpen = false;
+
+    /** 日历脉冲动画句柄（2026-10-19）：重建前先 cancel，避免动画叠加。 */
+    private volatile android.animation.ValueAnimator dayPulseAnim = null;
+
     private void startSignBtnFx(final android.app.Activity act, final Button btn, final boolean allDone) {
         startSignBtnFx(act, btn, allDone, false);
     }
@@ -18582,11 +18756,22 @@ public final class TGAutoSignCore {
             va.setDuration(isBulk ? 1100 : 2400);
             va.setRepeatCount(android.animation.ValueAnimator.INFINITE);
             va.setInterpolator(new android.view.animation.LinearInterpolator());
+            final int[] lastState = new int[]{-1};
+            final long[] lastStateAt = new long[]{0L};
             va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
                 @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
                     try {
                         if (!btn.isShown()) return;              // 不可见 → 不动（省电）
-                        int st = signBtnState();
+                        // 2026-10-19：状态判定降频到 500ms。
+                        // 改前每帧调 signBtnState() → accountStats() → 遍历全部目标，
+                        // 60fps 下就是每秒 60 次全量统计（主线程堆栈实证）。
+                        // 按钮外观的呼吸是视觉动画，状态不可能在 16ms 内变。
+                        long nowSt = android.os.SystemClock.uptimeMillis();
+                        if (nowSt - lastStateAt[0] > 500L || lastState[0] == -1) {
+                            lastState[0] = signBtnState();
+                            lastStateAt[0] = nowSt;
+                        }
+                        int st = lastState[0];
                         if (st == 2) { a.cancel(); return; }     // 转完成 → 停
 
                         float t = ((Float) a.getAnimatedValue()).floatValue();
@@ -19324,20 +19509,47 @@ public final class TGAutoSignCore {
     }
 
 
+    /**
+     * 读 long 值。
+     *
+     * 2026-10-19 性能修复：旧实现是 `prefs.getAll().get(key)` ——
+     * getAll() 会**复制整张 map**（O(n)），而本方法在
+     * loadTargetsIntoUncached 里被每个目标的每个字段各调一次，
+     * 又被动画帧回调链每帧触发 → 主线程饱和（官方版实测堆栈为证）。
+     * 现在改用 getLong：O(1) 内存查表，不复制。
+     * 兼容：历史值可能以 String 存过，读不到再回退一次字符串解析。
+     */
     private long numLong(String key, long def) {
         try {
-            Object o = prefs.getAll().get(key);
-            if (o instanceof Number) return ((Number) o).longValue();
+            if (!prefs.contains(key)) return def;
+            return prefs.getLong(key, def);
+        } catch (ClassCastException cce) {
+            try {
+                String s = prefs.getString(key, null);
+                if (s != null && s.trim().length() > 0) return Long.parseLong(s.trim());
+            } catch (Throwable ignored) {}
         } catch (Throwable ignored) {}
         return def;
     }
 
+    /**
+     * 读字符串值。
+     *
+     * 2026-10-19 性能修复：理由同 numLong —— 旧实现每次 getAll() 复制整张表。
+     * 这里改用 getString（O(1)），类型不符时兜底用 getAll 走一次原逻辑，
+     * 保证历史上以非 String 类型存的值仍然读得到。
+     */
     private String strOf(String key) {
         try {
-            Object o = prefs.getAll().get(key);
-            if (o instanceof String) return (String) o;
-            if (o != null) return String.valueOf(o);
-        } catch (Throwable ignored) {}
+            if (!prefs.contains(key)) return null;
+            return prefs.getString(key, null);
+        } catch (Throwable ignored) {
+            // 类型不是 String（历史数据可能存了 Integer/Long/Boolean）
+            try {
+                Object o = prefs.getAll().get(key);
+                if (o != null) return String.valueOf(o);
+            } catch (Throwable ignored2) {}
+        }
         return null;
     }
 
@@ -19489,10 +19701,20 @@ public final class TGAutoSignCore {
         try {
             // 宽松模式：来者不拒 —— 点什么学什么（仍然尊重「排除的 bot」，
             // 因为那是用户明确拉黑的整只 bot，不属于"判定词对不上"的范畴）。
+            //
+            // 2026-10-18：修「宽松模式让排除规则失效」。
+            // 改前这里直接 return null，下面的 excludeHit 永远不执行 ——
+            // 用户在设置里写的排除规则（如「含验证码的不要学」）全被无视，
+            // 而界面文案只写「点了就学」，没说会绕过排除规则。
+            // 现在：宽松只豁免**导航按钮过滤**与内置启发式；
+            //       用户亲手写的排除规则仍然生效（用户表态 > 模式设置）。
             if (LOOSE_MODE) {
                 if (did != 0 && LEARN_BLOCKED_DIDS.contains(did)) {
                     return Lang.tf("命中「排除的 bot」({0})", did);
                 }
+                String hayL = (context == null ? "" : context) + " \n " + (text == null ? "" : text);
+                String hitL = excludeHit(hayL);
+                if (hitL != null) return Lang.tf("命中排除规则「{0}」", hitL);
                 return null;
             }
             if (did != 0 && LEARN_BLOCKED_DIDS.contains(did)) {
@@ -19592,6 +19814,118 @@ public final class TGAutoSignCore {
             if (reason.indexOf("模块自身") >= 0) return false;
             return true;
         } catch (Throwable t) { return false; }
+    }
+
+    /**
+     * 待添加条目被处理后的收尾（2026-10-19）。
+     *
+     * 设计目标（用户要求「框体实时跟踪」）：
+     *   · 还有剩余 → 那一行淡出右滑消失，对话框**不重建**（不闪、不跳）
+     *   · 已无剩余 → 给 1 秒完成提示，然后自动关窗（不再弹空框）
+     *
+     * @param rowCard 这一行对应的视图（淡出后移除）
+     */
+    /**
+     * 刷新主列表「待添加」横幅数字（2026-10-19）。
+     *
+     * 为什么需要：待添加框是独立对话框，处理/关闭后主列表 showList
+     * 里那条横幅的数字不会自动变。这里直接改那条 TextView 的文案。
+     * 拿不到（列表已关）就忽略 —— 下次打开 showList 会重算。
+     */
+    private void refreshPendingBanner(final Activity act) {
+        try {
+            if (act == null || act.isFinishing()) return;
+            final TextView lb = pendingBannerLabel;
+            if (lb == null) return;
+            final int n = pendingConfirmCount(currentAccount());
+            lb.post(new Runnable() {
+                @Override public void run() {
+                    try {
+                        if (n > 0) {
+                            // 还有剩余：更新数字 + 一次轻微弹跳，让变化被看见
+                            lb.setText(Lang.tf("{0} 个新按钮待添加 —— 点此选择加入", n));
+                            lb.setScaleX(0.96f); lb.setScaleY(0.96f);
+                            lb.animate().scaleX(1f).scaleY(1f).setDuration(160).start();
+                        } else {
+                            // 清空了：整条横幅**高度动画收起**，完成使命退场
+                            View banner = lb.getParent() instanceof View ? (View) lb.getParent() : null;
+                            if (banner == null) { lb.setVisibility(View.GONE); return; }
+                            final int fullH = banner.getHeight();
+                            if (fullH <= 0) { banner.setVisibility(View.GONE); return; }
+                            android.animation.ValueAnimator va =
+                                    android.animation.ValueAnimator.ofInt(fullH, 0);
+                            va.setDuration(300);
+                            va.setInterpolator(new android.view.animation.DecelerateInterpolator());
+                            va.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+                                @Override public void onAnimationUpdate(android.animation.ValueAnimator a) {
+                                    try {
+                                        int h = ((Integer) a.getAnimatedValue()).intValue();
+                                        android.view.ViewGroup.LayoutParams lp = banner.getLayoutParams();
+                                        lp.height = h;
+                                        banner.setLayoutParams(lp);
+                                        banner.setAlpha((float) h / fullH);
+                                    } catch (Throwable ignored) {}
+                                }
+                            });
+                            va.addListener(new android.animation.AnimatorListenerAdapter() {
+                                @Override public void onAnimationEnd(android.animation.Animator a) {
+                                    try { banner.setVisibility(View.GONE); } catch (Throwable ignored) {}
+                                }
+                            });
+                            va.start();
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            });
+        } catch (Throwable t) { noteSwallowed("refreshPendingBanner", t); }
+    }
+
+    /** 主列表「待添加」横幅的文案控件（showList 构建时赋值，供关窗后刷新）。 */
+    private volatile TextView pendingBannerLabel = null;
+
+    private void afterPendingHandled(final Activity act, final Object[] curDlg,
+                                     final View rowCard, final int acc, final String label) {
+        try {
+            toast(label);
+            // 行级动画：淡出 + 右移，180ms
+            if (rowCard != null) {
+                try {
+                    rowCard.animate()
+                            .alpha(0f)
+                            .translationX(Theme.dp(act, 48))
+                            .setDuration(180)
+                            .setInterpolator(new android.view.animation.AccelerateInterpolator())
+                            .withEndAction(new Runnable() {
+                                @Override public void run() {
+                                    try { rowCard.setVisibility(View.GONE); } catch (Throwable ignored) {}
+                                }
+                            })
+                            .start();
+                } catch (Throwable ignored) {}
+            }
+            final int left = pendingConfirmCount(acc);
+            // 2026-10-19：立刻刷新主列表横幅（不等关窗回调），动画当场播
+            refreshPendingBanner(act);
+            if (left > 0) {
+                // 还有剩余：不重建，只把标题里的数字改掉（原地跟踪）
+                try {
+                    if (curDlg[0] != null) {
+                        java.lang.reflect.Method setTitle = curDlg[0].getClass().getMethod("setTitle", CharSequence.class);
+                        setTitle.invoke(curDlg[0], Lang.tf("待添加（{0}）", left));
+                    }
+                } catch (Throwable ignored) {}
+                return;
+            }
+            // 已清空：1 秒后自动关窗，顺带一句收尾
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
+                @Override public void run() {
+                    try {
+                        if (curDlg[0] != null) dismissOne(curDlg[0]);
+                        toast(Lang.tr("待添加已清空"));
+                    } catch (Throwable ignored) {}
+                }
+            }, 900L);
+        } catch (Throwable t) { noteSwallowed("afterPendingHandled", t); }
     }
 
     /** 被拦下的按钮：能捞回就进待添加池。返回 true 表示已入池。 */
@@ -21239,10 +21573,20 @@ public final class TGAutoSignCore {
                 return;
             }
 
-            // ④ 判不出：沉淀到「未识别回复」，给用户处置
+            // ④ 判不出：先剔掉公告，再沉淀到「未识别回复」
+            //
+            // 2026-10-18（用户实测）：原实现无条件入池，而 bot 的公告尾巴
+            // 全都含「签到/积分」字样，于是整段防骗广告塞满主列表 ——
+            // 用户看到的 10 条里 6 条是广告，真正该判的一条也没有。
+            // 现在：公告只记进「被自动过滤」，可在那里一次收回，不污染主列表。
+            markResultCode(prefix, id, SignLogic.R_REPLIED_UNK);
+            if (SignLogic.isLikelyAnnouncement(text)) {
+                logd("【回复判定】" + did + " 像公告/广告，不进未识别池: " + clip(text, 50));
+                try { noteSkippedUnknown(prefix, "像是公告/广告", text); } catch (Throwable ignored) {}
+                return;
+            }
             jlog("【回复判定】" + did + " 回复认不出，已记录一条（可去「设置 → 回复判定词」补词）："
                  + clip(text, 60));
-            markResultCode(prefix, id, SignLogic.R_REPLIED_UNK);
             try {
                 io.github.wlmosv_png.tgautosign.judge.UnkPool.add(
                         prefs, prefix + "unk_pool", prefix + "unk_seen", did, text,
@@ -21932,14 +22276,25 @@ public final class TGAutoSignCore {
                         noteJudgeOffOnce();
                         return;
                     }
+                    // ── 2026-10-18：进度提示必须排在宽松模式**之前** ──
+                    // 宽松模式改前在这里直接判成功，而 looksLikeProgress 的检查在它后面，
+                    // 于是「✅ 正在签到,请稍后…」被当成结果 → 目标立刻变绿，
+                    // 真正的结论到达时已无意义（用户日志 2026-10-16 07:32:31 实证）。
+                    // 进度语永远只是中间态，任何模式下都不产生结论。
+                    if (SignLogic.looksLikeProgress(replyText)) {
+                        logd("【回复判定】" + did + " 进度提示（宽松模式也等结果）: " + clip(replyText, 40));
+                        return;
+                    }
+
                     // 宽松模式：**只要 bot 回了内容就算成功**，完全不看判定词。
                     // 专门对付措辞千奇百怪、内置词表永远对不上的机器人。
                     // 放在词表判定之前，命中即返回。
                     if (LOOSE_MODE) {
                         // 宽松 ≠ 盲目：**明确失败**仍然判失败（活动已结束 / 请先关注 /
                         // 未绑定账号 / failed 之类）。否则 bot 挂了也会显示绿色，用户被骗。
+                        // 2026-10-18：改读全局键（旧版读废弃 cfg_ 键，自定义失败词形同不存在）。
                         String[] looseExtraFail = JUDGE_USE_CUSTOM
-                                ? SignLogic.parseExtraWords(cfgStr("fail_words", "")) : null;
+                                ? SignLogic.parseExtraWords(prefs.getString(Keys.failWordsGlobal(), "")) : null;
                         String[] looseFail = mergeWords(SignLogic.FAIL_WORDS_DEFAULT, looseExtraFail);
                         Object[] lvd = SignLogic.verdictDetail(replyText, new String[0], new String[0], looseFail);
                         if (((Integer) lvd[0]).intValue() == SignLogic.V_FAILED) {
@@ -21954,7 +22309,12 @@ public final class TGAutoSignCore {
                                      .putInt(kRetry(prefix, lid), lcur + 1)
                                      .putLong(kRetryAt(prefix, lid), System.currentTimeMillis() + backoffDelay(Math.max(lcur, 1)))
                                      .putString(kRetryDay(prefix, lid), todayStr()).commit();
-                                logw("【回复判定】宽松模式：命中明确失败词「" + lhit + "」→ 判失败并退避重试 (id=" + lid + ")");
+                                // 2026-10-17：失败分支必须带原文。
+                                // 成功分支一直有 clip(replyText,50)，失败分支没有 →
+                                // 「为什么判失败」事后完全查不到（用户实测两个 bot
+                                // 长期失败，光看日志无法判断真假，实际是模板误撞）。
+                                logw("【回复判定】宽松模式：命中明确失败词「" + lhit + "」→ 判失败并退避重试 (id=" + lid + ")"
+                                     + "  原文: " + clip(replyText, 60));
                                 noteResult(ctrlAcc >= 0 ? ctrlAcc : currentAccount(), false);
                                 return;
                             }
@@ -22189,12 +22549,29 @@ public final class TGAutoSignCore {
                     // loose     → 放行：当成功（明确失败词已在上面判过，不会走到这）
                     // fail      → 拦截：当失败，撤销已签并安排重试
                     if ("loose".equals(FALLBACK) || "fail".equals(FALLBACK)) {
+                        // ── 2026-10-18 修「放行把任何废话都算成功」──
+                        // 改前：只要是 V_UNKNOWN 就按用户选的档处理。
+                        // 于是 bot 回「抬头向上看咱们今日路线查询价格表」这种
+                        // 非进度、非菜单的公告，选「放行」就直接 markSigned。
+                        // 用户视角 = 「bot 说句废话就算签到了」，第二天断签才发现。
+                        // 现在：放行必须「这条确实像签到结果」才生效；
+                        //       不像的一律保持 UNKNOWN（继续等 / 进池）。
+                        boolean looksRes = SignLogic.looksLikeSignResult(replyText);
+                        if ("loose".equals(FALLBACK) && !looksRes) {
+                            logd("【回复判定】" + did + " 兜底=放行，但这条不像签到结果 → 继续等: "
+                                 + clip(replyText, 40));
+                        } else {
                         boolean asOk = "loose".equals(FALLBACK);
                         int marked = 0;
                         for (Map<String, Object> m : judgeTargets) {
                             if (entryDid(m) != did) continue;
                             String id = entryId(m);
                             if (asOk) {
+                                // ── 2026-10-18：成功也要「今天在途」──
+                                // 失败分支一直有这个检查，成功分支漏了：
+                                // 任何历史目标都会被 markSigned。
+                                long okSent = prefs.getLong(prefix + "sent_at_" + id, 0L);
+                                if (okSent <= 0L || System.currentTimeMillis() - okSent > PENDING_TTL_MS) continue;
                                 prefs.edit().putInt(kRetry(prefix, id), 0)
                                      .remove(kRetryAt(prefix, id)).remove(kRetryDay(prefix, id)).apply();
                                 markSigned(prefix, id);
@@ -22219,6 +22596,7 @@ public final class TGAutoSignCore {
                              + clip(replyText, 40));
                         noteResult(ctrlAcc >= 0 ? ctrlAcc : currentAccount(), asOk);
                         return;
+                        }   // end if (looksRes)
                     }
 
                     boolean progress = SignLogic.looksLikeProgress(replyText);
@@ -22594,23 +22972,46 @@ public final class TGAutoSignCore {
     }
 
     /** 把「被跳过」的全部补收进池（方案 4.1 的「全部收进池」按钮）。 */
+    /** 「全部收回」单次最多收回多少条（2026-10-18）。 */
+    private static final int MAX_PROMOTE = 40;
+
     private int promoteSkippedUnknown() {
         int n = 0;
         try {
             String prefix = accountPrefix();
             java.util.List<String[]> list = skippedUnknownList();
+            java.util.List<String> keep = new java.util.ArrayList<String>();
             for (String[] kv : list) {
                 String text = kv[1];
                 if (text == null || text.length() == 0) continue;
+                // 2026-10-18 ①：公告不收回。
+                // 改前无脑全塞，收回来又立刻被公告过滤挡掉，白忙一场且刷日志。
+                if (SignLogic.isLikelyAnnouncement(text)) continue;
+                if (n >= MAX_PROMOTE) {
+                    // 2026-10-18 ②：单次上限。改前一次全收 —— 用户实测点一下卡死
+                    // （200 条 × 12 控件整页重建）。留下的下次再收。
+                    keep.add(kv[0] + "\t" + text);
+                    continue;
+                }
                 try {
                     io.github.wlmosv_png.tgautosign.judge.UnkPool.add(
                             prefs, prefix + "unk_pool", prefix + "unk_seen", 0L, text,
                             io.github.wlmosv_png.tgautosign.judge.ReplyNormalizer.normalize(text),
                             todayStr(), null, 0L);
                     n++;
-                } catch (Throwable ignored) {}
+                } catch (Throwable ignored) { keep.add(kv[0] + "\t" + text); }
             }
-            if (n > 0) prefs.edit().remove(prefix + "unk_skipped").apply();
+            // 写回未收回的部分（而不是无脑清空）
+            if (keep.isEmpty()) {
+                prefs.edit().remove(prefix + "unk_skipped").apply();
+            } else {
+                StringBuilder sb = new StringBuilder();
+                for (String k : keep) { if (sb.length() > 0) sb.append('\n'); sb.append(k); }
+                prefs.edit().putString(prefix + "unk_skipped", sb.toString()).apply();
+            }
+            if (n > 0) {
+                jlog("[未识别] 已收回 " + n + " 条进池" + (keep.isEmpty() ? "" : "，余 " + keep.size() + " 条留待下次"));
+            }
         } catch (Throwable t) { noteSwallowed("promoteSkippedUnknown", t); }
         return n;
     }
@@ -24271,12 +24672,60 @@ public final class TGAutoSignCore {
         // 自定义补充词（可选）：只在需要时填，且要求开关开着
         R.judgeCustomSw = swRow(act, "使用我的自定义词（叠加在内置之上）", JUDGE_USE_CUSTOM);
         card3.addView(R.judgeCustomSw);
+
+        // ── 2026-10-18：把「这两行填的是什么范围」讲清楚 ──
+        // 用户实测困惑：「设置里的关键词 和 未识别回复里学的词 不同步」。
+        // 事实是：这两行 = 全局级（对所有目标生效）；
+        //   学习页默认写 Bot 级（只对那只机器人生效），两者本来就是不同范围。
+        // 但界面从没说过，用户自然以为是同一个东西丢了。
+        TextView scopedTip = new TextView(act);
+        scopedTip.setTextSize(Theme.TS_CAPTION);
+        scopedTip.setTextColor(Theme.txtMuted(act));
+        scopedTip.setTypeface(Theme.text());
+        scopedTip.setPadding(dp(4), dp(0), dp(4), dp(6));
+        try {
+            int gOk = splitWordsStatic(prefs.getString(Keys.okWordsGlobal(), "")).size();
+            int gFail = splitWordsStatic(prefs.getString(Keys.failWordsGlobal(), "")).size();
+            java.util.List<String[]> allOk = allJudgeWordsInternal(true);
+            java.util.List<String[]> allFail = allJudgeWordsInternal(false);
+            int tOk = allOk == null ? 0 : allOk.size();
+            int tFail = allFail == null ? 0 : allFail.size();
+            int bOk = Math.max(0, tOk - gOk);
+            int bFail = Math.max(0, tFail - gFail);
+
+            // 2026-10-19：把「合计」摆出来，让两处数字能对上。
+            // 用户实测困惑：学习页说成功 9，设置页框里只有 4 条。
+            // 其实 4(全局) + 5(bot级) = 9，只是设置页只管全局级。
+            scopedTip.setText(Lang.tf(
+                    "下面两个框 = **全局词**（对所有目标生效）：成功 {0} 条 / 失败 {1} 条。\n"
+                  + "另有各 bot 专属：成功 {2} 条 / 失败 {3} 条（避免互相污染）。\n"
+                  + "合计 成功 {4} 条 / 失败 {5} 条 —— 与「未识别回复」页顶部数字一致。",
+                    gOk, gFail, bOk, bFail, tOk, tFail));
+        } catch (Throwable t) {
+            scopedTip.setText(Lang.tr("下面两个框 = 全局词（对所有目标生效）。"));
+        }
+        card3.addView(scopedTip);
+
+        // 统一管理入口：完整列表在「未识别回复」页底部
+        Button manageAll = mkBtn(act);
+        withIconText(act, manageAll, "key", Lang.tr("查看并管理全部判定词"));
+        manageAll.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                try {
+                    if (R.act != null) showLearnPage(R.act);
+                } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
+            }
+        });
+        card3.addView(manageAll);
         R.okWordsEd = adInput(act, "如: 领取完毕,今日完成", 0);
-        R.okWordsEd.setText(strOf("jmb_ok_words"));
+        // 2026-10-18：迁移历史值 —— 老版本把词存到 acc0_cfg_ok_words，
+        // 判定链从来没读过。这里在首次打开设置时补进全局键，不丢用户数据。
+        migrateLegacyJudgeWords();
+        R.okWordsEd.setText(strOf(Keys.okWordsGlobal()));
         R.okWordsEd.setVisibility(JUDGE_USE_CUSTOM ? android.view.View.VISIBLE : android.view.View.GONE);
         card3.addView(R.okWordsEd);
         R.failWordsEd = adInput(act, "如: 次数已用完,不可领取", 0);
-        R.failWordsEd.setText(strOf("jmb_fail_words"));
+        R.failWordsEd.setText(strOf(Keys.failWordsGlobal()));
         R.failWordsEd.setVisibility(JUDGE_USE_CUSTOM ? android.view.View.VISIBLE : android.view.View.GONE);
         card3.addView(R.failWordsEd);
         R.judgeCustomSw.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {

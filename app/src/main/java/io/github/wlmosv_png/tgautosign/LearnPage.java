@@ -62,6 +62,14 @@ public final class LearnPage {
          * @param targetId  目标条目 id（scope=target 时用）
          */
         void addJudgeWordScoped(String word, boolean isOk, String scope, long did, String targetId);
+
+        /**
+         * 判定词表发生变化（新增/删除）后调用。
+         *
+         * 2026-10-18：从「卡住的目标 → 补判定词」进来时，学完必须让那张卡片
+         * 重新评估一次 —— 否则用户补完词回到列表，看到的仍是「判不出」。
+         */
+        void notifyWordsChanged();
         void addIgnoredPattern(String pattern);
         java.util.Set<String> ignoredPatterns();
         /** 撤销一条「已忽略」（问题 6）；池里的原文仍在，撤了就会回到待确认列表。 */
@@ -107,6 +115,17 @@ public final class LearnPage {
     /** 三级判定词缓存（避免每个 pattern 都拉一次全量）。 */
     private java.util.List<String[]> wordsCacheOk = null;
     private java.util.List<String[]> wordsCacheFail = null;
+
+    /**
+     * 折叠区展开状态（2026-10-19）。
+     *
+     * 用户实测：添加/删除一个词后整页重建，所有折叠区又折回去，
+     * 得重新点开 —— 操作三个词就要点三次展开。
+     * 这里记住状态，重建时恢复；只在本次打开周期内有效。
+     */
+    private boolean expandIgnored = false;
+    private boolean expandSkipped = false;
+    private boolean expandKnown = false;
 
     /**
      * 命中统计**批量预取**（2026-10-07 性能修复）。
@@ -171,6 +190,25 @@ public final class LearnPage {
     }
 
     /** 单行预览：压缩空白 + 截断。 */
+    /**
+     * 压缩连续重复的装饰符（2026-10-19 性能修复）。
+     *
+     * 为什么：bot 常用 ━ ═ ─ ▬ ● 之类画分隔线，一行能连出二三十个。
+     * 在等宽字体下每个都是 CJK 宽字符且无断行机会，
+     * 排版器必须逐字符测量 → 单个 TextView onMeasure 实测 926ms（真机日志）。
+     *
+     * 只影响**显示**，不动聚类键与判定值。
+     */
+    static String squeezeDeco(String s) {
+        if (s == null || s.length() == 0) return "";
+        String t = s;
+        // 同一装饰符连续出现 3 次以上 → 压成 3 个（视觉上仍是短线）
+        t = t.replaceAll("([\u2501\u2500\u2550\u2500\u2581\u2584\u2588\u25AC\u25AE\u2E3B])\\1{3,}", "$1$1$1");
+        // 通用：任意同一非字母数字字符连续 4 次以上 → 3 个
+        t = t.replaceAll("([^\\p{L}\\p{N}\\s])\\1{3,}", "$1$1$1");
+        return t;
+    }
+
     private static String preview(String s) {
         if (s == null) return "";
         String t = s.replace('\n', ' ').replace('\r', ' ').trim();
@@ -335,10 +373,20 @@ public final class LearnPage {
         ignoredHost = null;
         pendingCountLabel = null;
 
+        // 2026-10-18：细粒度计时（用户实测 build=105ms，需定位到具体阶段）
+        long _t0 = android.os.SystemClock.uptimeMillis();
         final List<UnkPool.Item> rawItems = UnkPool.list(cb.prefs(), poolKey);
+        long _t1 = android.os.SystemClock.uptimeMillis();
         final List<ReplyNormalizer.Pattern> pats = ReplyNormalizer.clusterItems(rawItems);
+        long _t2 = android.os.SystemClock.uptimeMillis();
 
         java.util.Set<String> ignored = cb.ignoredPatterns();
+        long _t3 = android.os.SystemClock.uptimeMillis();
+        try {
+            cb.logPerf("fillContent 分段: poolList=" + (_t1 - _t0) + "ms(" + rawItems.size()
+                     + "条) cluster=" + (_t2 - _t1) + "ms(" + pats.size()
+                     + "模式) ignored=" + (_t3 - _t2) + "ms");
+        } catch (Throwable ignored2) {}
         final List<ReplyNormalizer.Pattern> shown = new ArrayList<ReplyNormalizer.Pattern>();
         final List<ReplyNormalizer.Pattern> ignoredPats = new ArrayList<ReplyNormalizer.Pattern>();
         for (ReplyNormalizer.Pattern pt : pats) {
@@ -346,51 +394,40 @@ public final class LearnPage {
             else shown.add(pt);
         }
 
+        long _h0 = android.os.SystemClock.uptimeMillis();
         // ── 顶部：一句话说清这页是干嘛的 + 现在有多少活 ──
         LinearLayout head = new LinearLayout(act);
         head.setOrientation(LinearLayout.VERTICAL);
         head.setPadding(dp(12), dp(12), dp(12), dp(12));
         head.setBackground(containerBg(Theme.surface(act, 1)));
 
+        // ── 2026-10-19 去臃肿：标题与计数合成一行，解释文字全删 ──
+        // 用户反馈「很臃肿」。原来头部是「标题 + 计数 + 两段解释」共四行，
+        // 占掉首屏近 1/4，而解释文字看过一次就再也不需要。
+        LinearLayout headRow = new LinearLayout(act);
+        headRow.setOrientation(LinearLayout.HORIZONTAL);
+        headRow.setGravity(Gravity.CENTER_VERTICAL);
+
         TextView hTitle = new TextView(act);
         hTitle.setTextSize(Theme.TS_SUBTITLE);
         hTitle.setTextColor(Theme.termTxt(act));
         hTitle.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        hTitle.setText(Lang.tr("帮我认一认这些回复"));
-        head.addView(hTitle);
+        hTitle.setText(Lang.tr("帮我认一认"));
+        headRow.addView(hTitle, new LinearLayout.LayoutParams(0, -2, 1f));
 
         pendingCountLabel = new TextView(act);
         pendingCountLabel.setTextSize(Theme.TS_SECOND);
         pendingCountLabel.setTextColor(Theme.termCyan(act));
         pendingCountLabel.setTypeface(Theme.text());
-        pendingCountLabel.setPadding(0, dp(4), 0, dp(2));
+        pendingCountLabel.setGravity(Gravity.END);
         pendingCountLabel.setText(shown.isEmpty()
                 ? Lang.tr("都处理完了")
-                : Lang.tf("还有 {0} 条等你判断", shown.size()));
-        head.addView(pendingCountLabel);
-
-        TextView hSub = new TextView(act);
-        hSub.setTextSize(Theme.TS_CAPTION);
-        hSub.setTextColor(Theme.termFaint(act));
-        hSub.setTypeface(Theme.text());
-        hSub.setLineSpacing(dp(2), 1f);
-        hSub.setText(Lang.tr("机器人回复了、但我认不出结果的消息会攒在这里。"
-                           + "你只要告诉我「这样的话算不算签到成功」，以后同类回复我就能自动认出来。"));
-        // ── 2026-10-09 P2-b：说清"这个词还能在哪管" ──
-        // 群反馈里有人找不到手动加词的地方（「奥 看到了」= 翻了半天）。
-        // 判定词全貌在「我已经学会的词」里（下方折叠），增删都在那儿；
-        // 这里直接点明，省得他们去设置里瞎翻。
-        TextView where = new TextView(act);
-        where.setTextSize(Theme.TS_CAPTION);
-        where.setTextColor(Theme.termFaint(act));
-        where.setTypeface(Theme.text());
-        where.setLineSpacing(dp(2), 1f);
-        where.setPadding(0, dp(4), 0, 0);
-        where.setText(Lang.tr("已有判定词都在页面底部「我已经学会的词」里，可以随时加一个、删一个。"));
-        head.addView(where);
-        head.addView(hSub);
+                : Lang.tf("{0} 条待判", shown.size()));
+        headRow.addView(pendingCountLabel, new LinearLayout.LayoutParams(-2, -2));
+        head.addView(headRow);
         box.addView(head);
 
+        long _h1 = android.os.SystemClock.uptimeMillis();
         if (shown.isEmpty()) {
             box.addView(emptyBlock(rawItems.size(), pats.size()));
         } else {
@@ -421,7 +458,9 @@ public final class LearnPage {
                         } else {
                             try { ((android.view.ViewGroup) box).removeView(more); } catch (Throwable ignored) {}
                         }
-                        refreshPendingCount(shown.size() - (to - BATCH) + (to - from));
+                        // 2026-10-18 修算术：原式 size-(to-BATCH)+(to-from)
+                        // 里 to-from 恒等于 BATCH，to-BATCH 越展越大 → 剩余数越展越多。
+                        refreshPendingCount(shown.size() - to);
                     }
                 });
                 LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(-1, -2);
@@ -431,6 +470,11 @@ public final class LearnPage {
             }
         }
 
+        long _h2 = android.os.SystemClock.uptimeMillis();
+        try {
+            cb.logPerf("build 分段: head=" + (_h1 - _h0) + "ms cards=" + (_h2 - _h1)
+                     + "ms (" + shown.size() + "张)");
+        } catch (Throwable ignoredPerf) {}
         // ── 已忽略（折叠成一行，需要时才展开）──
         if (!ignoredPats.isEmpty()) {
             final LinearLayout host = new LinearLayout(act);
@@ -443,20 +487,54 @@ public final class LearnPage {
             toggle.setTypeface(Theme.text());
             toggle.setPadding(dp(12), dp(10), dp(12), dp(10));
             toggle.setBackground(containerBg(Theme.surface(act, 1)));
-            toggle.setText(Lang.tf("已忽略 {0} 条  ▾ 点开可恢复", ignoredPats.size()));
+            toggle.setText(expandIgnored
+                    ? Lang.tf("已忽略 {0} 条  ▴ 点此收起", ignoredPats.size())
+                    : Lang.tf("已忽略 {0} 条  ▾ 点开可恢复", ignoredPats.size()));
             host.addView(toggle);
 
             final LinearLayout inner = new LinearLayout(act);
             inner.setOrientation(LinearLayout.VERTICAL);
-            inner.setVisibility(View.GONE);
-            for (final ReplyNormalizer.Pattern pt : ignoredPats) {
-                inner.addView(ignoredBlock(pt, prefix, poolKey, inner));
+            // 2026-10-19：恢复上次的展开状态，别把用户刚点开的又折回去
+            inner.setVisibility(expandIgnored ? View.VISIBLE : View.GONE);
+            // 2026-10-18：分批。改前 for 全建 —— 已忽略条数一多就是
+            // 几百个控件一次性构建，展开时整页卡顿（与「等你判断」同因）。
+            final int ignBatch = Math.min(BATCH, ignoredPats.size());
+            for (int ii = 0; ii < ignBatch; ii++) {
+                inner.addView(ignoredBlock(ignoredPats.get(ii), prefix, poolKey, inner));
+            }
+            final TextView ignMore = new TextView(act);
+            ignMore.setTextSize(Theme.TS_CAPTION);
+            ignMore.setTextColor(Theme.termCyan(act));
+            ignMore.setTypeface(Theme.text());
+            ignMore.setGravity(Gravity.CENTER);
+            ignMore.setPadding(dp(12), dp(10), dp(12), dp(10));
+            if (ignoredPats.size() > ignBatch) {
+                ignMore.setText(Lang.tf("还有 {0} 条 · 点此展开", ignoredPats.size() - ignBatch));
+                ignMore.setOnClickListener(new View.OnClickListener() {
+                    private int fromI = ignBatch;
+                    @Override public void onClick(View v) {
+                        int toI = Math.min(ignoredPats.size(), fromI + BATCH);
+                        for (int ii = fromI; ii < toI; ii++) {
+                            inner.addView(ignoredBlock(ignoredPats.get(ii), prefix, poolKey, inner));
+                        }
+                        fromI = toI;
+                        int leftI = ignoredPats.size() - toI;
+                        if (leftI > 0) {
+                            ignMore.setText(Lang.tf("还有 {0} 条 · 点此展开", leftI));
+                        } else {
+                            try { ((android.view.ViewGroup) ignMore.getParent()).removeView(ignMore); }
+                            catch (Throwable ignored) {}
+                        }
+                    }
+                });
+                inner.addView(ignMore);
             }
             host.addView(inner);
             toggle.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) {
                     boolean open = inner.getVisibility() == View.VISIBLE;
                     inner.setVisibility(open ? View.GONE : View.VISIBLE);
+                    expandIgnored = !open;   // 2026-10-19 记住状态
                     toggle.setText(open
                             ? Lang.tf("已忽略 {0} 条  ▾ 点开可恢复", ignoredPats.size())
                             : Lang.tf("已忽略 {0} 条  ▴ 点此收起", ignoredPats.size()));
@@ -481,12 +559,13 @@ public final class LearnPage {
                 tg.setTypeface(Theme.text());
                 tg.setPadding(dp(12), dp(10), dp(12), dp(10));
                 tg.setBackground(containerBg(Theme.surface(act, 1)));
-                tg.setText(Lang.tf("另有 {0} 条被自动过滤  ▾", skipped.size()));
+                tg.setText(Lang.tf("另有 {0} 条被自动过滤  ", skipped.size())
+                         + (expandSkipped ? "▴" : "▾"));
                 host2.addView(tg);
 
                 final LinearLayout inner2 = new LinearLayout(act);
                 inner2.setOrientation(LinearLayout.VERTICAL);
-                inner2.setVisibility(View.GONE);
+                inner2.setVisibility(expandSkipped ? View.VISIBLE : View.GONE);
                 inner2.setPadding(dp(4), dp(4), dp(4), dp(4));
 
                 TextView note = new TextView(act);
@@ -516,6 +595,12 @@ public final class LearnPage {
                     @Override public void onClick(View v) {
                         int n = cb.promoteSkipped();
                         cb.toast(Lang.tf("已收回 {0} 条", n));
+                        // 2026-10-18：不再 dismissAndRefresh（整页重建 = 所有卡重做，
+                        // 收回几十条时用户手感是「点一下卡死」）。走原地刷新，
+                        // 只清内容容器重填，对话框不动。
+                        try {
+                            if (canRefreshInPlace()) { refreshInPlace(); return; }
+                        } catch (Throwable ignored) {}
                         cb.dismissAndRefresh();
                     }
                 });
@@ -528,6 +613,7 @@ public final class LearnPage {
                     @Override public void onClick(View v) {
                         boolean open = inner2.getVisibility() == View.VISIBLE;
                         inner2.setVisibility(open ? View.GONE : View.VISIBLE);
+                        expandSkipped = !open;   // 2026-10-19 记住状态
                         tg.setText(Lang.tf("另有 {0} 条被自动过滤  ", skipped.size())
                                  + (open ? "▾" : "▴"));
                     }
@@ -565,193 +651,196 @@ public final class LearnPage {
         final LinearLayout card = block();
         card.setTag("card:" + pt.norm);
 
-        // ① 原文（折叠）
+        // ── ① 原话（唯一的主体，点它展开/收起）──
+        String raw0 = null;
+        try {
+            for (String s : pt.samples) {
+                if (s == null) continue;
+                if (raw0 == null || s.length() > raw0.length()) raw0 = s;
+            }
+        } catch (Throwable ignored) {}
+        if (raw0 == null || raw0.trim().length() == 0) raw0 = pt.norm;
+        final String fullText = uiClip(squeezeDeco(raw0));
+        final String shortText = preview(fullText);
+
         final TextView body = new TextView(act);
         body.setTextSize(Theme.TS_BODY);
         body.setTextColor(Theme.termTxt(act));
         body.setTypeface(Typeface.MONOSPACE);
-        body.setLineSpacing(dp(3), 1f);
-        final String fullText = uiClip(pt.norm);
-        final boolean needFold = fullText.length() > PREVIEW_MAX;
-        body.setText(needFold ? preview(fullText) : fullText);
+        body.setLineSpacing(dp(2), 1f);
+        try {
+            body.setBreakStrategy(android.text.Layout.BREAK_STRATEGY_SIMPLE);
+            body.setHyphenationFrequency(android.text.Layout.HYPHENATION_FREQUENCY_NONE);
+        } catch (Throwable ignored) {}
+        body.setText(shortText);
         card.addView(body);
 
-        if (needFold) {
-            final TextView fold = new TextView(act);
-            fold.setTextSize(Theme.TS_CAPTION);
-            fold.setTextColor(Theme.termCyan(act));
-            fold.setTypeface(Theme.text());
-            fold.setPadding(0, dp(2), 0, 0);
-            fold.setText(Lang.tr("展开全文 ▾"));
-            fold.setOnClickListener(new View.OnClickListener() {
+        // 点正文展开/收起全文（替代原来占一整行的「展开全文 ▾」）
+        if (fullText.length() > PREVIEW_MAX) {
+            body.setOnClickListener(new View.OnClickListener() {
                 private boolean open = false;
                 @Override public void onClick(View v) {
                     open = !open;
-                    body.setText(open ? fullText : preview(fullText));
-                    fold.setText(open ? Lang.tr("收起 ▴") : Lang.tr("展开全文 ▾"));
+                    body.setText(open ? fullText : shortText);
                 }
             });
-            card.addView(fold);
         }
 
-        TextView meta = new TextView(act);
-        meta.setTextSize(Theme.TS_CAPTION);
-        meta.setTextColor(Theme.termFaint(act));
-        meta.setTypeface(Theme.text());
-        meta.setPadding(0, dp(3), 0, 0);
-        meta.setText(Lang.tf("出现过 {0} 次", pt.count));
-        card.addView(meta);
-
-        // ② 问题
-        TextView ask = new TextView(act);
-        ask.setTextSize(Theme.TS_SECOND);
-        ask.setTextColor(Theme.termTxt(act));
-        ask.setTypeface(Theme.text());
-        ask.setPadding(0, dp(10), 0, dp(4));
-        ask.setText(Lang.tr("看到这样的话，算签到成功吗？"));
-        card.addView(ask);
-
-        // ③ 推荐词
+        // ── ② 词 + 作用域（同一行：词占满，作用域贴右）──
         final String suggest = suggestFor(pt.norm);
-        final EditText wordEd = new EditText(act);
-        // 供空词时自动聚焦（见 submit）
-        wordEd.setOnFocusChangeListener(new View.OnFocusChangeListener() {
-            @Override public void onFocusChange(View v, boolean has) {
-                if (has) inputRef = wordEd;
-            }
-        });
-        inputRef = wordEd;
-        wordEd.setTextSize(Theme.TS_BODY);
-        wordEd.setTextColor(Theme.termTxt(act));
-        wordEd.setTypeface(Typeface.MONOSPACE);
-        wordEd.setSingleLine(true);
-        wordEd.setInputType(InputType.TYPE_CLASS_TEXT);
-        wordEd.setPadding(dp(10), dp(9), dp(10), dp(9));
-        wordEd.setHint(Lang.tr("填一段这句话里固定出现的文字"));
-        wordEd.setHintTextColor(Theme.termFaint(act));
-        if (suggest != null && suggest.length() > 0) wordEd.setText(uiClip(suggest));
-        try { wordEd.setBackground(controlBg(Theme.surface(act, 3))); } catch (Throwable ignored) {}
-        card.addView(wordEd, new LinearLayout.LayoutParams(-1, -2));
+        final String suggestVal = (suggest != null && suggest.length() > 0) ? uiClip(suggest) : "";
 
-        TextView hint = new TextView(act);
-        hint.setTextSize(Theme.TS_CAPTION);
-        hint.setTextColor(Theme.termFaint(act));
-        hint.setTypeface(Theme.text());
-        hint.setPadding(0, dp(3), 0, 0);
-        hint.setText(Lang.tr("以后回复里出现这段文字，就按你的判断算。改一改也行。"));
-        card.addView(hint);
+        final LinearLayout wordRow = new LinearLayout(act);
+        wordRow.setOrientation(LinearLayout.HORIZONTAL);
+        wordRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams wrlp = new LinearLayout.LayoutParams(-1, -2);
+        wrlp.topMargin = dp(8);
+        wordRow.setLayoutParams(wrlp);
 
-        // 命中反馈（有记录才显示）
-        try {
-            if (suggest != null && suggest.length() > 0) {
-                long[] hs = hitOf(suggest);
-                if (hs != null && hs[0] > 0) {
-                    TextView hit = new TextView(act);
-                    hit.setTextSize(Theme.TS_CAPTION);
-                    hit.setTextColor(Theme.termGreen(act));
-                    hit.setTypeface(Theme.text());
-                    hit.setPadding(0, dp(4), 0, 0);
-                    hit.setText(Lang.tf("✓ 这个词已经帮你认出 {0} 次", hs[0]));
-                    card.addView(hit);
-                }
-            }
-        } catch (Throwable ignored) {}
+        final android.widget.FrameLayout wordHost = new android.widget.FrameLayout(act);
+        wordHost.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
 
-        // ④ 作用域：一行下拉
-        final String[] scope = new String[]{ ptDid != 0L ? "bot" : "target" };
-        TextView scRow = new TextView(act);
-        scRow.setTextSize(Theme.TS_SECOND);
-        scRow.setTextColor(Theme.termTxt(act));
-        scRow.setTypeface(Theme.text());
-        scRow.setPadding(dp(10), dp(9), dp(10), dp(9));
-        scRow.setBackground(controlBg(Theme.surface(act, 2)));
-        LinearLayout.LayoutParams scLp = new LinearLayout.LayoutParams(-1, -2);
-        scLp.topMargin = dp(8);
-        scRow.setLayoutParams(scLp);
-        card.addView(scRow);
+        final TextView wordPh = new TextView(act);
+        wordPh.setTextSize(Theme.TS_SECOND);
+        wordPh.setTextColor(suggestVal.length() > 0 ? Theme.termTxt(act) : Theme.termFaint(act));
+        wordPh.setSingleLine(true);
+        wordPh.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        wordPh.setPadding(dp(8), dp(6), dp(8), dp(6));
+        wordPh.setText(suggestVal.length() > 0 ? suggestVal : Lang.tr("点这里自定义判定词"));
+        try { wordPh.setBackground(controlBg(Theme.surface(act, 3))); } catch (Throwable ignored) {}
+        wordHost.addView(wordPh, new android.widget.FrameLayout.LayoutParams(-1, -2));
+        wordRow.addView(wordHost);
 
-        final Runnable[] refreshScope = new Runnable[1];
-        refreshScope[0] = new Runnable() {
+        final EditText[] lazyEd = new EditText[1];
+        final Runnable ensureEditor = new Runnable() {
             @Override public void run() {
-                String cur = scope[0];
-                String label = "global".equals(cur) ? Lang.tr("对所有目标生效")
-                             : "target".equals(cur) ? Lang.tr("只对这一条目标生效")
-                             : Lang.tr("只对这只机器人生效（推荐）");
-                scRow.setText(Lang.tf("适用范围： {0}   ▾", label));
+                if (lazyEd[0] != null) {
+                    try { lazyEd[0].requestFocus(); } catch (Throwable ignored) {}
+                    return;
+                }
+                EditText e;
+                try { e = new EditText(act); } catch (Throwable t) { return; }
+                e.setTextSize(Theme.TS_SECOND);
+                e.setTextColor(Theme.termTxt(act));
+                e.setSingleLine(true);
+                e.setInputType(InputType.TYPE_CLASS_TEXT);
+                e.setPadding(dp(8), dp(6), dp(8), dp(6));
+                e.setHint(Lang.tr("填这句话里固定出现的文字"));
+                e.setHintTextColor(Theme.termFaint(act));
+                if (suggestVal.length() > 0) {
+                    e.setText(suggestVal);
+                    e.setSelection(e.getText().length());
+                }
+                try { e.setBackground(controlBg(Theme.surface(act, 3))); } catch (Throwable ignored) {}
+                wordHost.removeAllViews();
+                wordHost.addView(e, new android.widget.FrameLayout.LayoutParams(-1, -2));
+                lazyEd[0] = e;
+                inputRef = e;
+                e.requestFocus();
+                try {
+                    android.view.inputmethod.InputMethodManager im =
+                        (android.view.inputmethod.InputMethodManager)
+                        act.getSystemService(android.content.Context.INPUT_METHOD_SERVICE);
+                    if (im != null) im.showSoftInput(e, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+                } catch (Throwable ignored) {}
             }
         };
-        refreshScope[0].run();
+        wordPh.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { ensureEditor.run(); }
+        });
 
-        scRow.setOnClickListener(new View.OnClickListener() {
+        // 作用域：紧凑标签，点开选（原来占整行）
+        final String[] scope = new String[]{ ptDid != 0L ? "bot" : "target" };
+        final TextView scopeTagView = new TextView(act);
+        scopeTagView.setTextSize(Theme.TS_CAPTION);
+        scopeTagView.setTextColor(Theme.termCyan(act));
+        scopeTagView.setTypeface(Theme.text());
+        scopeTagView.setPadding(dp(8), dp(6), dp(4), dp(6));
+        final Runnable refreshScope = new Runnable() {
+            @Override public void run() {
+                String cur = scope[0];
+                scopeTagView.setText("global".equals(cur) ? Lang.tr("所有目标 ▾")
+                        : "target".equals(cur) ? Lang.tr("仅此条 ▾") : Lang.tr("仅此bot ▾"));
+            }
+        };
+        refreshScope.run();
+        scopeTagView.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                // 轻量选择器：三个候选用对话框列表（不引入宿主 Spinner 主题风险）
-                final String[] keys = {"bot", "global", "target"};
+                final String[] keys = {"bot", "target", "global"};
                 String[] labels = {
                         Lang.tr("只对这只机器人生效（推荐）"),
-                        Lang.tr("对所有目标生效（影响最大）"),
-                        Lang.tr("只对这一条目标生效（最保守）")
+                        Lang.tr("只对这一条目标生效（最保守）"),
+                        Lang.tr("对所有目标生效（影响最大）")
                 };
                 android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(act);
                 b.setTitle(Lang.tr("这个词对谁生效？"));
                 b.setItems(labels, new android.content.DialogInterface.OnClickListener() {
                     @Override public void onClick(android.content.DialogInterface d, int which) {
                         scope[0] = keys[which];
-                        refreshScope[0].run();
+                        refreshScope.run();
                     }
                 });
                 try { b.show(); } catch (Throwable t) { cb.toast(Lang.tr("打不开选择器")); }
             }
         });
+        wordRow.addView(scopeTagView);
+        card.addView(wordRow);
 
-        // ⑤ 动作
-        LinearLayout row = new LinearLayout(act);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
-        rlp.topMargin = dp(10);
-        row.setLayoutParams(rlp);
+        // ── ③ 三个按钮 + 次数（次数缩成行尾小字）──
+        LinearLayout btns = new LinearLayout(act);
+        btns.setOrientation(LinearLayout.HORIZONTAL);
+        btns.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, -2);
+        blp.topMargin = dp(8);
+        btns.setLayoutParams(blp);
 
-        TextView okB = primaryButton(Lang.tr("算成功，记住它"));
+        TextView okB = pill(Lang.tr("算成功"), Theme.termGreen(act), 1);
         okB.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                submit(card, pt, wordEd.getText().toString(), true, scope[0], ptDid, ptTarget, prefix, poolKey);
+                submit(card, pt, currentWord(lazyEd[0], suggestVal), true, scope[0], ptDid, ptTarget, prefix, poolKey);
             }
         });
-        row.addView(okB, new LinearLayout.LayoutParams(0, -2, 1.35f));
-        row.addView(gap(6));
+        btns.addView(okB, new LinearLayout.LayoutParams(0, -2, 1f));
 
-        TextView failB = pill(Lang.tr("其实是失败"), Theme.termPink(act), 1);
+        TextView failB = pill(Lang.tr("算失败"), Theme.termPink(act), 1);
         failB.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                submit(card, pt, wordEd.getText().toString(), false, scope[0], ptDid, ptTarget, prefix, poolKey);
+                submit(card, pt, currentWord(lazyEd[0], suggestVal), false, scope[0], ptDid, ptTarget, prefix, poolKey);
             }
         });
-        row.addView(failB, new LinearLayout.LayoutParams(0, -2, 1f));
-        card.addView(row);
+        LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(0, -2, 1f);
+        flp.leftMargin = dp(6);
+        btns.addView(failB, flp);
 
-        TextView skip = new TextView(act);
-        skip.setTextSize(Theme.TS_CAPTION);
-        skip.setTextColor(Theme.termMuted(act));
-        skip.setTypeface(Theme.text());
-        skip.setGravity(Gravity.CENTER);
-        skip.setPadding(0, dp(10), 0, dp(2));
-        skip.setText(Lang.tr("先不管（以后想起来可以在「已忽略」里找回）"));
-        skip.setOnClickListener(new View.OnClickListener() {
+        TextView skipB = pill(Lang.tr("先不管"), Theme.termMuted(act), -1);
+        skipB.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                cb.addIgnoredPattern(pt.norm);
-                removeCard(card, new Runnable() {
-                    @Override public void run() {
-                        addToIgnoredSection(pt, prefix, poolKey);
-                    }
-                });
-                cb.toast(Lang.tr("已跳过"));
+                try {
+                    cb.addIgnoredPattern(pt.norm);
+                    cb.toast(Lang.tr("已跳过"));
+                    removeCard(card, null);
+                } catch (Throwable t) { cb.toast(Lang.tf("操作失败：{0}", String.valueOf(t))); }
             }
         });
-        card.addView(skip);
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-2, -2);
+        slp.leftMargin = dp(6);
+        btns.addView(skipB, slp);
+        card.addView(btns);
+
+        // 次数：行尾小字，不再是单独一行
+        if (pt.count > 1) {
+            TextView cnt = new TextView(act);
+            cnt.setTextSize(Theme.TS_CAPTION);
+            cnt.setTextColor(Theme.termFaint(act));
+            cnt.setTypeface(Theme.text());
+            cnt.setPadding(dp(2), dp(4), 0, 0);
+            cnt.setText(Lang.tf("这条回复出现过 {0} 次", pt.count));
+            card.addView(cnt);
+        }
 
         return card;
     }
 
-    /** 把刚忽略的条目就地插进「已忽略」区，省一次整页重建。 */
     private void addToIgnoredSection(ReplyNormalizer.Pattern pt, String prefix, String poolKey) {
         try {
             if (ignoredHost == null) return;
@@ -771,6 +860,23 @@ public final class LearnPage {
         t.setPadding(dp(14), dp(11), dp(14), dp(11));
         t.setBackground(controlBg(Theme.primaryFill(act)));
         return t;
+    }
+
+    /**
+     * 取当前要提交的词（2026-10-19，配合懒创建 EditText）。
+     *
+     * 输入框还没被点开时，用户看到的是**推荐词占位文本**，
+     * 直接点「算成功 / 其实是失败」就该用这个推荐词 —— 而不是提示"请填词"。
+     * 点开过就用框里的实际内容（用户可能改过）。
+     */
+    private String currentWord(EditText ed, String fallback) {
+        try {
+            if (ed != null) {
+                String t = ed.getText().toString().trim();
+                if (t.length() > 0) return t;
+            }
+        } catch (Throwable ignored) {}
+        return fallback == null ? "" : fallback;
     }
 
     private void submit(final View card, ReplyNormalizer.Pattern pt, String rawWord, boolean isOk,
@@ -798,10 +904,25 @@ public final class LearnPage {
             }
             cb.addJudgeWordScoped(word, isOk, scope, did, targetId);
             UnkPool.remove(cb.prefs(), poolKey, pt.norm);
+            // ── 2026-10-18：提交后必须失效词表缓存 ──
+            // 否则「我已经学会的词（成功 X · 失败 Y）」计数与列表都不会变，
+            // 用户看到的现象是「加了但列表里没有」，以为没保存（实测反馈）。
+            // 这里不清 suggestCache / hitCache —— 那两个与新增无关，清了反而更慢。
+            wordsCacheOk = null;
+            wordsCacheFail = null;
+            try { cb.notifyWordsChanged(); } catch (Throwable ignored) {}
             String scopeLabel = "global".equals(scope) ? Lang.tr("所有目标")
                               : "target".equals(scope) ? Lang.tr("这一条目标") : Lang.tr("这只机器人");
+            // 反馈里带上「学会了几条」，用户能立刻确认落库成功
+            String totalHint = "";
+            try {
+                java.util.List<String[]> now = wordsFor(isOk);
+                if (now != null && now.size() > 0) {
+                    totalHint = Lang.tf(" · 现已学会 {0} 条", now.size());
+                }
+            } catch (Throwable ignored) {}
             cb.toast((isOk ? Lang.tr("记住了「") : Lang.tr("记下了「")) + word
-                     + Lang.tr("」（") + scopeLabel + Lang.tr("）"));
+                     + Lang.tr("」（") + scopeLabel + Lang.tr("）") + totalHint);
             // 关键：只摘这一张卡，不重建整页（上一版卡顿的主因）
             removeCard(card, null);
         } catch (Throwable t) {
@@ -831,12 +952,14 @@ public final class LearnPage {
             okN = a == null ? 0 : a.size();
             failN = b == null ? 0 : b.size();
         } catch (Throwable ignored) {}
-        toggle.setText(Lang.tf("我已经学会的词（成功 {0} · 失败 {1}）  ▾", okN, failN));
+        toggle.setText(Lang.tf("我已经学会的词（成功 {0} · 失败 {1}）  ", okN, failN)
+                     + (expandKnown ? "▴" : "▾"));
         outer.addView(toggle);
 
         final LinearLayout inner = new LinearLayout(act);
         inner.setOrientation(LinearLayout.VERTICAL);
-        inner.setVisibility(View.GONE);
+        // 2026-10-19：记住展开状态 —— 加/删一个词不该把这块折回去
+        inner.setVisibility(expandKnown ? View.VISIBLE : View.GONE);
         inner.addView(wordBlock(true));
         inner.addView(wordBlock(false));
         outer.addView(inner);
@@ -845,10 +968,54 @@ public final class LearnPage {
             @Override public void onClick(View v) {
                 boolean open = inner.getVisibility() == View.VISIBLE;
                 inner.setVisibility(open ? View.GONE : View.VISIBLE);
+                expandKnown = !open;   // 2026-10-19 记住状态
                 toggle.setText(toggle.getText().toString().replace(open ? "▴" : "▾", open ? "▾" : "▴"));
             }
         });
         return outer;
+    }
+
+    /** 一行「词 + 作用域 + 删除」。抽出来供分批展开复用（2026-10-18）。 */
+    private View wordRow(final boolean isOk, final String[] kv) {
+        final String w = kv[0];
+        final String scopeTag = kv.length > 1 ? kv[1] : "";
+        LinearLayout row = new LinearLayout(act);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
+        rlp.topMargin = dp(4);
+        row.setLayoutParams(rlp);
+
+        // ── 2026-10-19 去臃肿：去掉每行的「删除」按钮 ──
+        // 原来几十个词就是几十个红按钮，视觉噪音大。
+        // 现在整行可点，弹确认后删除 —— 行更干净，也少建一个控件。
+        TextView tv = new TextView(act);
+        tv.setTextSize(Theme.TS_SECOND);
+        tv.setTextColor(Theme.termTxt(act));
+        tv.setTypeface(Typeface.MONOSPACE);
+        tv.setSingleLine(true);
+        tv.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        tv.setPadding(dp(8), dp(7), dp(8), dp(7));
+        tv.setText(w + (scopeTag.length() > 0 ? "  · " + scopeTag : ""));
+        try { tv.setBackground(controlBg(Theme.surface(act, 2))); } catch (Throwable ignored) {}
+        tv.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                try {
+                    android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(act);
+                    b.setTitle(Lang.tf("删除「{0}」？", w));
+                    b.setMessage(Lang.tr("删掉后，以后同类回复就认不出来了。"));
+                    b.setPositiveButton(Lang.tr("删除"), new android.content.DialogInterface.OnClickListener() {
+                        @Override public void onClick(android.content.DialogInterface d, int which) {
+                            removeWordScoped(isOk, w, scopeTag);
+                        }
+                    });
+                    b.setNegativeButton(Lang.tr("取消"), null);
+                    b.show();
+                } catch (Throwable t) { removeWordScoped(isOk, w, scopeTag); }
+            }
+        });
+        row.addView(tv, new LinearLayout.LayoutParams(-1, -2));
+        return row;
     }
 
     private View wordBlock(final boolean isOk) {
@@ -872,33 +1039,39 @@ public final class LearnPage {
             none.setText(Lang.tr("（还没有）"));
             card.addView(none);
         } else {
-            for (final String[] kv : words) {
-                final String w = kv[0];
-                final String scopeTag = kv.length > 1 ? kv[1] : "";
-                LinearLayout row = new LinearLayout(act);
-                row.setOrientation(LinearLayout.HORIZONTAL);
-                row.setGravity(Gravity.CENTER_VERTICAL);
-                LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
-                rlp.topMargin = dp(4);
-                row.setLayoutParams(rlp);
-
-                TextView tv = new TextView(act);
-                tv.setTextSize(Theme.TS_SECOND);
-                tv.setTextColor(Theme.termTxt(act));
-                tv.setTypeface(Typeface.MONOSPACE);
-                tv.setSingleLine(true);
-                tv.setEllipsize(android.text.TextUtils.TruncateAt.END);
-                tv.setText(w + (scopeTag.length() > 0 ? "  · " + scopeTag : ""));
-                row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
-
-                TextView del = pill(Lang.tr("删除"), Theme.termPink(act), -1);
-                del.setOnClickListener(new View.OnClickListener() {
-                    @Override public void onClick(View v) { removeWordScoped(isOk, w, scopeTag); }
+            // 2026-10-18：分批。改前一次全建 —— 全局+bot+目标三级词叠起来
+            // 轻易上百条，每条 3 个控件，展开时整页卡顿。
+            final java.util.List<String[]> wl = words;
+            final int wBatch = Math.min(BATCH, wl.size());
+            for (int wi = 0; wi < wBatch; wi++) {
+                card.addView(wordRow(isOk, wl.get(wi)));
+            }
+            if (wl.size() > wBatch) {
+                final TextView wMore = new TextView(act);
+                wMore.setTextSize(Theme.TS_CAPTION);
+                wMore.setTextColor(Theme.termCyan(act));
+                wMore.setTypeface(Theme.text());
+                wMore.setGravity(Gravity.CENTER);
+                wMore.setPadding(dp(12), dp(10), dp(12), dp(10));
+                wMore.setText(Lang.tf("还有 {0} 条 · 点此展开", wl.size() - wBatch));
+                wMore.setOnClickListener(new View.OnClickListener() {
+                    private int fromW = wBatch;
+                    @Override public void onClick(View v) {
+                        int toW = Math.min(wl.size(), fromW + BATCH);
+                        int insertAt = card.indexOfChild(wMore);
+                        for (int wi = fromW; wi < toW; wi++) {
+                            card.addView(wordRow(isOk, wl.get(wi)), insertAt++);
+                        }
+                        fromW = toW;
+                        int leftW = wl.size() - toW;
+                        if (leftW > 0) {
+                            wMore.setText(Lang.tf("还有 {0} 条 · 点此展开", leftW));
+                        } else {
+                            card.removeView(wMore);
+                        }
+                    }
                 });
-                LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(-2, -2);
-                dlp.leftMargin = dp(8);
-                row.addView(del, dlp);
-                card.addView(row);
+                card.addView(wMore);
             }
         }
 
@@ -909,28 +1082,60 @@ public final class LearnPage {
         alp.topMargin = dp(8);
         addRow.setLayoutParams(alp);
 
-        final EditText ed = new EditText(act);
-        ed.setHint(isOk ? Lang.tr("如：签到成功") : Lang.tr("如：次数已用完"));
-        ed.setHintTextColor(Theme.termFaint(act));
-        ed.setTextSize(Theme.TS_SECOND);
-        ed.setTextColor(Theme.termTxt(act));
-        ed.setTypeface(Typeface.MONOSPACE);
-        ed.setInputType(InputType.TYPE_CLASS_TEXT);
-        ed.setSingleLine(true);
-        ed.setPadding(dp(10), dp(9), dp(10), dp(9));
-        try { ed.setBackground(controlBg(Theme.surface(act, 3))); } catch (Throwable ignored) {}
-        addRow.addView(ed, new LinearLayout.LayoutParams(0, -2, 1f));
+        // 2026-10-19：懒创建（理由同问题卡 —— EditText 是打开页面最贵的开销之一）
+        final android.widget.FrameLayout addHost = new android.widget.FrameLayout(act);
+        addHost.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+        final TextView addPh = new TextView(act);
+        addPh.setTextSize(Theme.TS_SECOND);
+        addPh.setTextColor(Theme.termFaint(act));
+        addPh.setSingleLine(true);
+        addPh.setPadding(dp(10), dp(9), dp(10), dp(9));
+        addPh.setText(isOk ? Lang.tr("如：签到成功") : Lang.tr("如：次数已用完"));
+        try { addPh.setBackground(controlBg(Theme.surface(act, 3))); } catch (Throwable ignored) {}
+        addHost.addView(addPh, new android.widget.FrameLayout.LayoutParams(-1, -2));
+        addRow.addView(addHost);
         addRow.addView(gap(8));
+
+        final EditText[] addEd = new EditText[1];
+        final Runnable ensureAddEd = new Runnable() {
+            @Override public void run() {
+                if (addEd[0] != null) { addEd[0].requestFocus(); return; }
+                EditText e;
+                try { e = new EditText(act); } catch (Throwable t) { return; }
+                e.setHint(isOk ? Lang.tr("如：签到成功") : Lang.tr("如：次数已用完"));
+                e.setHintTextColor(Theme.termFaint(act));
+                e.setTextSize(Theme.TS_SECOND);
+                e.setTextColor(Theme.termTxt(act));
+                e.setInputType(InputType.TYPE_CLASS_TEXT);
+                e.setSingleLine(true);
+                e.setPadding(dp(10), dp(9), dp(10), dp(9));
+                try { e.setBackground(controlBg(Theme.surface(act, 3))); } catch (Throwable ignored) {}
+                addHost.removeAllViews();
+                addHost.addView(e, new android.widget.FrameLayout.LayoutParams(-1, -2));
+                addEd[0] = e;
+                e.requestFocus();
+            }
+        };
+        addPh.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { ensureAddEd.run(); }
+        });
 
         TextView add = pill(Lang.tr("加一个"), Theme.termTxt(act), -1);
         add.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
+                // 没点过输入框 = 还没输入，先把输入框建出来并聚焦
+                if (addEd[0] == null) { ensureAddEd.run(); cb.toast(Lang.tr("请输入词")); return; }
+                EditText ed = addEd[0];
                 String t = ed.getText().toString().trim();
                 if (t.length() == 0) { cb.toast(Lang.tr("请输入词")); return; }
                 if (isOk) cb.addJudgeWords(new String[]{t}, null);
                 else cb.addJudgeWords(null, new String[]{t});
                 cb.toast(Lang.tf("已添加「{0}」", t));
                 ed.setText("");
+                // 2026-10-19：原地刷新，不整页重建（重建会把折叠区全折回去 + 闪一下）
+                try {
+                    if (canRefreshInPlace()) { refreshInPlace(); return; }
+                } catch (Throwable ignored) {}
                 cb.dismissAndRefresh();
             }
         });
@@ -941,10 +1146,18 @@ public final class LearnPage {
     }
 
     private void removeWordScoped(boolean isOk, String word, String scopeTag) {
+        // 2026-10-18：删除同样要失效缓存 —— 否则删掉的词还留在「已学会」列表里。
+        wordsCacheOk = null;
+        wordsCacheFail = null;
+        try { cb.notifyWordsChanged(); } catch (Throwable ignored) {}
         try {
             cb.removeJudgeWord(word + "\u0001" + (scopeTag == null ? "" : scopeTag)
                                + "\u0001" + (isOk ? "ok" : "fail"), isOk);
             cb.toast(Lang.tf("已删除「{0}」", word));
+            // 2026-10-19：原地刷新，不整页重建
+            try {
+                if (canRefreshInPlace()) { refreshInPlace(); return; }
+            } catch (Throwable ignored) {}
             cb.dismissAndRefresh();
         } catch (Throwable t) {
             cb.toast(Lang.tf("删除失败：{0}", String.valueOf(t)));
@@ -962,7 +1175,7 @@ public final class LearnPage {
         main.setTextSize(Theme.TS_SECOND);
         main.setTextColor(Theme.termMuted(act));
         main.setTypeface(Typeface.MONOSPACE);
-        main.setText(preview(pt.norm));
+        main.setText(preview(squeezeDeco(pt.norm)));
         card.addView(main);
 
         TextView meta = new TextView(act);
@@ -978,6 +1191,10 @@ public final class LearnPage {
             @Override public void onClick(View v) {
                 cb.removeIgnoredPattern(pt.norm);
                 cb.toast(Lang.tr("已恢复"));
+                // 2026-10-19：原地刷新，不整页重建
+                try {
+                    if (canRefreshInPlace()) { refreshInPlace(); return; }
+                } catch (Throwable ignored) {}
                 cb.dismissAndRefresh();
             }
         });
