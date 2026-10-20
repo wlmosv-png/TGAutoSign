@@ -30,6 +30,7 @@ public final class SettingsRefs {
     // 开关
     public Switch timerSw;      // 定时签到
     public Switch missBackSw;   // 错过补签
+    public Switch catchupSw;    // 打开 TG 时补签（2026-10-21）
     public Switch notifySw;     // 签到结果通知
     public Switch savedMsgSw;   // 收藏夹摘要（2026-10-17 独立开关）
     public Switch notifyFailSw; // 只通知失败

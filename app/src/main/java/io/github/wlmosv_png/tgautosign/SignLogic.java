@@ -102,6 +102,46 @@ public final class SignLogic {
         return new int[]{a, b};
     }
 
+    /**
+     * 解析「某个目标的固定签到时刻」应该落在哪一分钟（2026-10-21）。
+     *
+     * 规则：
+     *   ① 用户在窗口内指定了时间 → 就用它
+     *   ② 指定时间早于窗口开始   → 夹到窗口开始
+     *   ③ 指定时间晚于窗口结束   → 夹到窗口结束前一分钟
+     *   ④ 窗口非法/为空（不限）  → 原样使用
+     *   ⑤ 跨天窗口（如 22:00-02:00）→ 落在 [start,1440) ∪ [0,end] 内即算窗口内
+     *
+     * @param wantMin  用户指定的分钟（0..1439）
+     * @param winAny   窗口解析结果（windowRangeAny 的返回，可为 null）
+     * @return {实际分钟, 是否被夹取}；wantMin 非法（<0）时返回 {0,false} 由调用方忽略
+     *
+     * 抽成纯函数的理由：夹取逻辑最容易写错（跨天窗口尤其），必须能单测。
+     */
+    public static int[] resolveSignMinute(int wantMin, int[] winAny) {
+        if (wantMin < 0) return new int[]{0, 0};
+        int want = wrapMinute(wantMin);
+        if (winAny == null) return new int[]{want, 0};          // 窗口不限
+        int a = winAny[0], b = winAny[1];
+        boolean cross = crossesMidnight(winAny);
+
+        // 已在窗口内 → 原样使用
+        if (inWindowAny(want, winAny)) return new int[]{want, 0};
+
+        // 不在窗口内 → 夹到最近的边界
+        if (!cross) {
+            if (want < a) return new int[]{a, 1};
+            // want > b
+            return new int[]{wrapMinute(b - 1 < 0 ? 1439 : b - 1), 1};
+        }
+        // 跨天窗口：窗口是 [a,1440) ∪ [0,b]
+        // 落在中间空档 (b, a) —— 取离哪边近
+        int distToStart = Math.abs(want - a);
+        int distToEnd = Math.abs(want - b);
+        return distToStart <= distToEnd ? new int[]{a, 1}
+                                        : new int[]{wrapMinute(b - 1 < 0 ? 1439 : b - 1), 1};
+    }
+
     /** 把窗口内的分钟轴偏移折回 0..1439（跨天窗口会跨过午夜）。 */
     public static int wrapMinute(int min) {
         int m = min % (24 * 60);

@@ -663,6 +663,45 @@ public final class Lang {
                "The two boxes below = global words (apply to all targets).");
         EN.put("查看并管理全部判定词", "View and manage all judge words");
         EN.put("待添加已清空", "Pending list cleared");
+        // 2026-10-21 打开 TG 时补签
+        EN.put("打开 TG 时补签", "Catch up when Telegram opens");
+        // 2026-10-21 单目标固定时刻
+        EN.put("定时", "Schedule");
+        EN.put("定时签到", "Scheduled check-in");
+        EN.put("设定", "Set");
+        EN.put("更改", "Change");
+        EN.put("每天 {0} 执行", "Runs daily at {0}");
+        EN.put(" · 实际 {0}（超窗口）", " · actual {0} (outside window)");
+        EN.put("跟随全局窗口，自动随机安排", "Follows the global window (auto)");
+        EN.put("超出时间窗口，实际会在 {0} 执行", "Outside the window — will run at {0}");
+        EN.put("快捷时间", "Quick times");
+        EN.put("已指定", "Set");
+        EN.put("已命中 {0} 次", "Matched {0} times");
+        EN.put(" · 最近 {0}", " · last {0}");
+        EN.put("学了 {0} 天，还没命中过（可能学错了）", "Learned {0} days ago, never matched (may be wrong)");
+        EN.put("还没命中过", "No match yet");
+        EN.put("学了 {0} 天没命中", "Learned {0} days ago, no match");
+        EN.put("点一个词删除它", "Tap a word to delete it");
+        EN.put("这个页面加载出错了", "This page failed to load");
+        EN.put("数据没丢。请关掉重开一次；如果反复出现，把这条日志发给作者：",
+               "Your data is safe. Close and reopen; if it keeps happening, send this log to the author:");
+        EN.put("已设为每天 {0}，今日计划已更新", "Set to daily {0}; today's plan updated");
+        EN.put("已设为每天 {0}（今日未排期，明天起生效）", "Set to daily {0} (not scheduled today; takes effect tomorrow)");
+        EN.put("已恢复跟随全局，今日计划将重新安排", "Back to global; today's plan will be rearranged");
+        EN.put("带时钟图标的「已指定」= 你为这个目标单独设的固定时间",
+               "The clock-marked \"Set\" means you pinned a fixed time for that target");
+        EN.put("跟随全局", "Use global");
+        EN.put("每天 {0}", "Daily {0}");
+        EN.put("（超窗口→{0}）", " (outside window → {0})");
+        EN.put("不设置 = 跟随全局窗口随机安排。点了可改时刻或恢复跟随。",
+               "Unset = follow the global window (random). Tap to pick a time or reset.");
+        EN.put("已设为每天 {0}", "Set to daily {0}");
+        EN.put("已恢复跟随全局", "Back to global");
+        EN.put("打开失败：{0}", "Open failed: {0}");
+        EN.put("开：只要今天还有没签的目标，打开 Telegram 就立刻补签一次，不受时间窗口限制。\n关：只在设定的时间窗口内签到（旧行为）。\n手机冻结 TG、或窗口设在半夜的用户建议开着。",
+               "On: if any target is still unsigned today, sign immediately when Telegram opens, ignoring the time window.\n"
+             + "Off: only sign inside the configured window (old behaviour).\n"
+             + "Recommended on if your phone freezes Telegram or your window is at night.");
         EN.put("下面两行只对「所有目标」生效（全局）。\n「未识别回复」里补的词默认只对那只机器人生效，不在这里显示。\n当前：全局 成功 {0} 条 / 失败 {1} 条；另有机型/目标专属 成功 {2} 条 / 失败 {3} 条。",
                "The two lines below apply to ALL targets (global).\nWords learned under \"Unrecognised replies\" apply to that bot only and are not listed here.\nNow: global ok {0} / fail {1}; per-bot or per-target ok {2} / fail {3}.");
         EN.put("记为已签", "Mark as signed");

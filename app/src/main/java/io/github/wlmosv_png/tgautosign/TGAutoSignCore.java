@@ -291,6 +291,17 @@ public final class TGAutoSignCore {
     private boolean BACKUP_AUTO = false;
     private int BACKUP_KEEP = 5;
     private boolean NOTIFY_FAIL_ONLY = false;    // 只通知失败
+
+    /**
+     * 打开 TG 时补签（2026-10-21，默认开）。
+     *
+     * 用户反馈：老版本「进电报就签到」，现在只在窗口内随机时刻签，
+     * 而 TG 被系统冻结的用户白天打开时永远在窗口外 → 永远签不上。
+     *
+     * 开：启动/打开宿主时，只要今天还有未签目标，立即补一次（不受窗口限制）。
+     * 关：保持旧行为（窗口外一律跳过），给「严格按窗口签」的用户。
+     */
+    private boolean CATCHUP_ON_OPEN = true;
     private boolean NOTIFY_ALL_ACCOUNTS = false; // 汇总时包含其它账号
     private int FAIL_ALERT_DAYS = 3;             // 连续失败多少天开始告警
     private String lastThemeSig = "";
@@ -2251,6 +2262,7 @@ public final class TGAutoSignCore {
             NOTIFY_ON = cfgBool("notify", NOTIFY_ON);
             SAVED_MSG_ON = cfgBool("saved_msg", SAVED_MSG_ON);
             NOTIFY_FAIL_ONLY = cfgBool("notify_fail_only", NOTIFY_FAIL_ONLY);
+            CATCHUP_ON_OPEN = cfgBool("catchup_on_open", CATCHUP_ON_OPEN);
             NOTIFY_ALL_ACCOUNTS = cfgBool("notify_all_acc", NOTIFY_ALL_ACCOUNTS);
             SORT_MODE = cfgStr("sort", SORT_MODE);
             TITLE_FX = cfgInt("fx", TITLE_FX);
@@ -5438,6 +5450,113 @@ public final class TGAutoSignCore {
         box.addView((View) f1[0]);
         String curTitle = entryTitle(m);
         alias.setText(curTitle == null ? "" : curTitle);
+        gap(box, 14);
+
+        // ── 单目标固定时刻（2026-10-21，2026-10-22 重做视觉）──
+        // 用户反馈「不明显，不易察觉可以点击」→ 改成整块可点卡片 + 右侧行动按钮。
+        // 时间选择改用**自绘**：系统 TimePicker 在深色主题下白底刺眼、风格冲突。
+        {
+            final String _p = accountPrefix();
+            final String _id = entryId(m);
+
+            LinearLayout card = new LinearLayout(act);
+            card.setOrientation(LinearLayout.HORIZONTAL);
+            card.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            card.setPadding(dp(12), dp(10), dp(10), dp(10));
+            try {
+                card.setBackground(outlinedBg(act, Theme.termCardInput(act),
+                        Theme.withAlpha(Theme.termCyan(act), 0x3D), 10));
+            } catch (Throwable ignored) {}
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
+            clp.bottomMargin = dp(4);
+            card.setLayoutParams(clp);
+
+            // 左：时钟图标
+            TextView ic = new TextView(act);
+            ic.setTextSize(Theme.TS_SUBTITLE);
+            ic.setTextColor(Theme.termCyan(act));
+            ic.setGravity(android.view.Gravity.CENTER);
+            try {
+                android.graphics.drawable.Drawable d = Icons.d(act, "clock", 18f, Theme.termCyan(act));
+                if (d != null) { d.setBounds(0, 0, dp(18), dp(18)); ic.setCompoundDrawables(d, null, null, null); }
+            } catch (Throwable ignored) {}
+            ic.setPadding(0, 0, dp(10), 0);
+            card.addView(ic, new LinearLayout.LayoutParams(-2, -2));
+
+            // 中：两行文案（标题 + 状态）
+            LinearLayout mid = new LinearLayout(act);
+            mid.setOrientation(LinearLayout.VERTICAL);
+            TextView t1 = new TextView(act);
+            t1.setTextSize(Theme.TS_BODY);
+            t1.setTextColor(Theme.termTxt(act));
+            t1.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+            t1.setText(Lang.tr("定时签到"));
+            mid.addView(t1);
+
+            final TextView val = new TextView(act);
+            val.setTextSize(Theme.TS_CAPTION);
+            val.setTypeface(Theme.text());
+            val.setPadding(0, dp(3), 0, 0);
+            mid.addView(val);
+
+            final Runnable refreshVal = new Runnable() {
+                @Override public void run() {
+                    try {
+                        if (prefs.contains(Keys.signAt(_p, _id))) {
+                            int want = prefs.getInt(Keys.signAt(_p, _id), -1);
+                            int[] rm = SignLogic.resolveSignMinute(want, SignLogic.windowRangeAny(WINDOW));
+                            String s = Lang.tf("每天 {0} 执行", hhmm(want));
+                            if (rm[1] == 1) s += Lang.tf(" · 实际 {0}（超窗口）", hhmm(rm[0]));
+                            val.setText(s);
+                            val.setTextColor(Theme.termCyan(act));
+                        } else {
+                            val.setText(Lang.tr("跟随全局窗口，自动随机安排"));
+                            val.setTextColor(Theme.termFaint(act));
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            };
+            refreshVal.run();
+            card.addView(mid, new LinearLayout.LayoutParams(0, -2, 1f));
+
+            // 右：行动按钮（青色实心，明确「可以点」）
+            final TextView act2 = new TextView(act);
+            act2.setTextSize(Theme.TS_SECOND);
+            act2.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+            act2.setGravity(android.view.Gravity.CENTER);
+            act2.setPadding(dp(14), dp(7), dp(14), dp(7));
+            act2.setTextColor(Theme.termCardDeep(act));
+            try {
+                android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+                g.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
+                g.setCornerRadius(dp(8));
+                g.setColor(Theme.termCyan(act));
+                act2.setBackground(g);
+            } catch (Throwable ignored) {}
+            final Runnable refreshBtn = new Runnable() {
+                @Override public void run() {
+                    try {
+                        act2.setText(prefs.contains(Keys.signAt(_p, _id))
+                                ? Lang.tr("更改") : Lang.tr("设定"));
+                    } catch (Throwable ignored) {}
+                }
+            };
+            refreshBtn.run();
+            card.addView(act2, new LinearLayout.LayoutParams(-2, -2));
+
+            View.OnClickListener openPicker = new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    try {
+                        showTimePickerSheet(act, _p, _id, new Runnable() {
+                            @Override public void run() { refreshVal.run(); refreshBtn.run(); }
+                        });
+                    } catch (Throwable t) { toast(Lang.tf("打开失败：{0}", String.valueOf(t))); }
+                }
+            };
+            card.setOnClickListener(openPicker);
+
+            box.addView(card);
+        }
         gap(box, 14);
 
         Object[] f2 = adField(act, "标签 / 指令", "签到", null, 0);
@@ -10795,6 +10914,9 @@ public final class TGAutoSignCore {
                 @Override public java.util.Set<String> ignoredPatterns() { return ignoredPatternsInternal(); }
                 @Override public void removeIgnoredPattern(String pattern) { removeIgnoredPatternInternal(pattern); }
                 @Override public long[] wordHitOf(String word) { return wordHitOf(word); }
+                @Override public String wordMetaOf(String word) {
+                    try { return prefs.getString(wordMetaKey(word), ""); } catch (Throwable t) { return null; }
+                }
                 @Override public java.util.List<String[]> allJudgeWords(boolean isOk) { return allJudgeWordsInternal(isOk); }
                 @Override public void removeJudgeWord(String packed, boolean isOk) { removeJudgeWordInternal(packed, isOk); }
                 @Override public java.util.List<String[]> skippedUnknown() { return skippedUnknownList(); }
@@ -10988,6 +11110,22 @@ public final class TGAutoSignCore {
                 { android.content.SharedPreferences.Editor _e=prefs.edit(); putCfg(_e,"judge_custom",true); _e.commit(); }
                 jlog("[学习] 已打开「使用我的自定义词」开关");
             }
+            // 2026-10-22：给**所有已登录账号**都打开开关。
+            // 词表是全局的，但 judge_custom 是账号级 ——
+            // 只在账号1 学词，账号2 判定时读不到这些词（用户实测「换账号就不认」）。
+            // 只写 true，从不写 false：不会关掉用户手动关闭的开关。
+            try {
+                android.content.SharedPreferences.Editor _eA = prefs.edit();
+                boolean any = false;
+                for (int _slot : accountSlots()) {
+                    String _k = "acc" + _slot + "_cfg_judge_custom";
+                    if (!prefs.getBoolean(_k, false)) { _eA.putBoolean(_k, true); any = true; }
+                }
+                if (any) {
+                    _eA.commit();
+                    jlog("[学习] 已为所有账号打开「使用我的自定义词」开关");
+                }
+            } catch (Throwable ignored) {}
             jlog("[判定] scope=" + scope + " key=" + key + " word=" + w
                  + " kind=" + (isOk ? "OK" : "FAIL"));
         } catch (Throwable t) {
@@ -16376,23 +16514,52 @@ public final class TGAutoSignCore {
             // 间隔策略：用户设了 jmb_gap>0 用固定间隔；否则按目标数自动均分
             // 先筛出今天还没签的目标，只为这些排时刻
             List<Map<String, Object>> todo = new ArrayList<Map<String, Object>>();
+            // 2026-10-21：单目标固定时刻的目标单独拎出来，不参与均分。
+            List<Map<String, Object>> fixed = new ArrayList<Map<String, Object>>();
+            int[] winAnyForFixed = SignLogic.windowRangeAny(WINDOW);
             for (Map<String, Object> m : list) {
                 String id = entryId(m);
                 if (todayStr().equals(prefs.getString(kLast(prefix, id), ""))) continue;   // 今天已签不排
                 if (isFrozen(prefix, id)) continue;                                        // 冻结不排（2026-09-29）
+                if (isSnoozed(prefix, id)) continue;                                       // 暂停不排
                 /* 2026-09-29 fix: frozen targets must not appear in timer plans.
                    ensureTimerPlan only filtered "signed today". Frozen targets were still
                    scheduled → skipScheduling blocked execution but the entry remained →
                    UI showed "待签" indefinitely. */
-                if (isFrozen(prefix, id)) continue;
+                // 有固定时刻 → 走 fixed 分支（下面单独排），不进均分池
+                if (prefs.contains(Keys.signAt(prefix, id))) { fixed.add(m); continue; }
                 todo.add(m);
             }
+            // 先排固定时刻的（越窗口会被 resolveSignMinute 夹到边界）
+            for (Map<String, Object> m : fixed) {
+                try {
+                    String id = entryId(m);
+                    int want = prefs.getInt(Keys.signAt(prefix, id), -1);
+                    if (want < 0) continue;
+                    int[] rm = SignLogic.resolveSignMinute(want, winAnyForFixed);
+                    int min = rm[0];
+                    org.json.JSONObject o = new org.json.JSONObject();
+                    o.put("id", id);
+                    o.put("did", entryDid(m));
+                    o.put("kind", entryKind(m));
+                    o.put("text", entryText(m));
+                    o.put("min", min);
+                    arr.put(o);
+                    rememberPlanHm(prefix, id, min);
+                    if (rm[1] == 1) {
+                        logd("[定时] " + id + " 固定时刻 " + hhmm(want)
+                             + " 超出窗口，已夹到 " + hhmm(min));
+                    }
+                } catch (Throwable _ef) { noteSwallowed("ensureTimerPlan.fixed", _ef); }
+            }
             int nTodo = todo.size();
-            if (nTodo <= 0) return;
+            // 注意：fixed 非空时即使 nTodo==0 也要继续走到写盘，不能 return
+            if (nTodo <= 0 && arr.length() == 0) return;
             // 序号均分：把窗口切成 nTodo 份，第 i 个目标只在第 i 份里随机。
             // 这样 lo 由序号决定，数学上不可能跑到窗口外（旧写法 cursor 单调累加会溢出）。
             int idx = 0;
             for (Map<String, Object> m : todo) {
+                if (nTodo <= 0) break;
                 String id = entryId(m);
                 int lo = r0 + (int) ((long) span * idx / nTodo);
                 int hi = r0 + (int) ((long) span * (idx + 1) / nTodo) - 1;
@@ -16438,6 +16605,43 @@ public final class TGAutoSignCore {
      * 做法：比对表内 id 与当前未签目标，把缺失的那些
      * 补进**从现在往后**的剩余时段；已过去的时段不动。
      */
+    /**
+     * 把当日计划里**某一个目标**的时刻改掉（2026-10-22）。
+     *
+     * 为什么需要：ensureTimerPlan 见到当日计划已存在时只调 topUpTimerPlan，
+     * 它只补缺失条目、**从不更新已有条目的 min**。
+     * 于是用户把某目标改成 07:40 后，当天仍按旧时刻执行 ——
+     * 表现为「设置了但没生效」（用户实测）。
+     *
+     * 只改这一条、不重排全部：重排会打乱其他目标的时刻，用户反而更困惑。
+     *
+     * @return true 表示确实改到了（该目标今天在计划里）
+     */
+    private boolean patchPlanMinute(String prefix, String id, int newMin) {
+        try {
+            String key = timerPlanKey(prefix);
+            String cur = prefs.getString(key, "");
+            if (cur == null || cur.isEmpty()) return false;
+            org.json.JSONArray arr = new org.json.JSONArray(cur);
+            boolean hit = false;
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                if (id.equals(o.optString("id"))) {
+                    o.put("min", SignLogic.wrapMinute(newMin));
+                    arr.put(i, o);
+                    hit = true;
+                }
+            }
+            if (hit) {
+                prefs.edit().putString(key, arr.toString()).apply();
+                rememberPlanHm(prefix, id, SignLogic.wrapMinute(newMin));
+                logd("[定时] 已把 " + id + " 的今日计划改到 " + hhmm(newMin));
+            }
+            return hit;
+        } catch (Throwable t) { noteSwallowed("patchPlanMinute", t); return false; }
+    }
+
     private void topUpTimerPlan(String prefix, String key) {
         try {
             String cur = prefs.getString(key, "");
@@ -16719,6 +16923,11 @@ public final class TGAutoSignCore {
     /** 排一个待执行的签到任务（sweep=true 走巡检查道，false 走精确排期）。 */
     private void armTask(final Map<String, Object> m, long delayMs, final boolean sweep, String tag, final int acc) {
         final Map<String, Object> fm = m;
+        // 2026-10-21：同一分钟多目标错开 0~50 秒，避免同时发送触发风控。
+        // 只对「定时任务」（非 sweep）加，补签路径不加（越早越好）。
+        if (!sweep && delayMs > 1000L) {
+            try { delayMs += random.nextInt(50) * 1000L; } catch (Throwable ignored) {}
+        }
         // 账号在「排任务时」就钉死：延迟可达 1~5 分钟，期间用户可能切号。
         // 以前执行时才取 accountPrefix()/currentAccount()，会把旧账号的目标
         // 用新账号发出去（用户反馈「账号1给账号2配置的 bot 发消息」）。
@@ -17187,8 +17396,314 @@ public final class TGAutoSignCore {
     /** 定时模式下所有自动触发入口统一走这里（窗口外不动作） */
     private void timerHook(String reason) {
         if (!TIMER_ENABLED) { enqueueTry(reason); return; }
+        // 2026-10-21：「打开时补签」—— 启动/打开宿主是用户在场的最强信号。
+        // 今天还有未签目标就立即补一次，**不受窗口限制**。
+        // 关掉则维持旧行为（窗口外一律跳过）。
+        if (CATCHUP_ON_OPEN && isStartupTrigger(reason)) {
+            int pend = countUnsignedToday(accountPrefix());
+            if (pend > 0) {
+                logw("[定时] 打开时补签：窗口外但有 " + pend + " 个未签目标，立即执行一次（" + reason + "）");
+                kickSchedule();
+                return;
+            }
+            logd("[定时] 打开时补签：今天都签完了，跳过（" + reason + "）");
+            return;
+        }
         if (!inWindow() && !inMissBackTime()) { logd("[定时] 窗口外(" + reason + ")，跳过"); return; }
         kickSchedule();
+    }
+
+    /**
+     * 自绘时间选择面板（2026-10-22）。
+     *
+     * 不用系统 TimePickerDialog 的理由见调用处注释：
+     * 深色主题白底刺眼、无法显示越窗口夹取结果、不能加业务按钮。
+     *
+     * @param onSaved 保存/清除后回调（刷新卡片文案）
+     */
+    private void showTimePickerSheet(final Activity act, final String prefix, final String id,
+                                     final Runnable onSaved) {
+        try {
+            final int[] cur = new int[]{
+                    prefs.contains(Keys.signAt(prefix, id))
+                            ? prefs.getInt(Keys.signAt(prefix, id), 8 * 60) : 8 * 60
+            };
+
+            LinearLayout box = new LinearLayout(act);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(18), dp(12), dp(18), dp(6));
+
+            // ── 大号时间显示 ──
+            final TextView big = new TextView(act);
+            big.setTextSize(44);
+            big.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+            big.setTextColor(Theme.termCyan(act));
+            big.setGravity(android.view.Gravity.CENTER);
+            big.setPadding(0, dp(6), 0, dp(2));
+
+            final TextView preview = new TextView(act);
+            preview.setTextSize(Theme.TS_CAPTION);
+            preview.setTypeface(Theme.text());
+            preview.setGravity(android.view.Gravity.CENTER);
+            preview.setPadding(0, dp(6), 0, dp(4));
+
+            final Runnable refresh = new Runnable() {
+                @Override public void run() {
+                    try {
+                        int m = cur[0];
+                        big.setText(String.format("%02d:%02d", m / 60, m % 60));
+                        int[] rm = SignLogic.resolveSignMinute(m, SignLogic.windowRangeAny(WINDOW));
+                        if (rm[1] == 1) {
+                            preview.setText(Lang.tf("超出时间窗口，实际会在 {0} 执行", hhmm(rm[0])));
+                            preview.setTextColor(Theme.termAmber(act));
+                        } else {
+                            preview.setText(Lang.tf("每天 {0} 执行", hhmm(rm[0])));
+                            preview.setTextColor(Theme.termFaint(act));
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            };
+
+            // ── 调节行：时 ─ / 时 + ｜ 分 ─ / 分 + ──
+            LinearLayout ctl = new LinearLayout(act);
+            ctl.setOrientation(LinearLayout.HORIZONTAL);
+            ctl.setGravity(android.view.Gravity.CENTER);
+            ctl.setPadding(0, dp(4), 0, dp(8));
+
+            // 每组：上三角 / 数字标签 / 下三角
+            LinearLayout hourCol = new LinearLayout(act);
+            hourCol.setOrientation(LinearLayout.VERTICAL);
+            hourCol.setGravity(android.view.Gravity.CENTER);
+
+            LinearLayout minCol = new LinearLayout(act);
+            minCol.setOrientation(LinearLayout.VERTICAL);
+            minCol.setGravity(android.view.Gravity.CENTER);
+
+            final Runnable[] refreshCtl = new Runnable[1];
+
+            // 生成一个「三角 + 数字 + 三角」列，delta 单位分钟
+            java.util.function.BiFunction<Integer, String, LinearLayout> mkCol =
+                    new java.util.function.BiFunction<Integer, String, LinearLayout>() {
+                @Override public LinearLayout apply(final Integer step, String unitLabel) {
+                    LinearLayout col = new LinearLayout(act);
+                    col.setOrientation(LinearLayout.VERTICAL);
+                    col.setGravity(android.view.Gravity.CENTER);
+
+                    TextView up = new TextView(act);
+                    up.setText("\u25B2");
+                    up.setTextSize(14);
+                    up.setGravity(android.view.Gravity.CENTER);
+                    up.setTextColor(Theme.termCyan(act));
+                    up.setPadding(dp(18), dp(8), dp(18), dp(8));
+                    up.setOnClickListener(new View.OnClickListener() {
+                        @Override public void onClick(View v) {
+                            cur[0] = SignLogic.wrapMinute(cur[0] + step);
+                            try { refreshCtl[0].run(); } catch (Throwable ignored) {}
+                        }
+                    });
+                    // 长按连调
+                    up.setOnLongClickListener(new View.OnLongClickListener() {
+                        @Override public boolean onLongClick(View v) {
+                            for (int i = 0; i < 9; i++) cur[0] = SignLogic.wrapMinute(cur[0] + step);
+                            try { refreshCtl[0].run(); } catch (Throwable ignored) {}
+                            return true;
+                        }
+                    });
+                    col.addView(up);
+
+                    TextView num = new TextView(act);
+                    num.setTextSize(Theme.TS_SUBTITLE);
+                    num.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+                    num.setTextColor(Theme.termTxt(act));
+                    num.setGravity(android.view.Gravity.CENTER);
+                    num.setPadding(dp(20), dp(2), dp(20), dp(2));
+                    col.addView(num);
+
+                    TextView dn = new TextView(act);
+                    dn.setText("\u25BC");
+                    dn.setTextSize(14);
+                    dn.setGravity(android.view.Gravity.CENTER);
+                    dn.setTextColor(Theme.termCyan(act));
+                    dn.setPadding(dp(18), dp(8), dp(18), dp(8));
+                    dn.setOnClickListener(new View.OnClickListener() {
+                        @Override public void onClick(View v) {
+                            cur[0] = SignLogic.wrapMinute(cur[0] - step);
+                            try { refreshCtl[0].run(); } catch (Throwable ignored) {}
+                        }
+                    });
+                    dn.setOnLongClickListener(new android.view.View.OnLongClickListener() {
+                        @Override public boolean onLongClick(View v) {
+                            for (int i = 0; i < 9; i++) cur[0] = SignLogic.wrapMinute(cur[0] - step);
+                            try { refreshCtl[0].run(); } catch (Throwable ignored) {}
+                            return true;
+                        }
+                    });
+                    col.addView(dn);
+
+                    col.setTag(num);
+                    return col;
+                }
+            };
+
+            LinearLayout hc = mkCol.apply(60, "时");
+            LinearLayout mc = mkCol.apply(5, "分");
+
+            TextView colon = new TextView(act);
+            colon.setText(":");
+            colon.setTextSize(24);
+            colon.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+            colon.setTextColor(Theme.termMuted(act));
+            colon.setPadding(dp(6), 0, dp(6), 0);
+
+            ctl.addView(hc);
+            ctl.addView(colon);
+            ctl.addView(mc);
+
+            final TextView numH = (TextView) hc.getTag();
+            final TextView numM = (TextView) mc.getTag();
+            refreshCtl[0] = new Runnable() {
+                @Override public void run() {
+                    numH.setText(String.format("%02d", cur[0] / 60));
+                    numM.setText(String.format("%02d", cur[0] % 60));
+                    refresh.run();
+                }
+            };
+            refreshCtl[0].run();
+
+            // ── 快捷预设 ──
+            LinearLayout quick = new LinearLayout(act);
+            quick.setOrientation(LinearLayout.HORIZONTAL);
+            quick.setGravity(android.view.Gravity.CENTER);
+            quick.setPadding(0, 0, 0, dp(6));
+            final int[] PRESET = {8 * 60, 12 * 60, 20 * 60};
+            final String[] PRESET_LABEL = {"08:00", "12:00", "20:00"};
+            for (int i = 0; i < PRESET.length; i++) {
+                final int pm = PRESET[i];
+                TextView chip = new TextView(act);
+                chip.setText(PRESET_LABEL[i]);
+                chip.setTextSize(Theme.TS_CAPTION);
+                chip.setTypeface(android.graphics.Typeface.MONOSPACE);
+                chip.setGravity(android.view.Gravity.CENTER);
+                chip.setPadding(dp(14), dp(6), dp(14), dp(6));
+                chip.setTextColor(Theme.termCyan(act));
+                try {
+                    android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+                    g.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
+                    g.setCornerRadius(dp(14));
+                    g.setColor(Theme.withAlpha(Theme.termCyan(act), 0x1F));
+                    g.setStroke(dp(1), Theme.withAlpha(Theme.termCyan(act), 0x66));
+                    chip.setBackground(g);
+                } catch (Throwable ignored) {}
+                chip.setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        cur[0] = pm;
+                        try { refreshCtl[0].run(); } catch (Throwable ignored) {}
+                    }
+                });
+                LinearLayout.LayoutParams qlp = new LinearLayout.LayoutParams(-2, -2);
+                qlp.setMargins(dp(4), 0, dp(4), 0);
+                quick.addView(chip, qlp);
+            }
+
+            box.addView(big);
+            box.addView(ctl);
+            box.addView(preview);
+            box.addView(quietLabel(act, "快捷时间"));
+            box.addView(quick);
+
+            // ── 底部按钮 ──
+            LinearLayout btns = new LinearLayout(act);
+            btns.setOrientation(LinearLayout.HORIZONTAL);
+            btns.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            btns.setPadding(0, dp(10), 0, dp(2));
+
+            Button clear = quietBtn(act, "跟随全局", "clock");
+            clear.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    try {
+                        prefs.edit().remove(Keys.signAt(prefix, id)).apply();
+                        // 清除后当日计划里这条仍是旧固定时刻 —— 一并作废当日计划，
+                        // 下次 ensureTimerPlan 会把该目标重新纳入均分。
+                        try { prefs.edit().remove(timerPlanKey(prefix)).apply(); } catch (Throwable ignored) {}
+                        try { kickSchedule(); } catch (Throwable ignored) {}
+                        toast(Lang.tr("已恢复跟随全局，今日计划将重新安排"));
+                    } catch (Throwable t) { noteSwallowed("clearSignAt", t); }
+                    try { if (onSaved != null) onSaved.run(); } catch (Throwable ignored) {}
+                    dismissTopDialog();
+                }
+            });
+            btns.addView(clear);
+
+            btns.addView(new android.widget.Space(act), new LinearLayout.LayoutParams(0, 1, 1f));
+
+            Button ok = mkBtn(act);
+            ok.setText(Lang.tr("确定"));
+            ok.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    try {
+                        prefs.edit().putInt(Keys.signAt(prefix, id), cur[0]).apply();
+                        // 2026-10-22：立刻把今天这条计划改掉并重挂任务，
+                        // 否则当天仍按旧时刻走（用户实测「设了没生效」）。
+                        int[] rm = SignLogic.resolveSignMinute(cur[0], SignLogic.windowRangeAny(WINDOW));
+                        boolean patched = patchPlanMinute(prefix, id, rm[0]);
+                        try { kickSchedule(); } catch (Throwable ignored) {}
+                        if (patched) toast(Lang.tf("已设为每天 {0}，今日计划已更新", hhmm(cur[0])));
+                        else toast(Lang.tf("已设为每天 {0}（今日未排期，明天起生效）", hhmm(cur[0])));
+                    } catch (Throwable t) { noteSwallowed("saveSignAt", t); }
+                    try { if (onSaved != null) onSaved.run(); } catch (Throwable ignored) {}
+                    dismissTopDialog();
+                }
+            });
+            btns.addView(ok);
+            box.addView(btns);
+
+            showDialog(act, Lang.tr("定时签到"), box, Lang.tr("取消"));
+        } catch (Throwable t) {
+            toast(Lang.tf("打开失败：{0}", String.valueOf(t)));
+        }
+    }
+
+    /** 小号说明标签。 */
+    private TextView quietLabel(Activity act, String text) {
+        TextView t = new TextView(act);
+        t.setTextSize(Theme.TS_CAPTION);
+        t.setTextColor(Theme.txtMuted(act));
+        t.setTypeface(Theme.text());
+        t.setText(Lang.tr(text));
+        t.setPadding(dp(2), dp(8), 0, dp(2));
+        return t;
+    }
+
+    /** 关闭当前最上层对话框（自绘面板用）。 */
+    private void dismissTopDialog() {
+        try {
+            Object d = dlgStack.pollLast();
+            if (d != null) dismissOne(d);
+        } catch (Throwable ignored) {}
+    }
+
+    /** 触发源是否属于「用户刚打开宿主」这一类。 */
+    static boolean isStartupTrigger(String reason) {
+        if (reason == null) return false;
+        return reason.contains("启动") || reason.contains("打开");
+    }
+
+    /** 今天还没签的目标数（不含冻结/排除）。 */
+    private int countUnsignedToday(String prefix) {
+        try {
+            java.util.List<Map<String, Object>> list = new java.util.ArrayList<Map<String, Object>>();
+            loadTargetsInto(prefix, list);
+            String today = todayStr();
+            int n = 0;
+            for (Map<String, Object> m : list) {
+                String id = entryId(m);
+                if (today.equals(prefs.getString(kLast(prefix, id), ""))) continue;
+                if (isFrozen(prefix, id)) continue;
+                if (isSnoozed(prefix, id)) continue;
+                n++;
+            }
+            return n;
+        } catch (Throwable t) { return 0; }
     }
 
     /**
@@ -18265,6 +18780,7 @@ public final class TGAutoSignCore {
                 settingsDraft = new SettingsDraft();             // 已落盘，草稿作废
                 try { android.content.SharedPreferences.Editor le = prefs.edit(); le.putInt("jmb_lang", Lang.MODE); le.commit(); } catch (Throwable ignored) {}
                 MISS_BACK = R.missBackSw.isChecked();
+                if (R.catchupSw != null) CATCHUP_ON_OPEN = R.catchupSw.isChecked();
                 try { MISS_DEADLINE = R.missDeadlineMin; if (MISS_DEADLINE < 0) MISS_DEADLINE = 0; if (MISS_DEADLINE > 24 * 60 - 1) MISS_DEADLINE = 24 * 60 - 1; } catch (Throwable ignored) {}
                 scheduleTickLoop();   // 确保心跳在跑（开启补签后立即可用，不等触发源）
                 try { GAP_MIN = Integer.parseInt(R.gapEd.getText().toString().trim()); if (GAP_MIN < 0) GAP_MIN = 0; if (GAP_MIN > 240) GAP_MIN = 240; } catch (Throwable ignored) {}
@@ -18326,6 +18842,7 @@ public final class TGAutoSignCore {
                     ed.putString(Keys.failWordsGlobal(), R.failWordsEd.getText().toString().trim());
                     putCfg(ed, "notify", NOTIFY_ON);
                     putCfg(ed, "notify_fail_only", NOTIFY_FAIL_ONLY);
+                    putCfg(ed, "catchup_on_open", CATCHUP_ON_OPEN);
                     putCfg(ed, "notify_all_acc", NOTIFY_ALL_ACCOUNTS);
                     putCfg(ed, "sort", SORT_MODE);
                     putCfg(ed, "fx", TITLE_FX);
@@ -24275,6 +24792,22 @@ public final class TGAutoSignCore {
         mbTip.setText(Lang.tr("关掉 TG 期间错过的签到点：开=错过后随机延迟 1~5 分钟自动补；关=错过即跳过（默认）"));
         mbTip.setPadding(dp(4), 0, dp(4), dp(2));
         card1.addView(mbTip);
+
+        // ── 打开 TG 时补签（2026-10-21）──
+        // 用户反馈：老版本「进电报就签到」，现在只在窗口内随机时刻签，
+        // 而 TG 被系统冻结的用户白天进 TG 永远在窗口外 → 永远签不上。
+        R.catchupSw = swRow(act, "打开 TG 时补签", CATCHUP_ON_OPEN);
+        R.catchupSw.setTextSize(Theme.TS_BODY);
+        card1.addView(R.catchupSw);
+        TextView cuTip = new TextView(act);
+        cuTip.setTextSize(Theme.TS_CAPTION);
+        cuTip.setTextColor(Theme.txtMuted(act));
+        cuTip.setTypeface(Theme.text());
+        cuTip.setText(Lang.tr("开：只要今天还有没签的目标，打开 Telegram 就立刻补签一次，不受时间窗口限制。\n"
+                            + "关：只在设定的时间窗口内签到（旧行为）。\n"
+                            + "手机冻结 TG、或窗口设在半夜的用户建议开着。"));
+        cuTip.setPadding(dp(4), 0, dp(4), dp(6));
+        card1.addView(cuTip);
         // 补签截止：窗口结束后仍可补到该时间（与签到窗口解耦，避免当天错过作废）
         R.missDeadlineMin = MISS_DEADLINE;
         LinearLayout mdRow = new LinearLayout(act); mdRow.setOrientation(LinearLayout.HORIZONTAL); mdRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
@@ -24433,8 +24966,26 @@ public final class TGAutoSignCore {
                             time.setTextColor(Theme.termGreen(act)); setIconOn(time, "check", 12f, Theme.termGreen(act));
                         }
                     } else if (tm != null) {
-                        time.setText(tm);
-                        time.setTextColor(Theme.termCyan(act));
+                        // 2026-10-22：固定时刻的目标加矢量时钟图标 + 「已指定」，
+                        // 让用户一眼区分「我设的」和「系统自动排的」。
+                        boolean fixedTime = false;
+                        try { fixedTime = prefs.contains(Keys.signAt(fPrefix, id)); } catch (Throwable ignored) {}
+                        if (fixedTime) {
+                            time.setText(tm + "  " + Lang.tr("已指定"));
+                            time.setTextColor(Theme.termAmber(act));
+                            try {
+                                android.graphics.drawable.Drawable ic =
+                                        Icons.d(act, "clock", 12f, Theme.termAmber(act));
+                                if (ic != null) {
+                                    ic.setBounds(0, 0, dp(12), dp(12));
+                                    time.setCompoundDrawablePadding(dp(4));
+                                    time.setCompoundDrawables(ic, null, null, null);
+                                }
+                            } catch (Throwable ignored) {}
+                        } else {
+                            time.setText(tm);
+                            time.setTextColor(Theme.termCyan(act));
+                        }
                     } else {
                         time.setText(Lang.tr("明日排"));
                         time.setTextColor(Theme.txtMuted(act));
@@ -24444,7 +24995,8 @@ public final class TGAutoSignCore {
                 }
                 TextView foot = new TextView(act);
                 foot.setTextSize(Theme.TS_CAPTION); foot.setTextColor(Theme.txtMuted(act)); foot.setTypeface(Theme.text());
-                foot.setText(Lang.tf("已签 {0} / {1} · 已签=实际签上时刻 / 待签=计划时刻", doneN, all.size()));
+                foot.setText(Lang.tf("已签 {0} / {1} · 已签=实际签上时刻 / 待签=计划时刻", doneN, all.size())
+                             + "\n" + Lang.tr("带时钟图标的「已指定」= 你为这个目标单独设的固定时间"));
                 foot.setPadding(dp(4), dp(6), dp(4), 0);
                 pl.addView(foot);
                 // 同理：打开今日计划前，把补签列表与自己的旧窗口都关掉

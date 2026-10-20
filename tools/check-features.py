@@ -77,7 +77,9 @@ chk("CapBox 不再 UNSPECIFIED 双重测量",
     'MeasureSpec.UNSPECIFIED));\n            if (getMeasuredHeight() > maxH)' not in core)
 chk("CapBox 用 AT_MOST", 'MeasureSpec.AT_MOST' in core)
 chk("已忽略区已分批", 'ignBatch' in learn)
-chk("学会词区已分批", 'wBatch' in learn)
+# 2026-10-22：学会词区改为**单个自绘 View**（ColorOS 每个 TextView 抢 AssetManager 锁，
+# 词一多就 ANR）。判据从"分批"改为"自绘 + View 数量恒定"。
+chk("学会词区用自绘 View（控数恒定）", 'class WordListView extends View' in learn)
 chk("展开计数已修正", 'refreshPendingCount(shown.size() - to)' in learn)
 
 # ── 7. i18n ──

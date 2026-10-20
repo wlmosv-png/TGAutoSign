@@ -59,6 +59,8 @@ public final class SignLogicTest {
         poolFilterEdge();
         scopedBareGuard();
         autoAddButtonScope();
+        startupCatchupTrigger();
+        resolveSignMinuteTests();
 
         System.out.println("----------------------------------------");
         System.out.println("通过 " + passed + " / 失败 " + failed.size());
@@ -1687,6 +1689,70 @@ public final class SignLogicTest {
             }
         }
         tru("强词表未泄漏宽词", leak == false);
+    }
+
+
+
+    /** ── 打开 TG 时补签：触发源判定（2026-10-21）─────────────
+     *
+     *  isStartupTrigger 决定「这次 timerHook 是不是用户刚打开宿主」。
+     *  只有启动/打开类触发才允许越窗补签，定时类仍受窗口约束。
+     */
+    private static void startupCatchupTrigger() {
+        tru("「启动」算启动触发", TGAutoSignCore.isStartupTrigger("启动"));
+        tru("「启动补签」算启动触发", TGAutoSignCore.isStartupTrigger("启动补签"));
+        tru("「打开TG」算启动触发", TGAutoSignCore.isStartupTrigger("打开TG"));
+        tru("「定时」不算", !TGAutoSignCore.isStartupTrigger("定时"));
+        tru("「进入窗口」不算", !TGAutoSignCore.isStartupTrigger("进入窗口"));
+        tru("空串不算", !TGAutoSignCore.isStartupTrigger(""));
+        tru("null 不算", !TGAutoSignCore.isStartupTrigger(null));
+    }
+
+
+
+    /** ── 单目标固定时刻签到：窗口夹取（2026-10-21）──────────────
+     *
+     *  规则：窗口内用指定值；越界夹到边界；跨天窗口取最近边界。
+     */
+    private static void resolveSignMinuteTests() {
+        int[] win = SignLogic.windowRangeAny("08:00-20:00");     // 480..1200
+        eq("窗口内原样", Integer.valueOf(SignLogic.resolveSignMinute(510, win)[0]), Integer.valueOf(510));
+        eq("窗口内不算夹取", Integer.valueOf(SignLogic.resolveSignMinute(510, win)[1]), Integer.valueOf(0));
+
+        // 早于窗口 → 夹到窗口开始 480
+        int[] r1 = SignLogic.resolveSignMinute(360, win);        // 06:00
+        eq("早于窗口→夹到开始", Integer.valueOf(r1[0]), Integer.valueOf(480));
+        eq("早于窗口→标记夹取", Integer.valueOf(r1[1]), Integer.valueOf(1));
+
+        // 晚于窗口 → 夹到 1199（结束前一分钟）
+        int[] r2 = SignLogic.resolveSignMinute(1380, win);       // 23:00
+        eq("晚于窗口→夹到结束前", Integer.valueOf(r2[0]), Integer.valueOf(1199));
+        eq("晚于窗口→标记夹取", Integer.valueOf(r2[1]), Integer.valueOf(1));
+
+        // 边界值本身算窗口内
+        eq("正好开始", Integer.valueOf(SignLogic.resolveSignMinute(480, win)[0]), Integer.valueOf(480));
+        eq("正好开始不夹取", Integer.valueOf(SignLogic.resolveSignMinute(480, win)[1]), Integer.valueOf(0));
+        eq("正好结束", Integer.valueOf(SignLogic.resolveSignMinute(1200, win)[0]), Integer.valueOf(1200));
+
+        // 窗口不限（null）→ 原样
+        eq("无窗口原样", Integer.valueOf(SignLogic.resolveSignMinute(510, null)[0]), Integer.valueOf(510));
+
+        // 跨天窗口 22:00-02:00：窗口内 = >=1320 或 <=120
+        int[] cw = SignLogic.windowRangeAny("22:00-02:00");
+        eq("跨天·23点在内", Integer.valueOf(SignLogic.resolveSignMinute(1380, cw)[0]), Integer.valueOf(1380));
+        eq("跨天·1点在内", Integer.valueOf(SignLogic.resolveSignMinute(60, cw)[0]), Integer.valueOf(60));
+
+        // 跨天·落在空档 12:00 → 取最近边界（到 22:00 距离 600，到 2:00 距离 600）→ 取 start
+        int[] r3 = SignLogic.resolveSignMinute(720, cw);
+        eq("跨天·空档取边界", Integer.valueOf(r3[0]), Integer.valueOf(1320));
+        eq("跨天·空档标记夹取", Integer.valueOf(r3[1]), Integer.valueOf(1));
+
+        // 跨天·空档 08:00 → 到 22:00 是 840，到 2:00 是 360 → 取 end 侧 (2:00-1=119)
+        int[] r4 = SignLogic.resolveSignMinute(480, cw);
+        eq("跨天·近结束侧", Integer.valueOf(r4[0]), Integer.valueOf(119));
+
+        // 非法输入
+        eq("want 负数→0", Integer.valueOf(SignLogic.resolveSignMinute(-1, win)[0]), Integer.valueOf(0));
     }
 
 

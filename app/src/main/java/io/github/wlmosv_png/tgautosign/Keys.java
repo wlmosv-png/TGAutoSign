@@ -108,6 +108,8 @@ public final class Keys {
     public static String okWordsBot(long did)   { return "jmb_ok_bot_" + did; }
     public static String failWordsBot(long did) { return "jmb_fail_bot_" + did; }
     public static String okWordsTarget(String entryId)   { return "jmb_ok_tgt_" + entryId; }
+    /** 单目标固定签到时刻（分钟 0..1439）。不存在 = 跟随全局窗口均分。 */
+    public static String signAt(String p, String id)     { return p + "sign_at_" + id; }
     public static String failWordsTarget(String entryId) { return "jmb_fail_tgt_" + entryId; }
 
     /**
