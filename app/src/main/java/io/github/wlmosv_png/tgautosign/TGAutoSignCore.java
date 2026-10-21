@@ -17395,20 +17395,22 @@ public final class TGAutoSignCore {
 
     /** 定时模式下所有自动触发入口统一走这里（窗口外不动作） */
     private void timerHook(String reason) {
-        if (!TIMER_ENABLED) { enqueueTry(reason); return; }
-        // 2026-10-21：「打开时补签」—— 启动/打开宿主是用户在场的最强信号。
-        // 今天还有未签目标就立即补一次，**不受窗口限制**。
-        // 关掉则维持旧行为（窗口外一律跳过）。
-        if (CATCHUP_ON_OPEN && isStartupTrigger(reason)) {
-            int pend = countUnsignedToday(accountPrefix());
-            if (pend > 0) {
-                logw("[定时] 打开时补签：窗口外但有 " + pend + " 个未签目标，立即执行一次（" + reason + "）");
-                kickSchedule();
+        // 非定时模式：catchup 可以冲窗口（打开 TG 就补签）
+        if (!TIMER_ENABLED) {
+            if (CATCHUP_ON_OPEN && isStartupTrigger(reason)) {
+                int pend = countUnsignedToday(accountPrefix());
+                if (pend > 0) {
+                    logw("[定时] 打开时补签（非定时模式）：有 " + pend + " 个未签目标，立即执行一次（" + reason + "）");
+                    kickSchedule();
+                    return;
+                }
+                logd("[定时] 打开时补签：今天都签完了，跳过（" + reason + "）");
                 return;
             }
-            logd("[定时] 打开时补签：今天都签完了，跳过（" + reason + "）");
+            enqueueTry(reason);
             return;
         }
+        // 定时模式：永远尊重窗口，catchup 开关不影响
         if (!inWindow() && !inMissBackTime()) { logd("[定时] 窗口外(" + reason + ")，跳过"); return; }
         kickSchedule();
     }
