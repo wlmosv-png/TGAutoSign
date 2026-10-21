@@ -786,15 +786,12 @@ public final class LearnPage {
                         Lang.tr("只对这一条目标生效（最保守）"),
                         Lang.tr("对所有目标生效（影响最大）")
                 };
-                android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(act);
-                b.setTitle(Lang.tr("这个词对谁生效？"));
-                b.setItems(labels, new android.content.DialogInterface.OnClickListener() {
-                    @Override public void onClick(android.content.DialogInterface d, int which) {
-                        scope[0] = keys[which];
+                showScopeDialog(labels, new Runnable() {
+                    @Override public void run() {
+                        scope[0] = keys[_scopeWhich];
                         refreshScope.run();
                     }
                 });
-                try { b.show(); } catch (Throwable t) { cb.toast(Lang.tr("打不开选择器")); }
             }
         });
         wordRow.addView(scopeTagView);
@@ -1029,16 +1026,12 @@ public final class LearnPage {
                     String[] kv = wl.get(index);
                     final String w0 = kv[0];
                     final String tag = kv.length > 1 ? kv[1] : "";
-                    android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(act);
-                    b.setTitle(Lang.tf("删除「{0}」？", w0));
-                    b.setMessage(Lang.tr("删掉后，以后同类回复就认不出来了。"));
-                    b.setPositiveButton(Lang.tr("删除"), new android.content.DialogInterface.OnClickListener() {
-                        @Override public void onClick(android.content.DialogInterface d, int which) {
-                            removeWordScoped(isOk, w0, tag);
-                        }
-                    });
-                    b.setNegativeButton(Lang.tr("取消"), null);
-                    b.show();
+                    showConfirmDialog(
+                            Lang.tf("删除「{0}」？", w0),
+                            Lang.tr("删掉后，以后同类回复就认不出来了。"),
+                            Lang.tr("删除"),
+                            new Runnable() { @Override public void run() { removeWordScoped(isOk, w0, tag); } },
+                            Lang.tr("取消"));
                 } catch (Throwable t) {
                     try { cb.toast(Lang.tf("操作失败：{0}", String.valueOf(t))); } catch (Throwable ignored) {}
                 }
@@ -1346,10 +1339,13 @@ public final class LearnPage {
     private LinearLayout block() {
         LinearLayout card = new LinearLayout(act);
         card.setOrientation(LinearLayout.VERTICAL);
+        // 柔和底色：用 level 1 但叠一层 alpha，让卡片和页面底色更接近
+        // 靠间距 + elevation 区分层次，不靠边框
         card.setBackground(containerBg(Theme.surface(act, 1)));
-        card.setPadding(dp(12), dp(11), dp(12), dp(11));
+        card.setPadding(dp(14), dp(13), dp(14), dp(13));
+        card.setElevation(dp(3));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.setMargins(0, dp(3), 0, dp(3));
+        lp.setMargins(0, dp(10), 0, dp(10));
         card.setLayoutParams(lp);
         return card;
     }
@@ -1447,6 +1443,7 @@ public final class LearnPage {
         g.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
         g.setCornerRadius(dp(Theme.R_CONTAINER));
         g.setColor(fill);
+        // 无描边：靠底色 + elevation + 间距区分层次，不靠线条
         return g;
     }
 
@@ -1490,4 +1487,59 @@ public final class LearnPage {
         }
         return null;
     }
+
+    // ── 自定义弹窗（替代原生 AlertDialog，风格与模块 UI 一致）──
+
+    private int _scopeWhich = 0;
+
+    private void showScopeDialog(final String[] labels, final Runnable onPick) {
+        try {
+            final int[] picked = {0};
+            android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(act);
+            b.setTitle(Lang.tr("这个词对谁生效？"));
+            b.setItems(labels, new android.content.DialogInterface.OnClickListener() {
+                @Override public void onClick(android.content.DialogInterface d, int which) {
+                    picked[0] = which;
+                    onPick.run();
+                }
+            });
+            android.app.AlertDialog dlg = b.show();
+            // 模块风格：圆角 + 暗色背景
+            android.view.Window w = dlg.getWindow();
+            if (w != null) {
+                android.view.View content = w.getDecorView();
+                content.setBackground(containerBg(Theme.surface(act, 1)));
+                content.setPadding(dp(16), dp(14), dp(16), dp(14));
+            }
+        } catch (Throwable t) {
+            try { cb.toast(Lang.tr("打不开选择器")); } catch (Throwable ignored) {}
+        }
+    }
+
+    private Object _scopeDialogRef = null;
+
+    private void showConfirmDialog(String title, String msg, String positive,
+                                    Runnable onPositive, String negative) {
+        try {
+            android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(act);
+            b.setTitle(title);
+            if (msg != null && msg.length() > 0) b.setMessage(msg);
+            b.setPositiveButton(positive, new android.content.DialogInterface.OnClickListener() {
+                @Override public void onClick(android.content.DialogInterface d, int which) { onPositive.run(); }
+            });
+            b.setNegativeButton(negative, null);
+            android.app.AlertDialog dlg = b.show();
+            // 模块风格
+            android.view.Window w = dlg.getWindow();
+            if (w != null) {
+                android.view.View content = w.getDecorView();
+                content.setBackground(containerBg(Theme.surface(act, 1)));
+                content.setPadding(dp(16), dp(14), dp(16), dp(14));
+            }
+        } catch (Throwable t) {
+            // 静默
+        }
+    }
+
+    private Object _confirmDialogRef = null;
 }
