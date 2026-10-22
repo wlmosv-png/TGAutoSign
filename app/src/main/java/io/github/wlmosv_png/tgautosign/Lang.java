@@ -1489,5 +1489,14 @@ public final class Lang {
         EN.put("分钟", "min");
         EN.put("小时", "h");
         EN.put("天", "d");
+        EN.put("TGAutoSign · {0}：还没有目标，发 {1} 打开面板添加", "TGAutoSign · {0}: no targets yet, send {1} to add");
+        EN.put("TGAutoSign · {0}：{1} 个目标", "TGAutoSign · {0}: {1} targets");
+        EN.put("已签 {0} · 待确认 {1} · 未签 {2}", "Done {0} · Needs you {1} · Unsigned {2}");
+        EN.put("窗口 {0} · 窗口内，会自动签", "Window {0} · inside window, signs automatically");
+        EN.put("窗口 {0} · 补签时段，正在补", "Window {0} · make-up hours, catching up now");
+        EN.put("窗口 {0} · 已过窗口，打开即补签", "Window {0} · window passed, make-up runs on open");
+        EN.put("今天全部签完了", "All done for today");
+        EN.put("另有 {0} 个账号没学习目标", "{0} more account(s) have no targets");
+        EN.put("；另有 {0} 个账号没学习目标", "; {0} more account(s) have no targets");
     }
 }

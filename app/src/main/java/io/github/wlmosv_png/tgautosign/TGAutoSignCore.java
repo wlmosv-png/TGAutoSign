@@ -3828,14 +3828,50 @@ public final class TGAutoSignCore {
      */
     private static final String[] ORPHAN_HEADS = Keys.ORPHAN_HEADS;
 
-    /** 每天第一次加载时提示一条汇总（之前是每次重启都弹两条，很吵） */
+    /**
+     * 每天第一次加载时提示一条汇总（之前是每次重启都弹两条，很吵）。
+     *
+     * 2026-10-23 升级为**当日状态摘要**。起因：用户要求"打开 TG 就算不开 /jmb
+     * 面板，也该知道啥情况"。旧实现只说"22 个目标"，一个字不提签没签；
+     * 而唯一带状态的每日摘要走的是收藏夹（SAVED_MSG_ON），开关一关就彻底没提示
+     * —— 实测 jmb_notified_0 停在 2026-10-19，用户连续三天毫不知情。
+     * 现在这条不再依赖任何开关：每天第一次打开 TG 就能看到 已签/待确认/未签。
+     */
     private void bootToast() {
         try {
-            int t = targetsSnapshot().size();
+            String prefix = accountPrefix();
+            List<Map<String, Object>> list = new ArrayList<Map<String, Object>>();
+            loadTargetsInto(prefix, list);
+            int total = list.size();
             int noTarget = accountsWithoutTargets();
-            String msg = "TGAutoSign 今天已就位：" + accountLabel(currentAccount()) + " " + t + " 个目标";
-            if (noTarget > 0) msg += "；还有 " + noTarget + " 个账号没学习目标";
-            toastDaily("boot", msg);
+            if (total == 0) {
+                String m0 = Lang.tf("TGAutoSign · {0}：还没有目标，发 {1} 打开面板添加",
+                        accountLabel(currentAccount()), "/jmb");
+                if (noTarget > 0) m0 += Lang.tf("；另有 {0} 个账号没学习目标", noTarget);
+                toastDaily("boot", m0);
+                return;
+            }
+            String today = todayStr();
+            int done = 0, pend = 0, left = 0;
+            for (Map<String, Object> m : list) {
+                String id = entryId(m);
+                if (today.equals(prefs.getString(kLast(prefix, id), ""))) { done++; continue; }
+                if (isPendingConfirm(prefix, id)) { pend++; continue; }
+                left++;
+            }
+            StringBuilder sb = new StringBuilder();
+            sb.append(Lang.tf("TGAutoSign · {0}：{1} 个目标", accountLabel(currentAccount()), total));
+            sb.append("\n").append(Lang.tf("已签 {0} · 待确认 {1} · 未签 {2}", done, pend, left));
+            String w = (WINDOW == null || WINDOW.isEmpty()) ? "—" : WINDOW;
+            if (left > 0 || pend > 0) {
+                if (inWindow()) sb.append("\n").append(Lang.tf("窗口 {0} · 窗口内，会自动签", w));
+                else if (inMissBackTime()) sb.append("\n").append(Lang.tf("窗口 {0} · 补签时段，正在补", w));
+                else sb.append("\n").append(Lang.tf("窗口 {0} · 已过窗口，打开即补签", w));
+            } else {
+                sb.append("\n").append(Lang.tr("今天全部签完了"));
+            }
+            if (noTarget > 0) sb.append("\n").append(Lang.tf("另有 {0} 个账号没学习目标", noTarget));
+            toastDaily("boot", sb.toString());
         } catch (Throwable ignored) {}
     }
 
@@ -6484,34 +6520,17 @@ public final class TGAutoSignCore {
         stateStore.clearPostSignState(prefix, id);
     }
 
-    private void markSignedFromRequest(int account, long did, String text) {
-        try {
-            if (text == null) return;
-            List<Map<String,Object>> list = new ArrayList<Map<String,Object>>();
-            loadTargetsInto(accountPrefix(account), list);
-            for (Map<String,Object> m : list) {
-                if (entryDid(m) == did && KIND_TEXT.equals(entryKind(m)) && entryText(m).equals(String.valueOf(text))) {
-                    markSigned(accountPrefix(account), entryId(m));
-                    return;
-                }
-            }
-        } catch (Throwable ignored) {}
-    }
-
-    private void markSignedFromCallback(int account, long did, byte[] data) {
-        try {
-            if (data == null) return;
-            List<Map<String,Object>> list = new ArrayList<Map<String,Object>>();
-            loadTargetsInto(accountPrefix(account), list);
-            for (Map<String,Object> m : list) {
-                if (entryDid(m) == did && KIND_CB.equals(entryKind(m)) && Arrays.equals(entryData(m), data)) {
-                    markSigned(accountPrefix(account), entryId(m));
-                    return;
-                }
-            }
-        } catch (Throwable ignored) {}
-    }
-
+    /*
+     * 2026-10-23 删除 markSignedFromRequest / markSignedFromCallback。
+     *
+     * 它们是「请求发出即标已签」的入口：hook 命中的是我方 sendMessage / 点按钮的
+     * **请求对象**，远早于服务器响应与 bot 回复。后果（10-22 实测）：
+     *   22 个目标里 10 个全天零回复依据却被标「今日已签」，
+     *   用户看到一片绿，实际一堆 bot 根本没签上。
+     *
+     * 现在统一只标「已发出」（markOptimistic 写 opt_），最终结论一律由回复判定
+     * （handleReplyText / onUpdateProcessed）给出；没等到结论的会按重试规则补发。
+     */
     // ---------------- 发送签到 ----------------
     private long backoffDelay(int retries) {
         return SignLogic.backoffDelay(retries);
@@ -21981,7 +22000,15 @@ public final class TGAutoSignCore {
                                     if (entryDid(_tm) == u && KIND_TEXT.equals(entryKind(_tm)) && entryText(_tm).equals(t)) { tx = _tm; break; }
                                 }
                                 if (tx != null && isPendingFresh(accountPrefix(hookAccount), entryId(tx))) {
-                                    markSignedFromRequest(hookAccount, u, t);
+                                    // 2026-10-23 修复：这里**只记「已发出」**（opt_），绝不写 last_。
+                                    // 旧实现调 markSignedFromRequest —— 它 hook 在 TL_messages_sendMessage
+                                    // 的**请求对象**上，早于任何网络往返，更早于 bot 回复。
+                                    // 后果：bot 回「请先加入频道 / 未绑定账号」，甚至根本没回，
+                                    // 面板照样显示「今日已签」。
+                                    // 实测 10-22：22 个目标里 10 个全天零回复依据却被标已签；
+                                    // 8353929739 更是「命令发出 → 被清理 → 全天无判定」却显示已签。
+                                    // 与上面的回调分支对齐：只标「已发出」，最终结论交给回复判定。
+                                    markOptimistic(accountPrefix(hookAccount), entryId(tx));
                                 } else {
                                     logd("[活动] 非模块发起的文本，不乐观标记 " + u);
                                 }

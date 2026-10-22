@@ -134,6 +134,18 @@ if [ "${TGAS_SKIP_WIRING:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/check-wiring.py" ]
     echo "FATAL: 有孤儿方法或菜单项没派发（临时跳过：TGAS_SKIP_WIRING=1）" >&2; exit 1; }
 fi
 
+# ── 写 last_ 的依据门禁（2026-10-23 新增，事故驱动）──
+# 事故：hook 打在 TL_messages_sendMessage 的**请求对象**上，早于网络往返与 bot 回复，
+#   于是「命令一发出」就写 last_（界面直接显示已签）。实测 10-17~10-22 每天
+#   1/3~1/2 的目标"假绿"（无任何 bot 回复依据却被标已签），六道门禁一条没拦住 ——
+#   因为没有一道管「写 last_ 的依据」。规则与证据见 tools/check-last-write.py 头注释。
+# 跳过：TGAS_SKIP_LASTWRITE=1
+if [ "${TGAS_SKIP_LASTWRITE:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/check-last-write.py" ]; then
+  echo "== 写 last_ 依据 =="
+  python3 "$TGAS_SRC/tools/check-last-write.py" || {
+    echo "FATAL: 有路径把目标标成已签却缺 bot 回复依据（临时跳过：TGAS_SKIP_LASTWRITE=1）" >&2; exit 1; }
+fi
+
 # ── judge 子系统单测门禁（2026-10-06 补做第 5 项）──
 # 来历：judge/UnkPool 依赖 android.content.SharedPreferences，SignLogicTest 的
 #   最小编译集里没有它，所以这块一直没测试。这里用 tools/tests/stubs/ 的桩 +
