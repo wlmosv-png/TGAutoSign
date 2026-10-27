@@ -33,6 +33,13 @@ public final class SettingsRefs {
     public Switch catchupSw;    // 打开 TG 时补签（2026-10-21）
     public Switch notifySw;     // 签到结果通知
     public Switch savedMsgSw;   // 收藏夹摘要（2026-10-17 独立开关）
+    // ── 签到音效（2026-10-25）──
+    public Switch soundSw;         // 签到音效总开关
+    public Switch soundRoundSw;    // 「全部签完」再响一次
+    public android.widget.Button soundStyleBtn;   // 音色（点一次切一档）
+    public android.widget.Button soundTestBtn;    // 试听
+    public EditText soundFromEd;   // 响铃时段起
+    public EditText soundToEd;     // 响铃时段止
     public Switch notifyFailSw; // 只通知失败
     public Switch autoLearnSw;  // 按钮学习
     public Switch autoLearnNetSw;       // 网络学习

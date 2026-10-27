@@ -53,6 +53,9 @@ public final class SignLogicTest {
         statsData();
         p0ComboFalsePositive();
         p2UpdateLogic();
+        judgeHardening();
+        judgeAudit();
+        soundGate();
         p3DateUtils();
         bareFailContext();
         announcementFilter();
@@ -61,6 +64,7 @@ public final class SignLogicTest {
         autoAddButtonScope();
         startupCatchupTrigger();
         resolveSignMinuteTests();
+        savedMsgScope();
 
         System.out.println("----------------------------------------");
         System.out.println("通过 " + passed + " / 失败 " + failed.size());
@@ -70,6 +74,39 @@ public final class SignLogicTest {
             System.exit(1);
         }
         System.out.println("ALL OK");
+    }
+
+    // ── 收藏夹摘要开关的账号作用域（2026-10-27 修跨账号串扰）──────────
+    private static void savedMsgScope() {
+        // ① 账号 A 关闭、账号 B 开启 → 只有 B 可发（B 的解析结果不受 A 影响）
+        eq("A关B开·账号A", SignLogic.resolveSavedMsgOn(Boolean.FALSE, null, true), Boolean.FALSE);
+        eq("A关B开·账号B", SignLogic.resolveSavedMsgOn(Boolean.TRUE, null, true), Boolean.TRUE);
+        // ② 账号 A 开启、账号 B 关闭 → 只有 A 可发
+        eq("A开B关·账号A", SignLogic.resolveSavedMsgOn(Boolean.TRUE, null, true), Boolean.TRUE);
+        eq("A开B关·账号B", SignLogic.resolveSavedMsgOn(Boolean.FALSE, null, true), Boolean.FALSE);
+        // ③ 切换当前账号不串扰：解析只依赖入参，多次/交错调用结果恒定
+        for (int i = 0; i < 5; i++) {
+            eq("切号不串扰·A#" + i, SignLogic.resolveSavedMsgOn(Boolean.FALSE, null, true), Boolean.FALSE);
+            eq("切号不串扰·B#" + i, SignLogic.resolveSavedMsgOn(Boolean.TRUE, null, true), Boolean.TRUE);
+        }
+        // ④ 持久化后重新初始化（实测现场：acc0=false 已落盘、acc3 无该键）
+        eq("重启恢复·acc0(false)", SignLogic.resolveSavedMsgOn(Boolean.FALSE, null, true), Boolean.FALSE);
+        eq("重启恢复·acc3(无键→默认开)", SignLogic.resolveSavedMsgOn(null, null, true), Boolean.TRUE);
+        // ⑤ 配置缺失时的兼容策略：账号键 → 全局 jmb_ 键 → 默认值
+        eq("缺省·都缺→默认", SignLogic.resolveSavedMsgOn(null, null, true), Boolean.TRUE);
+        eq("缺省·有全局false", SignLogic.resolveSavedMsgOn(null, Boolean.FALSE, true), Boolean.FALSE);
+        eq("缺省·有全局true", SignLogic.resolveSavedMsgOn(null, Boolean.TRUE, true), Boolean.TRUE);
+        eq("缺省·账号值优先于全局", SignLogic.resolveSavedMsgOn(Boolean.TRUE, Boolean.FALSE, true), Boolean.TRUE);
+        eq("缺省·账号false压过全局true", SignLogic.resolveSavedMsgOn(Boolean.FALSE, Boolean.TRUE, true), Boolean.FALSE);
+        // ⑥ 两个开关职责独立（不得因为「有两处判断」删掉其一）
+        eq("摘要·都开", SignLogic.canSendSavedSummary(true, true), Boolean.TRUE);
+        eq("摘要·关收藏夹", SignLogic.canSendSavedSummary(false, true), Boolean.FALSE);
+        eq("摘要·关通知", SignLogic.canSendSavedSummary(true, false), Boolean.FALSE);
+        eq("摘要·都关", SignLogic.canSendSavedSummary(false, false), Boolean.FALSE);
+        // ⑦ 三入口共用同一判定（契约由 tools/check-savedmsg-scope.py 静态校验）：
+        //    心跳 / 轮次结束 → trySendDailySummary → canSendSavedSummaryFor(acc)
+        //    失败告警        → savedMsgOnFor(account)
+        //    sendSavedMessage 内层还有一道 savedMsgOnFor(account) 兜底
     }
 
     // ── 断言助手 ──────────────────────────────────────────────
@@ -277,6 +314,143 @@ public final class SignLogicTest {
         eq("误伤检查·去看商城", SignLogic.navButtonHit("去商城逛逛"), null);
         eq("误伤检查·空", SignLogic.navButtonHit(""), null);
         eq("误伤检查·null", SignLogic.navButtonHit(null), null);
+    }
+
+    /** 2026-10-25：签到音效闸门（一天只响一次的核心判据，必须可测）。 */
+    private static void soundGate() {
+        // 时段
+        tru("音效-时段内", SoundGate.inWindow(10 * 60, 8 * 60, 23 * 60));
+        tru("音效-太早", !SoundGate.inWindow(7 * 60, 8 * 60, 23 * 60));
+        tru("音效-太晚", !SoundGate.inWindow(23 * 60 + 30, 8 * 60, 23 * 60));
+        tru("音效-跨天深夜", SoundGate.inWindow(23 * 60 + 30, 22 * 60, 8 * 60));
+        tru("音效-跨天凌晨", SoundGate.inWindow(7 * 60, 22 * 60, 8 * 60));
+        tru("音效-跨天白天不算", !SoundGate.inWindow(12 * 60, 22 * 60, 8 * 60));
+        tru("音效-首尾相等=全天", SoundGate.inWindow(3 * 60, 8 * 60, 8 * 60));
+        // 一天只响一次
+        tru("音效-首次允许", SoundGate.allow(true, true, false, 10 * 60, 480, 1380, false));
+        tru("音效-当天已响过→拒绝", !SoundGate.allow(true, true, true, 10 * 60, 480, 1380, false));
+        tru("音效-总开关关→拒绝", !SoundGate.allow(false, true, false, 10 * 60, 480, 1380, false));
+        tru("音效-该时机关→拒绝", !SoundGate.allow(true, false, false, 10 * 60, 480, 1380, false));
+        tru("音效-静音→拒绝", !SoundGate.allow(true, true, false, 10 * 60, 480, 1380, true));
+        tru("音效-时段外→拒绝", !SoundGate.allow(true, true, false, 2 * 60, 480, 1380, false));
+        // 时段文本解析（用户手输，必须容错）
+        eq("音效-parseHM 08:00", Integer.valueOf(SoundGate.parseHM("08:00", -1)), Integer.valueOf(480));
+        eq("音效-parseHM 全角冒号", Integer.valueOf(SoundGate.parseHM("8\uFF1A30", -1)), Integer.valueOf(510));
+        eq("音效-parseHM 空→默认", Integer.valueOf(SoundGate.parseHM("", 123)), Integer.valueOf(123));
+        eq("音效-parseHM 非法→默认", Integer.valueOf(SoundGate.parseHM("abc", 123)), Integer.valueOf(123));
+        eq("音效-parseHM 越界→默认", Integer.valueOf(SoundGate.parseHM("25:00", 123)), Integer.valueOf(123));
+        eq("音效-fmtHM", SoundGate.fmtHM(480), "08:00");
+        // 音色档位（2026-10-27 新增自研完成音 style=3；老档位语义不变）
+        eq("音效-档位0=系统通知音", SoundGate.styleName(0), "系统通知音");
+        eq("音效-档位1=清脆", SoundGate.styleName(1), "清脆");
+        eq("音效-档位2=低音", SoundGate.styleName(2), "低音");
+        eq("音效-档位3=完成音", SoundGate.styleName(3), "完成音");
+        eq("音效-非法档位→系统通知音", SoundGate.styleName(99), "系统通知音");
+        eq("音效-循环0→1", Integer.valueOf(SoundGate.nextStyle(0)), Integer.valueOf(1));
+        eq("音效-循环1→2", Integer.valueOf(SoundGate.nextStyle(1)), Integer.valueOf(2));
+        eq("音效-循环2→3", Integer.valueOf(SoundGate.nextStyle(2)), Integer.valueOf(3));
+        eq("音效-循环3→0", Integer.valueOf(SoundGate.nextStyle(3)), Integer.valueOf(0));
+        eq("音效-负值归1", Integer.valueOf(SoundGate.nextStyle(-1)), Integer.valueOf(1));
+        tru("音效-默认档位是完成音(3)", SoundGate.STYLE_GLASS == 3);
+        // 音色轮换：系统 → 清脆 → 低音 → 系统（不会卡死在同一档）
+        // 2026-10-27：档位由 3 档扩到 4 档（新增自研「完成音」=3），
+        // 循环断言已在上方更新为 0→1→2→3→0；原来的「2→0」不再成立，
+        // 这是本次音效接入中**唯一被刻意修改**的既有期望值。
+    }
+
+    /** 2026-10-25：漏判/误判专项审查样本（固化，防回归）。
+     *  A 组验「真结果带公告特征不能漏判」，B 组验「教程/广告不能误判成功」。 */
+    private static void judgeAudit() {
+        String[] ok = mergeOkForTest("社工库功能,👑,欢迎使用hope,呵呵");
+        eq("A1 真结果+官方频道", scopedOf("🎉 恭喜完成签到，欢迎加入官方频道 @xxx", ok), SignLogic.V_SIGNED);
+        eq("A2 真结果+广告提醒", scopedOf("签到成功！注意：上方广告都是骗子，请勿点击", ok), SignLogic.V_SIGNED);
+        eq("A3 真结果+邀请尾巴", scopedOf("✅ 签到成功，积分+3（每天可邀请好友得积分）", ok), SignLogic.V_SIGNED);
+        eq("A4 打卡完成+积分", scopedOf("打卡完成，获得 2 积分", ok), SignLogic.V_SIGNED);
+        eq("B1 教程句", scopedOf("进行普通签到可以随机获得积分", ok), SignLogic.V_UNKNOWN);
+        eq("B2 广告含👑", scopedOf("😇暗影社工库 | 2026最新数据 👑政务接口", ok), SignLogic.V_UNKNOWN);
+        eq("B3 防骗提示", scopedOf("☝️ 上方出现广告🟰骗子 请不要上当", ok), SignLogic.V_UNKNOWN);
+        eq("B4 迁移通知", scopedOf("📢 迁移通知：新机器人 @KaliSGKai 点击加入", ok), SignLogic.V_UNKNOWN);
+        eq("C1 成功+条件词", scopedOf("签到成功！请先关注频道解锁更多功能", ok), SignLogic.V_SIGNED);
+        eq("C2 真失败+条件词", scopedOf("签到失败，请先关注频道", ok), SignLogic.V_FAILED);
+        eq("C4 纯拒绝", scopedOf("⚠️ 请先加入以下1个频道才能使用功能", ok), SignLogic.V_FAILED);
+        eq("D1 已签过", scopedOf("您今天已经签到过了", ok), SignLogic.V_SIGNED);
+        eq("D2 额度用尽", scopedOf("❌ 您本日的规则触发数量上限，请明日再试", ok), SignLogic.V_EXHAUSTED);
+        eq("E1 闲聊", scopedOf("你好，有什么可以帮你？", ok), SignLogic.V_UNKNOWN);
+        tru("F1 广告判公告", SignLogic.isLikelyAnnouncement("😇暗影社工库 | 2026最新数据 👑政务接口"));
+        tru("F2 真结果不判公告", !SignLogic.isLikelyAnnouncement("🎉 恭喜完成签到，欢迎加入官方频道 @xxx"));
+        // G 宽词 / 后置否定（防误判）
+        eq("G1 查询结果含宽词", scopedOf("您的查询已获得结果", ok), SignLogic.V_UNKNOWN);
+        eq("G2 说明句重复+无效", scopedOf("每天签到可获得积分，重复签到无效", ok), SignLogic.V_UNKNOWN);
+        eq("G3 英文 Success", scopedOf("Success!", ok), SignLogic.V_SIGNED);
+        eq("G4 签到获得积分", scopedOf("签到获得 3 积分", ok), SignLogic.V_SIGNED);
+        eq("G5 查询完成", scopedOf("查询完成，共 3 条命中", ok), SignLogic.V_UNKNOWN);
+        tru("F3 blockedOkWord 报出 👑",
+                "👑".equals(SignLogic.blockedOkWord("😇暗影社工库 | 2026最新数据 👑政务接口", ok, null, null)));
+    }
+
+    /** 2026-10-24：判定链硬化 —— 假成功（广告命中自定义词）与假失败（条件词抢先）。
+     *
+     *  真实现场：
+     *    · 假成功：用户全局成功词含 👑 / 社工库功能，而社工库 bot 的推广文案满屏 👑
+     *      → 「😇暗影社工库 | 2026最新数据 👑政务接口…」被判 V_SIGNED（没签到却显示已签）。
+     *    · 假失败：「签到成功！请先关注频道解锁更多功能」含条件词「请先关注」→ 判失败。
+     */
+    private static void judgeHardening() {
+        String[] okMerged = mergeOkForTest("社工库功能,👑,欢迎使用hope,呵呵");
+
+        eq("广告含👑 → 不再判成功",
+                scopedOf("😇暗影社工库 | 2026最新数据 👑政务接口 | 👑26年新数据 | 👑短信轰炸", okMerged),
+                SignLogic.V_UNKNOWN);
+        eq("欢迎语 → 不再判成功",
+                scopedOf("🎉欢迎使用hope社工机器人hope社工库官方查档频道@makegoodhopepeople", okMerged),
+                SignLogic.V_UNKNOWN);
+        eq("公告(迁移通知) → 不判成功",
+                scopedOf("📢 エ庫迁移通知 我们已迁移至新机器人 新机器人：@KaliSGKai 点击用户名加入", okMerged),
+                SignLogic.V_UNKNOWN);
+        eq("真结论(带条件尾巴) → 仍成功",
+                scopedOf("签到成功，获得 1 积分 额外奖励条件：- 资料中未包含机器人链接", okMerged),
+                SignLogic.V_SIGNED);
+        eq("真结论(短) → 成功",
+                scopedOf("🎉 签到成功，积分+3", okMerged), SignLogic.V_SIGNED);
+        eq("已签过 → 成功",
+                scopedOf("⚠️你今天已经签到过了 🌟您可以通过 充值、推广 获取更多学分", okMerged),
+                SignLogic.V_SIGNED);
+
+        // 假失败：成功结论 + 条件型失败词同句
+        eq("成功+请先关注 → 以成功为准",
+                scopedOf("签到成功！请先关注频道解锁更多功能", okMerged), SignLogic.V_SIGNED);
+        eq("成功+已过期(条件) → 以成功为准",
+                scopedOf("签到成功，会员已过期不影响本次签到", okMerged), SignLogic.V_SIGNED);
+        // 真失败不能被翻
+        eq("真失败+条件词 → 仍失败",
+                scopedOf("签到失败，请先关注频道后重试", okMerged), SignLogic.V_FAILED);
+        eq("没有签到成功 → 仍失败",
+                scopedOf("没有签到成功", okMerged), SignLogic.V_FAILED);
+        eq("纯拒绝(无成功词) → 仍失败",
+                scopedOf("⚠️ 请先加入以下1个频道才能使用功能", okMerged), SignLogic.V_FAILED);
+
+        // 辅助判据
+        tru("isAlreadySignedWord(已经签)", SignLogic.isAlreadySignedWord("已经签"));
+        tru("isAlreadySignedWord(已打卡)", SignLogic.isAlreadySignedWord("已打卡"));
+        tru("isAlreadySignedWord(签到成功)=false", !SignLogic.isAlreadySignedWord("签到成功"));
+        tru("isTooBroadOkWord(👑)", SignLogic.isTooBroadOkWord("👑"));
+        tru("isTooBroadOkWord(社工库功能)", SignLogic.isTooBroadOkWord("社工库功能"));
+        tru("isTooBroadOkWord(签到成功)=false", !SignLogic.isTooBroadOkWord("签到成功"));
+        tru("tooBroadWords 命中 2 条",
+                SignLogic.tooBroadWords("社工库功能,👑,签到成功").size() == 2);
+    }
+
+    private static int scopedOf(String text, String[] okMerged) {
+        Object[] vd = SignLogic.verdictDetailScoped(text, okMerged,
+                SignLogic.FAIL_WORDS_DEFAULT, null, null, null, null);
+        return ((Integer) vd[0]).intValue();
+    }
+
+    private static String[] mergeOkForTest(String csv) {
+        java.util.LinkedHashSet<String> s = new java.util.LinkedHashSet<String>();
+        for (String w : SignLogic.OK_WORDS_DEFAULT) s.add(w);
+        for (String w : SignLogic.parseExtraWords(csv)) s.add(w);
+        return s.toArray(new String[0]);
     }
 
     private static void verdict() {

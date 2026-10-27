@@ -282,7 +282,25 @@ public final class TGAutoSignCore {
      *   "今日签到摘要"就不得不把通知也一起关掉。用户反馈"强迫症受不了"。
      *   现在两件事各管各的：NOTIFY_ON 管通知，SAVED_MSG_ON 管收藏夹。
      */
+    /** 仅代表**当前账号**的开关值（设置页显示 / 赋值用）。
+     *  ⚠ 发送决策一律走 savedMsgOnFor(account) —— 不要再拿这个字段判断
+     *  「要不要发」：多账号下它是串扰源（2026-10-27 修）。 */
     private boolean SAVED_MSG_ON = true;
+    // ── 签到音效（2026-10-25）──────────────────────────────
+    /** 签到音效总开关。默认开：这是用户主动要的功能。 */
+    private boolean SOUND_ON = true;
+    /** 「当天全部签完」再响一次（默认关 —— 只有首次成功最可靠）。 */
+    private boolean SOUND_ON_ROUND = false;
+    /** 音色：0=系统通知音（默认）1=清脆 2=低音。 */
+    private int SOUND_STYLE = 0;
+    /** 响铃时段（当日分钟数）。默认 08:00–23:00：深夜签到不吵人。 */
+    private int SOUND_FROM = 8 * 60;
+    private int SOUND_TO = 23 * 60;
+    /** 进程内原子占位：防同一秒多账号/多回调并发重入（prefs 去重有"检查→落盘"空窗）。 */
+    private final java.util.Set<String> SOUND_PLAYED = cs();
+    /** 最近一次会话候选的分层统计（远程排障用：一眼看出哪一层断了）。 */
+    private volatile String lastPickStats = "";
+
     /** 外部通知通道（2026-10-03）：0=关 1=ntfy 2=Bark 3=Webhook。 */
     private int EXTERNAL_KIND = 0;
     /** 外部通知地址（ntfy 主题 URL / Bark key URL / 自定义 Webhook）。 */
@@ -2061,6 +2079,13 @@ public final class TGAutoSignCore {
             NOTIFY_ON = cfgBool("notify", true);
             SAVED_MSG_ON = cfgBool("saved_msg", true);
             NOTIFY_FAIL_ONLY = cfgBool("notify_fail_only", false);
+            SOUND_ON = cfgBool("sound", true);
+            SOUND_ON_ROUND = cfgBool("sound_round", false);
+            // 2026-10-27：没设置过的用户默认用自研「完成音」（STYLE_GLASS=3）。
+            // 已经存过值的用户**一律保持原值**（不重置任何既有配置）。
+            SOUND_STYLE = cfgInt("sound_style", SoundGate.STYLE_GLASS);
+            SOUND_FROM = cfgInt("sound_from", 8 * 60);
+            SOUND_TO = cfgInt("sound_to", 23 * 60);
             NOTIFY_ALL_ACCOUNTS = cfgBool("notify_all_acc", false);
             Theme.mode = THEME_MODE;
             MISS_DEADLINE = cfgInt("missdead", 23 * 60);
@@ -2076,6 +2101,8 @@ public final class TGAutoSignCore {
             // 且账号可用即放行），bootReadyAt 退化为上限兜底。
             if (bootReadyAt == 0L) bootReadyAt = System.currentTimeMillis() + 8000L;
             DEBUG_OVERFLOW_SIM = prefs.getBoolean("jmb_dbg_overflow", false);
+            // 音效预热：后台加载自研音，避免"第一次要响时样本还没解码完"（2026-10-27）
+            try { SignSound.prewarm(appContext); } catch (Throwable ignored) {}
             try { accountManager.setOverflowSim(DEBUG_OVERFLOW_SIM); } catch (Throwable ignored) {}
             AUTO_LEARN = cfgBool("autolearn", AUTO_LEARN);
             // jmb_judge 是 v1.5.8 新键，默认开。**尊重用户显式关闭**：
@@ -2142,6 +2169,7 @@ public final class TGAutoSignCore {
             try { if (netReceiver != null) appContext.unregisterReceiver(netReceiver); } catch (Throwable ignored) {}
             netReceiver = null;
             receiverRegistered = false;
+            try { SignSound.release(); } catch (Throwable ignored) {}   // 释放 SoundPool
             jlog("[生命周期] 实例已停止（热重载 / 卸载）");
         } catch (Throwable t) { noteSwallowed("stop", t); }
     }
@@ -2747,8 +2775,59 @@ public final class TGAutoSignCore {
         return 0L;
     }
 
+    /**
+     * 签到提示音（2026-10-25）。
+     *
+     * **一天一次**靠四道闸，缺一道就会"反复出现"：
+     *   ① 开关（总开关 + 该时机开关）
+     *   ② 当天是否已响过（prefs，跨进程重启有效）
+     *   ③ 进程内原子占位（防并发重入）
+     *   ④ 静音/勿打扰 + 响铃时段
+     * 顺序：先判②③④再占位，占位成功后才落盘并播放 ——
+     * 不留下"已标记但要播失败"的中间态。
+     */
+    private void maybePlaySignSound(int account, int kind) {
+        try {
+            if (!SOUND_ON) return;
+            if (kind == SoundGate.KIND_ROUND_DONE && !SOUND_ON_ROUND) return;
+            final String day = todayStr();
+            final String key = accountPrefix(account) + "sound_" + kind;
+            if (day.equals(prefs.getString(key, ""))) return;              // ② 当天已响
+            java.util.Calendar c = java.util.Calendar.getInstance();
+            int nowMin = c.get(java.util.Calendar.HOUR_OF_DAY) * 60 + c.get(java.util.Calendar.MINUTE);
+            boolean silent = SignSound.isSilent(appContext);               // ④ 静音/勿扰
+            if (!SoundGate.allow(true, true, false, nowMin, SOUND_FROM, SOUND_TO, silent)) {
+                // 2026-10-27：这条以前是 logd（默认不落盘）→ 用户"签到没声音"时完全查不到原因。
+                logw("[音效] 不响：" + (silent ? "静音/勿打扰" : "时段 " + SoundGate.fmtHM(nowMin) + " 之外")
+                     + (SignSound.notificationVolumeZero(appContext) ? "；且通知音量为 0" : ""));
+                return;
+            }
+            final String token = day + "|" + account + "|" + kind;
+            if (!SOUND_PLAYED.add(token)) return;                          // ③ 并发占位
+            if (!prefs.edit().putString(key, day).commit()) {              // 落盘失败 → 释放占位留待下次
+                SOUND_PLAYED.remove(token);
+                return;
+            }
+            SignSound.play(appContext, SOUND_STYLE);
+            logw("[音效] 签到提示音（" + (kind == SoundGate.KIND_FIRST_SIGN ? "首次签成功" : "全部签完")
+                 + "·" + SoundGate.styleName(SOUND_STYLE) + "）账号" + accountLabel(account));
+        } catch (Throwable t) { noteSwallowed("maybePlaySignSound", t); }
+    }
+
     /** 往收藏夹发一条纯文本消息。 */
     private void sendSavedMessage(String text, int account) {
+        // 2026-10-25：开关守在最里层 —— 任何调用点（含以后新增的）都拦得住，
+        // 防「关了收藏夹摘要还在往收藏夹发」（DD-Liu 反馈的那类现象）。
+        // 2026-10-27：守卫按**本条目标所属账号**判定（原来读当前账号的单值字段，
+        // 导致关一个账号压不住它、切号后又回退默认）。
+        if (!savedMsgOnFor(account)) {
+            // 值变化时留痕（同账号+同取值每天一条，心跳每轮调用也不会刷屏）。
+            // 真机排障用：能一眼看出「这次为什么没发」以及读到的开关值。
+            logOnce("savedmsg_guard:" + todayStr() + ":" + account,
+                    LV_WARN, "[收藏夹] 账号" + accountLabel(account)
+                    + " 发送被拦截（收藏夹开关=false 通知总开关=" + NOTIFY_ON + "）");
+            return;
+        }
         try {
             Object peer = savedMessagesPeer(account);
             if (peer == null) { logd("[通知] 收藏夹 peer 获取失败，跳过通知"); return; }
@@ -2786,7 +2865,7 @@ public final class TGAutoSignCore {
                     (errText == null || errText.isEmpty() ? Lang.tr("未知") : errText),
                     accountLabel(account));
             logw("[告警] " + nm + " 连续失败 " + streak + " 天（" + errText + "）");
-            if (SAVED_MSG_ON) sendSavedMessage(tip, account);
+            if (savedMsgOnFor(account)) sendSavedMessage(tip, account);
             else toastOnce("fail|" + id, Lang.tf(" {0} 连续 {1} 天签到失败", nm, streak));
         } catch (Throwable ignored) {}
     }
@@ -2809,8 +2888,15 @@ public final class TGAutoSignCore {
      */
     private void trySendDailySummary(final int acc) {
         try {
-            // 收藏夹摘要由 SAVED_MSG_ON 单独控制（2026-10-17）
-            if (!SAVED_MSG_ON) return;
+            // 收藏夹摘要：按**本条 acc 自己的配置**判定（2026-10-27 修跨账号串扰）。
+            // 通知总开关 NOTIFY_ON 仍是上游闸门，产品语义不变。
+            if (!canSendSavedSummaryFor(acc)) {
+                // 同上：账号级开关值变化时留痕，供真机验收核对「读到的是谁的值」。
+                logOnce("savedmsg_off:" + todayStr() + ":" + acc + ":" + savedMsgOnFor(acc),
+                        LV_WARN, "[收藏夹] 账号" + accountLabel(acc) + " 摘要不发送（收藏夹开关="
+                        + savedMsgOnFor(acc) + " 通知总开关=" + NOTIFY_ON + "）");
+                return;
+            }
             final String nk = "jmb_notified_" + acc;
             final String today = todayStr();
             // 并发闸（2026-10-01 修）：心跳与 flushRoundToast 可能同时到达，
@@ -3999,11 +4085,43 @@ public final class TGAutoSignCore {
         }
 
         if (!captureArmed) return false;
-        captureArmed=false;
+        // 2026-10-25：captureArmed 的消耗点**移到 did 校验之后**（见下）。
+        //   旧顺序一进来就置 false，导致"UI 层没拿到 id 弹了 uid=0 面板，
+        //   网络层本来能补却因为武装已消耗而不再触发"。
         try {
             long did=0L; int mid=0;
-            if (mo!=null){ Object d=callSafe(mo,"getDialogId"); if (d instanceof Number) did=((Number)d).longValue(); Object m2=callSafe(mo,"getId"); if (m2 instanceof Number) mid=((Number)m2).intValue(); }
+            if (mo!=null){
+                Object d=callSafe(mo,"getDialogId"); if (d instanceof Number) did=((Number)d).longValue();
+                Object m2=callSafe(mo,"getId"); if (m2 instanceof Number) mid=((Number)m2).intValue();
+                // 2026-10-25：getDialogId 反射失败时的回退 —— fork / 未来版本一旦把
+                //   MessageObject.getDialogId 混淆掉，这里就是 did=0、面板显示 uid=0，
+                //   用户点「绑定」只会看到「绑定失败：会话ID无效」。
+                //   走 messageOwner.peer_id + 统一解析（与网络层 hook 同源：按字段判定、不看类名）。
+                if (did==0L){
+                    try {
+                        Object owner=getFieldValSafe(mo,"messageOwner");
+                        if (owner!=null){
+                            did=resolveDialogIdFromPeer(getFieldValSafe(owner,"peer_id"));
+                            if (mid==0){
+                                Object idv=getFieldValSafe(owner,"id");
+                                if (idv instanceof Number) mid=((Number)idv).intValue();
+                            }
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            }
             if (did==0 && lastCapDid>0) did=lastCapDid;   // 群 ID 是负数，只有 0 才算无效
+            // 2026-10-25：确实取不到会话 id 时 —— **不消耗武装、也不弹 uid=0 的面板**。
+            //   旧行为会弹「会话 uid=0」，用户点「绑定」只得到「绑定失败：会话ID无效」
+            //   （用户实测截图：uid=0 msg=0 回调按钮 1/1）；而紧随其后的网络层 hook
+            //   本来能带着 peer 弹一个正确面板，却因为武装已被消耗而不再触发。
+            //   现在保留武装等网络层（双方都有 60 秒 TTL 兜底），并把原因写进日志。
+            if (did == 0L) {
+                jlog("【捕获】UI 层未取到会话 id（按钮=" + strOr(buttonText(proto), "?")
+                     + "），保留武装等网络层回调补上");
+                return true;
+            }
+            captureArmed = false;
             List<Object[]> btns=readKeyboard(mo);
             byte[] pdata = proto==null?null:buttonData(proto);
             if (btns.isEmpty() && pdata!=null) btns.add(new Object[]{ strOr(buttonText(proto),"回调按钮"), pdata, buttonHash(proto) });
@@ -4188,6 +4306,14 @@ public final class TGAutoSignCore {
     /** 会话条目 → dialogId（字段名各版本不一）。 */
     private long dialogIdOf(Object d) {
         if (d == null) return 0L;
+        // 2026-10-25 实测（TG 13.1.1，解 base.apk 的 dex 得到）：
+        //   TLRPC.Dialog 只剩 3 个方法（<init> / TLdeserialize / fromConstructor），
+        //   **getDialogId 与 getId 都不存在了**。旧实现靠后面的字段 id 兜底才没崩。
+        //   这里改为优先解析 peer（user_id / chat_id / channel_id），语义最硬。
+        try {
+            long pid = peerIdOf(getFieldValSafe(d, "peer"));
+            if (pid != 0L) return pid;
+        } catch (Throwable ignored) {}
         for (String m : new String[]{"getDialogId", "getId"}) {
             try {
                 Object o = call(d, m, new Class<?>[0], new Object[0]);
@@ -4203,8 +4329,64 @@ public final class TGAutoSignCore {
         return 0L;
     }
 
+    /** TLRPC.User → 显示名（first_name + last_name；都没有返回 null）。 */
+    private static String userDisplayName(Object u) {
+        if (u == null) return null;
+        try {
+            Object fn = getFieldValSafe(u, "first_name");
+            Object ln = getFieldValSafe(u, "last_name");
+            String t = ((fn == null ? "" : String.valueOf(fn))
+                    + " " + (ln == null ? "" : String.valueOf(ln))).trim();
+            if (t.length() > 0 && !"null".equals(t)) return t;
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    /** TLRPC.Peer → 会话 id（与 TG 内部 dialogId 同口径：私聊取正，群/频道取负）。 */
+    private static long peerIdOf(Object peer) {
+        if (peer == null) return 0L;
+        try {
+            Object u = getFieldValSafe(peer, "user_id");
+            if (u instanceof Number && ((Number) u).longValue() != 0L) {
+                return ((Number) u).longValue();
+            }
+            Object c = getFieldValSafe(peer, "chat_id");
+            if (c instanceof Number && ((Number) c).longValue() != 0L) {
+                return -((Number) c).longValue();
+            }
+            Object ch = getFieldValSafe(peer, "channel_id");
+            if (ch instanceof Number && ((Number) ch).longValue() != 0L) {
+                return -1000000000000L - ((Number) ch).longValue();
+            }
+        } catch (Throwable ignored) {}
+        return 0L;
+    }
+
     /** 批量取群名：从 chat / channel 缓存里找。 */
     private String chatTitleFromCache(Object mc, long did, int account) {
+        // 2026-10-24：私聊（did>0）原来恒返回 null → 候选循环把整条 continue 掉，
+        // 会话选择器里看不到任何私聊 bot。这是 fracture 报「取不到会话数据」的一条根因。
+        if (did > 0L) {
+            try {
+                Object u = invoke(mc, "getUser", new Class<?>[]{Long.class},
+                        new Object[]{Long.valueOf(did)});
+                if (u == null) {
+                    Object ms0 = getMessagesStorage(account);
+                    if (ms0 != null) {
+                        u = invoke(ms0, "getUser", new Class<?>[]{long.class},
+                                new Object[]{Long.valueOf(did)});
+                    }
+                }
+                if (u != null) {
+                    Object fn = getFieldValSafe(u, "first_name");
+                    Object ln = getFieldValSafe(u, "last_name");
+                    String t = ((fn == null ? "" : String.valueOf(fn))
+                            + " " + (ln == null ? "" : String.valueOf(ln))).trim();
+                    if (t.length() > 0 && !"null".equals(t)) return t;
+                }
+            } catch (Throwable ignored) {}
+            return null;
+        }
         long raw = -did;
         boolean isChannel = raw > 1000000000000L;
         long bare = isChannel ? (raw - 1000000000000L) : raw;
@@ -4255,12 +4437,61 @@ public final class TGAutoSignCore {
         showPickChat(act, targetEd, titleEd, 0);
     }
 
+    /**
+     * 候选列表拿不到时的兜底面板（2026-10-25）。
+     *
+     * 为什么要有：手动添加的「从会话列表选」整层失效时，用户完全没法添加目标。
+     *   而按钮学习走的是网络层（按 peer 字段解析，稳得多）——
+     *   实测用户原话「用按钮学习可以加上」，所以这里两条路都给出来。
+     */
+    private void showManualAddHint(final Activity act, final EditText targetEd) {
+        try {
+            LinearLayout box = new LinearLayout(act);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(16), dp(8), dp(16), dp(8));
+            TextView tip = new TextView(act);
+            tip.setTextSize(Theme.TS_BODY);
+            tip.setTextColor(Theme.termMuted(act));
+            tip.setText(Lang.tf("没读到会话列表（{0}）。两个办法：\n① 直接填下框（数字 ID 或 @用户名）；\n② 更省事：在 Telegram 里点一次那个 bot 的签到按钮，模块会自动学会它。",
+                    lastPickStats));
+            box.addView(tip);
+            final EditText ed = adInput(act, Lang.tr("机器人 ID 或 @用户名（如 123456789 或 @xxx_bot）"), 0);
+            if (targetEd != null) ed.setText(String.valueOf(targetEd.getText()));
+            box.addView(ed);
+            Button ok = mkBtnPrimary(act);
+            ok.setText(Lang.tr("解析并填入"));
+            ok.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    final String raw = String.valueOf(ed.getText()).trim();
+                    if (raw.length() == 0) { toast(Lang.tr("请填写 ID 或 @用户名")); return; }
+                    inputToDidAsync(raw, new java.util.function.Consumer<Long>() {
+                        @Override public void accept(Long did) {
+                            try {
+                                if (did == null || did.longValue() == 0L) {
+                                    toast(Lang.tf("没解析到 {0}：先在 Telegram 里给这个 bot 发一条消息再试", raw));
+                                    return;
+                                }
+                                if (targetEd != null) targetEd.setText(String.valueOf(did.longValue()));
+                                toast(Lang.tf("已填入 {0}", String.valueOf(did.longValue())));
+                            } catch (Throwable ignored) {}
+                        }
+                    });
+                }
+            });
+            box.addView(ok);
+            showDialog(act, Lang.tr("手动添加"), box, Lang.tr("取消"));
+        } catch (Throwable t) { noteSwallowed("showManualAddHint", t); }
+    }
+
     private void showPickChat(final Activity act, final EditText targetEd,
                               final EditText titleEd, final int onlyType) {
         try {
             final java.util.List<PickEntry> all = collectPickCandidates();
             if (all.isEmpty()) {
-                toast(Lang.tr("拿不到会话列表：先打开一次 TG 主界面再试"));
+                // 2026-10-25：个别客户端（实测 ExteraLess / Nagram 12.10.x）候选层可能整层拿不到 ——
+                //   旧行为是直接 toast 然后 return，用户「删了再加也不行」，彻底没路走。
+                //   现在改为给手输兜底 + 明确引导「按钮学习」这条稳的路。
+                showManualAddHint(act, targetEd);
                 return;
             }
 
@@ -4467,6 +4698,7 @@ public final class TGAutoSignCore {
         final Map<Long, PickEntry> bag = PickEntry.newBag();
         final int account = currentAccount();
 
+        final int _c0 = bag.size();
         // ── ① 会话列表（全文件夹，不只主文件夹）──
         try {
             Object mc = getMessagesController(account);
@@ -4485,23 +4717,33 @@ public final class TGAutoSignCore {
                     for (Object d : ds) {
                         long did = dialogIdOf(d);
                         if (did == 0L) continue;
-                        String title = chatTitleFromCache(mc, did, account);
-                        if (title == null || title.isEmpty()) continue;
-                        boolean isBot = false;
+                        // 2026-10-25：私聊只取一次 user 对象，标题/用户名/isBot 都从它读 ——
+                        // 老实现私聊直接返回 null 更快；补了标题就得同时补性能，
+                        // 否则几百个会话 × 每次 3~4 次反射会把面板拖卡。
+                        Object u = null;
                         if (did > 0L) {
                             try {
-                                Object u = invoke(mc, "getUser", new Class<?>[]{Long.class},
+                                u = invoke(mc, "getUser", new Class<?>[]{Long.class},
                                         new Object[]{Long.valueOf(did)});
-                                if (u != null) isBot = Boolean.TRUE.equals(getFieldValSafe(u, "bot"));
                             } catch (Throwable ignored) {}
                         }
-                        String uname = usernameOf(mc, did, account);
+                        boolean isBot = u != null && Boolean.TRUE.equals(getFieldValSafe(u, "bot"));
+                        String uname = (u != null) ? strOr(getFieldValSafe(u, "username"), "")
+                                                   : usernameOf(mc, did, account);
+                        String title = (u != null) ? userDisplayName(u)
+                                                   : chatTitleFromCache(mc, did, account);
+                        // 2026-10-24：取不到标题也**不再丢弃**。旧实现在这里 continue，
+                        // 而私聊与新版会话常取不到标题 → 整层等于空（TG 13.1.1 实测）。
+                        if (title == null || title.isEmpty()) {
+                            title = (uname != null && uname.length() > 0) ? ("@" + uname) : ("会话 " + did);
+                        }
                         PickEntry.merge(bag, PickEntry.fromDid(did, title, uname, isBot, true));
                     }
                 }
             }
         } catch (Throwable t) { noteSwallowed("collectPick.dialogs", t); }
 
+        final int _c1 = bag.size();
         // ── ② 本地数据库 users 表（很久没聊的 bot 也能捞到）──
         try {
             Object ms = getMessagesStorage(account);
@@ -4533,13 +4775,28 @@ public final class TGAutoSignCore {
             }
         } catch (Throwable t) { noteSwallowed("collectPick.storage", t); }
 
-        // ── ③ MessagesController.users 内存表 ──
+        final int _c2 = bag.size();
+        // ── ③ MessagesController 的用户内存表 ──
         try {
             Object mc = getMessagesController(account);
             if (mc != null) {
+                // 2026-10-25：不再只依赖 `users` 字段名 —— 取不到就改用公开方法 getUsers()
+                //（返回全部已加载用户）。字段名/方法名任何一个变了都还有另一条路。
                 Object arr = getFieldValSafe(mc, "users");
-                if (arr instanceof Map) {
-                    for (Object v : ((Map<?, ?>) arr).values()) {
+                if (!(arr instanceof Map)) {
+                    try {
+                        Object lst = invoke(mc, "getUsers", new Class<?>[0], new Object[0]);
+                        // 2026-10-25 实测：getUsers() 返回的是 ConcurrentHashMap（Map），
+                        //   不是 Collection —— 只判 Collection 的话这条兜底永远接不住。
+                        if (lst instanceof java.util.Map) arr = lst;
+                        else if (lst instanceof java.util.Collection) arr = lst;
+                    } catch (Throwable ignored) {}
+                }
+                java.util.List<Object> _ulist = new java.util.ArrayList<Object>();
+                if (arr instanceof Map) _ulist.addAll(((Map<?, ?>) arr).values());
+                else if (arr instanceof java.util.Collection) _ulist.addAll((java.util.Collection<?>) arr);
+                if (!_ulist.isEmpty()) {
+                    for (Object v : _ulist) {
                         if (v == null) continue;
                         Object idv = getFieldValSafe(v, "id");
                         if (!(idv instanceof Number)) continue;
@@ -4560,6 +4817,12 @@ public final class TGAutoSignCore {
             }
         } catch (Throwable t) { noteSwallowed("collectPick.mcUsers", t); }
 
+        // 2026-10-25：**每次**都记一行分层计数（不再只在为空时记）——
+        //   用户报「手动添加读不到会话」时，这一行就能定位是哪一层断的，
+        //   不用再靠猜。统计只在用户打开添加面板时产生，不会刷屏。
+        lastPickStats = "会话层=" + (_c1 - _c0) + " 数据库层=" + (_c2 - _c1)
+                + " 内存层=" + (bag.size() - _c2) + " 合计=" + bag.size();
+        logw("[候选] " + lastPickStats);
         return new ArrayList<PickEntry>(bag.values());
     }
 
@@ -4650,22 +4913,33 @@ public final class TGAutoSignCore {
             for (int i = 0; i < 16; i++) {           // 16 × 500ms = 8 秒
                 try { Thread.sleep(500L); } catch (Throwable ignored) {}
                 try {
-                    // 解析成功后 TG 会把 user 写进内存表；扫一遍找 username 匹配
+                    // 解析成功后 TG 会把 user 写进内存表；扫一遍找 username 匹配。
+                    // 2026-10-25：不再只认 `users` 字段 —— 字段名一旦被改名，这里会
+                    //   16 轮空转 8 秒后报「解析失败」，用户看到的就是「@用户名也不行」。
+                    //   改为「字段 ∪ getUsers() 方法」双路（与候选列表同一套兜底）。
+                    java.util.List<Object> _us = new java.util.ArrayList<Object>();
                     if (mc != null) {
                         Object arr = getFieldValSafe(mc, "users");
-                        if (arr instanceof Map) {
-                            for (Object v : ((Map<?, ?>) arr).values()) {
-                                if (v == null) continue;
-                                Object un = getFieldValSafe(v, "username");
-                                if (un == null) continue;
-                                if (!low.equals(String.valueOf(un).toLowerCase(java.util.Locale.US))) continue;
-                                Object idv = getFieldValSafe(v, "id");
-                                if (idv instanceof Number) {
-                                    long did = ((Number) idv).longValue();
-                                    logd("[解析] @" + u + " → " + did + "（网络命中）");
-                                    return did;
-                                }
-                            }
+                        if (arr instanceof Map) _us.addAll(((Map<?, ?>) arr).values());
+                        else if (arr instanceof java.util.Collection) _us.addAll((java.util.Collection<?>) arr);
+                        if (_us.isEmpty()) {
+                            try {
+                                Object lst = invoke(mc, "getUsers", new Class<?>[0], new Object[0]);
+                                if (lst instanceof Map) _us.addAll(((Map<?, ?>) lst).values());
+                                else if (lst instanceof java.util.Collection) _us.addAll((java.util.Collection<?>) lst);
+                            } catch (Throwable ignored) {}
+                        }
+                    }
+                    for (Object v : _us) {
+                        if (v == null) continue;
+                        Object un = getFieldValSafe(v, "username");
+                        if (un == null) continue;
+                        if (!low.equals(String.valueOf(un).toLowerCase(java.util.Locale.US))) continue;
+                        Object idv = getFieldValSafe(v, "id");
+                        if (idv instanceof Number) {
+                            long did = ((Number) idv).longValue();
+                            logd("[解析] @" + u + " → " + did + "（网络命中）");
+                            return did;
                         }
                     }
                 } catch (Throwable ignored) {}
@@ -6437,12 +6711,22 @@ public final class TGAutoSignCore {
         } catch (Throwable t) { noteSwallowed("clearPanelStale", t); }
     }
 
-    private void markSigned(String prefix, String id) {
+    private void markSigned(String prefix, String id) { markSigned(prefix, id, null); }
+
+    /** 带原因的重载（2026-10-24）：把「凭什么判成功」写进同一条 WARN 日志，
+     *  不再让判定依据因采样而丢失。 */
+    private void markSigned(String prefix, String id, String reason) {
         // 重构 1.6.1：实现搬到 SignStateStore（那里集中维护"写 last_ 必须连带清理"
         // 等不变式）。此处保留薄封装，既有 6 个调用点不变。
-        stateStore.markSigned(prefix, id);
+        stateStore.markSigned(prefix, id, reason);
+        // 2026-10-28 B：趁"它刚回过消息/判成功"把名字固化下来 ——
+        // 条目没备注名时曾经永远显示成一串数字（真机：两个 bot 显示 7622987039）。
+        try { backfillEntryTitle(prefix, id); } catch (Throwable ignored) {}
         // 签到中心实时状态：标记为「已签」
         try { roundMark(prefix, id, RS_SIGNED, "签到成功"); } catch (Throwable ignored) {}
+        // 2026-10-25：签到音效 —— 每个目标签成功都会走到这里，但闸门保证一天只响一次
+        try { maybePlaySignSound(accountOfPrefix(prefix), SoundGate.KIND_FIRST_SIGN); }
+        catch (Throwable ignored) {}
     }
 
     /**
@@ -6927,12 +7211,24 @@ public final class TGAutoSignCore {
                 }
             }
             if (peer == null) {
+                // 2026-10-25：自动激活一次 —— 该 bot 只在本账号之外存在时（跨账号复制、
+                //   换客户端导入、本地库被清），内存与数据库都没有它的 user。
+                //   用条目里存下的 @用户名发起一次服务器解析（异步），
+                //   模块的退避重试会在下一轮拿到数据后成功，不用用户手动开会话。
+                Object _un = entry.get("uname");
+                if (_un != null && String.valueOf(_un).length() > 0
+                        && !"null".equals(String.valueOf(_un))) {
+                    try {
+                        jlog("[激活] 目标无本地数据，拉取 @" + _un + " → " + dialogId);
+                        resolveUsernameInto(account, String.valueOf(_un));
+                    } catch (Throwable ignored) {}
+                }
                 // 诊断：目标其实是群/频道却被当成私聊 bot（多因旧数据缺 peerKind）
                 if (isChatOrChannel(dialogId, account)) {
                     logw("[诊断] " + dialogId + " 实际是群/频道但条目缺 peerKind，请在「目标列表」里删掉后重新添加");
                     countSoftFail(entry, account, "这是群/频道，需按「 群签到」重新添加");
                 } else {
-                    countSoftFail(entry, account, "取不到这个 bot 的会话数据");
+                    countSoftFail(entry, account, Lang.tr("取不到这个 bot 的会话数据（本账号本地没有它的记录，已尝试自动拉取；也可在 TG 里用这个账号打开它发一条消息）"));
                 }
                 return SignLogic.SKIP_SEND_FAIL;
             }
@@ -8064,17 +8360,29 @@ public final class TGAutoSignCore {
                 } catch (Throwable ignored) {}
 
                 // ② 遍历会话列表兜底
-                Object dialogs = null;
-                try {
-                    dialogs = call(mc, "getDialogs", new Class<?>[]{int.class},
-                                   new Object[]{Integer.valueOf(0)});
-                } catch (Throwable ignored) {}
-                if (!(dialogs instanceof List)) {
-                    try { dialogs = call(mc, "getDialogs", new Class<?>[0], new Object[0]); } catch (Throwable ignored) {}
-                }
-                if (!(dialogs instanceof List)) return null;
+                // 2026-10-25：**所有文件夹**都扫 —— 旧实现只看主文件夹（folder 0），
+                //   归档会话与自建文件夹里的目标全都匹配不到，于是「明明聊过却说取不到会话数据」。
                 Class<?> peerCls = classEx("org.telegram.tgnet.TLRPC$Peer");
-                for (Object d : (List<?>) dialogs) {
+                java.util.List<Object> all = new java.util.ArrayList<Object>();
+                boolean any = false;
+                for (int folder = 0; folder <= 10; folder++) {
+                    Object ds = null;
+                    try {
+                        ds = call(mc, "getDialogs", new Class<?>[]{int.class},
+                                  new Object[]{Integer.valueOf(folder)});
+                    } catch (Throwable ignored) {}
+                    if (ds instanceof List) {
+                        any = true;
+                        if (!((List<?>) ds).isEmpty()) all.addAll((List<?>) ds);
+                    }
+                }
+                if (!any && all.isEmpty()) {
+                    try {
+                        Object ds = call(mc, "getDialogs", new Class<?>[0], new Object[0]);
+                        if (ds instanceof List) all.addAll((List<?>) ds);
+                    } catch (Throwable ignored) {}
+                }
+                for (Object d : all) {
                     if (d == null) continue;
                     // 真实字段：TLRPC$Dialog.id
                     long id = -1L;
@@ -8218,7 +8526,37 @@ public final class TGAutoSignCore {
         }
         // ④ bot / 用户
         String bn = botName(did);
-        return (bn != null && bn.length() > 0) ? bn : String.valueOf(did);
+        // 2026-10-28：兜底也要能辨认 —— 以前直接怼一串数字，用户根本不知道是哪个 bot
+        return (bn != null && bn.length() > 0) ? bn : Lang.tf("bot {0}（本地无资料）", did);
+    }
+
+    /**
+     * 目标缺备注名时，补存一次（2026-10-28 B）。
+     *
+     * 为什么：真机实测两个目标长期显示为 `bot 7622987039` —— 条目没有 title_，
+     * 而该 bot 又在 TG 侧失效（PEER_ID_INVALID），本地永远查不到名字。
+     * 现在凡"判成功"这一刻（它必然刚回过消息）就把能查到的名字固化，
+     * 之后即使 bot 改资料/失效，列表里也还认得出来。
+     *
+     * 只补空 —— 用户手填的备注名绝不被覆盖。
+     */
+    private void backfillEntryTitle(String prefix, String id) {
+        try {
+            int acc = accountOfPrefix(prefix);
+            Map<String, Object> m = findEntryById(id, acc);
+            if (m == null) return;
+            String cur = entryTitle(m);
+            if (cur != null && cur.length() > 0) return;      // 已有名字，不动
+            long did = entryDid(m);
+            String nm = "chat".equals(entryPeerKind(m))
+                    ? chatTitle(did, acc) : botName(did);
+            if (nm == null || nm.length() == 0) return;       // 查不到就不写（不伪造）
+            String key = prefix + "title_" + id;
+            if (nm.equals(prefs.getString(key, ""))) return;
+            prefs.edit().putString(key, nm).commit();
+            m.put("title", nm);
+            logd("[目标] 已补存名称 " + id + " → " + nm);
+        } catch (Throwable t) { noteSwallowed("backfillEntryTitle", t); }
     }
 
     /** 把查到的名字写回条目（title_<id>），避免每次重查。 */
@@ -8311,7 +8649,8 @@ public final class TGAutoSignCore {
         if (n == null || n.length() == 0) {
             String u = botUsername(did);
             if (u != null && u.length() > 0) return "@" + u;
-            return Lang.tf("bot {0}", did);
+            // 2026-10-28：同上 —— 明确告知"本地无资料"，而不是干巴巴一串 ID
+            return Lang.tf("bot {0}（本地无资料）", did);
         }
         return n;
     }
@@ -16345,6 +16684,51 @@ public final class TGAutoSignCore {
     }
 
     /**
+     * prefs → Boolean 的**只读**适配（键不存在返回 null，不是 false）。
+     *
+     * 抽成 SavedMsgPolicy.Flags 是为了让「收藏夹开关的账号级决策链」能在 JVM 上
+     * 被真实执行（测试注入 Map 实现），而不是只靠静态检查。
+     */
+    private final io.github.wlmosv_png.tgautosign.savedmsg.SavedMsgPolicy.Flags prefsFlags =
+            new io.github.wlmosv_png.tgautosign.savedmsg.SavedMsgPolicy.Flags() {
+                @Override public Boolean find(String key) {
+                    try {
+                        if (prefs.contains(key)) return Boolean.valueOf(prefs.getBoolean(key, true));
+                    } catch (Throwable ignored) {}
+                    return null;
+                }
+            };
+
+    /** 读一个布尔配置的**原始值**：键不存在返回 null（区别于「值是 false」）。 */
+    private Boolean cfgBoolRaw(String key) {
+        return prefsFlags.find(key);
+    }
+
+    /** 收藏夹摘要开关的代码默认值（历史默认：开）。 */
+    private static final boolean SAVED_MSG_DEFAULT_ON = true;
+
+    /**
+     * **指定账号**的「收藏夹摘要」开关（2026-10-27 修跨账号串扰）。
+     *
+     * 与 cfgBool 同一套键与同一套优先级（本账号 → 全局 jmb_ → 默认），
+     * 唯一区别：账号由参数给定，而不是读「当前选中账号」。
+     * 发送端按 accountSlots() 遍历时必须用本方法，否则会串到别的账号的配置。
+     *
+     * @param account 账号槽位；<0 时退回 currentAccount()
+     */
+    private boolean savedMsgOnFor(int account) {
+        int acc = account >= 0 ? account : currentAccount();
+        return io.github.wlmosv_png.tgautosign.savedmsg.SavedMsgPolicy
+                .savedMsgOn(prefsFlags, acc, SAVED_MSG_DEFAULT_ON);
+    }
+
+    /** 指定账号的摘要是否可发：账号收藏夹开关 ∧ 通知总开关（保持既有产品语义）。 */
+    private boolean canSendSavedSummaryFor(int account) {
+        return io.github.wlmosv_png.tgautosign.savedmsg.SavedMsgPolicy
+                .canSendSummary(prefsFlags, account, NOTIFY_ON);
+    }
+
+    /**
      * 在**任意账号**里找第一个存在该配置后缀的键，返回它的完整键名（找不到返回 null）。
      * 只用于配置读取兜底 —— 不参与写入，因此不会造成跨账号污染。
      */
@@ -17048,6 +17432,17 @@ public final class TGAutoSignCore {
                             for (int _sa : accountSlots()) trySendDailySummary(_sa);
                         }
                     } catch (Throwable _eS) { noteSwallowed("tick-summary", _eS); }
+                    // 2026-10-25：「全部签完」提示音。放在 NOTIFY_ON **之外** ——
+                    // 若挂在摘要开关下，「关了收藏夹摘要就永远不响」又是一个新坑。
+                    try {
+                        if (SOUND_ON && SOUND_ON_ROUND) {
+                            for (int _ss : accountSlots()) {
+                                if (allSettledToday(_ss)) {
+                                    maybePlaySignSound(_ss, SoundGate.KIND_ROUND_DONE);
+                                }
+                            }
+                        }
+                    } catch (Throwable _eSnd) { noteSwallowed("tick-sound", _eSnd); }
                     if (TIMER_ENABLED) {
                         kickSchedule();
                     } else if (inWindow()) {
@@ -18859,10 +19254,37 @@ public final class TGAutoSignCore {
                     // 改前写 acc0_cfg_ok_words，而判定链/学习页读 jmb_ok_words ——
                     // 两套键互不相认，用户「填了词却不生效、列表里也没有」。
                     // 现在设置页就是全局级的唯一入口，三处读同一个键。
-                    ed.putString(Keys.okWordsGlobal(), R.okWordsEd.getText().toString().trim());
+                    String _okWBroad = R.okWordsEd.getText().toString().trim();
+                    ed.putString(Keys.okWordsGlobal(), _okWBroad);
                     ed.putString(Keys.failWordsGlobal(), R.failWordsEd.getText().toString().trim());
+                    // 2026-10-24：过宽的成功词会把 bot 广告判成签到成功（实测 👑 / 社工库功能）
+                    try {
+                        java.util.List<String> _broad = SignLogic.tooBroadWords(_okWBroad);
+                        if (!_broad.isEmpty()) {
+                            StringBuilder _sbB = new StringBuilder();
+                            for (int _iB = 0; _iB < _broad.size(); _iB++) {
+                                if (_iB > 0) _sbB.append("\u3001");
+                                _sbB.append(_broad.get(_iB));
+                            }
+                            toast(Lang.tf("成功词过宽，容易把广告判成签到成功，建议删掉：{0}", _sbB.toString()));
+                        }
+                    } catch (Throwable _eB) { noteSwallowed("broadWords", _eB); }
                     putCfg(ed, "notify", NOTIFY_ON);
                     putCfg(ed, "notify_fail_only", NOTIFY_FAIL_ONLY);
+                    // 2026-10-25：签到音效（SOUND_STYLE 由音色按钮就地写字段）
+                    if (R.soundSw != null) SOUND_ON = R.soundSw.isChecked();
+                    if (R.soundRoundSw != null) SOUND_ON_ROUND = R.soundRoundSw.isChecked();
+                    if (R.soundFromEd != null) {
+                        SOUND_FROM = SoundGate.parseHM(String.valueOf(R.soundFromEd.getText()), 8 * 60);
+                    }
+                    if (R.soundToEd != null) {
+                        SOUND_TO = SoundGate.parseHM(String.valueOf(R.soundToEd.getText()), 23 * 60);
+                    }
+                    putCfg(ed, "sound", SOUND_ON);
+                    putCfg(ed, "sound_round", SOUND_ON_ROUND);
+                    putCfg(ed, "sound_style", SOUND_STYLE);
+                    putCfg(ed, "sound_from", SOUND_FROM);
+                    putCfg(ed, "sound_to", SOUND_TO);
                     putCfg(ed, "catchup_on_open", CATCHUP_ON_OPEN);
                     putCfg(ed, "notify_all_acc", NOTIFY_ALL_ACCOUNTS);
                     putCfg(ed, "sort", SORT_MODE);
@@ -22082,8 +22504,10 @@ public final class TGAutoSignCore {
                 int v = ((Integer) vd[0]).intValue();
                 String hit = String.valueOf(vd[1]);
                 if (v == SignLogic.V_SIGNED) {
-                    jlog("【回复判定】" + did + " 命中「" + hit + "」→ 计入已签");
-                    markSigned(prefix, id);
+                    // 2026-10-28 P2：同样带来源 + 原文片段，便于逐案回溯
+                    logw("【回复判定】" + did + " 命中「" + hit + "」→ 计入已签（锚点B）"
+                         + "｜原文: " + clip(text, 60));
+                    markSigned(prefix, id, "命中「" + hit + "」");
                     clearPendingConfirm(prefix, id);
                     return;
                 }
@@ -22112,8 +22536,11 @@ public final class TGAutoSignCore {
 
             // ③ 媒体消息 + 按钮型目标：图里就是结果，文字层读不到内容。
             //    放在失败词之后 —— 带说明文字的图（caption 含「失败」）已被①拦下。
-            if (isMedia && KIND_CB.equals(entryKind(m))) {
-                jlog("【回复判定】" + did + " 收到媒体消息（图片/贴纸）→ 按钮型目标视为签到成功");
+            // 2026-10-28 收口：媒体消息没有可读文本，**不能凭"收到一张图"就判成功**；
+            // 必须该目标此刻确在"已发出、等结论"窗口内（与其它成功路径同一证据标准）。
+            // 不在途 → 落到下面的未识别分支（证据不足不判成功）。
+            if (isMedia && KIND_CB.equals(entryKind(m)) && isSentPendingFresh(prefix, id)) {
+                jlog("【回复判定】" + did + " 收到媒体消息（图片/贴纸）+ 有在途请求 → 按钮型目标视为签到成功");
                 markSigned(prefix, id);
                 clearPendingConfirm(prefix, id);
                 return;
@@ -22126,6 +22553,18 @@ public final class TGAutoSignCore {
             // 用户看到的 10 条里 6 条是广告，真正该判的一条也没有。
             // 现在：公告只记进「被自动过滤」，可在那里一次收回，不污染主列表。
             markResultCode(prefix, id, SignLogic.R_REPLIED_UNK);
+            // 2026-10-25：命中成功词却被公告守卫拦下时必须留痕 ——
+            // 否则用户会以为「我学的词不生效」，且完全查不到原因。
+            try {
+                String _blk = SignLogic.blockedOkWord(text,
+                        SignLogic.parseExtraWords(prefs.getString(Keys.okWordsGlobal(), "")),
+                        SignLogic.parseExtraWords(prefs.getString(Keys.okWordsBot(did), "")),
+                        SignLogic.parseExtraWords(prefs.getString(Keys.okWordsTarget(id), "")));
+                if (_blk != null) {
+                    logw("【回复判定】" + did + " 命中成功词「" + _blk
+                         + "」但这段像公告/广告 → 不判成功（若它确实是结果，请删掉这个过宽的词）");
+                }
+            } catch (Throwable ignored) {}
             if (SignLogic.isLikelyAnnouncement(text)) {
                 logd("【回复判定】" + did + " 像公告/广告，不进未识别池: " + clip(text, 50));
                 try { noteSkippedUnknown(prefix, "像是公告/广告", text); } catch (Throwable ignored) {}
@@ -22983,13 +23422,49 @@ public final class TGAutoSignCore {
                         // （v1.5.8 中途试过"只标刚发过请求的那条"，但一旦 sent_at 缺失/超时
                         //  就会"bot 说成功却不计已签"，看着像失败 —— 比偶发误标更让人迷惑。
                         //  用户自己知道哪个是签到 bot，成功就算成功。）
+                        // ── 2026-10-24：从「该 bot 名下全标」改为「在途优先」（修假成功）──
+                        // 旧行为：命中成功词就把该 did 下所有目标标已签，且不看是否在途 ——
+                        // 一个 bot 挂多条目标时，一条回复把整排点亮，用户看到「没签到却显示已签」。
+                        // 2026-10-25 修订（**兼顾不漏判**）：
+                        //   ① 有在途 → 只标在途那些（最精确）；
+                        //   ② 无在途 + 命中词是内置结论词 or「已签过」语义 → 整 bot 都标。
+                        //      这条是防漏判的关键：用户手动签、进程重启丢 sent_at_、
+                        //      bot 超过 30 分钟才回话，都指望它（历史 v1.5.8 就是砍了它才翻车）。
+                        //   ③ 无在途 + 命中词只是**用户自定义词** → 只标 1 条并落 WARN。
+                        //      宽词（👑/社工库功能…）误命中不该点亮一整排，但也不完全漏。
                         int marked = 0;
+                        java.util.List<Map<String, Object>> inflight = new java.util.ArrayList<Map<String, Object>>();
+                        java.util.List<Map<String, Object>> others = new java.util.ArrayList<Map<String, Object>>();
                         for (Map<String, Object> m : judgeTargets) {
                             if (entryDid(m) != did) continue;
+                            String _cid = entryId(m);
+                            if (isSentPendingFresh(prefix, _cid) || isPendingFresh(prefix, _cid)) inflight.add(m);
+                            else others.add(m);
+                        }
+                        boolean userWordHit = extraHit(hitWord, extraOk);
+                        java.util.List<Map<String, Object>> toMark;
+                        if (!inflight.isEmpty()) {
+                            toMark = inflight;
+                        } else if (!userWordHit || SignLogic.isAlreadySignedWord(hitWord)) {
+                            toMark = others;
+                        } else if (!others.isEmpty()) {
+                            toMark = others.subList(0, 1);
+                            logw("【回复判定】" + did + " 命中你的自定义词「" + hitWord
+                                 + "」但今天没有在途请求 → 只标了 1 条，其余请在列表里确认");
+                        } else {
+                            toMark = java.util.Collections.<Map<String, Object>>emptyList();
+                        }
+                        if (toMark.isEmpty()) {
+                            logw("【回复判定】" + did + " 命中「" + hitWord
+                                 + "」但该 bot 名下没有目标可标 → 不计已签（避免误标）");
+                            noteResult(ctrlAcc >= 0 ? ctrlAcc : currentAccount(), false);
+                            return;
+                        }
+                        for (Map<String, Object> m : toMark) {
                             String id = entryId(m);
                             prefs.edit().putInt(kRetry(prefix, id), 0)
                                  .remove(kRetryAt(prefix, id)).remove(kRetryDay(prefix, id)).apply();
-                            markSigned(prefix, id);
+                            markSigned(prefix, id, "命中「" + hitWord + "」");
                             clearSendAttempts(prefix, id);   // 有结论了，当日发送计数归零
                             marked++;
                             // 2026-10-09 P2：签成了就把自己刚发的那条指令撤掉
@@ -23001,9 +23476,13 @@ public final class TGAutoSignCore {
                         // 回复），每次都记一行会把日志刷满。
                         // 现在同一目标**当天只记首次** —— 「今天这个目标签上了」这件事
                         // 记一次就够，后续重复只是噪声。
-                        logOnce("signed:" + todayStr() + ":" + did, LV_INFO,
+                        // 2026-10-28 P2：成功判定必须**可追溯** —— 原日志只有命中词，
+                        // 事后无法验证"到底依据哪条文本"（审计时踩过：cb 目标查不到原文）。
+                        // 只记脱敏截断片段（60 字），不外泄完整聊天内容。
+                        logOnce("signed:" + todayStr() + ":" + did, LV_WARN,
                                 "【回复判定】" + did + " 命中「" + hitWord + "」→ 计入已签（" + marked + " 条）"
-                                + (extraHit(hitWord, extraOk) ? "（用户自定义词）" : ""));
+                                + (extraHit(hitWord, extraOk) ? "（用户自定义词）" : "")
+                                + "｜来源=长消息链 原文: " + clip(replyText, 60));
                         noteResult(ctrlAcc >= 0 ? ctrlAcc : currentAccount(), true);
                         return;
                     }
@@ -23037,7 +23516,7 @@ public final class TGAutoSignCore {
                                  .remove(prefix + "sent_at_" + id)
                                  .remove(prefix + "opt_" + id)
                                  .commit();
-                            markSigned(prefix, id);          // ← 关键：算成功
+                            markSigned(prefix, id, "命中「" + hitWord + "」（额度用尽）");   // ← 关键：算成功
                             clearSendAttempts(prefix, id);
                             markResultCode(prefix, id, SignLogic.R_EXHAUSTED);
                             deleteOwnSentMessage(ctrlAcc >= 0 ? ctrlAcc : currentAccount(),
@@ -23145,6 +23624,15 @@ public final class TGAutoSignCore {
                         }   // end if (looksRes)
                     }
 
+                    // 2026-10-28 P0/P2：命中泛词但缺少结果形态 → 明确留痕
+                    // （这类文本以前会被判成功；现在走未识别，必须让用户看得见原因）
+                    try {
+                        String _gb = SignLogic.genericOkBlocked(replyText);
+                        if (_gb != null) {
+                            logw("【回复判定】" + did + " 命中泛词「" + _gb
+                                 + "」但缺少签到结果形态 → 不判成功｜原文: " + clip(replyText, 50));
+                        }
+                    } catch (Throwable ignored) {}
                     boolean progress = SignLogic.looksLikeProgress(replyText);
                     boolean menuHelp = SignLogic.looksLikeMenuHelp(replyText);
                     boolean looksLikeResult = SignLogic.looksLikeSignResult(replyText) && !menuHelp;
@@ -24565,6 +25053,95 @@ public final class TGAutoSignCore {
         R.notifyFailSw = swRow(act, "只通知失败", NOTIFY_FAIL_ONLY);
         R.notifyFailSw.setTextSize(Theme.TS_BODY);
         cardN.addView(R.notifyFailSw);
+
+        // ── 签到音效（2026-10-25）──
+        // 为什么放在"通知"分区：它跟通知是同一件事的两种呈现（看得见 / 听得见）。
+        sectionHeader(cardN, act, Lang.tr("▍签到音效"));
+        R.soundSw = swRow(act, "签到音效", SOUND_ON);
+        R.soundSw.setTextSize(Theme.TS_BODY);
+        cardN.addView(R.soundSw);
+        R.soundRoundSw = swRow(act, "全部签完再响一次", SOUND_ON_ROUND);
+        R.soundRoundSw.setTextSize(Theme.TS_BODY);
+        cardN.addView(R.soundRoundSw);
+        // 2026-10-27 重排：原来"音色"和"试听"是两块一样的大灰块，又丑又浪费竖向空间。
+        // 现在同一行：左边音色（主按钮，带铃铛图标），右边试听（描边次要按钮 + 图标）。
+        LinearLayout soundCtlRow = new LinearLayout(act);
+        soundCtlRow.setOrientation(LinearLayout.HORIZONTAL);
+        R.soundStyleBtn = mkBtnPrimary(act);
+        withIconText(act, R.soundStyleBtn, "bell",
+                Lang.tf("音色：{0}", Lang.tr(SoundGate.styleName(SOUND_STYLE))));
+        R.soundTestBtn = ghostBtn(act, "试听", "pulse");
+        LinearLayout.LayoutParams _lp1 = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 3.0f);
+        LinearLayout.LayoutParams _lp2 = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.5f);
+        _lp2.leftMargin = dp(8);
+        soundCtlRow.addView(R.soundStyleBtn, _lp1);
+        soundCtlRow.addView(R.soundTestBtn, _lp2);
+        cardN.addView(soundCtlRow);
+        R.soundStyleBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                SOUND_STYLE = SoundGate.nextStyle(SOUND_STYLE);      // 就地写字段，保存块直接读
+                R.soundStyleBtn.setText(Lang.tf("音色：{0}", Lang.tr(SoundGate.styleName(SOUND_STYLE))));
+                // 手动切档 → 用「试听」通道（媒体流），保证这次一定听得到
+                SignSound.playPreview(appContext, SOUND_STYLE);
+            }
+        });
+        R.soundTestBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                try {
+                    SignSound.playPreview(appContext, SOUND_STYLE);
+                    // 说明为什么"试听能听到、签到却没声"——这是用户最容易被绕晕的点
+                    if (SignSound.isSilent(appContext)) {
+                        toast(Lang.tr("试听走媒体音量（不受静音影响）；当前静音/勿扰，签到音不会响"));
+                    } else if (SignSound.notificationVolumeZero(appContext)) {
+                        toast(Lang.tr("通知音量为 0：签到音不会响，请调高通知音量"));
+                    }
+                } catch (Throwable ignored) {}
+            }
+        });
+        // 状态提示行（只有真有问题时才出现）
+        try {
+            String _sh = SignSound.audioStateHint(appContext);
+            if (_sh != null) {
+                TextView _sv = new TextView(act);
+                _sv.setText(_sh);
+                _sv.setTextSize(Theme.TS_CAPTION);
+                _sv.setTextColor(Theme.termMuted(act));
+                _sv.setTypeface(Theme.text());
+                _sv.setPadding(dp(6), dp(4), dp(6), dp(2));
+                cardN.addView(_sv);
+            }
+        } catch (Throwable ignored) {}
+        TextView sLbl = new TextView(act);
+        sLbl.setText(Lang.tr("响铃时段"));
+        sLbl.setTextSize(Theme.TS_CAPTION);
+        sLbl.setTextColor(Theme.termMuted(act));
+        sLbl.setTypeface(Theme.text());
+        sLbl.setPadding(dp(4), dp(6), dp(4), dp(2));
+        cardN.addView(sLbl);
+        LinearLayout soundRow = new LinearLayout(act);
+        soundRow.setOrientation(LinearLayout.HORIZONTAL);
+        R.soundFromEd = adInput(act, "08:00", 0);
+        R.soundFromEd.setText(SoundGate.fmtHM(SOUND_FROM));
+        R.soundToEd = adInput(act, "23:00", 0);
+        R.soundToEd.setText(SoundGate.fmtHM(SOUND_TO));
+        soundRow.addView(R.soundFromEd, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView sDash = new TextView(act);
+        sDash.setText(" ~ ");
+        sDash.setTextColor(Theme.termMuted(act));
+        sDash.setGravity(android.view.Gravity.CENTER);
+        soundRow.addView(sDash);
+        soundRow.addView(R.soundToEd, new LinearLayout.LayoutParams(0, -2, 1f));
+        soundRow.setPadding(dp(4), 0, dp(4), 0);
+        cardN.addView(soundRow);
+        TextView sTip = new TextView(act);
+        sTip.setTextSize(Theme.TS_CAPTION);
+        sTip.setTextColor(Theme.termMuted(act));
+        sTip.setTypeface(Theme.text());
+        sTip.setPadding(dp(4), dp(2), dp(4), dp(6));
+        sTip.setText(Lang.tr("当天第一次签到成功时响一次（多账号各自一次）；静音/勿打扰、以及时段外不响。"));
+        cardN.addView(sTip);
         TextView nTip = new TextView(act); nTip.setTextSize(Theme.TS_CAPTION); nTip.setTextColor(Theme.txtMuted(act));
         nTip.setTypeface(Theme.text());
         nTip.setText(Lang.tr("每账号每天一条摘要，发到自己的「收藏夹」（不弹系统通知）。目标连续 3 天失败会额外提醒。"));

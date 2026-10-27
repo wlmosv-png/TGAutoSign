@@ -157,6 +157,16 @@ public final class SignStateStore {
      */
     public void markResult(String prefix, String id, int result) {
         try {
+            // 2026-10-28 治本：**今天已经签上了**就不再接受异常归类。
+            // 否则 sweep / 超时兜底等路径会在成功之后又把「判不出」写回去，
+            // 界面与真实状态打架（真机实测 6379863842 就是这个形态）。
+            if (isSignedToday(prefix, id)) {
+                store.tx(ed -> ed.remove(Keys.opt(prefix, id))
+                                 .remove(Keys.sentAt(prefix, id))
+                                 .remove("result_" + id)
+                                 .remove("result_day_" + id));
+                return;
+            }
             /* 无论什么归类 —— bot 已经结束了这一轮，opt_ 和 sent_at_ 必须清掉。
                2026-09-29 线上事故：markResult 只写 pendcfm_ 不清 opt_ →
                模块重启后 promoteSilentToPending 读到残留 opt_，
@@ -205,6 +215,8 @@ public final class SignStateStore {
     /** 读取归类码；无归类返回 -1。 */
     public int resultOf(String prefix, String id) {
         try {
+            // 2026-10-28：已签 → 没有异常归类可谈（历史残留也不显示）
+            if (isSignedToday(prefix, id)) return -1;
             // 独立键优先（按天有效；跨天视为无归类）
             String d = store.s("result_day_" + id, "");
             if (d != null && d.equals(today())) {
@@ -249,7 +261,16 @@ public final class SignStateStore {
      * 幂等：今天已标过则只做清理、不重复记账（历史 bug：早退把清理也跳过了）。
      * 返回 true 表示本次真正写入（首次）。
      */
-    public boolean markSigned(String prefix, String id) {
+    public boolean markSigned(String prefix, String id) { return markSigned(prefix, id, null); }
+
+    /**
+     * 带「原因」的重载（2026-10-24）。
+     *
+     * 为什么需要：日志里「标记今日已签 X」以前是孤零零一行 ——
+     * 判定命中那行属于 INFO/DEBUG，会被落盘采样丢掉（lv>=LV_WARN 才必写），
+     * 于是用户排障时完全看不到「凭什么判成功」。现在把命中词写进同一条 WARN。
+     */
+    public boolean markSigned(String prefix, String id, String reason) {
         try {
             boolean first = !isSignedToday(prefix, id);
             if (first) {
@@ -264,7 +285,8 @@ public final class SignStateStore {
             clearPostSignState(prefix, id);
             if (first) {
                 if (hooks != null) { try { hooks.onSigned(prefix, id); } catch (Throwable t) { swallow("markSigned.onSigned", t); } }
-                warn("标记今日已签 " + id);
+                warn("标记今日已签 " + id
+                     + (reason == null || reason.length() == 0 ? "" : "（" + reason + "）"));
             }
             return first;
         } catch (Throwable t) { swallow("markSigned", t); return false; }
@@ -317,7 +339,12 @@ public final class SignStateStore {
                     .remove(Keys.retry(prefix, id))
                     .remove(Keys.retryAt(prefix, id))
                     .remove(Keys.retryDay(prefix, id))
-                    .remove(Keys.answered(prefix, id)));
+                    .remove(Keys.answered(prefix, id))
+                    // 2026-10-28 修：独立归类键也必须一起清 ——
+                    // resultOf() **优先**读它，残留会让"已签"的目标仍显示「判不出」
+                    // （真机实测：last_=今天 而 result_=replied_unknown）。
+                    .remove("result_" + id)
+                    .remove("result_day_" + id));
             clearFailStreak(prefix, id);
         } catch (Throwable t) { swallow("clearPostSignState", t); }
     }

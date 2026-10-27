@@ -1,5 +1,73 @@
 # 更新日志
 
+## 1.6.9 (135) — 2026-10-28
+
+> 只有 bot 明确回复签到成功才算已签：指令发出不再算数。
+> 广告、菜单、帮助与账户信息不再被算作签到结果，真实结果不再被当成广告或失败丢掉。
+> 新增单目标固定签到时刻与签到音效。
+
+### 修复 · Fixed
+
+- **发出指令就算已签**
+  *Fixed: sending the command was enough to mark the day as signed.*
+  此前发送签到指令后立即标记今日已签，bot 回没回、回什么都无关。
+  现在只有 bot 明确回复签到成功才计入已签；没有结论的目标保持等待，
+  不会因为看着像签过了而整天跳过。
+- **bot 说「今天已经签到了」却被判失败并反复重试**
+  *Fixed: replies saying "already signed in today" were judged as failures and retried.*
+  回复里只要同时出现别的词（例如个人简介里的词）就会判失败。
+  现在以同一句里的成功结论为准；纯拒绝类回复仍判失败。
+- **广告、菜单、帮助、账户信息被算作签到成功**
+  *Fixed: ads, menus, help text and account panels no longer count as a successful sign-in.*
+  这类内容被计入已签后当天不再签到，直接造成漏签。
+  现在只有带签到结果的内容才计入，其余进入「未识别」交给你判断。
+- **真实结果被当成广告丢掉**
+  *Fixed: genuine results are no longer discarded as advertisements.*
+  部分 bot 在结果后附带推广文字（如「连续服役 2 天 · 获得盒能 +50 · 邀请好友…」），
+  此前整条按广告处理、不计入已签。现在结果与推广分开识别，结果有效即计入。
+- **签上了却显示「判不出」**
+  *Fixed: signed targets no longer keep showing "unrecognized".*
+  判定结果与列表显示现在一致。
+- **图片或贴纸回复直接算成功**
+  *Fixed: image or sticker replies no longer count as success outright.*
+  没有文字的回复，只在该目标确实在等结论时才算。
+- **收藏夹摘要开关不生效**
+  *Fixed: the Saved Messages digest switch did not take effect.*
+  此前只对当前账号有效。现按账号独立生效：关掉的账号不再收摘要，
+  其他账号不受影响，切换账号后设置保持。
+- **「未识别」页条目多时卡住无响应**
+  *Fixed: the unrecognized-replies page froze with a long list.*
+  条目再多也不阻塞界面。
+- **定时模式下补签越出设定窗口**
+  *Fixed: make-up sign-ins ignored the schedule window.*
+  现在严格按设定的时间窗口与当日安排执行。
+- **学习词条不生效，或作用到别的目标**
+  *Fixed: learned words did not take effect, or applied to the wrong target.*
+  现按全局、单个 bot、单个目标三级分别生效；列表里能看到每条词的命中次数
+  与最近命中时间，过宽的词会提示删除。
+- **本地没有该 bot 记录时添加不了目标**
+  *Fixed: a bot missing from local chat data could not be added.*
+  可直接填数字 ID 或 @用户名，也可点「解析并填入」自动补全。
+
+### 新增 · Added
+
+- **单目标固定签到时刻**
+  *Added: a fixed sign-in time for individual targets.*
+  可为单个目标指定时刻（如每天 08:30），未指定的目标仍按全局窗口自动随机安排；
+  指定时刻落在窗口外时自动贴到最近的窗口边界，列表中标出实际执行时间，
+  当天已过则从次日生效。
+- **签到音效**
+  *Added: sign-in sound.*
+  当天第一次签到成功响一次（多账号各自一次），可开关、切音色、试听，
+  也可设为「全部签完再响一次」。静音、勿扰与响铃时段外不响，未响会说明原因；
+  音量走通知流。
+- **目标名称补全**
+  *Added: target names are filled in automatically.*
+  取不到资料的目标不再只显示一串编号，判定成功时自动记下名称。
+- **开屏当日状态摘要**
+  *Added: startup daily summary.*
+  每天第一次打开 Telegram 显示今天已签、待确认、未签的数量与窗口状态。
+
 ## 1.6.7 (133) — 2026-10-17
 
 > 判定问题不再靠单点猜测：消息入口增至三条，互不依赖，任一失效仍有兜底，

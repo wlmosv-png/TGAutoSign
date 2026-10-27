@@ -807,16 +807,34 @@ public final class SignLogic {
                     && !bareFailSupported(lower.replace(" ", "").replace("\u3000", ""), m)) {
                 continue;   // 模板复述 → 不作数，继续看下一条链
             }
+            // 2026-10-24：用户自己加的词仍按用户语义生效；
+            // 只有内置/条件型词才允许被「同句成功结论」翻过来。
+            if (!isUserAddedWord(m, words)) {
+                String okOv = conditionalSuccessOverride(lower, m, okGlobal);
+                if (okOv != null) return new Object[]{Integer.valueOf(V_SIGNED), okOv};
+            }
             return new Object[]{Integer.valueOf(V_FAILED), m};
         }
 
         // 成功侧：具体级优先（目标 > Bot > 全局）
+        //
+        // 2026-10-28 P0 修复（真实事故：10-25 02:37 两条“未签到却显示成功”）：
+        //   旧写法只对**内置词**加语境守卫（`isBuiltinOkWord(m) && okWordNeedsContext(m)`），
+        //   于是用户自定义的泛词（"欢迎""成功""恭喜您"…）**完全绕过守卫** ——
+        //   欢迎语 / 帮助说明里出现这些字就直接判成功。
+        //   现在：**内置词与用户词走同一套证据标准** —— 泛词必须有「结果形态」。
         String[][] okChains = { okTarget, okBot, okGlobal };
         for (String[] words : okChains) {
             if (words == null || words.length == 0) continue;
             String m = matched(lower, words);
-            // 否定守卫同样生效（「还没有完成」不能被「完成」命中）
-            if (m != null && !negated(lower, m)) return new Object[]{Integer.valueOf(V_SIGNED), m};
+            if (m == null) continue;
+            if (negated(lower, m)) continue;                       // 否定守卫
+            if (isLikelyAnnouncement(reply)) continue;             // 公告守卫
+            if (m.contains("重复") && hasTrailingNegation(lower)) continue;
+            // ★ 统一证据标准：泛词（无论内置还是用户词）必须有结果形态
+            if (isGenericOkWord(m) && !hasSuccessShape(lower)) continue;
+            if (isBuiltinOkWord(m) && okWordNeedsContext(m) && !hasSignContext(lower)) continue;
+            return new Object[]{Integer.valueOf(V_SIGNED), m};
         }
 
         // 都未命中 → 落回内置完整判定链（含非结论类、组合判定）
@@ -857,6 +875,99 @@ public final class SignLogic {
         return verdictDetail(reply, dup, ok, fail);
     }
 
+    /**
+     * 判定词是不是「条件型失败词」（2026-10-24 修假失败）。
+     *
+     * 背景（真实事故）：bot 把结论和条件写在一句里 ——
+     *   「签到成功！请先关注频道解锁更多功能」
+     * 旧实现失败词优先，直接命中「请先关注」判失败 → 撤销已签 + 退避重发，
+     * 用户看到「日志判失败、实际已经签上」。littlekunlun 反馈的正是这条。
+     *
+     * 真结论失败词（「签到失败」「未成功」「没有签到成功」）含业务动词，不属于条件型，
+     * 仍然直接判失败。
+     */
+    static boolean isConditionalFailWord(String w) {
+        if (w == null || w.length() == 0) return false;
+        String lw = w.toLowerCase(java.util.Locale.US);
+        String[] VERDICT = {"签到", "打卡", "成功", "完成", "领取", "参与", "奖励", "积分",
+                "check", "sign", "claim"};
+        for (String k : VERDICT) {
+            if (lw.contains(k)) return false;
+        }
+        return true;
+    }
+
+    /** 同一句里是否另有**未被否定**的成功结论；有则返回它，否则 null。 */
+    static String conditionalSuccessOverride(String lower, String failWord, String[] ok) {
+        try {
+            if (lower == null || !isConditionalFailWord(failWord)) return null;
+            // 2026-10-28 修（真实案例）：**不要**在这里再要求 hasSuccessShape ——
+            //   「❌️ 你今天已经签到了…不通过就拉黑」这类是"完成态 + 条件威胁"混合句，
+            //   它的成功证据本来就是"同句存在未被否定的成功结论"（下面 firstUnnegated）。
+            //   之前多加了形态要求，DONE_STATE 表又没收"已经签到"，于是永远翻不了盘
+            //   → 用户抱怨「加了判定词也一直判失败」（Little Kunlun 的 mfsgk）。
+            String[] tab = (ok != null && ok.length > 0) ? ok : OK_WORDS_DEFAULT;
+            String hit = firstUnnegated(lower, tab);
+            if (hit != null) return hit;
+            return firstUnnegated(lower, DUP_WORDS_DEFAULT);
+        } catch (Throwable t) { return null; }
+    }
+
+    private static String firstUnnegated(String lower, String[] tab) {
+        if (tab == null) return null;
+        for (String w : tab) {
+            if (w == null || w.length() == 0) continue;
+            String lw = w.toLowerCase(java.util.Locale.US);
+            if (lower.contains(lw) && !negated(lower, lw)) return w;
+        }
+        return null;
+    }
+
+    /** 命中词是否表达「今天已经签过了」（不是"刚刚签成功"）。
+     *  成功落库时用它决定「只标在途那条」还是「该 bot 名下都标」。 */
+    public static boolean isAlreadySignedWord(String w) {
+        if (w == null || w.length() == 0) return false;
+        String lw = w.toLowerCase(java.util.Locale.US);
+        String[] AL = {"已签", "已经签", "已打卡", "已经打卡", "重复", "已领取", "已参与",
+                "already", "repeated", "again later"};
+        for (String k : AL) {
+            if (lw.contains(k)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 用户自定义成功词是否「过宽」——会被 bot 的广告/菜单命中。
+     *
+     * 2026-10-24：实测用户的全局成功词里有 `👑`、`社工库功能`，
+     * 而社工库 bot 的推广文案恰好满屏 👑 与「社工库」——
+     * 实测「😇暗影社工库 | 2026最新数据 👑政务接口…」被判 V_SIGNED。
+     * 本函数只用于**设置页提示**，不改用户配置。
+     */
+    public static boolean isTooBroadOkWord(String w) {
+        if (w == null) return false;
+        String s = w.trim();
+        if (s.length() == 0) return false;
+        boolean hasAlnum = false;
+        for (int i = 0; i < s.length(); i++) {
+            if (Character.isLetterOrDigit(s.charAt(i))) { hasAlnum = true; break; }
+        }
+        if (!hasAlnum) return true;              // 纯 emoji / 符号
+        if (s.length() < 2) return true;         // 单字
+        if (isLikelyAnnouncement(s)) return true; // 命中公告特征词（社工库/广告/邀请链接…）
+        return false;
+    }
+
+    /** 从逗号分隔的自定义词里挑出过宽的（设置页提示用）。 */
+    public static java.util.List<String> tooBroadWords(String csv) {
+        java.util.List<String> out = new java.util.ArrayList<String>();
+        if (csv == null) return out;
+        for (String w : parseExtraWords(csv)) {
+            if (isTooBroadOkWord(w)) out.add(w);
+        }
+        return out;
+    }
+
     public static Object[] verdictDetail(String reply, String[] dup, String[] ok, String[] fail) {
         if (reply == null || reply.length() == 0) return new Object[]{Integer.valueOf(V_UNKNOWN), ""};
         String lower = reply.toLowerCase();
@@ -880,6 +991,9 @@ public final class SignLogic {
         // 于是只要用户加过一个词，「拉黑」守卫就整个失效（行为验证实测到）。
         if (m != null && (!isBareFailWord(m) || isUserAddedWord(m, fail) || bareFailSupported(
                 lower.replace(" ", "").replace("\u3000", ""), m))) {
+            // 2026-10-24：条件型失败词 + 同句成功结论 → 以成功为准（修假失败）
+            String okOv = conditionalSuccessOverride(lower, m, ok);
+            if (okOv != null) return new Object[]{Integer.valueOf(V_SIGNED), okOv};
             return new Object[]{Integer.valueOf(V_FAILED), m};
         }
         m = matched(lower, PERMANENT_FAIL_WORDS);
@@ -887,6 +1001,8 @@ public final class SignLogic {
         // （「未关注公众号的用户没有资格参加」），需要语境校验才认可。
         if (m != null && (!isBareFailWord(m) || bareFailSupported(
                 lower.replace(" ", "").replace("\u3000", ""), m))) {
+            String okOv2 = conditionalSuccessOverride(lower, m, ok);
+            if (okOv2 != null) return new Object[]{Integer.valueOf(V_SIGNED), okOv2};
             return new Object[]{Integer.valueOf(V_FAILED), m};
         }
         // 今日已用尽（2026-10-01 新增）：排在重复/成功词之前。
@@ -900,13 +1016,26 @@ public final class SignLogic {
         if (matched(lower, NON_CONCLUSION_WORDS) != null) {
             return new Object[]{Integer.valueOf(V_UNKNOWN), ""};
         }
+        // 2026-10-24：成功侧也要过「公告/广告」守卫 ——
+        // 实测「😇暗影社工库 | 2026最新数据 👑政务接口…」因自定义词 👑 被判成功。
+        // isLikelyAnnouncement 先看结果词（有「签到成功」等一律放行），再查公告特征词，
+        // 真结论不会受影响。
         m = matched(lower, dup != null ? dup : DUP_WORDS_DEFAULT);
-        if (m != null && !negated(lower, m)) return new Object[]{Integer.valueOf(V_SIGNED), m};
+        if (m != null && !negated(lower, m) && !isLikelyAnnouncement(reply)
+                && !(m.contains("重复") && hasTrailingNegation(lower))) {
+            return new Object[]{Integer.valueOf(V_SIGNED), m};
+        }
         m = matched(lower, ok != null ? ok : OK_WORDS_DEFAULT);
-        if (m != null && !negated(lower, m)) return new Object[]{Integer.valueOf(V_SIGNED), m};
+        if (m != null && !negated(lower, m) && !isLikelyAnnouncement(reply)
+                && !(okWordNeedsContext(m) && (!hasSignContext(lower) || hasTrailingNegation(lower)))
+                // 2026-10-28：与 scoped 链同一标准 —— 泛词必须有结果形态
+                && !(isGenericOkWord(m) && !hasSuccessShape(lower))) {
+            return new Object[]{Integer.valueOf(V_SIGNED), m};
+        }
         // ── 组合判定（兜底）：词表没覆盖，但语义上明显是成功 ──
         String cm = comboSuccess(lower);
-        if (cm != null && !negated(lower, cm.split("\\+")[0])) {
+        // 2026-10-28：组合判定同样要结果形态（否则"欢迎+签到"这类面板会被判成功）
+        if (cm != null && !negated(lower, cm.split("\\+")[0]) && hasSuccessShape(lower)) {
             return new Object[]{Integer.valueOf(V_SIGNED), cm};
         }
         return new Object[]{Integer.valueOf(V_UNKNOWN), ""};
@@ -1411,6 +1540,48 @@ public final class SignLogic {
     }
 
     // ────────────────────────────────────────────────────────────────
+    // ─────────────────── 收藏夹摘要开关（按账号解析，2026-10-27）───────────────────
+
+    /**
+     * 解析「收藏夹摘要」开关的**实际生效值**。
+     *
+     * 故障背景（实测现场）：
+     *   Core 里原来是**单个内存字段** SAVED_MSG_ON，取值走 cfgBool("saved_msg")，
+     *   而 cfgBool 读的是 `acc{currentAccount()}_cfg_saved_msg` —— 只有「当前选中账号」
+     *   的那一个键。可发送端是按 accountSlots() **遍历所有账号**，于是：
+     *     · 只关了一个账号 → 其它账号读不到键 → 回退默认 true → 照发；
+     *     · 停在关掉的那个账号 → 遍历到的所有账号被一起抑制（反向串扰）。
+     *   官方宿主 prefs 实测：acc0_cfg_saved_msg=false，而 acc1 / acc3 无该键。
+     *
+     * 取值顺序（与 cfgBool 完全同序，只是把「哪个账号」显式化）：
+     *   ① 本账号键存在       → 用它（**绝不去读别的账号的键**）
+     *   ② 否则全局 jmb_ 键存在 → 用它（历史数据 / 迁移兜底）
+     *   ③ 都没有             → def
+     *
+     * @param accountVal 本账号键的值；键不存在传 null
+     *                   （null = 没设置过，false = 用户显式关了 —— 语义相反，不可混用）
+     * @param globalVal  全局 jmb_ 键的值；不存在传 null
+     * @param def        代码默认值
+     */
+    public static boolean resolveSavedMsgOn(Boolean accountVal, Boolean globalVal, boolean def) {
+        if (accountVal != null) return accountVal.booleanValue();
+        if (globalVal != null) return globalVal.booleanValue();
+        return def;
+    }
+
+    /**
+     * 收藏夹简报是否允许发送 = **账号级**收藏夹开关 ∧ 通知总开关。
+     *
+     * 两个开关职责不同，缺一不可 —— 不要因为「有两处判断」就删掉其中一个：
+     *   · savedMsgOn —— 「往收藏夹发不发」，账号级，设置页可单独关；
+     *   · notifyOn   —— 「签到结果通知」总开关，历史上就是摘要的上游闸门，
+     *                    产品语义是「开了通知才有摘要」，本次修复**不改**这个语义。
+     * 返回 false 时，心跳 / 轮次结束 / 失败告警三条入口都不应发送。
+     */
+    public static boolean canSendSavedSummary(boolean savedMsgOn, boolean notifyOn) {
+        return savedMsgOn && notifyOn;
+    }
+
     // 账号索引归一化（纯逻辑，可单测）
     //
     // AccountManager.current() 的决策核心抽到这里，便于测试覆盖多账号边界。
@@ -1893,6 +2064,20 @@ public final class SignLogic {
         for (String h : RESULT_HINT) {
             if (lr.contains(h)) return false;
         }
+        // 2026-10-25 加固（**防漏判**）：内置表命中也算「结果词」——
+        // 否则「恭喜完成签到，欢迎加入官方频道 @x」这类**真结果**因为含公告特征词
+        // 会被判成公告 → 不判成功 → 用户以为没签上。
+        // 但放行范围必须窄：只认「重复/已签过」表，以及带**结论形态**（成功/完成/完毕…）
+        // 的成功词 —— 「获得积分」这类弱词是教程句的高频词，放行会让教程被误判成功
+        //（既有单测「教程：可随机获得积分 → 公告」就是卡这条）。
+        if (matched(lr, DUP_WORDS_DEFAULT) != null) return false;
+        String _okw = matched(lr, OK_WORDS_DEFAULT);
+        if (_okw != null) {
+            for (String strong : new String[]{"成功", "完成", "完毕", "失败",
+                    "success", "failed", "claimed", "already"}) {
+                if (_okw.contains(strong)) return false;
+            }
+        }
         // 「获得积分」不能当裸词 —— 教程句也含它：
         //   「进行普通签到可以随机获得积分」（教怎么签到，不是结果）
         // 真结果一定带数字：「获得积分:2」「获得积分 +3」「获得积分 5」。
@@ -1917,25 +2102,38 @@ public final class SignLogic {
                 // 免责 / 声明
                 "免责", "声明", "最终解释权", "官方频道", "请认准", "永久唯一",
                 "认准唯一", "谨记",
-                // 招募 / 推广
-                "邀请链接", "邀请1位", "邀请好友", "拉人", "推广", "招募",
+                // 招募 / 推广 —— 2026-10-28：**降为弱特征**（见 ANNOUNCE_WEAK）
+                // 为什么：真结果尾部常挂"邀请好友 +100盒能"这类推广，
+                // 强特征会把它整条判成公告 → 真签到被漏判。
                 // 教程 / 菜单 / 导航
                 "使用说明", "使用帮助", "命令列表", "查看全部", "怎么用",
                 "点击下方", "点击上方", "请选择功能", "请选择操作",
                 // 2026-10-18 单测抓出的漏网：bot 常把运维说明附在回复里，
                 // 用户截图那条「抬头向上看…价格表…提示被注销」就是。
                 "价格表", "查询价格", "路线查询", "提示被注销", "无法使用可以",
-                "其他机器人", "下方按钮", "抬头向上看", "配给领取",
+                "其他机器人", "下方按钮", "抬头向上看",
                 // 2026-10-18 真机样本验证补漏：这类是**教程**（教怎么签到），不是结果
                 "可以随机获得", "可随机获得", "进行普通签到", "普通签到可以",
                 "任意一个给机器人", "给机器人进行", "表情给机器人",
-                // 商城 / 充值引导
-                "去商城", "去充值", "开通会员", "购买",
+                // 商城 / 充值引导 —— 2026-10-28：同样降为弱特征
                 // 英文公告
                 "advertisement", "scam", "disclaimer", "official channel",
         };
         for (String w : ANNOUNCE) {
             if (lr.contains(w)) return true;
+        }
+
+        // ②b 弱公告特征（这些词**本身也可能是签到结果**，例如“配给领取”）：
+        //     只有**没有结果形态**时才当公告 —— 否则该 bot 的真结果会被误杀
+        //     （2026-10-28 P1：8286060286 的「[ 配给领取 ] 连续服役: 2 天 · 获得盒能: +50」被判成公告 → 漏判）
+        String[] ANNOUNCE_WEAK = {
+                "配给领取", "可以随机获得", "可随机获得", "进行普通签到",
+                // 推广/招募/商城：既是推广话术，也常是**真结果的尾巴**
+                "邀请链接", "邀请1位", "邀请好友", "拉人", "推广", "招募",
+                "去商城", "去充值", "开通会员", "购买",
+        };
+        for (String w : ANNOUNCE_WEAK) {
+            if (lr.contains(w) && !hasSuccessShape(lr)) return true;
         }
 
         // ③ 超长且无结果词 → 大概率是公告/说明
@@ -1944,6 +2142,223 @@ public final class SignLogic {
         if (reply.length() > 180) return true;
 
         return false;
+    }
+
+    /** 该成功词是否**必须**有「签到语境」才算数。
+     *
+     *  2026-10-25 审查新增（防误判）：内置表里「已获得」「获得积分」「签到获得」「积分 +」
+     *  这类是**宽词** —— 查询类 bot 回一句「您的查询已获得结果」就会被判成签到成功。
+     *  纯英文/数字词（success / claimed / already）不算宽词：英文 bot 回 "Success!"
+     *  本来就该算结果，加语境要求会造成漏判。
+     */
+    // ─────────────── 成功证据（2026-10-28 P0/P1 修复）───────────────
+
+    /** 强结论词：本身带签到语义且是结论形态 —— 命中即可判成功，不需要额外证据。 */
+    private static final String[] STRONG_RESULT = {
+            "签到成功", "打卡成功", "签到完成", "打卡完成", "签到已完成", "打卡已完成",
+            "已成功签到", "签到已成功", "成功签到", "成功打卡", "完成签到", "完成打卡",
+            "签到完毕", "打卡完毕", "领取成功", "领取完毕", "任务完成", "任务达成",
+            "check-in complete", "claimed", "success",
+    };
+
+    /**
+     * **通用高频词**：这些词在任何 bot 回复里都可能出现，单独命中**不足以**证明签到成功。
+     * 采用「完全相等」匹配 —— 所以「任务完成」「配给领取」「办妥了」这类具体说法不受影响。
+     */
+    private static final String[] GENERIC_WORDS = {
+            // 用户词表里出现过的宽词（2026-10-28 prefs 快照）
+            "成功", "完成", "欢迎", "恭喜", "恭喜您", "领取", "获得", "签到", "打卡",
+            "积分", "获得积分", "签到获得", "签到奖励", "已获得", "签到 +1", "打卡 +1",
+            "配给", "哭哭", "社工库功能", "欢迎使用hope",
+            // 内置表里的宽词
+            "已参与", "参与成功", "领取完成", "获得奖励", "积分 +",
+            // 常见礼貌/状态词
+            "感谢", "谢谢", "好的", "收到", "已处理", "处理成功", "提交成功", "已收到",
+    };
+
+    /** 面板/账户类文本特征：命中即视为"信息展示"，不构成签到结论。 */
+    private static final String[] PANEL_HINT = {
+            "账户信息", "会员状态", "账户余额", "累计推广", "今日推广", "支持的查询",
+            "查询类型", "可用积分", "积分获取方式", "个人信息", "我的资料",
+    };
+
+    /** 完成态：表示“这件事已经发生过了”。 */
+    private static final String[] DONE_STATE = {
+            "已领取", "已签到", "已打卡", "已参与", "今日已", "已经领", "已配给",
+            "距下次", "剩余", "连续", "已获得",
+            // 2026-10-28 补：这几类在真实回复里极常见（如「你今天已经签到了」），
+            // 漏了会让泛词\/完成态判定集体失灵
+            "已经签", "已经打卡", "今天已经", "今日已签", "已签过", "已完成",
+    };
+
+    /** 教程 / 说明 / 帮助形态：这类文本里的“签到/领取”是在教怎么做，不是结论。 */
+    private static final String[] TUTORIAL_HINT = {
+            "可获得", "可获取", "可以获得", "获取方式", "获取方法", "使用方法", "使用说明",
+            "演示", "示例", "例如", "格式", "怎么用", "如何", "教程", "说明：", "详情",
+            "积分获取", "积分获得方式",
+    };
+
+    /** 是否属于“教程/帮助/说明”文本（含签到动词也不算结论）。 */
+    static boolean looksLikeTutorialOrHelp(String lower) {
+        if (lower == null) return false;
+        for (String w : TUTORIAL_HINT) if (lower.contains(w)) return true;
+        return false;
+    }
+
+    /**
+     * 「结果形态」：文本是否具备**签到结果的形态证据**。
+     *
+     * 为什么需要（2026-10-28 真实事故）：
+     *   用户自定义词表里有「欢迎」「成功」「恭喜您」这类**泛词**，
+     *   而欢迎语 / 帮助说明 / 操作提示里到处是这些字 ——
+     *   结果是「未签到却显示成功」（日志 10-25 02:37:08 两条，TG 原始消息为欢迎语与帮助文本）。
+     *
+     * 形态 = ① 有签到语境（签到/打卡/领取/配给/check/sign/claim/daily/qd）
+     *        + ② 且不是教程句
+     *        + ③ 且满足任一结论证据：
+     *             · 强结论词（签到成功 / 领取成功 …）
+     *             · 完成态（已领取 / 今日已 / 距下次 …）
+     *             · 业务数字（获得盒能: +50 / 积分 3 / 服役: 2 天 / +1）
+     *
+     * 反例（必须判 false）：账户面板、帮助菜单、欢迎语、广告面板、查询说明。
+     */
+    static boolean hasSuccessShape(String lower) {
+        if (lower == null || lower.length() == 0) return false;
+        if (!hasSignContextEx(lower)) return false;
+        if (looksLikeTutorialOrHelp(lower)) return false;
+        // 面板/账户类：展示信息，不是签到结论（否则"当前积分：49 分"会因 积分+数字 被放行）
+        for (String p : PANEL_HINT) if (lower.contains(p)) return false;
+        for (String w : STRONG_RESULT) if (lower.contains(w)) return true;
+        for (String w : DONE_STATE) if (lower.contains(w)) return true;
+        return hasBusinessNumber(lower);
+    }
+
+    /** 签到语境（比 hasSignContext 多认“配给 / qd”这类账号私有说法）。 */
+    static boolean hasSignContextEx(String lower) {
+        if (hasSignContext(lower)) return true;
+        String[] EXTRA = {"配给", "qd", "盒能", "积分"};
+        for (String c : EXTRA) if (lower.contains(c)) return true;
+        return false;
+    }
+
+    /** 文本里是否有“业务数字”证据（积分/盒能/奖励/服役/天数/次数/加号）。 */
+    static boolean hasBusinessNumber(String lower) {
+        if (lower == null) return false;
+        // ① 必须有数字或加减号
+        boolean digit = false;
+        for (int i = 0; i < lower.length(); i++) {
+            char c = lower.charAt(i);
+            if (Character.isDigit(c) || c == '+' || c == '＋') { digit = true; break; }
+        }
+        if (!digit) return false;
+        // ② 数字必须落在**业务语境**里（原来 anchor 太窄，"✅ 今日打卡 +1" 认不出来）
+        String[] ANCHOR = {"积分", "盒能", "奖励", "服役", "天", "次", "获得", "领取",
+                "生命", "打卡", "签到", "配给", "qd", "+", "＋"};
+        for (String a : ANCHOR) if (lower.contains(a)) return true;
+        return false;
+    }
+
+    /**
+     * 命中词是否为**泛词** —— 单独出现不足以证明签到成功（内置词与用户词**一视同仁**）。
+     *
+     * 强词（含签到/打卡动词的结论形态）不算泛词；其余一律按泛词处理：
+     *   成功 / 完成 / 欢迎 / 恭喜 / 领取 / 获得 / 积分 / 配给 / 哭哭 / emoji / 社工库功能 …
+     */
+    static boolean isGenericOkWord(String w) {
+        if (w == null || w.length() == 0) return false;
+        String lw = w.toLowerCase(java.util.Locale.US);
+        // ① 强结论形态（签到成功 / 领取完毕…）→ 不是泛词
+        for (String strong : STRONG_RESULT) if (lw.contains(strong)) return false;
+        // ② **通用高频词**（完全相等）→ 泛词。它们在任何回复里都可能出现，
+        //    例如「获得积分」在教程句里就有（实测被误放行过）。
+        for (String g : GENERIC_WORDS) if (lw.equals(g)) return true;
+        // ③ 极短词（≤2 个汉字）或纯符号/emoji/短英文 → 判别力不足，也算泛词。
+        int cjk = 0;
+        for (int i = 0; i < lw.length(); i++) {
+            char c = lw.charAt(i);
+            if (c >= 0x4E00 && c <= 0x9FFF) cjk++;
+        }
+        if (cjk <= 2) return true;
+        if (cjk == 0 && lw.length() <= 4) return true;
+        // ④ 其余（任务完成 / 任务达成 / 配给领取 / 办妥了 …）→ 用户逐条学过的具体说法，
+        //    有判别力，直接生效（公告守卫仍然生效）。
+        return false;
+    }
+
+    /** 命中泛词、却因缺少结果形态而被拦下的那个词（供 Core 留痕诊断）。 */
+    public static String genericOkBlocked(String reply) {
+        if (reply == null || reply.length() == 0) return null;
+        String lower = reply.toLowerCase();
+        String[] all = OK_WORDS_DEFAULT;
+        String m = matched(lower, all);
+        if (m == null || !isGenericOkWord(m)) return null;
+        if (hasSuccessShape(lower)) return null;
+        return m;
+    }
+
+    static boolean okWordNeedsContext(String w) {
+        if (w == null || w.length() == 0) return false;
+        String lw = w.toLowerCase(java.util.Locale.US);
+        if (lw.matches("[a-z0-9 +\\-]+")) return false;      // 纯英文/数字 → 不设限
+        String[] CORE = {"签到", "打卡", "领取", "签", "check", "sign", "claim"};
+        for (String c : CORE) {
+            if (lw.contains(c)) return false;
+        }
+        return true;
+    }
+
+    /** 整句是否含签到语境。 */
+    static boolean hasSignContext(String lower) {
+        if (lower == null) return false;
+        String[] CORE = {"签到", "打卡", "领取", "check", "sign", "claim", "daily"};
+        for (String c : CORE) {
+            if (lower.contains(c)) return true;
+        }
+        return false;
+    }
+
+    /** 句中出现「后置否定」（守卫只看命中词之前，这类得单独挡）。
+     *  典型：「每天签到可获得积分，重复签到无效」——「重复签到」在 DUP 表里，
+     *  但后面跟了「无效」，显然不是本次结论。 */
+    static boolean hasTrailingNegation(String lower) {
+        if (lower == null) return false;
+        String[] N = {"无效", "不算", "不成功", "不可用", "不生效", "取消"};
+        for (String n : N) {
+            if (lower.contains(n)) return true;
+        }
+        return false;
+    }
+
+    /** 命中词是不是**内置**表里的（用于区分用户自定义词 —— 用户词不受上下文限制）。 */
+    static boolean isBuiltinOkWord(String w) {
+        if (w == null || w.length() == 0) return false;
+        for (String x : OK_WORDS_DEFAULT) {
+            if (x.equalsIgnoreCase(w)) return true;
+        }
+        for (String x : DUP_WORDS_DEFAULT) {
+            if (x.equalsIgnoreCase(w)) return true;
+        }
+        return false;
+    }
+
+    /** 命中成功词、却被「公告守卫」拦下的那个词（没有则返回 null）。
+     *
+     *  2026-10-25：必须留痕。否则用户会看到「我明明加了词/学了词，还是不判成功」，
+     *  却查不到任何原因 —— 实际是被公告守卫挡了。
+     */
+    public static String blockedOkWord(String reply, String[] okGlobal, String[] okBot, String[] okTarget) {
+        try {
+            if (reply == null || reply.length() == 0) return null;
+            if (!isLikelyAnnouncement(reply)) return null;
+            String lower = reply.toLowerCase(java.util.Locale.US);
+            String[][] chains = { okTarget, okBot, okGlobal };
+            for (String[] words : chains) {
+                if (words == null || words.length == 0) continue;
+                String m = matched(lower, words);
+                if (m != null && !negated(lower, m)) return m;
+            }
+            return null;
+        } catch (Throwable t) { return null; }
     }
 
     public static boolean looksLikeSignResult(String reply) {

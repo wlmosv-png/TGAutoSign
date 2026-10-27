@@ -176,6 +176,37 @@ public final class Lang {
         EN.put("下载未校验，请在「下载」目录手动确认安装", "Download was not verified — confirm the install manually from Downloads");
         EN.put("下载到系统「下载」目录，尽力核对文件指纹后交给系统安装", "Download to the system Downloads folder, verify the fingerprint where possible, then hand it to the system installer");
         EN.put("{0} 个新按钮待添加 —— 点此选择加入", "{0} new button(s) to add — tap to choose");
+        // 2026-10-25 签到音效
+        EN.put("▍签到音效", "\u25cd Sign-in sound");
+        EN.put("签到音效", "Sign-in sound");
+        // 2026-10-27 音效可用性提示（试听走媒体流；签到音受静音/通知音量影响）
+        EN.put("手机处于静音/勿扰：签到成功时不会响（点「试听」仍能听到音色）", "Phone is silent / DND: no sound on successful sign-in (Preview still plays via media volume)");
+        EN.put("通知音量为 0：签到成功时不会响；请调高通知音量（「试听」走媒体音量）", "Notification volume is 0: no sound on successful sign-in; please raise notification volume (Preview uses media volume)");
+        EN.put("试听走媒体音量（不受静音影响）；当前静音/勿扰，签到音不会响", "Preview plays on media volume (ignores silent mode); phone is currently silent/DND, so the sign-in sound will not play");
+        EN.put("通知音量为 0：签到音不会响，请调高通知音量", "Notification volume is 0: the sign-in sound will not play; please raise notification volume");
+        // 2026-10-25 手动添加兜底
+        EN.put("手动添加", "Add manually");
+        EN.put("取不到这个 bot 的会话数据（本账号本地没有它的记录，已尝试自动拉取；也可在 TG 里用这个账号打开它发一条消息）",
+                "Cannot read this bot's chat data (no local record under this account; auto-fetch attempted — you can also open it in Telegram with this account and send a message)");
+        EN.put("解析并填入", "Resolve & fill");
+        EN.put("没读到会话列表（{0}）。两个办法：\n① 直接填下框（数字 ID 或 @用户名）；\n② 更省事：在 Telegram 里点一次那个 bot 的签到按钮，模块会自动学会它。",
+                "Could not read the chat list ({0}). Two options: \n1) Fill in the box below (numeric ID or @username); \n2) Easier: tap that bot's check-in button once in Telegram and the module will learn it automatically.");
+        EN.put("机器人 ID 或 @用户名（如 123456789 或 @xxx_bot）", "Bot ID or @username (e.g. 123456789 or @xxx_bot)");
+        EN.put("请填写 ID 或 @用户名", "Enter an ID or @username");
+        EN.put("没解析到 {0}：先在 Telegram 里给这个 bot 发一条消息再试",
+                "Could not resolve {0}: send that bot a message in Telegram first, then retry");
+        EN.put("已填入 {0}", "Filled {0}");
+        EN.put("全部签完再响一次", "Also play when all done");
+        EN.put("音色：{0}", "Tone: {0}");
+        EN.put("系统通知音", "System notification");
+        EN.put("清脆", "Chime");
+        EN.put("低音", "Low");
+        EN.put("试听", "Preview");
+        EN.put("响铃时段", "Sound hours");
+        EN.put("当天第一次签到成功时响一次（多账号各自一次）；静音/勿打扰、以及时段外不响。",
+                "Plays once on the day's first successful sign-in (once per account); muted in silent/DND mode and outside the hours below.");
+        EN.put("成功词过宽，容易把广告判成签到成功，建议删掉：{0}",
+                "These success keywords are too broad and may mark bot ads as signed in. Suggest removing: {0}");
         EN.put("以后这个 bot 的按钮都自动加入", "Always learn buttons from this bot automatically");
         EN.put("以后这个 bot 的按钮都不再问", "Never ask about buttons from this bot again");
         EN.put("按钮学习需确认", "Confirm before learning a button");
@@ -399,6 +430,7 @@ public final class Lang {
         EN.put("跨账号彻底清", "Wipe all accounts");
         EN.put("English", "English");
         EN.put("bot {0}", "bot {0}");
+        EN.put("bot {0}（本地无资料）", "bot {0} (no local profile)");
         EN.put("json 备份", "JSON backup");
         EN.put("{0} 个目标", "{0} targets");
         EN.put("{0} 个账号", "{0} accounts");

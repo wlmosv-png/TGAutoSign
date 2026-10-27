@@ -19,6 +19,5 @@ verify/
 __pycache__/
 *.pyc
 
-# 本地备份
-*.bak-*
-*.bak
+# 本地备份（含 .bak3-… 这类带后缀的临时副本）
+*.bak*
