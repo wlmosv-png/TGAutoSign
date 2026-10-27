@@ -2,51 +2,42 @@
 
 ## 1.6.9 (135) — 2026-10-28
 
-> 只有 bot 明确回复签到成功才算已签：指令发出不再算数。
-> 广告、菜单、帮助与账户信息不再被算作签到结果，真实结果不再被当成广告或失败丢掉。
-> 新增单目标固定签到时刻与签到音效。
+> 签到状态以 bot 回复为依据。新增单目标固定签到时刻、签到音效、目标名称补全与开屏当日状态摘要。
 
 ### 修复 · Fixed
 
-- **发出指令就算已签**
-  *Fixed: sending the command was enough to mark the day as signed.*
-  此前发送签到指令后立即标记今日已签，bot 回没回、回什么都无关。
-  现在只有 bot 明确回复签到成功才计入已签；没有结论的目标保持等待，
-  不会因为看着像签过了而整天跳过。
-- **bot 说「今天已经签到了」却被判失败并反复重试**
-  *Fixed: replies saying "already signed in today" were judged as failures and retried.*
-  回复里只要同时出现别的词（例如个人简介里的词）就会判失败。
-  现在以同一句里的成功结论为准；纯拒绝类回复仍判失败。
-- **广告、菜单、帮助、账户信息被算作签到成功**
-  *Fixed: ads, menus, help text and account panels no longer count as a successful sign-in.*
-  这类内容被计入已签后当天不再签到，直接造成漏签。
-  现在只有带签到结果的内容才计入，其余进入「未识别」交给你判断。
-- **真实结果被当成广告丢掉**
-  *Fixed: genuine results are no longer discarded as advertisements.*
-  部分 bot 在结果后附带推广文字（如「连续服役 2 天 · 获得盒能 +50 · 邀请好友…」），
-  此前整条按广告处理、不计入已签。现在结果与推广分开识别，结果有效即计入。
-- **签上了却显示「判不出」**
-  *Fixed: signed targets no longer keep showing "unrecognized".*
-  判定结果与列表显示现在一致。
-- **图片或贴纸回复直接算成功**
-  *Fixed: image or sticker replies no longer count as success outright.*
-  没有文字的回复，只在该目标确实在等结论时才算。
-- **收藏夹摘要开关不生效**
-  *Fixed: the Saved Messages digest switch did not take effect.*
-  此前只对当前账号有效。现按账号独立生效：关掉的账号不再收摘要，
-  其他账号不受影响，切换账号后设置保持。
-- **「未识别」页条目多时卡住无响应**
-  *Fixed: the unrecognized-replies page froze with a long list.*
-  条目再多也不阻塞界面。
-- **定时模式下补签越出设定窗口**
-  *Fixed: make-up sign-ins ignored the schedule window.*
-  现在严格按设定的时间窗口与当日安排执行。
-- **学习词条不生效，或作用到别的目标**
-  *Fixed: learned words did not take effect, or applied to the wrong target.*
-  现按全局、单个 bot、单个目标三级分别生效；列表里能看到每条词的命中次数
-  与最近命中时间，过宽的词会提示删除。
-- **本地没有该 bot 记录时添加不了目标**
-  *Fixed: a bot missing from local chat data could not be added.*
+- **已签状态以 bot 回复为依据**
+  *Signed status is written only from the bot's explicit reply.*
+  签到指令发出仅记录为「已发送」；收到明确签到结果才计入已签，
+  未获结论的目标保持等待，不因指令已发出而跳过当天。
+- **同一条回复内以结论为准**
+  *The conclusion inside a reply takes precedence.*
+  成功结论优先于同句中的其他词；纯拒绝类回复判为失败。
+- **非结果内容不参与判定**
+  *Ads, menus, help text and account panels do not count as sign-in results.*
+  此类内容统一归入「未识别」，由用户判断。
+- **结果与推广分开识别**
+  *Genuine results are no longer discarded as advertisements.*
+  回复中附带的推广（如「连续服役 2 天 · 获得盒能 +50 · 邀请好友…」）不影响结论，
+  结果有效即计入已签。
+- **判定结果与列表显示一致**
+  *Verdicts and list display now agree.*
+- **图片、贴纸类回复不产生签到结论**
+  *Image and sticker replies do not produce a sign-in result.*
+  仅在该目标确实在等结论时处理。
+- **收藏夹摘要开关按账号生效**
+  *The Saved Messages digest switch is evaluated per account.*
+  关掉的账号不再收摘要，其他账号不受影响，切换账号后设置保持。
+- **「未识别」页面长列表渲染**
+  *The unrecognized-replies page renders long lists without blocking the UI.*
+- **定时模式下的补签时间窗口**
+  *Make-up sign-ins follow the configured schedule window in scheduled mode.*
+- **学习词条按层级生效**
+  *Learned words apply at the level they are configured.*
+  全局、单个 bot、单个目标三级分别生效；列表显示每条词的命中次数与最近命中时间，
+  过宽的词会提示删除。
+- **本地无该 bot 记录时仍可添加目标**
+  *Targets can be added even when the bot is missing from local chat data.*
   可直接填数字 ID 或 @用户名，也可点「解析并填入」自动补全。
 
 ### 新增 · Added
