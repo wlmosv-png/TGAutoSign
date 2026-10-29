@@ -8,7 +8,8 @@
 # roundProblemsOf() 会产出的状态集合做对照 —— 前者不该有后者不知道的。
 import io, os, re, sys
 
-SRC = sys.argv[1] if len(sys.argv) > 1 else '/data/local/tmp/tgas'
+HERE = os.path.dirname(os.path.abspath(__file__))
+SRC = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, '..')
 CORE = os.path.join(SRC, 'app/src/main/java/io/github/wlmosv_png/tgautosign/TGAutoSignCore.java')
 if not os.path.isfile(CORE):
     print('FATAL: 找不到 ' + CORE); sys.exit(1)

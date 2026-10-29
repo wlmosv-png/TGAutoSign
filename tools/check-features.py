@@ -53,7 +53,16 @@ chk("无残留 cfg 词表读取",
 
 # ── 3. 宽松模式 ──
 i_prog = core.find('进度提示必须排在宽松模式')
-i_loose = core.find('if (LOOSE_MODE) {', i_prog) if i_prog > 0 else -1
+# 2026-10-30：判定链已把 LOOSE_MODE 改为按账号读（_loose）——
+# 门禁必须认两种写法，否则会因"找不到 LOOSE_MODE"而假失败。
+if i_prog > 0:
+    _a = core.find('if (_loose) {', i_prog)
+    _b = core.find('if (LOOSE_MODE) {', i_prog)
+    _c = core.find('if (looseOn(fPrefix)) {', i_prog)
+    _cands = [x for x in (_a, _b, _c) if x > 0]
+    i_loose = min(_cands) if _cands else -1
+else:
+    i_loose = -1
 chk("宽松模式：进度检查在其之前", 0 < i_prog < i_loose if i_prog > 0 else False,
     "prog@%d loose@%d" % (i_prog, i_loose))
 chk("宽松模式：不绕过用户排除规则",

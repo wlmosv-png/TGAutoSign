@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """打包前的接线自检：新增的方法/菜单入口真的被用上了吗。
 
-  ./check-wiring.py [源码目录]        默认 /data/local/tmp/tgas
+  ./check-wiring.py [源码目录]        默认 = 本仓库（脚本所在目录的上一级）
 退出码 1 = 有孤儿方法或有菜单项没有派发分支（别急着打包）。
 
 来历：v1.4.1 增补时「复制目标到其它账号」的界面方法写好了、菜单项也插了，
@@ -12,7 +12,8 @@ import os
 import re
 import sys
 
-SRC = sys.argv[1] if len(sys.argv) > 1 else '/data/local/tmp/tgas'
+HERE = os.path.dirname(os.path.abspath(__file__))
+SRC = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, '..')
 CORE = os.path.join(SRC, 'app/src/main/java/io/github/wlmosv_png/tgautosign/TGAutoSignCore.java')
 if not os.path.isfile(CORE):
     sys.exit('FATAL: 找不到 ' + CORE)

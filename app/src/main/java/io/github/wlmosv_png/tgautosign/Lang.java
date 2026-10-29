@@ -1403,6 +1403,16 @@ public final class Lang {
         EN_SHORT.put("已用尽", "Used up");
         EN.put("bot 未回复", "Bot did not reply");
         EN.put("判定已关", "Judging off");
+        EN.put("判定已关（去设置打开）", "Judging off (open in Settings)");
+        EN.put("严格：判不出就攒到「未识别回复」等你学词。\n放行：机器人回复且「像是签到结果」才算成功（明确失败词仍判失败；纯公告/菜单/进度语不会被当成结果）。\n拦截：判不出就当失败，撤销已签并重试。",
+                "Strict: undecidable replies are collected in \"Unrecognized replies\" for you to teach words.\\nAllow: a reply counts as success only when it *looks like a check-in result* (explicit failure words still fail; plain announcements/menus/progress lines are never treated as a result).\\nBlock: undecidable is treated as failure — the signed mark is revoked and a retry is scheduled.");
+        EN.put("【总开关】开着：按内置词表判断机器人回复是成功还是失败。\n关掉：下面「判不出时」和「使用我的自定义词」都不生效，回复只记录、不判成败（目标需你自己确认）。",
+                "[Main switch] On: judge bot replies with the built-in word list. Off: BOTH \"when undecidable\" and \"use my custom words\" below stop working; replies are only recorded, never judged (you confirm targets yourself).");
+        EN.put("填这里 = 全局生效；同样受上面「自动判定」总开关控制（总开关关着时，这些词不生效）。",
+                "Global scope; also gated by the \"Auto-judge\" main switch above (words do nothing while it is off).");
+        EN.put("⚠ 自动判定已关闭 —— 这一项当前不生效", "⚠ Auto-judge is OFF — this option currently has no effect");
+        EN.put("自动判定已关闭 → 所有回复都不会被判成败。要自动记成功请打开它：设置 → 判定机器人回复 → 自动判定成功/失败",
+                "Auto-judge is OFF → no reply will ever be judged. To record success automatically, turn it on: Settings → Judge bot replies → Auto-judge success/failure");
         EN.put("待添加 {0} 个", "{0} to add");
         EN.put("待添加 {0} 个（点此处理）", "{0} to add (tap to handle)");
         EN.put("待添加（{0}）", "To add ({0})");

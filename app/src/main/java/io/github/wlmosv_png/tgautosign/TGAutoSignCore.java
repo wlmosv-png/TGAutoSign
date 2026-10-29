@@ -2307,6 +2307,121 @@ public final class TGAutoSignCore {
 
     private String accountPrefix(int account) { return "acc" + account + "_"; }
 
+    // ── 按账号读取配置（2026-10-30 M5 / M8：消除全局单值串号）──
+    //
+    // 事故：TIMER_ENABLED / WINDOW / MISS_BACK / MISS_DEADLINE 都是启动时按**当前账号**
+    // 装载的单实例字段，而调度用它们判定**所有账号** —— 面板停在哪个账号，别的账号就按
+    // 它的窗口/模式被调度。实测 2026-10-28 05:00 账号2 走了"非定时模式"分支，
+    // 而同一时刻账号1 的 cfg_timer = 开。
+    //
+    // 现在调度路径一律**现读本账号**配置，不再依赖启动快照，也不再互相串号。
+    private boolean cfgBoolOf(int acc, String name, boolean def) {
+        try {
+            String cur = accountPrefix(acc) + "cfg_" + name;
+            if (prefs.contains(cur)) return prefs.getBoolean(cur, def);
+            if (prefs.contains("jmb_" + name)) return prefs.getBoolean("jmb_" + name, def);
+        } catch (Throwable ignored) {}
+        return def;
+    }
+
+    private String cfgStrOf(int acc, String name, String def) {
+        try {
+            String cur = accountPrefix(acc) + "cfg_" + name;
+            if (prefs.contains(cur)) return prefs.getString(cur, def);
+            if (prefs.contains("jmb_" + name)) return prefs.getString("jmb_" + name, def);
+        } catch (Throwable ignored) {}
+        return def;
+    }
+
+    private int cfgIntOf(int acc, String name, int def) {
+        try {
+            String cur = accountPrefix(acc) + "cfg_" + name;
+            if (prefs.contains(cur)) return prefs.getInt(cur, def);
+            if (prefs.contains("jmb_" + name)) return prefs.getInt("jmb_" + name, def);
+        } catch (Throwable ignored) {}
+        return def;
+    }
+
+    private boolean timerOf(int acc) { return cfgBoolOf(acc, "timer", false); }
+
+    private boolean missBackOf(int acc) { return cfgBoolOf(acc, "missback", false); }
+
+    private int missDeadlineOf(int acc) { return cfgIntOf(acc, "missdead", 23 * 60); }
+
+    private int[] windowAnyOf(int acc) { return SignLogic.windowRangeAny(cfgStrOf(acc, "window", "")); }
+
+    /** 本地时间（分钟）。调度判定统一走它，便于与 SignLogic 的纯函数对齐。 */
+    private int nowMin() {
+        java.util.Calendar c = java.util.Calendar.getInstance();
+        return c.get(java.util.Calendar.HOUR_OF_DAY) * 60 + c.get(java.util.Calendar.MINUTE);
+    }
+
+    /** 本账号是否在签到窗口内（窗口为空/非法 = 不限）。 */
+    private boolean inWindowOf(int acc) {
+        return SignLogic.inWindowAny(nowMin(), windowAnyOf(acc));
+    }
+
+    /** 本账号是否在补签时段内（[窗口开始, 补签截止]；窗口开始之前不算错过）。 */
+    private boolean inMissBackTimeOf(int acc) {
+        return SignLogic.inMissBackTime(nowMin(), windowAnyOf(acc), missDeadlineOf(acc), missBackOf(acc));
+    }
+
+    // ── 自动检查冷却 / 排队时刻（2026-10-30 M3）──
+    //
+    // 冷却只用于抑制**窗口外**的重复探测（切后台再回来、网络抖动、心跳叠加），
+    // 窗口内到点执行不受它限制。默认值 **待真机验证**：连续 10 次「切后台→回前台」
+    // 应只产生 1 次自动检查；若用户反馈"上线了却没签"，说明阈值过大需要下调。
+    private static final long AUTO_CHECK_MIN_GAP_MS = 10L * 60 * 1000L;
+
+    private static String kAutoCheckAt(String prefix) { return prefix + "auto_check_at"; }
+
+    private static String kNextAllowedAt(String prefix) { return prefix + "next_allowed_at"; }
+
+    private long lastAutoCheckMs(int acc) {
+        try { return prefs.getLong(kAutoCheckAt(accountPrefix(acc)), 0L); } catch (Throwable t) { return 0L; }
+    }
+
+    private void markAutoCheck(int acc) {
+        try { prefs.edit().putLong(kAutoCheckAt(accountPrefix(acc)), System.currentTimeMillis()).apply(); }
+        catch (Throwable t) { noteSwallowed("markAutoCheck", t); }
+    }
+
+    /** 记录"下一次允许执行的绝对时刻"（QUEUE 语义）。0 = 无排队。 */
+    private void markNextAllowed(int acc, long untilMs) {
+        try {
+            if (untilMs <= 0L) return;
+            String k = kNextAllowedAt(accountPrefix(acc));
+            long cur = prefs.getLong(k, 0L);
+            if (cur > 0L && cur >= untilMs) return;      // 已有更早的排队，不覆盖
+            prefs.edit().putLong(k, untilMs).apply();
+        } catch (Throwable t) { noteSwallowed("markNextAllowed", t); }
+    }
+
+    /**
+     * 清掉过期的排队时刻（跨天后启动时不补昨天 —— 补签是否被 bot 接受由 bot 决定，
+     * 不擅自尝试）。返回当前仍生效的排队时刻（毫秒），0 = 无。
+     */
+    private long takeNextAllowed(int acc) {
+        try {
+            String k = kNextAllowedAt(accountPrefix(acc));
+            long v = prefs.getLong(k, 0L);
+            if (v <= 0L) return 0L;
+            if (System.currentTimeMillis() >= v) {
+                prefs.edit().remove(k).apply();
+                return 0L;
+            }
+            return v;
+        } catch (Throwable t) { return 0L; }
+    }
+
+    /** 把"下一个窗口开始（分钟）"换算成绝对毫秒；已过则顺延到明天。 */
+    private long nextAllowedAtMs(int nextMin) {
+        if (nextMin < 0) return 0L;
+        long at = startOfTodayMs() + (long) nextMin * 60000L;
+        if (at <= System.currentTimeMillis()) at += 24L * 3600L * 1000L;
+        return at;
+    }
+
     /**
      * 已激活账号数。
      *
@@ -7483,7 +7598,8 @@ public final class TGAutoSignCore {
                                         return null;
                                     }
                                     // 宽松模式 + 尚无结论：发出即算成功（用户明确选用该档）。
-                                    if (LOOSE_MODE) {
+                                    // 2026-10-30：按本账号读（原直读单实例字段，换号即串）。
+                                    if (looseOn(fPrefix)) {
                                         markSigned(fPrefix, fId);
                                         logw("宽松模式：指令已发出且 bot 无结论 -> 按已签处理（" + fId + "）");
                                         noteResult(fAccount, true);
@@ -7804,9 +7920,13 @@ public final class TGAutoSignCore {
             lastRound = accountLabel(account) + "：已停用，跳过";
             return 0;
         }
-        // 定时模式下，非手动(force=false)的批量触发一律交给时刻表调度，不直接批量发
-        if (TIMER_ENABLED && !force) {
-            kickSchedule();
+        // 定时模式下，非手动(force=false)的批量触发一律交给时刻表调度，不直接批量发。
+        // 2026-10-30 M4：早退**语义保留**（定时模式不得绕过时刻表），但必须留痕 ——
+        // 原实现完全静默，导致「打开 TG / 心跳 / 网络恢复」被吞掉后无从排查
+        // （实测：账号1 定时关时 10-25 有 17 条 [打开TG] 摘要，转定时后 0 条）。
+        if (timerOf(account) && !force) {
+            logw("[" + reason + "] 定时模式（本账号）：转当日时刻表调度");
+            kickScheduleFor(account);
             lastRound = accountLabel(account) + "：定时模式，按当日时刻表逐个签到";
             return 0;
         }
@@ -7817,9 +7937,30 @@ public final class TGAutoSignCore {
             return 0;
         }
         if (account == currentAccount()) syncAccount();
-        if (!force && !inWindow()) {
-            logd("[" + reason + "] 签到窗口外（当前 " + nowHM() + "，窗口 " + WINDOW + "），跳过");
-            return 0;
+        // 2026-10-30 M4：窗口外不再一律丢弃。
+        //
+        // 事故：用户凌晨/晚上上线（落在"窗口开始前"或"补签截止后"），
+        // 原实现只打一条 logd 就 return —— 无排队、无补签、无落盘，
+        // 模块既不动也不记录，用户只能手动一键签（10-28 03:32 / 10-30 00:46 实测）。
+        //
+        // 现在按本账号的四态策略：RUN_NOW/RUN_LATE 继续执行（定时关 = 用户选择
+        // "任何时间上线都该试"）；QUEUE 记排队不发送；SKIP 表示冷却未到或无事可做。
+        if (!force && !inWindowOf(account)) {
+            SignLogic.TriggerCtx _tc = buildTriggerCtx(account, reason);
+            int _dec = SignLogic.decideTrigger(_tc);
+            if (_dec == SignLogic.T_QUEUE) {
+                int _next = SignLogic.nextAllowedMin(_tc);
+                markNextAllowed(account, nextAllowedAtMs(_next));
+                logw("[" + reason + "] 窗口外（当前 " + nowHM() + "），按策略排队至 "
+                     + (_next >= 0 ? hhmm(_next) : "下个窗口") + "，本次不发送");
+                return 0;
+            }
+            if (_dec == SignLogic.T_SKIP) {
+                logw("[" + reason + "] 窗口外（当前 " + nowHM() + "），按策略跳过（无事可做/冷却中）");
+                return 0;
+            }
+            logw("[" + reason + "] 窗口外（当前 " + nowHM() + "），按策略执行（"
+                 + (_dec == SignLogic.T_RUN_LATE ? "补签" : "定时关·上线即查") + "）");
         }
         if (!hasNetwork()) {
             logw("[" + reason + "] 无网络，跳过，网络恢复后自动补");
@@ -8271,56 +8412,87 @@ public final class TGAutoSignCore {
     }
 
     public void enqueueTry(String reason) {
-        // 排队去重（1.6.1）：多个触发源会在同一时间各排一个任务，
-        // 随机延迟互相错开后又都过了节流 → 同一轮被签多次（实测一个 bot 连发两条）。
-        // 这里只允许一个待执行的排队任务；重复请求直接合并。manual 路径不走本方法。
-        synchronized (enqueueLock) {
-            long nowE = System.currentTimeMillis();
-            if (enqueueAt > 0L && nowE - enqueueAt < 90L * 1000L) {
-                boolean logIt;
-                synchronized (queueLogAt) {
-                    Long last = queueLogAt.get(reason);
-                    logIt = (last == null || nowE - last.longValue() >= 60_000L);
-                    if (logIt) queueLogAt.put(reason, Long.valueOf(nowE));
-                }
-                if (logIt) {
-                    logd("[排队] " + reason + " 合并到已有排队任务（" + ((nowE - enqueueAt) / 1000L) + " 秒前已排）");
-                }
-                return;
-            }
-            enqueueAt = nowE;
-        }
+        enqueueTryFor(currentAccount(), reason);
+    }
+
+    /**
+     * 账号维度的排队入口（2026-10-30 M7）。
+     *
+     * 事故：原实现用**全局** `volatile long enqueueAt` 做 90 秒合并 ——
+     * 账号 A 的自动触发会把账号 B 的触发直接吞掉（而心跳路径早就有按账号的
+     * markEnqueueFor，两条路径粒度不一致）。现统一到账号维度。
+     *
+     * 排队去重（1.6.1 起）：多个触发源会在同一时间各排一个任务，
+     * 随机延迟互相错开后又都过了节流 → 同一轮被签多次（实测一个 bot 连发两条）。
+     * 这里每个账号只允许一个待执行的排队任务；重复请求直接合并。manual 路径不走本方法。
+     */
+    public boolean enqueueTryFor(final int acc, String reason) {
+        // 2026-10-30（P6）：返回「是否真的入队」。
+        // 原实现返回 void，调用方只能先打一条 logw("decision=RUN_NOW")，
+        // 若随后被 90 秒合并（那条日志只是 logd、还可能被采样），用户就只看到
+        // "策略允许尝试"却没有任何后续，容易误判成"要签却没签"。
+        if (!markEnqueueFor(acc)) return false;   // 内部按账号 90 秒合并 + 限频日志
         long delay = 0L;
-        if (inWindow() && windowRange() != null) {
+        if (inWindowOf(acc) && windowAnyOf(acc) != null) {
             delay = (long) (Math.random() * 3L * 60L * 1000L);
         }
         final String r = reason;
-        mainHandler.postDelayed(() -> { try { trySignAll(r, false); } catch (Throwable t) { jlog("[" + r + "] 异常: " + t); } }, delay);
+        mainHandler.postDelayed(() -> {
+            try { trySignAllFor(r, false, acc, false); }
+            catch (Throwable t) { jlog("[" + r + "] 异常: " + t); }
+        }, delay);
+        return true;
     }
 
     /** 按账号的排队去重时间戳（心跳为每个账号各排一次时用）。 */
     private final java.util.Map<Integer, Long> enqueueAtByAcc = new java.util.concurrent.ConcurrentHashMap<Integer, Long>();
 
-    /** 该账号在 90 秒内是否已经排过；返回 true 表示"本次可以排"。 */
+    /** 合并日志的限频表（每账号一条时间戳）。 */
+    private final java.util.Map<Integer, Long> enqueueLogAt = new java.util.concurrent.ConcurrentHashMap<Integer, Long>();
+
+    /** 限频表的串行化锁：保证 check-then-put 不被并发穿插。 */
+    private final Object enqueueLogLock = new Object();
+
+    /**
+     * 该账号在 90 秒内是否已经排过；返回 true 表示"本次可以排"。
+     *
+     * P2（2026-10-30）：合并日志恢复限频。
+     * 原 enqueueTry 有 queueLogAt 60 秒限频，改用本方法后丢了限频，而本方法现在被
+     * **所有** RUN_NOW 触发源调用（含每次打开 TG 的 onResume）—— 同类噪音历史上
+     * 曾达单日 229 条、占日志 36%。此处只抑制「合并」这一条日志，
+     * **不影响任何发送结果、失败原因与成功证据**。
+     */
     private boolean markEnqueueFor(int acc) {
         long nowE = System.currentTimeMillis();
         Long prev = enqueueAtByAcc.get(acc);
         if (prev != null && nowE - prev.longValue() < 90L * 1000L) {
-            logd("[排队] 账号" + (acc + 1) + " 已有待执行任务，合并");
+            if (enqueueLogAllowed(acc, nowE)) {
+                logd("[排队] 账号" + (acc + 1) + " 已有待执行任务，合并");
+            }
             return false;
         }
         enqueueAtByAcc.put(acc, nowE);
         return true;
     }
 
-    private final Object enqueueLock = new Object();
+    /** 同一账号的合并日志是否允许记录（60 秒窗口；串行化 check-then-put）。 */
+    private boolean enqueueLogAllowed(int acc, long nowE) {
+        synchronized (enqueueLogLock) {
+            Long last = enqueueLogAt.get(acc);
+            boolean ok = SignLogic.enqueueLogAllowed(
+                    last == null ? 0L : last.longValue(), nowE, SignLogic.ENQUEUE_LOG_WINDOW_MS);
+            if (ok) enqueueLogAt.put(acc, Long.valueOf(nowE));
+            return ok;
+        }
+    }
+
+    // 2026-10-30（P7）：原 enqueueLock / queueLogAt / enqueueAt 随 M7 改成
+    // 账号维度去重后已无任何引用，此处删除以消除误导（保留说明，避免后人再找）。
 
     // ── 排队合并日志限频（2026-10-01）──
     // 「[排队] xxx 合并到已有排队任务」在 90 秒合并窗口内每次触发都写，
     // 实测单日 229 条、占日志 36%。改为同一 reason 60 秒内只记一条：
     // 仍能看出哪些触发源在反复触发，但不再逐次刷屏。
-    private final java.util.Map<String, Long> queueLogAt = new java.util.HashMap<String, Long>();
-    private volatile long enqueueAt = 0L;
 
     /** 兜底解析 peer：缓存与数据库都拿不到 user 时，从会话列表里找这个 did 直接用 */
         private Object peerFromDialogs(long did, int account) {
@@ -8689,7 +8861,7 @@ public final class TGAutoSignCore {
         if (_rc == SignLogic.R_BTN_STALE)   return Lang.tr("按钮失效");
         if (_rc == SignLogic.R_REPLIED_UNK) return Lang.tr("回复判不出");
         if (_rc == SignLogic.R_NO_REPLY)    return Lang.tr("bot 未回复");
-        if (_rc == SignLogic.R_JUDGE_OFF)   return Lang.tr("判定已关");
+        if (_rc == SignLogic.R_JUDGE_OFF)   return Lang.tr("判定已关（去设置打开）");
         // 2026-10-08：V_EXHAUSTED 已改判为「签到成功」，状态栏也要跟着改，
         // 否则用户看到「今日已用尽」会以为没签上，又去手动点。
         if (_rc == SignLogic.R_EXHAUSTED)   return Lang.tr("今日已签");
@@ -11507,12 +11679,30 @@ public final class TGAutoSignCore {
                 String merged = mergeWords(cur, failWords);
                 prefs.edit().putString(Keys.failWordsGlobal(), merged).commit();
             }
-            // 关键：写了词必须打开自定义词开关，否则不生效
+            // 关键：写了词必须打开自定义词开关，否则不生效。
+            //
+            // 2026-10-30（A）：**必须给所有已登录账号都打开**。
+            // 词表是全局的（jmb_ok_words），而 judge_custom 是账号级 ——
+            // 只开当前账号的话，切到账号2 判定时读不到这些词（用户实测「换账号就不认」）。
+            // addJudgeWordScoped（学习页提词）2026-10-22 已修为遍历所有槽位，
+            // 本条路径当时被漏掉，现补齐同一修法。只写 true、从不写 false，
+            // 不会关掉用户手动关闭的开关。
             if (!JUDGE_USE_CUSTOM) {
                 JUDGE_USE_CUSTOM = true;
-                { android.content.SharedPreferences.Editor _e=prefs.edit(); putCfg(_e,"judge_custom",true); _e.commit(); }
-                jlog("[判定词学习] 已自动打开「使用我的自定义词」开关");
+                jlog("[判定词学习] 已打开「使用我的自定义词」开关");
             }
+            try {
+                android.content.SharedPreferences.Editor _eA = prefs.edit();
+                boolean _anySlot = false;
+                for (int _slot : accountSlots()) {
+                    String _k = "acc" + _slot + "_cfg_judge_custom";
+                    if (!prefs.getBoolean(_k, false)) { _eA.putBoolean(_k, true); _anySlot = true; }
+                }
+                if (_anySlot) {
+                    _eA.commit();
+                    jlog("[判定词学习] 已为所有账号打开「使用我的自定义词」开关");
+                }
+            } catch (Throwable _eS) { noteSwallowed("addJudgeWordsInternal-slots", _eS); }
         } catch (Throwable t) {
             jlog("写入判定词失败: " + t);
         }
@@ -17189,8 +17379,10 @@ public final class TGAutoSignCore {
 
     private void scheduleTimerPlan() {
         try {
-            if (!TIMER_ENABLED) return;
-            if (!inWindow()) return;              // 未到点目标只在窗口内，窗口外交给 sweepDue 补
+            // M5：同上，按本账号现读配置
+            final int _curPlanAcc = currentAccount();
+            if (!timerOf(_curPlanAcc)) return;
+            if (!inWindowOf(_curPlanAcc)) return;   // 未到点目标只在窗口内，窗口外交给 sweepDue 补
             if (pendingTimerFire != null) return;
             final int _schedAcc = currentAccount();
             // 同 sweepDue：停用账号不排精确任务。
@@ -17233,9 +17425,12 @@ public final class TGAutoSignCore {
      */
     private void sweepDue() {
         try {
-            if (!TIMER_ENABLED) return;
-            boolean win = inWindow();
-            boolean mb = inMissBackTime();
+            // M5：现读**本账号**配置，不再用启动时装载的全局快照
+            //（否则切号后仍按上一个账号的模式/窗口巡检）。
+            final int _curAcc = currentAccount();
+            if (!timerOf(_curAcc)) return;
+            boolean win = inWindowOf(_curAcc);
+            boolean mb = inMissBackTimeOf(_curAcc);
             if (!win && !mb) return;
             if (pendingSweep != null) return;
             // 状态归位：把「已发出但久无结论」的转「待确认」。
@@ -17249,7 +17444,10 @@ public final class TGAutoSignCore {
             for (int _pa : accountSlots()) {
                 promoteSilentToPendingAll(accountPrefix(_pa));
             }
-            final int _schedAcc = currentAccount();
+            // P8（2026-10-30）：复用上面那份快照，不再二次取号 ——
+            // 原实现前面用 _curAcc 判窗口/补签、后面又用 _schedAcc 排任务，
+            // 两次调用之间若发生切号，会出现「按账号 A 判定、给账号 B 排任务」的不一致。
+            final int _schedAcc = _curAcc;
             // 停用账号不排任务。sendSign 仍会兜住（那里是唯一权威），
             // 但提前返回可以少一轮「排任务→被拒」的空转与日志噪音。
             if (!isAccountEnabled(_schedAcc)) return;
@@ -17343,7 +17541,14 @@ public final class TGAutoSignCore {
             @Override public void run() {
                 try {
                     if (sweep) pendingSweep = null; else pendingTimerFire = null;
-                    if (!TIMER_ENABLED || (!inWindow() && !inMissBackTime())) { kickSchedule(); return; }
+                    // P1（2026-10-30）：本任务在 armTask 时已锁定账号 Ctx，
+                    // 判定必须用**该账号**的配置读。原来读全局 TIMER_ENABLED / inWindow()，
+                    // 一旦在「排任务 → 执行」之间切换了账号，任务会被另一个账号的配置误杀
+                    //（例如切到非定时账号 → !TIMER_ENABLED 为真 → 已到点的任务被直接丢弃）。
+                    if (!timerOf(ctx.account)
+                            || (!inWindowOf(ctx.account) && !inMissBackTimeOf(ctx.account))) {
+                        kickSchedule(); return;
+                    }
                     // 任务已经持有不可变 Ctx；用户切换 UI 账号不能取消后台任务。
                     // 这里只使用任务创建时锁定的账号。
                     String fPrefix = ctx.prefix;
@@ -17443,28 +17648,30 @@ public final class TGAutoSignCore {
                             }
                         }
                     } catch (Throwable _eSnd) { noteSwallowed("tick-sound", _eSnd); }
-                    if (TIMER_ENABLED) {
-                        kickSchedule();
-                    } else if (inWindow()) {
-                        // 非定时模式：遍历所有启用账号，各有未签就签（含非当前账号）
-                        int cur = currentAccount();
-                        if (hasUnsignedTarget()) enqueueTry("心跳检测");
-                        // 遍历真实账号槽位，而不是 0..activatedAccounts()-1。
-                        // selectedAccount 读到的值不等于账号的「第几个」（实测 Nagram XF
-                        // 会读到 7、9），按连续区间遍历会漏掉或错位。
-                        for (int i : accountSlots()) {
-                            if (i == cur) continue;
-                            if (!isAccountEnabled(i)) continue;
-                            if (accountHasUnsigned(i)) {
-                                final int fAcc = i;
-                                // 走带去重的排期（原来直调 trySignAllFor，没有去重；
-                                // 而 kLast 要等回复判定才写，空档期内每轮心跳都会重排一次）。
-                                if (markEnqueueFor(fAcc)) {
-                                    mainHandler.postDelayed(new Runnable(){ @Override public void run(){
-                                        try { trySignAllFor("心跳(账号" + (fAcc + 1) + ")", false, fAcc); } catch (Throwable _e24) { noteSwallowed("scheduleTickLoop", _e24); }
-                                    } }, 5000L + (long) (random.nextInt(10000)));
-                                }
-                            }
+                    // M6：逐账号判定 —— 每个账号用**自己的** timer / window 配置，
+                    // 不再用单一全局 TIMER_ENABLED 决定所有账号走哪条路。
+                    //
+                    // 旧实现下「面板停在哪个账号，别的账号就按它的窗口/模式被调度」：
+                    // 实测 2026-10-28 05:00 账号2（cfg_timer=false）走了非定时分支，
+                    // 而账号1（cfg_timer=true）的定时在那一刻无人调度。
+                    for (int _hbAcc : accountSlots()) {
+                        if (!isAccountEnabled(_hbAcc)) continue;
+                        if (timerOf(_hbAcc)) {
+                            // 时刻表以当前账号为准（ensureTimerPlan 按当前 prefix 生成）；
+                            // 其余账号在切号后由 schedulePoll 重载并重排。
+                            if (_hbAcc == currentAccount()) kickSchedule();
+                            continue;
+                        }
+                        // 非定时模式：按**本账号**窗口判定，窗口内才主动巡检
+                        if (!inWindowOf(_hbAcc)) continue;
+                        if (!accountHasUnsigned(_hbAcc)) continue;
+                        final int fAcc = _hbAcc;
+                        // 走带去重的排期（原来直调 trySignAllFor，没有去重；
+                        // 而 kLast 要等回复判定才写，空档期内每轮心跳都会重排一次）。
+                        if (markEnqueueFor(fAcc)) {
+                            mainHandler.postDelayed(new Runnable(){ @Override public void run(){
+                                try { trySignAllFor("心跳(账号" + (fAcc + 1) + ")", false, fAcc); } catch (Throwable _e24) { noteSwallowed("scheduleTickLoop", _e24); }
+                            } }, 5000L + (long) (random.nextInt(10000)));
                         }
                     }
                 } catch (Throwable _e25) { noteSwallowed("scheduleTickLoop", _e25); }
@@ -17807,25 +18014,121 @@ public final class TGAutoSignCore {
         return null;
     }
 
-    /** 定时模式下所有自动触发入口统一走这里（窗口外不动作） */
+    /**
+     * 所有自动触发入口统一走这里（2026-10-30 M2 重构：不再按模式分叉）。
+     *
+     * 事故驱动：旧实现「非定时 + catchup」分支调 kickSchedule()，而
+     * sweepDue / scheduleTimerPlan 首行都是 `if (!TIMER_ENABLED) return;` ——
+     * 非定时模式必然空转，且随后 return 把本该走的 enqueueTry 一起绕掉。
+     * 日志实锤：2026-10-28 04:54:09 与 05:00:13 两次打印
+     * 「打开时补签（非定时模式）：有 6 个未签目标，立即执行一次（启动）」，
+     * 之后没有任何发送记录 —— 文案说「立即执行」，实际一个字节都没发。
+     *
+     * 现在：组装**本账号**的 TriggerCtx → SignLogic.decideTrigger → requestAutoSign 统一出口。
+     */
     private void timerHook(String reason) {
-        // 非定时模式：catchup 可以冲窗口（打开 TG 就补签）
-        if (!TIMER_ENABLED) {
-            if (CATCHUP_ON_OPEN && isStartupTrigger(reason)) {
-                int pend = countUnsignedToday(accountPrefix());
-                if (pend > 0) {
-                    logw("[定时] 打开时补签（非定时模式）：有 " + pend + " 个未签目标，立即执行一次（" + reason + "）");
-                    kickSchedule();
-                    return;
-                }
-                logd("[定时] 打开时补签：今天都签完了，跳过（" + reason + "）");
+        try {
+            final int acc = currentAccount();
+            if (!isAccountEnabled(acc)) {
+                logw("[触发] " + reason + " 账号已停用，跳过");
                 return;
             }
-            enqueueTry(reason);
+            SignLogic.TriggerCtx ctx = buildTriggerCtx(acc, reason);
+            int decision = SignLogic.decideTrigger(ctx);
+            requestAutoSign(acc, reason, decision, ctx);
+        } catch (Throwable t) {
+            logException("timerHook(" + reason + ")", t);
+        }
+    }
+
+    /** 组装**本账号**的触发上下文（全部按账号取，绝不复用全局单值 —— M5）。 */
+    private SignLogic.TriggerCtx buildTriggerCtx(int acc, String reason) {
+        SignLogic.TriggerCtx c = new SignLogic.TriggerCtx();
+        c.timerEnabled = timerOf(acc);
+        c.missBackOn = missBackOf(acc);
+        c.windowAny = windowAnyOf(acc);
+        c.missDeadlineMin = missDeadlineOf(acc);
+        c.nowMin = nowMin();
+        c.startupTrigger = isStartupTrigger(reason);
+        c.catchupOnOpen = cfgBoolOf(acc, "catchup_on_open", true);
+        c.pendingToday = countUnsignedToday(accountPrefix(acc)) > 0;
+        long last = lastAutoCheckMs(acc);
+        c.sinceLastAutoCheckMs = last > 0L ? (System.currentTimeMillis() - last) : -1L;
+        c.autoCooldownMs = AUTO_CHECK_MIN_GAP_MS;
+        return c;
+    }
+
+    /**
+     * 统一自动签到出口（2026-10-30 M3）。所有自动触发源只准经过它：
+     *   启动 / 打开TG / 心跳 / 网络恢复 / 进入窗口 / 设置变更。
+     *
+     * **只负责"时段上该不该动"**；账号启用、绑定、网络、退避、发送上限、在途、
+     * 待确认等保护仍在 skipScheduling / decideSign 里，自动与手动共用同一实现。
+     */
+    private void requestAutoSign(int acc, String reason, int decision, SignLogic.TriggerCtx ctx) {
+        try {
+            // 排队时刻已过期 → 清掉（跨天后不补昨天）；未过期则本次不重复记录
+            long queued = takeNextAllowed(acc);
+            String zone;
+            if (ctx.windowAny == null) {
+                zone = "不限";
+            } else if (SignLogic.inWindowAny(ctx.nowMin, ctx.windowAny)) {
+                zone = "窗口内";
+            } else if (SignLogic.inMissBackTime(ctx.nowMin, ctx.windowAny, ctx.missDeadlineMin, ctx.missBackOn)) {
+                zone = "补签时段";
+            } else {
+                zone = "窗口外";
+            }
+
+            switch (decision) {
+                case SignLogic.T_SKIP:
+                    logd("[触发] src=" + reason + " acc=" + acc + " zone=" + zone + " decision=SKIP"
+                         + (queued > 0L ? "（排队中至 " + hhmm((int) ((queued - startOfTodayMs()) / 60000L)) + "）" : ""));
+                    return;
+
+                case SignLogic.T_QUEUE: {
+                    int nextMin = SignLogic.nextAllowedMin(ctx);
+                    long until = nextAllowedAtMs(nextMin);
+                    markNextAllowed(acc, until);
+                    logw("[触发] src=" + reason + " acc=" + acc + " zone=" + zone
+                         + " decision=QUEUE 排队至 " + (nextMin >= 0 ? hhmm(nextMin) : "下个窗口")
+                         + "（本次不发送）");
+                    return;
+                }
+
+                case SignLogic.T_RUN_LATE:
+                    if (!markEnqueueFor(acc)) { logd("[触发] " + reason + " 本账号已有待执行任务，合并"); return; }
+                    markAutoCheck(acc);
+                    logw("[触发] src=" + reason + " acc=" + acc + " zone=" + zone
+                         + " decision=RUN_LATE（补签，1~5 分钟后触发）");
+                    mainHandler.postDelayed(new Runnable() { @Override public void run() {
+                        try { trySignAllFor(reason, false, acc, false); }
+                        catch (Throwable t) { noteSwallowed("requestAutoSign-late", t); }
+                    } }, 60000L + (long) (random.nextInt(4 * 60 * 1000)));
+
+                    return;
+
+                default:   // T_RUN_NOW
+                    markAutoCheck(acc);
+                    // 去重交给 enqueueTryFor 内部的账号维度 90 秒合并。
+                    // ⚠️ 此处**不得**再调 markEnqueueFor：刚标记过的话，
+                    // enqueueTryFor 内部的 markEnqueueFor 会立刻返回 false → 任务永不排入。
+                    boolean _queued = enqueueTryFor(acc, reason);
+                    logw("[触发] src=" + reason + " acc=" + acc + " zone=" + zone + " decision=RUN_NOW"
+                         + (_queued ? "（已入队）" : "（本账号已有待执行任务，本次合并）"));
+                    return;
+            }
+        } catch (Throwable t) {
+            logException("requestAutoSign(" + reason + ")", t);
+        }
+    }
+
+    /** 按账号触发时刻表调度（M2/M6）。时刻表只服务当前账号 —— 与既有语义一致。 */
+    private void kickScheduleFor(int acc) {
+        if (acc != currentAccount()) {
+            logd("[触发] 账号" + (acc + 1) + " 非当前账号，时刻表待切号后处理");
             return;
         }
-        // 定时模式：永远尊重窗口，catchup 开关不影响
-        if (!inWindow() && !inMissBackTime()) { logd("[定时] 窗口外(" + reason + ")，跳过"); return; }
         kickSchedule();
     }
 
@@ -19377,6 +19680,74 @@ public final class TGAutoSignCore {
      * @param reply    bot 回复原文
      * @return {Integer 判定码, String 命中词}
      */
+    /**
+     * 某账号是否启用「使用我的自定义词」。
+     *
+     * 2026-10-30（B）：判定必须按**目标所属账号**读，不能读单实例字段 JUDGE_USE_CUSTOM。
+     * 原来 judgeWithScopes 拿到了 prefix（目标账号）却仍读当前选中账号的开关 ——
+     * 面板停在账号 A（开关关着）时判定账号 B 的目标，B 辛苦加的词一个都不生效。
+     * 这是与触发链 RC-6 同类的「全局单值 vs 账号级配置」串扰，发生在判定链上。
+     */
+    private boolean judgeCustomOn(String prefix) {
+        try {
+            if (prefix == null || prefix.length() == 0) return JUDGE_USE_CUSTOM;
+            String k = prefix + "cfg_judge_custom";
+            if (prefs.contains(k)) return prefs.getBoolean(k, false);
+            if (prefs.contains("jmb_judge_custom")) return prefs.getBoolean("jmb_judge_custom", false);
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /**
+     * 按账号读三个判定相关开关（2026-10-30，与 judgeCustomOn 同一族）。
+     *
+     * 为什么必须按账号：`judge / loose / fallback` 都是**账号级**配置
+     * （cfgBool/cfgStr 装载自当前账号），而判定发生在「处理某条回复」的上下文里 ——
+     * 那条回复属于哪个账号，就该校该账号的开关。原实现直读单实例字段，
+     * 面板停在账号 A 时判定账号 B 的回复用的是 A 的配置（用户视角：
+     * 「B 的开关明明打开了却不判」或「B 关了判定却还是判了」）。
+     * 只改"从哪里读"，不改任何判定语义。
+     */
+    private boolean judgeOn(String prefix) {
+        try {
+            if (prefix != null && prefix.length() > 0) {
+                String k = prefix + "cfg_judge";
+                if (prefs.contains(k)) return prefs.getBoolean(k, true);
+            }
+            if (prefs.contains("jmb_judge")) return prefs.getBoolean("jmb_judge", true);
+        } catch (Throwable ignored) {}
+        return true;
+    }
+
+    private boolean looseOn(String prefix) {
+        try {
+            if (prefix != null && prefix.length() > 0) {
+                String k = prefix + "cfg_loose";
+                if (prefs.contains(k)) return prefs.getBoolean(k, false);
+            }
+            if (prefs.contains("jmb_loose")) return prefs.getBoolean("jmb_loose", false);
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /** 判不出时的兜底档；与本账号的 loose 保持一致的默认推导（同装载逻辑 :2113）。 */
+    private String fallbackOf(String prefix) {
+        try {
+            if (prefix != null && prefix.length() > 0) {
+                String k = prefix + "cfg_fallback";
+                if (prefs.contains(k)) {
+                    String v = prefs.getString(k, "strict");
+                    if (v != null && v.length() > 0) return v;
+                }
+            }
+            if (prefs.contains("jmb_fallback")) {
+                String v = prefs.getString("jmb_fallback", "strict");
+                if (v != null && v.length() > 0) return v;
+            }
+        } catch (Throwable ignored) {}
+        return looseOn(prefix) ? "loose" : "strict";
+    }
+
     private Object[] judgeWithScopes(String prefix, long did, long botDid,
                                      String targetId, String reply) {
         try {
@@ -19387,7 +19758,7 @@ public final class TGAutoSignCore {
             String[] okGlobal = null, failGlobal = null;
             String[] okBot = null, failBot = null;
             String[] okTgt = null, failTgt = null;
-            if (JUDGE_USE_CUSTOM) {
+            if (judgeCustomOn(prefix)) {          // B：按目标所属账号读
                 okGlobal = SignLogic.parseExtraWords(prefs.getString(Keys.okWordsGlobal(), ""));
                 failGlobal = SignLogic.parseExtraWords(prefs.getString(Keys.failWordsGlobal(), ""));
                 okBot = SignLogic.parseExtraWords(prefs.getString(Keys.okWordsBot(scopeBot), ""));
@@ -23211,6 +23582,11 @@ public final class TGAutoSignCore {
                 try {
                     // 用 hook 实例锁定的账号；拿不到（旧调用点）才回退全局值
                     String prefix = _rtAcc >= 0 ? accountPrefix(_rtAcc) : accountPrefix();
+                    // 2026-10-30：这三个开关都是**账号级**的，必须按 prefix 读 ——
+                    // 与 judgeCustomOn 同一族（原实现直读单实例字段，换号即串）。
+                    final boolean _judgeOn = judgeOn(prefix);
+                    final boolean _loose = looseOn(prefix);
+                    final String _fb = fallbackOf(prefix);
                     // 目标列表必须**按这个 prefix 现场重载**，不能用 targetsSnapshot()。
                     // 反例（用户实测）：内存 targets 是按 lastAccount 装载的，而一条 update
                     // 可能来自另一个账号（全账号签到/多窗口），两者不同步时 prefix 指向账号2
@@ -23246,7 +23622,7 @@ public final class TGAutoSignCore {
                     // 否则 last_ 不写 → 日历不绿 → 心跳每 90 秒再发一次（死循环）
                     // 判定逻辑已抽到 SignLogic（纯逻辑、有单测）：返回 {判定码, 命中词}
                     // 判定总开关：关掉就只记录回复、不判成败（用户自己确认目标）
-                    if (!JUDGE_ENABLED) {
+                    if (!_judgeOn) {
                         // 关掉判定是用户的显式选择，但**不能让它悄悄生效**：
                         // 否则用户会看到"bot 明明回签到成功、目标却没变绿"，无从下手。
                         //
@@ -23274,11 +23650,12 @@ public final class TGAutoSignCore {
                     // 宽松模式：**只要 bot 回了内容就算成功**，完全不看判定词。
                     // 专门对付措辞千奇百怪、内置词表永远对不上的机器人。
                     // 放在词表判定之前，命中即返回。
-                    if (LOOSE_MODE) {
+                    if (_loose) {
                         // 宽松 ≠ 盲目：**明确失败**仍然判失败（活动已结束 / 请先关注 /
                         // 未绑定账号 / failed 之类）。否则 bot 挂了也会显示绿色，用户被骗。
                         // 2026-10-18：改读全局键（旧版读废弃 cfg_ 键，自定义失败词形同不存在）。
-                        String[] looseExtraFail = JUDGE_USE_CUSTOM
+                        // 2026-10-30：按账号读（原直读单实例 —— 与 judgeWithScopes 同一族缺陷，上一轮漏修）
+                        String[] looseExtraFail = judgeCustomOn(prefix)
                                 ? SignLogic.parseExtraWords(prefs.getString(Keys.failWordsGlobal(), "")) : null;
                         String[] looseFail = mergeWords(SignLogic.FAIL_WORDS_DEFAULT, looseExtraFail);
                         Object[] lvd = SignLogic.verdictDetail(replyText, new String[0], new String[0], looseFail);
@@ -23355,7 +23732,10 @@ public final class TGAutoSignCore {
                     boolean _isGroup = fIsGroupPeer || did < 0L;
                     if (scopeBotDid == 0L && _isGroup && fFromUid != 0L) scopeBotDid = fFromUid;
                     if (scopeBotDid == 0L) scopeBotDid = did;
-                    if (JUDGE_USE_CUSTOM) {
+                    // 2026-10-30：同上，按**目标所属账号**读这个开关。
+                    // 这是第二条判定路径（长消息链）—— 上一轮只修了 judgeWithScopes，它被漏掉，
+                    // 导致多账号下自定义词在两条路径上生效与否不一致。
+                    if (judgeCustomOn(prefix)) {
                         extraOk = SignLogic.parseExtraWords(prefs.getString(Keys.okWordsGlobal(), ""));
                         extraFail = SignLogic.parseExtraWords(prefs.getString(Keys.failWordsGlobal(), ""));
                         okBotW = SignLogic.parseExtraWords(prefs.getString(Keys.okWordsBot(scopeBotDid), ""));
@@ -23573,7 +23953,7 @@ public final class TGAutoSignCore {
                     // 严格(默认) → 维持原行为：UNKNOWN，进未识别回复
                     // loose     → 放行：当成功（明确失败词已在上面判过，不会走到这）
                     // fail      → 拦截：当失败，撤销已签并安排重试
-                    if ("loose".equals(FALLBACK) || "fail".equals(FALLBACK)) {
+                    if ("loose".equals(_fb) || "fail".equals(_fb)) {
                         // ── 2026-10-18 修「放行把任何废话都算成功」──
                         // 改前：只要是 V_UNKNOWN 就按用户选的档处理。
                         // 于是 bot 回「抬头向上看咱们今日路线查询价格表」这种
@@ -23582,11 +23962,11 @@ public final class TGAutoSignCore {
                         // 现在：放行必须「这条确实像签到结果」才生效；
                         //       不像的一律保持 UNKNOWN（继续等 / 进池）。
                         boolean looksRes = SignLogic.looksLikeSignResult(replyText);
-                        if ("loose".equals(FALLBACK) && !looksRes) {
+                        if ("loose".equals(_fb) && !looksRes) {
                             logd("【回复判定】" + did + " 兜底=放行，但这条不像签到结果 → 继续等: "
                                  + clip(replyText, 40));
                         } else {
-                        boolean asOk = "loose".equals(FALLBACK);
+                        boolean asOk = "loose".equals(_fb);
                         int marked = 0;
                         for (Map<String, Object> m : judgeTargets) {
                             if (entryDid(m) != did) continue;
@@ -23660,8 +24040,8 @@ public final class TGAutoSignCore {
                                 long lastP = prefs.getLong(prefix + "last_progress_" + pid, 0L);
                                 long nowP = System.currentTimeMillis();
                                 if (lastP > 0L && nowP - lastP > PROGRESS_GRACE_MS
-                                        && !"strict".equals(FALLBACK)) {
-                                    boolean asOk = "loose".equals(FALLBACK);
+                                        && !"strict".equals(_fb)) {
+                                    boolean asOk = "loose".equals(_fb);
                                     if (asOk) {
                                         prefs.edit().putInt(kRetry(prefix, pid), 0)
                                              .remove(kRetryAt(prefix, pid)).remove(kRetryDay(prefix, pid)).apply();
@@ -24242,7 +24622,7 @@ public final class TGAutoSignCore {
             if (judgeOffNotified) return;
             judgeOffNotified = true;
             mainHandler.post(new Runnable(){ @Override public void run(){
-                try { toast(Lang.tr("自动判定已关闭：机器人回复不会被判成败（设置 → 判定机器人回复）")); }
+                try { toast(Lang.tr("自动判定已关闭 → 所有回复都不会被判成败。要自动记成功请打开它：设置 → 判定机器人回复 → 自动判定成功/失败")); }
                 catch (Throwable _eJ) { noteSwallowed("noteJudgeOffOnce", _eJ); }
             } });
         } catch (Throwable _eJ2) { noteSwallowed("noteJudgeOffOnce", _eJ2); }
@@ -25804,12 +26184,16 @@ public final class TGAutoSignCore {
         }
         card3.addView(fbRow);
 
-        TextView fbTip = new TextView(act);
+        final TextView fbTip = new TextView(act);
         fbTip.setTextSize(Theme.TS_CAPTION);
         fbTip.setTextColor(Theme.txtMuted(act));
         fbTip.setTypeface(Theme.text());
         fbTip.setPadding(dp(4), dp(2), dp(4), dp(6));
-        fbTip.setText(Lang.tr("严格：判不出就攒到「未识别回复」等你学词。\n放行：只要机器人回了就算成功（失败词仍判失败）。\n拦截：判不出就当失败，撤销已签并重试。"));
+        // 2026-10-30：原说明写「只要机器人回了就算成功」，与实现不符 ——
+        // 实际还有一道 looksLikeSignResult 门槛（回复必须像签到结果）。
+        // 用户按旧说明理解「有回复就绿」，遇到 bot 回公告/菜单时会以为模块坏了。
+        final String fbBase = Lang.tr("严格：判不出就攒到「未识别回复」等你学词。\n放行：机器人回复且「像是签到结果」才算成功（明确失败词仍判失败；纯公告/菜单/进度语不会被当成结果）。\n拦截：判不出就当失败，撤销已签并重试。");
+        fbTip.setText(fbBase);
         card3.addView(fbTip);
         // 上色
         for (int k = 0; k < fbKeys.length; k++) {
@@ -25821,15 +26205,48 @@ public final class TGAutoSignCore {
         // 开关式：默认用内置词表判定成功/失败，不再要求用户"自己加词"。
         R.judgeSw = swRow(act, "自动判定成功 / 失败", JUDGE_ENABLED);
         card3.addView(R.judgeSw);
-        TextView rvTip = new TextView(act); rvTip.setTextSize(Theme.TS_CAPTION);
+        final TextView rvTip = new TextView(act); rvTip.setTextSize(Theme.TS_CAPTION);
         rvTip.setTextColor(Theme.txtMuted(act)); rvTip.setTypeface(Theme.text());
-        rvTip.setText(Lang.tr("开着：按内置词表判断机器人回复是成功还是失败。\n关掉：只记录回复、不判成败（目标需要你自己确认）。"));
+        // 2026-10-30：把它明确写成「总开关」。用户把这里关掉后仍去调下面的档位，
+        // 以为「判不出时」是独立功能 —— 实际总闸不开，下面两档都不执行。
+        final String rvBase = Lang.tr("【总开关】开着：按内置词表判断机器人回复是成功还是失败。\n关掉：下面「判不出时」和「使用我的自定义词」都不生效，回复只记录、不判成败（目标需你自己确认）。");
+        rvTip.setText(rvBase);
         rvTip.setPadding(dp(4), dp(4), dp(4), dp(2));
         card3.addView(rvTip);
 
         // 自定义补充词（可选）：只在需要时填，且要求开关开着
         R.judgeCustomSw = swRow(act, "使用我的自定义词（叠加在内置之上）", JUDGE_USE_CUSTOM);
         card3.addView(R.judgeCustomSw);
+        final TextView customTip = new TextView(act);
+        customTip.setTextSize(Theme.TS_CAPTION);
+        customTip.setTextColor(Theme.txtMuted(act));
+        customTip.setTypeface(Theme.text());
+        customTip.setPadding(dp(4), dp(2), dp(4), dp(6));
+        final String customBase = Lang.tr("填这里 = 全局生效；同样受上面「自动判定」总开关控制（总开关关着时，这些词不生效）。");
+        customTip.setText(customBase);
+        card3.addView(customTip);
+
+        // ── 2026-10-30：总闸状态联动提示 ──
+        // 只改提示文本与颜色，**不写 JUDGE_ENABLED** —— 保持「开关改动需保存才生效」的既有语义，
+        // 避免用户切完不保存却影响当前会话行为。
+        final TextView[] gateTips = new TextView[]{ fbTip, rvTip, customTip };
+        final String[]   gateBase = new String[]{ fbBase, rvBase, customBase };
+        final Runnable refreshGate = new Runnable() { @Override public void run() {
+            boolean on = (R.judgeSw != null) && R.judgeSw.isChecked();
+            for (int i = 0; i < gateTips.length; i++) {
+                gateTips[i].setText(on ? gateBase[i]
+                        : Lang.tr("⚠ 自动判定已关闭 —— 这一项当前不生效") + "\n" + gateBase[i]);
+                gateTips[i].setTextColor(on ? Theme.txtMuted(act) : Theme.termPink(act));
+            }
+        } };
+        refreshGate.run();
+        try {
+            R.judgeSw.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+                @Override public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
+                    refreshGate.run();
+                }
+            });
+        } catch (Throwable _tGate) { noteSwallowed("refreshGate", _tGate); }
 
         // ── 2026-10-18：把「这两行填的是什么范围」讲清楚 ──
         // 用户实测困惑：「设置里的关键词 和 未识别回复里学的词 不同步」。

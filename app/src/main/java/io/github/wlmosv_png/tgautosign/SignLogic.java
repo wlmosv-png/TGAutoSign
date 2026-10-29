@@ -182,6 +182,105 @@ public final class SignLogic {
         return nowMin >= start || nowMin <= missDeadline;
     }
 
+    // ─────────────────── 自动签到触发策略（2026-10-30，事故驱动） ───────────────────
+    //
+    // 事故：用户「我上线它不签到，只能打开面板手动一键签」。
+    // 旧实现：自动路径被「窗口/补签时段」硬门禁，窗口外（尤其凌晨）完全静默；
+    // 非定时模式下的「打开 TG 时补签」又调 kickSchedule()，在非定时模式下必然空转。
+    //
+    // 本函数只回答一个问题：**时段上该不该动**（立即 / 稍后 / 排队 / 不动）。
+    // 账号启用、绑定、网络、退避、发送上限、在途、待确认等保护**不在这里**，
+    // 一律由 skipScheduling / decideSign 负责，且自动与手动共用同一实现。
+
+    /** 立即执行（窗口内）。 */
+    public static final int T_RUN_NOW  = 0;
+    /** 立即执行，补签语义（窗口结束后到补签截止之间）。 */
+    public static final int T_RUN_LATE = 1;
+    /** 持久化排队到下一个合法时刻，本次不发（窗口开始前 / 截止后）。 */
+    public static final int T_QUEUE    = 2;
+    /** 本周期无事可做 / 冷却未到 / 明确不该动。 */
+    public static final int T_SKIP     = 3;
+
+    /** decideTrigger 的输入快照（全部按**账号**维度填，不得使用全局单值）。 */
+    public static final class TriggerCtx {
+        public boolean timerEnabled;          // 本账号「定时签到」
+        public boolean missBackOn;            // 本账号「错过补签」
+        public int[]   windowAny;             // 本账号窗口（windowRangeAny，可跨天；null = 不限）
+        public int     missDeadlineMin;       // 本账号补签截止（分钟）
+        public int     nowMin;                // 设备本地时间（分钟）
+        public boolean startupTrigger;        // 本次是否「刚打开宿主」
+        public boolean catchupOnOpen;         // 本账号「打开 TG 时补签」
+        public boolean pendingToday = true;   // 本周期仍有关注目标（未签且未在途且未待确认）
+        public long    sinceLastAutoCheckMs = -1L;   // 距上次自动检查；<0 = 从未查过
+        public long    autoCooldownMs;        // 自动检查冷却（0 = 不限）
+    }
+
+    /**
+     * 四态决策。判定优先级（先命中者胜）：
+     *   1. pendingToday == false    → T_SKIP（已签完 / 在途 / 待确认，无事可做）
+     *   2. 窗口内（含窗口不限）      → T_RUN_NOW（窗口内到点不受冷却限制）
+     *   3. 窗口外且冷却未到          → T_SKIP
+     *   4. 定时关                    → T_RUN_NOW（用户语义：任何时间上线都该试）
+     *   5. 定时开 + 补签时段         → T_RUN_LATE
+     *   6. 其余（窗口前 / 截止后）   → T_QUEUE（排队，不在本次发送）
+     *
+     * 窗口解析失败（非法格式）按「不限」处理，与 inWindowAny(null)==true 的既有语义一致，
+     * 避免用户把窗口写错就永远不动。
+     */
+    public static int decideTrigger(TriggerCtx c) {
+        if (c == null) return T_SKIP;
+        if (!c.pendingToday) return T_SKIP;
+
+        int[] any = c.windowAny;
+        // 窗口内：立即执行，不受冷却限制（冷却只用于抑制窗口外的重复探测）
+        if (any == null || inWindowAny(c.nowMin, any)) return T_RUN_NOW;
+
+        // 窗口外：先看自动检查冷却（触发合并，防止切后台再回来反复触发）
+        if (c.autoCooldownMs > 0L && c.sinceLastAutoCheckMs >= 0L
+                && c.sinceLastAutoCheckMs < c.autoCooldownMs) return T_SKIP;
+
+        // 定时关闭 = 用户选择「任何时间上线都应尝试」
+        if (!c.timerEnabled) return T_RUN_NOW;
+
+        // 定时开启 = 用户选择「只在窗口（含补签）内动作」
+        if (inMissBackTime(c.nowMin, any, c.missDeadlineMin, c.missBackOn)) return T_RUN_LATE;
+        return T_QUEUE;
+    }
+
+    /** 队列语义：下一个合法执行时刻（分钟）。用于日志与 next_allowed_at_ 计算。 */
+    public static int nextAllowedMin(TriggerCtx c) {
+        if (c == null) return -1;
+        int[] any = c.windowAny;
+        if (any == null) return -1;
+        return any[0];     // 定时开 + 窗口前 / 截止后 → 等下一个窗口开始
+    }
+
+    // ─────────────────── 合并日志限频（2026-10-30 P2） ───────────────────
+    //
+    // 事故：原 enqueueTry 有 queueLogAt 60 秒限频，改用 markEnqueueFor 后丢了限频，
+    // 而 markEnqueueFor 现在被**所有** RUN_NOW 触发源调用（含每次打开 TG 的 onResume）
+    // —— 同类噪音在历史上曾达单日 229 条、占日志 36%（用户明确要求降噪）。
+    //
+    // 只抑制「[排队] … 合并」这一条日志：不涉及任何发送、失败、成功证据。
+    // 作用域 = 每账号；窗口 = 60 秒（ENQUEUE_LOG_WINDOW_MS）；并发由调用方串行化保证。
+
+    /** 合并日志的限频窗口（毫秒）；<=0 表示不限频。 */
+    public static final long ENQUEUE_LOG_WINDOW_MS = 60_000L;
+
+    /**
+     * 合并日志限频判定（纯函数，便于单测）。
+     *
+     * @param lastMs   上次记录时刻（毫秒）；<=0 表示从未记录过
+     * @param nowMs    当前时刻（毫秒）
+     * @param windowMs 限频窗口（毫秒）；<=0 表示不限频
+     * @return true = 本次允许记录
+     */
+    public static boolean enqueueLogAllowed(long lastMs, long nowMs, long windowMs) {
+        if (windowMs <= 0L) return true;
+        if (lastMs <= 0L) return true;
+        return nowMs - lastMs >= windowMs;
+    }
+
     // ─────────────────────── 重试退避 ───────────────────────
 
     /** 单目标单日失败次数上限：达到即冻结到明天（防"成功清零/失败+1"震荡导致的反复重签）。 */
@@ -2050,6 +2149,72 @@ public final class SignLogic {
      * @param reply 回复原文
      * @return true = 公告类，不要进未识别池
      */
+
+    /** 公告判定的长度阈值（对**归一化后**的有效正文计算，见 effectiveBodyLength）。 */
+    static final int ANNOUNCE_LENGTH_LIMIT = 180;
+
+    /**
+     * 有效正文长度：剥掉 URL / 邀请链接后再计长度。
+     *
+     * 2026-10-29 新增。为什么需要：
+     *   bot 的真结果正文通常很短，但会把「一键分享」的长 URL 拼在尾部，
+     *   一条 184 字的真结果能被 URL 撑到 797 字 —— 旧实现用整串长度判定，
+     *   真签到被当成超长公告否决（8286060286 / mid=14613）。
+     *
+     * 处理原则（保守，绝不切断正文）：
+     *   · 只整段移除 **完整的 URL token**（http:// https:// t.me/ 与裸域名 www.x.y），
+     *     从协议头一直吃到下一个空白/换行/中文字符为止；
+     *   · URL 内部的 %XX 编码、查询参数原样跳过，不做解码、不做截断推断；
+     *   · 未被空白分隔的 URL 若紧贴中文（少见），以首个非 ASCII 字符为界停下，正文不受损。
+     *
+     * @return 剥离 URL 后的字符数（用于公告判定的长度证据）
+     */
+    public static int effectiveBodyLength(String reply) {
+        if (reply == null || reply.length() == 0) return 0;
+        String s = stripUrls(reply);
+        return s.trim().length();
+    }
+
+    /** 移除文本中的完整 URL，返回剩余正文（不改写、不截断正文）。 */
+    static String stripUrls(String text) {
+        if (text == null || text.length() == 0) return "";
+        StringBuilder out = new StringBuilder(text.length());
+        int i = 0, n = text.length();
+        while (i < n) {
+            int st = urlStart(text, i);
+            if (st < 0) { out.append(text.charAt(i)); i++; continue; }
+            i = st;
+            // 吃掉 URL 本体：直到空白/换行/中文字符/全角标点为止
+            while (i < n) {
+                char c = text.charAt(i);
+                if (c == '\n' || c == '\r' || c == '\t' || c == ' ') break;
+                // 中文与全角标点属于正文，遇到即停（URL 里不会出现未编码的这些字符）
+                if (c >= 0x2E80 && c <= 0x9FFF) break;
+                if (c >= 0x3000 && c <= 0x303F) break;
+                if (c >= 0xFF00 && c <= 0xFFEF) break;
+                // emoji 也是正文边界
+                if (Character.isHighSurrogate(c)) break;
+                i++;
+            }
+            // 用等长空白占位，保留行结构（避免前后两段粘连成新词）
+            for (int k = st; k < i; k++) out.append(' ');
+        }
+        return out.toString();
+    }
+
+    /** 若 i 处是一个 URL 的起点，返回其起始下标；否则 -1。 */
+    private static int urlStart(String t, int i) {
+        int n = t.length();
+        String[] PFX = {"https://", "http://", "t.me/", "www."};
+        for (String p : PFX) {
+            if (i + p.length() <= n && t.regionMatches(true, i, p, 0, p.length())) {
+                // 允许出现在句首/空白/标点之后
+                return i;
+            }
+        }
+        return -1;
+    }
+
     public static boolean isLikelyAnnouncement(String reply) {
         if (reply == null || reply.length() == 0) return false;
         String lr = reply.toLowerCase(java.util.Locale.US);
@@ -2139,7 +2304,20 @@ public final class SignLogic {
         // ③ 超长且无结果词 → 大概率是公告/说明
         //    真结论通常很短（「✅ 签到成功，积分+3」）；
         //    180 字以上还一个结果词都没有的，基本是模板。
-        if (reply.length() > 180) return true;
+        //
+        // 2026-10-29 修复（真实事故：8286060286 / mid=14613 / mid=14615）：
+        //   纯长度兜底**不能否决已有的可靠结果证据**。
+        //   真实回复正文仅 184 字（「✨ [ 配给领取 ] 连续服役: 3 天 · 获得盒能: +50 …」），
+        //   后面再挂 595 字符的推广 URL —— 整条 797 字。
+        //   旧实现先判「>180 → 公告」，真签到整条被判公告，
+        //   okChain 里 continue → 最终落到 V_UNKNOWN(2)，日志现形：
+        //   「这条回复像是签到结果，但没匹配上内置词」。
+        //
+        //   现在：① 长度改用 effectiveBodyLength（先剥 URL / 邀请链接，推广尾巴不再撑大长度）
+        //        ② hasSuccessShape 成立（签到语境 + 强结论词/完成态/业务数字）时，
+        //           长度一律不再否决，交给判定链
+        //        ③ 无结果证据的长文本仍照旧判公告（保留原有识别能力）
+        if (effectiveBodyLength(reply) > ANNOUNCE_LENGTH_LIMIT && !hasSuccessShape(lr)) return true;
 
         return false;
     }
@@ -2251,10 +2429,45 @@ public final class SignLogic {
             if (Character.isDigit(c) || c == '+' || c == '＋') { digit = true; break; }
         }
         if (!digit) return false;
-        // ② 数字必须落在**业务语境**里（原来 anchor 太窄，"✅ 今日打卡 +1" 认不出来）
-        String[] ANCHOR = {"积分", "盒能", "奖励", "服役", "天", "次", "获得", "领取",
-                "生命", "打卡", "签到", "配给", "qd", "+", "＋"};
-        for (String a : ANCHOR) if (lower.contains(a)) return true;
+        // ② 数字必须**紧邻**业务名词（同一子句内 ±6 字符）才算业务数字。
+        //
+        // 2026-10-29 收紧（真实反例，同一 bot 的推广句）：
+        //   「【配给领取】邀请好友 +100盒能，快来领取吧！加入我们，收益翻倍。」
+        //   旧实现只要文本里出现任意业务锚点（积分/盒能/领取…）+ 任意数字就成立，
+        //   于是「邀请好友 +100盒能」这种**奖励宣传**也能过形态检查，
+        //   配上用户词「配给」直接判签到成功。
+        //   现在要求数字与业务名词相邻 —— 真结果形态都能过：
+        //     "获得盒能: +50" / "盒能: 1596" / "连续服役: 3 天" / "打卡 +1" / "积分 +3"
+        //   纯宣传句则不过（数字 100 与「邀请好友」相邻，不与本次结果相邻亦可，
+        //   但「盒能」紧邻 100 时仍被算作业务数字 → 交给下面的排除表处理）。
+        String[] ANCHOR = {"积分", "盒能", "奖励", "服役", "获得", "领取",
+                "生命", "打卡", "签到", "配给", "qd"};
+        // 排除：明显属于「邀请/拉人/注册赠送」的宣传数字，不是本次签到结果
+        String[] PROMO = {"邀请", "拉人", "好友", "注册", "新人", "宣传", "推广",
+                "返利", "收益", "翻倍", "抽奖", "赠送"};
+        for (int i = 0; i < lower.length(); i++) {
+            if (!Character.isDigit(lower.charAt(i))) continue;
+            // 取数字左侧最近的业务名词
+            String near = "";
+            for (String a : ANCHOR) {
+                int p = lower.lastIndexOf(a, i);
+                if (p < 0) continue;
+                if (i - (p + a.length()) > 6) continue;   // 太远不算
+                if (isPromoContext(lower, p, i, PROMO)) continue;  // 宣传语境，跳过
+                near = a;
+                break;
+            }
+            if (!near.isEmpty()) return true;
+        }
+        return false;
+    }
+
+    /** 业务名词与数字之间/紧邻处是否夹着推广语（邀请、好友、注册…）。 */
+    private static boolean isPromoContext(String lower, int anchorPos, int digitPos, String[] promo) {
+        int from = Math.max(0, anchorPos - 8);
+        int to = Math.min(lower.length(), digitPos + 8);
+        String win = lower.substring(from, to);
+        for (String p : promo) if (win.contains(p)) return true;
         return false;
     }
 
