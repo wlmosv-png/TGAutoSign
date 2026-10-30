@@ -199,6 +199,25 @@ public final class SignStateStore {
     }
 
     /**
+     * 只写归类码，**不置「待确认」**（2026-10-30）。
+     *
+     * 用途：还没发出任何请求就失败的场景（典型：回调目标等不到带按钮的新消息）。
+     * 这类失败必须让界面如实显示原因（列表状态、「卡住的目标」、归类统计都读 result_），
+     * 但**绝不能**走 markResult —— 那里对 needsAttention 的归类会写 pendcfm_，
+     * 而 SignGate.pendingUnconfirmed 会据此拦住当天剩下的自动重试；
+     * 面板随时可能被 bot 推过来，「继续等下一次重试」才是对的策略。
+     *
+     * 与 markResult 一样按天有效（result_day_），跨天自动失效。
+     */
+    public void markReason(String prefix, String id, int result) {
+        try {
+            if (isSignedToday(prefix, id)) return;
+            store.tx(ed -> ed.putString("result_" + id, SignLogic.resultCode(result))
+                             .putString("result_day_" + id, today()));
+        } catch (Throwable t) { swallow("markReason", t); }
+    }
+
+    /**
      * 「待确认」是否是**今天**标的。
      *
      * 老数据（pendcfm_ 有、pendcfm_day_ 无）返回 true —— 宁可留着，

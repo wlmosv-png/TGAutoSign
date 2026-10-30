@@ -1527,6 +1527,24 @@ public final class SignLogic {
      */
     public static final int SKIP_SEND_ATTEMPTS_EXHAUST = 10;
 
+    /**
+     * 发送失败的**细分码**（2026-10-30，真实工单驱动）。
+     *
+     * 起因：SKIP_SEND_FAIL 一条码被 5 个完全不同的失败共用，而 toast 与日志
+     *   都写成「取不到会话数据，先进该会话发一条消息」—— 用户（Turrit 宿主 +
+     *   回调型 bot）真正遇到的是「等不到带按钮的新消息」，被这句话引去会话里
+     *   发消息，白折腾一晚上；他给该目标填了一条前置命令就好了。
+     *   归类不细分，文案就不可能说人话 —— 这是那次事故的直接结论。
+     *
+     * 7 保留为兜底（未细分的发送失败），新值从 11 起：不动既有取值，
+     * 老单测、日志统计与外部脚本的口径都不受影响。
+     */
+    public static final int SKIP_SEND_FAIL_PEER    = 11;  // 取不到会话数据（本地没有该 bot / 该群）
+    public static final int SKIP_SEND_FAIL_PANEL   = 12;  // 等不到带按钮的新消息（面板未就绪）
+    public static final int SKIP_SEND_FAIL_EXC     = 13;  // 发送过程抛异常
+    /** 前置命令已发出、正在等面板刷新 —— **不是失败**，只是这一轮还没走完。 */
+    public static final int SKIP_SEND_WAITING_PANEL = 14;
+
     /** 参数打包，避免调用方传一长串布尔。 */
     public static final class SignGate {
         public boolean manual;              // 用户显式操作（绕过所有"今天已签"类限制）
@@ -1630,7 +1648,11 @@ public final class SignLogic {
             case SKIP_RETRY_EXHAUST:  return "今日重试已用尽";
             case SKIP_BACKOFF:        return "退避中";
             case SKIP_DISABLED:       return "已停用/冻结/排除";
-            case SKIP_SEND_FAIL:      return "发送失败（会话数据取不到）";
+            case SKIP_SEND_FAIL:      return "发送失败（未细分）";
+            case SKIP_SEND_FAIL_PEER:     return "发送失败（取不到会话数据）";
+            case SKIP_SEND_FAIL_PANEL:    return "等不到带按钮的新消息（可填前置命令拉面板）";
+            case SKIP_SEND_FAIL_EXC:      return "发送异常";
+            case SKIP_SEND_WAITING_PANEL: return "已发前置命令，等面板刷新";
             case SKIP_ACCOUNT_DISABLED: return "账号已停用";
             case SKIP_PENDING_CONFIRM: return "待确认（等用户处置）";
             case SKIP_SEND_ATTEMPTS_EXHAUST: return "今日发送次数已达上限";

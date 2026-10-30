@@ -1113,6 +1113,15 @@ public final class Lang {
         EN.put("配置文件里没有可写入的键", "No writable keys in the config file");
         EN.put("没有可导出的数据（还没有签到目标）", "Nothing to export yet (no targets)");
         EN.put("按钮失效", "Button expired");
+        // ── 发送失败细分（2026-10-30）：以前三种失败共用一句「取不到会话数据」，见 SignLogic 的说明。
+        EN.put("「{0}」取不到会话数据：先用这个账号打开它发一条消息，再重试", "\"{0}\" has no local chat data: open it with this account and send a message there first, then retry");
+        EN.put("「{0}」等不到带按钮的新消息：在该目标「编辑」里填一条前置命令（如 /menu）", "\"{0}\": no new message with buttons arrived; add a pre-command (e.g. /menu) in this target's Edit dialog");
+        EN.put("「{0}」发送时出错，详见日志", "\"{0}\": send error, see the log");
+        EN.put("「{0}」已发前置命令，正在等面板刷新…", "\"{0}\": pre-command sent, waiting for the panel to refresh…");
+        EN.put("面板未就绪：给该目标填一条前置命令（如 /menu），模块会自动拉面板", "Panel not ready: add a pre-command (e.g. /menu) to this target and the module will pull the panel for you");
+        EN.put("等不到带按钮的新消息：在条目「编辑」里填一条前置命令（如 /menu）", "No new message with buttons arrived: add a pre-command (e.g. /menu) in the entry's Edit dialog");
+        EN.put("填前置命令（让模块自动拉面板）", "Add pre-command (pull the panel automatically)");
+        EN.put("目标已不存在", "Target no longer exists");
         EN.put("回复判不出", "Reply unreadable");
         // 「今日已用尽」——bot 明确表示今天不能再操作（次数上限/请明日再试）。
         // 归入今日了结：不标已签、不计失败、不再重发。

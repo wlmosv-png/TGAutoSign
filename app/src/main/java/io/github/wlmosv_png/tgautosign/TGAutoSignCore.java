@@ -1498,6 +1498,28 @@ public final class TGAutoSignCore {
                     card.addView(words, wp);
                 }
 
+                /* 2026-10-30：面板类失败的通用解法是「给这个目标一条前置命令」。
+                   原来这里只有 重试 / 记为已签 / 忽略今天 —— 用户点了重试还是同一条失败，
+                   真正该做的那一步（去条目的「编辑」里填前置命令）在界面上根本没有入口。 */
+                if (rs.state == RS_PANEL) {
+                    Button precmd = mkBtn(act);
+                    precmd.setText(Lang.tr("填前置命令（让模块自动拉面板）"));
+                    precmd.setTextSize(Theme.TS_CAPTION);
+                    precmd.setOnClickListener(v -> {
+                        try {
+                            final Map<String, Object> ent = findEntryById(rs.id, accountOfPrefix(prefix));
+                            if (ent == null) { toast(Lang.tr("目标已不存在")); return; }
+                            roundProbBox = null;
+                            dismissOne(roundProbDlg);
+                            roundProbDlg = null;
+                            showEditEntry(act, ent);
+                        } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", t)); }
+                    });
+                    LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(-1, -2);
+                    pp.topMargin = dp(6);
+                    card.addView(precmd, pp);
+                }
+
                 LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
                 clp.setMargins(0, 0, 0, dp(8));
                 box.addView(card, clp);
@@ -5468,6 +5490,20 @@ public final class TGAutoSignCore {
                 case SignLogic.SKIP_SEND_FAIL:
                     toast(Lang.tf("「{0}」发送失败：取不到会话数据，先进该会话发一条消息", nm));
                     break;
+                /* 2026-10-30：这三条以前都掉进上面那一句里 —— 用户看到「取不到会话数据，
+                   先进该会话发一条消息」去会话里发消息，而他的问题其实是「等不到新面板」。 */
+                case SignLogic.SKIP_SEND_FAIL_PEER:
+                    toast(Lang.tf("「{0}」取不到会话数据：先用这个账号打开它发一条消息，再重试", nm));
+                    break;
+                case SignLogic.SKIP_SEND_FAIL_PANEL:
+                    toast(Lang.tf("「{0}」等不到带按钮的新消息：在该目标「编辑」里填一条前置命令（如 /menu）", nm));
+                    break;
+                case SignLogic.SKIP_SEND_FAIL_EXC:
+                    toast(Lang.tf("「{0}」发送时出错，详见日志", nm));
+                    break;
+                case SignLogic.SKIP_SEND_WAITING_PANEL:
+                    toast(Lang.tf("「{0}」已发前置命令，正在等面板刷新…", nm));
+                    break;
                 case SignLogic.SKIP_ACCOUNT_DISABLED:
                     toast(Lang.tf("「{0}」所在账号已停用，未发送；如需签到请先在账号一览里启用", nm));
                     break;
@@ -7297,7 +7333,7 @@ public final class TGAutoSignCore {
             if (peer == null) {
                 noteSwallowed("群peer解析(did=" + dialogId + ")", null);
                 countSoftFail(entry, account, "取不到该群/频道的会话数据（先进该群发一条消息再试）");
-                return SignLogic.SKIP_SEND_FAIL;
+                return SignLogic.SKIP_SEND_FAIL_PEER;
             }
             logd("[群签到] peer 已解析 " + dialogId + " 指令=" + entryText(entry));
         } else {
@@ -7345,7 +7381,7 @@ public final class TGAutoSignCore {
                 } else {
                     countSoftFail(entry, account, Lang.tr("取不到这个 bot 的会话数据（本账号本地没有它的记录，已尝试自动拉取；也可在 TG 里用这个账号打开它发一条消息）"));
                 }
-                return SignLogic.SKIP_SEND_FAIL;
+                return SignLogic.SKIP_SEND_FAIL_PEER;
             }
         }
         final List<String> pres = cbPres(entry);
@@ -7373,7 +7409,7 @@ public final class TGAutoSignCore {
                 }
                 jlog("[" + id + "] 前置命令将发送，先进入等面板状态（did=" + dialogId + "）");
                 sendPreAndResign(entry, account, peer, pres, 0);
-                return SignLogic.SKIP_SEND_FAIL;
+                return SignLogic.SKIP_SEND_WAITING_PANEL;
             }
             // cacheHit 分支：不 return，落到下面的按钮发送流程
         }
@@ -7392,7 +7428,15 @@ public final class TGAutoSignCore {
                 if (live == null && !panelFresh) {
                     logw("[" + id + "] 面板未就绪（该 bot 的按钮随消息变化，需等新消息）→ 本次跳过，稍后重试");
                     countSoftFail(entry, account, "等不到带签到按钮的新消息，稍后重试");
-                return SignLogic.SKIP_SEND_FAIL;
+                    /* 2026-10-30（工单）：
+                       ① 返回细分码 —— 这条失败以前和「取不到会话数据」共用一句话，
+                          用户被引去会话里发消息，而真正的解法是给目标填一条前置命令；
+                       ② 与此同时如实写归类（markReason 只写 result_，**不写 pendcfm_**）：
+                          界面从此能显示真实原因，且不会因「待确认」闸拦住当天剩下的自动重试
+                          —— 面板随时可能被 bot 推过来，继续等下一次重试才是对的。 */
+                    try { stateStore.markReason(prefix, id, SignLogic.R_BTN_STALE); }
+                    catch (Throwable ignored) {}
+                    return SignLogic.SKIP_SEND_FAIL_PANEL;
                 }
                 byte[] useData = live != null ? live.data : entryData(entry);
                 int useMid = live != null ? live.msgId : entryMsgId(entry);
@@ -7882,7 +7926,7 @@ public final class TGAutoSignCore {
         } catch (Throwable t) {
             pendingSigns.remove(prefix + id);
             logException("发送签到(did=" + dialogId + ")", t);
-            return SignLogic.SKIP_SEND_FAIL;
+            return SignLogic.SKIP_SEND_FAIL_EXC;
         }
     }
 
@@ -8178,7 +8222,7 @@ public final class TGAutoSignCore {
                         int rc = resultCodeOf(prefix, id);
                         if (rc == SignLogic.R_REPLIED_UNK) { state = RS_UNKNOWN; note = "回复认不出，可补判定词"; }
                         else if (rc == SignLogic.R_NO_REPLY) { state = RS_NO_REPLY; note = "bot 未回复"; }
-                        else if (rc == SignLogic.R_BTN_STALE) { state = RS_PANEL; note = "面板已过期"; }
+                        else if (rc == SignLogic.R_BTN_STALE) { state = RS_PANEL; note = Lang.tr("等不到带按钮的新消息：在条目「编辑」里填一条前置命令（如 /menu）"); }
                         else if (rc == SignLogic.R_FAILED) { state = RS_SENDFAIL; note = "签到失败"; }
                         else {
                             // ── 2026-10-14：补齐「已放弃 / 退避中」──
@@ -16121,7 +16165,7 @@ public final class TGAutoSignCore {
     private String attentionHint(String prefix, String id) {
         int rc = resultCodeOf(prefix, id);
         if (rc == SignLogic.R_FAILED)       return Lang.tr("bot 明确说没签上（如「请先加入」），按提示处理后重试");
-        if (rc == SignLogic.R_BTN_STALE)    return Lang.tr("按钮已失效，等 bot 推新面板后可重试");
+        if (rc == SignLogic.R_BTN_STALE)    return Lang.tr("面板未就绪：给该目标填一条前置命令（如 /menu），模块会自动拉面板");
         if (rc == SignLogic.R_REPLIED_UNK)  return Lang.tr("bot 回复了，但判定词认不出结果");
         if (rc == SignLogic.R_NO_REPLY)     return Lang.tr("bot 全程没回复");
         if (rc == SignLogic.R_JUDGE_OFF)    return Lang.tr("自动判定已关闭，未判成败");

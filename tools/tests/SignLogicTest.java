@@ -737,6 +737,21 @@ public final class SignLogicTest {
         tru("skipLabel 有文案", SignLogic.skipLabel(SignLogic.SKIP_SENT_PENDING).length() > 0);
         eq("skipLabel 放行 → 空串", SignLogic.skipLabel(SignLogic.SKIP_NONE), "");
 
+        // ── 发送失败细分（2026-10-30）──
+        // 起因：四种完全不同的发送失败共用一条码 + 一句「取不到会话数据」，
+        // 用户看提示去会话里发消息，而真因是「等不到带按钮的新消息」。
+        tru("细分码都不同",
+            SignLogic.SKIP_SEND_FAIL != SignLogic.SKIP_SEND_FAIL_PEER
+            && SignLogic.SKIP_SEND_FAIL_PEER != SignLogic.SKIP_SEND_FAIL_PANEL
+            && SignLogic.SKIP_SEND_FAIL_PANEL != SignLogic.SKIP_SEND_FAIL_EXC
+            && SignLogic.SKIP_SEND_FAIL_EXC != SignLogic.SKIP_SEND_WAITING_PANEL
+            && SignLogic.SKIP_SEND_FAIL != SignLogic.SKIP_SEND_ATTEMPTS_EXHAUST);
+        tru("peer 细分码有日志文案", SignLogic.skipLabel(SignLogic.SKIP_SEND_FAIL_PEER).length() > 0);
+        tru("异常细分码有日志文案", SignLogic.skipLabel(SignLogic.SKIP_SEND_FAIL_EXC).length() > 0);
+        tru("等面板细分码有日志文案", SignLogic.skipLabel(SignLogic.SKIP_SEND_WAITING_PANEL).length() > 0);
+        tru("面板细分码指向前置命令",
+            SignLogic.skipLabel(SignLogic.SKIP_SEND_FAIL_PANEL).indexOf("前置命令") >= 0);
+
         // ── 账号级停用（1.6.1 补）──
         // 此前 isAccountEnabled 只在界面/一键签全部/心跳非当前账号三处检查，
         // 没进这道统一闸 → 切到停用账号后所有触发源照签，开关形同虚设。
