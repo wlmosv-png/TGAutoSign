@@ -539,6 +539,113 @@ public final class SignLogic {
             "already", "repeated", "again later", "already signed", "already checked",
             "checked in", "signed today"
     };
+    // ═══════════ 词表参数的三种语义（2026-11-01 S3 统一）═══════════
+    //
+    // 事故：宽松模式 `verdictDetail(reply, new String[0], new String[0], fail)`
+    //   本意是"成功侧走兜底、不靠词表"，但判据写的是 `dup != null ? dup : DUP_WORDS_DEFAULT`
+    //   —— 空数组 ≠ null，于是被当成"用户自定义空表"，**整张 DUP_WORDS_DEFAULT（34 词）失效**。
+    //   实测 4 例丢结论：您今天已经签到过了 / 今日已签到 / 今日已领取 / 今日已签过。
+    //
+    // 三种语义必须区分清楚（这是本次统一的核心）：
+    //
+    //   ① 整体词表参数（verdictDetail 的 dup/ok/fail 形参）
+    //        null    → 未提供 → 用内置默认表
+    //        空数组   → **等同于未提供** → 用内置默认表      （本处修复）
+    //        非空数组 → 用传入的表
+    //      判据：hasWords()
+    //
+    //   ② 分级词表（verdictDetailScoped 的 target/bot/global 三级）
+    //        空数组 → **该级没有词** → 跳过该级，继续下一级    （语义不同，保持原样）
+    //      三级皆空 → 由调用方回退到 verdictDetail（内置链）
+    //
+    //   ③ 显式禁用（词表里放哨兵，永不命中）
+    //        用于"我就是要这一侧不参与判定"，与①的"未提供"区分开。
+    //
+    // 为什么不做"全局把空数组替换成 null"（用户明确禁止）：
+    //   那样会让②的语义一起被改掉 —— scoped 的三级"空=该级无词"是**正确**的，
+    //   替换后会把"某一级没词"误当成"用默认表"，等于凭空引入默认词参与三级匹配。
+
+    // ═══════════ 次数/额度用尽的「对象识别」（2026-11-01 阶段 2）═══════════
+    //
+    // 用户要求：不能让抽奖次数、兑换次数、奖励次数影响签到成败判定；
+    //   也不能让"明确成功的签到"因为别的次数用尽而变成未签到。
+    //
+    // 分两层处理：
+    //   ① **顺序层**：成功证据（DUP/OK/COMBO）优先于 EXHAUSTED ——
+    //      「今日签到成功，抽奖次数已用尽」有明确成功词，就该判已签；
+    //   ② **对象层**：整条消息里**既无签到动作词、又有其他业务对象词**时，
+    //      这次"用尽"与签到无关，不产生签到结论（保留 UNKNOWN）。
+
+    /** 明确属于"其他业务"的对象词：出现它们说明额度不是签到额度。 */
+    private static final String[] OBJECT_OTHER_WORDS = {
+            "抽奖", "兑换", "转盘", "刮奖", "翻牌", "幸运", "分享", "邀请",
+            "发言", "发帖", "点赞", "推广", "返利", "签到抽奖"
+    };
+
+    /** 签到动作词：出现即认为"用尽"说的是签到额度。 */
+    private static final String[] OBJECT_SIGN_WORDS = {
+            "签到", "打卡", "签领", "报到", "今日签", "本次签",
+            "check in", "check-in", "sign in", "checkin"
+    };
+
+    /**
+     * 额度用尽是否明确指向"非签到"业务对象。
+     *
+     * @return true = 与签到无关（调用方不应据此判 EXHAUSTED）
+     *
+     * 判据（只在**没有**签到动作词时才可能为真）：
+     *   整条消息无签到动作词 + 出现其他业务对象词。
+     * 为什么不做子句级：额度说明常与对象分离书写（「已达上限（抽奖）」），
+     *   整条判断更稳；而"有签到词"的常见句式（「今日签到次数已达上限」）
+     *   本来就会被签到词救回，不会误伤。
+     */
+    public static boolean exhaustedAboutOtherObject(String reply) {
+        return exhaustedAboutOtherObject(reply, null);
+    }
+
+    public static boolean exhaustedAboutOtherObject(String reply, String hitWord) {
+        try {
+            if (reply == null || reply.length() == 0) return false;
+            String flat = stripSpace(reply);
+
+            // ── 第一优先：紧邻修饰语 ──
+            // 「抽奖次数已用完」的对象是"抽奖"、「签到次数已达上限」的对象是"签到"，
+            // 决定性证据就在"次数/上限"这类词**前面几个字**。
+            // 只看整条会误判：「今日签到成功，抽奖次数已用完」整条含"签到"，
+            // 于是被当成"签到次数"→ 明明是抽奖额度却影响了签到结论。
+            if (hitWord != null && hitWord.length() > 0) {
+                int idx = flat.indexOf(stripSpace(hitWord));
+                if (idx > 0) {
+                    int from = Math.max(0, idx - 6);
+                    String near = flat.substring(from, idx);
+                    for (String w : OBJECT_OTHER_WORDS) {
+                        if (near.contains(stripSpace(w))) return true;
+                    }
+                    for (String w : OBJECT_SIGN_WORDS) {
+                        if (near.contains(stripSpace(w))) return false;
+                    }
+                }
+            }
+
+            // ── 兜底：整条判断（仅在紧邻看不到修饰语时）──
+            for (String w : OBJECT_SIGN_WORDS) {
+                if (flat.contains(stripSpace(w))) return false;
+            }
+            for (String w : OBJECT_OTHER_WORDS) {
+                if (flat.contains(stripSpace(w))) return true;
+            }
+            return false;
+        } catch (Throwable t) { return false; }
+    }
+
+    /** 词表是否有效（null 与空数组均表示"未提供"）。 */
+    public static boolean hasWords(String[] t) {
+        return t != null && t.length > 0;
+    }
+
+    /** 显式"本侧词表禁用"哨兵：永不匹配任何真实文本。 */
+    public static final String[] WORDS_NONE = { "\u0000__WORDS_NONE__\u0000" };
+
     public static final String[] OK_WORDS_DEFAULT = {
             "签到成功", "打卡成功", "成功签到", "领取成功", "发送成功", "签到完成", "打卡完成",
             "签到获得", "获得积分", "success", "claimed", "check-in complete",
@@ -1001,6 +1108,17 @@ public final class SignLogic {
             return new Object[]{Integer.valueOf(V_FAILED), m};
         }
 
+        // ── 额度用尽：与 verdictDetail 同序（2026-11-01 阶段 2）──
+        // 两链顺序不一致是基线 C1–C6 互斥的根因：scoped 此前完全没有 EXHAUSTED 检查，
+        // 于是同一句在 scoped 判"已签"、在回退链判"用尽"。
+        // 现在统一前置，并用同一套对象识别（抽奖/兑换等额度不参与签到判定）。
+        {
+            String _em = matched(lower, EXHAUSTED_WORDS);
+            if (_em != null && !exhaustedAboutOtherObject(reply, _em)) {
+                return new Object[]{Integer.valueOf(V_EXHAUSTED), _em};
+            }
+        }
+
         // ── 命令式重复提示：明确结论，优先于成功侧词表与公告守卫（2026-11-01）──
         // 「请勿重复签到！」= 今天已经签过了。它含推广语，但不该被当广告吞掉；
         // 也因为它带"请勿"，凭否定守卫永远走不通 —— 必须在这里直接给出结论。
@@ -1179,7 +1297,7 @@ public final class SignLogic {
         // （用户以为签上了，实际没有，第二天直接断签）。
         //
         // 失败优先不会反过来误伤：成功语里几乎不会内嵌失败词。
-        String m = matched(lower, fail != null ? fail : FAIL_WORDS_DEFAULT);
+        String m = matched(lower, hasWords(fail) ? fail : FAIL_WORDS_DEFAULT);
         // 2026-10-17：裸短词（拉黑/未注册/禁止…）要过语境校验 ——
         // bot 的公告模板里也含这些字样，撞上就判失败属于误判（用户实测 7 次）。
         // 用户自定义词（fail != null）不受此限：那是用户亲自确认过的语义。
@@ -1232,11 +1350,32 @@ public final class SignLogic {
         // 今日已用尽（2026-10-01 新增）：排在重复/成功词之前。
         // 这类回复常同时含"已"字（如"今日次数已用完"），若不抢先判定，
         // 会被组合判定当成"签到+已"误判成功；但它**不等于签到成功**。
+        // ── 2026-11-01 阶段 2：EXHAUSTED 后移到成功侧之后（原位置：这里）──
+        // 原顺序 EXHAUSTED 在 DUP/OK 之前，导致「签到已完成 今日次数已达上限」
+        // 在回退链判"用尽"、在 scoped 链判"已签" —— 同一句两个结论，入口间互斥
+        // （基线 corpus C1–C6 六例中五例如此）。
+        // 语义上「签到已完成」比「次数已达上限」更贴近事实，且两者都会写已签状态，
+        // 因此统一为**成功证据优先**，与 scoped 链一致。见下方 COMBO 之后。
+        // ── 额度用尽（2026-11-01 阶段 2 前移）──
+        // 前移到 NON_CONCLUSION 与成功侧之前。理由是实测出来的，不是猜的：
+        //   · 「❌ 您本日的规则触发数量上限，请明日再试」既含 EXHAUSTED 词
+        //     「数量上限」、又含 NON_CONCLUSION 词「后再试」；后者在前就会把它吞成"判不出"。
+        //   · scoped 链本来就在成功侧之前没有 EXHAUSTED 检查，两链顺序不一致，
+        //     同一句在两条生产路径上给出不同结论（基线 C1–C6 五例互斥）。
+        // 现在两链统一：EXHAUSTED 先于 NON_CONCLUSION、先于成功侧。
+        // 注意：这里只是**顺序**统一；"额度到底属不属于签到"由
+        // exhaustedAboutOtherObject 的对象识别负责，不是无条件提高失败优先级。
         m = matched(lower, EXHAUSTED_WORDS);
-        if (m != null) return new Object[]{Integer.valueOf(V_EXHAUSTED), m};
-        // ── 非结论类（说明 / 统计 / 冷却）：在 FAIL 之后、DUP/OK/组合之前 ──
-        // 2026-10-06 新增。位置很关键：放最前会吞掉真失败（「签到失败,详见规则说明」），
+        if (m != null && !exhaustedAboutOtherObject(reply, m)) {
+            return new Object[]{Integer.valueOf(V_EXHAUSTED), m};
+        }
+        // ── 非结论类（说明 / 统计 / 冷却）──
+        // 位置很关键：放最前会吞掉真失败（「签到失败,详见规则说明」），
         // 放最后又拦不住（DUP/OK 已先命中）。只在这一段直接返回 V_UNKNOWN。
+        //
+        // 2026-11-01 阶段 2：本条分支在"把 EXHAUSTED 前移"的补丁里曾被误删
+        //（替换注释时连带删掉了 if 代码体），导致「签到冷却中,请于 8 小时后再试,
+        //  已签到 5 次」被 DUP 词「已签到」判成成功 —— 回归测试抓到后补回。
         if (matched(lower, NON_CONCLUSION_WORDS) != null) {
             return new Object[]{Integer.valueOf(V_UNKNOWN), ""};
         }
@@ -1250,12 +1389,12 @@ public final class SignLogic {
         if (isDuplicateReminder(reply)) {
             return new Object[]{Integer.valueOf(V_SIGNED), DUPLICATE_REMINDER_HIT};
         }
-        m = matched(lower, dup != null ? dup : DUP_WORDS_DEFAULT);
+        m = matched(lower, hasWords(dup) ? dup : DUP_WORDS_DEFAULT);
         if (m != null && !negated(lower, m) && !isLikelyAnnouncement(reply)
                 && !(m.contains("重复") && hasTrailingNegation(lower))) {
             return new Object[]{Integer.valueOf(V_SIGNED), m};
         }
-        m = matched(lower, ok != null ? ok : OK_WORDS_DEFAULT);
+        m = matched(lower, hasWords(ok) ? ok : OK_WORDS_DEFAULT);
         if (m != null && !negated(lower, m) && !isLikelyAnnouncement(reply)
                 // 2026-11-01 P0-2：与 scoped 链同一判据（两处必须一致）
                 && !hitInNonResultClause(reply, m)

@@ -53,6 +53,7 @@ public final class TriggerPolicyTest {
         signedFlipProtection20261101();
         duplicateReminder20261101();
         p0ClauseAndNegation20261101();
+        p2ExhaustedAndLoose20261101();
 
         fourStates();
         multiAccountIsolation();
@@ -690,6 +691,78 @@ public final class TriggerPolicyTest {
         tru("G14·假设子句识别", SignLogic.clauseIsNonResult("如果签到成功，将获得奖励"));
         tru("G15·结果子句不误判", !SignLogic.clauseIsNonResult("今日签到成功"));
         tru("G16·进度问句不误判为结果子句", SignLogic.clauseIsNonResult("签到成功了吗"));
+    }
+
+    // ═══════════ H 组：阶段 2 · 额度对象识别 + 入口一致性（2026-11-01） ═══════════
+    //
+    // 基线问题（corpus-baseline C1–C6 五例互斥 / T2/T12/T13/T18 宽松丢结论）：
+    //   ① scoped 链完全没有 EXHAUSTED 检查 → 同一句在两条生产路径结论相反；
+    //   ② 宽松模式传空数组致整张 DUP 表失效；
+    //   ③ 抽奖/兑换等其他业务额度会干扰签到判定。
+    // 用户要求：不能让其他业务次数影响签到；也不能让明确成功的签到变成未签到。
+
+    private static int scopedRaw(String r) {
+        Object[] vd = SignLogic.verdictDetailScoped(r, SignLogic.OK_WORDS_DEFAULT,
+                SignLogic.FAIL_WORDS_DEFAULT, null, null, null, null);
+        return ((Integer) vd[0]).intValue();
+    }
+    private static int detailRaw(String r) {
+        Object[] vd = SignLogic.verdictDetail(r, null, null, null);
+        return ((Integer) vd[0]).intValue();
+    }
+    /** 与生产宽松模式调用同形（dup=null 用内置表；ok=WORDS_NONE 显式禁用）。 */
+    private static int looseRaw(String r) {
+        Object[] vd = SignLogic.verdictDetail(r, null, SignLogic.WORDS_NONE, SignLogic.FAIL_WORDS_DEFAULT);
+        return ((Integer) vd[0]).intValue();
+    }
+    private static void same3(String tag, String r) {
+        int a = scopedRaw(r), b = detailRaw(r);
+        tru(tag + "·入口一致 [" + r + "] scoped=" + a + " detail=" + b, a == b);
+    }
+
+    private static void p2ExhaustedAndLoose20261101() {
+        // ── 额度对象识别：其他业务额度不得干扰签到 ──
+        eq("H1·签到成功+抽奖次数用尽 → 已签（不被抽奖带偏）",
+                Integer.valueOf(scopedRaw("今日签到成功，抽奖次数已用尽。")),
+                Integer.valueOf(SignLogic.V_SIGNED));
+        eq("H2·签到成功+兑换次数不足 → 已签",
+                Integer.valueOf(scopedRaw("今日签到成功，兑换次数不足。")),
+                Integer.valueOf(SignLogic.V_SIGNED));
+        eq("H3·签到完成+抽奖为0 → 已签",
+                Integer.valueOf(scopedRaw("签到已完成，但抽奖次数为0。")),
+                Integer.valueOf(SignLogic.V_SIGNED));
+        eq("H4·签到成功+抽奖次数已用完（同义） → 已签",
+                Integer.valueOf(scopedRaw("今日签到成功，抽奖次数已用完")),
+                Integer.valueOf(SignLogic.V_SIGNED));
+        tru("H5·纯抽奖额度用尽 → 不产生签到结论",
+                scopedRaw("今日抽奖次数已达上限。") == SignLogic.V_UNKNOWN);
+        eq("H6·签到额度用尽 → 用尽", Integer.valueOf(scopedRaw("今日签到次数已达上限。")),
+                Integer.valueOf(SignLogic.V_EXHAUSTED));
+
+        // ── 非结论（冷却/统计）不得被成功词带偏 ──
+        tru("H7·冷却句不得判成功（DUP 词『已签到』在统计语境里不算数）",
+                scopedRaw("签到冷却中,请于 8 小时后再试,已签到 5 次") != SignLogic.V_SIGNED);
+        eq("H8·额度用尽+请明日再试 → 用尽（不被『后再试』吞成判不出）",
+                Integer.valueOf(scopedRaw("❌ 您本日的规则触发数量上限，请明日再试")),
+                Integer.valueOf(SignLogic.V_EXHAUSTED));
+
+        // ── S3：宽松模式 DUP 表恢复 ──
+        String[] dupCases = {"您今天已经签到过了", "今日已签到", "今日已领取", "请勿重复签到"};
+        for (String c : dupCases) {
+            tru("H9·宽松模式识别已签 [" + c + "]",
+                    looseRaw(c) == SignLogic.V_SIGNED);
+            same3("H10", c);
+        }
+
+        // ── 入口一致性（阶段 2 核心验收）──
+        String[] all = {
+                "今日签到次数已达上限。", "今日签到成功，抽奖次数已用尽。",
+                "今日签到成功，兑换次数不足。", "签到失败，今日尝试次数已用尽。",
+                "今日奖励领取次数已达上限。", "签到已完成，但抽奖次数为0。",
+                "今日抽奖次数已达上限。", "签到冷却中,请于 8 小时后再试,已签到 5 次",
+                "签到成功", "签到失败", "请勿重复签到", "签到成功了吗？"
+        };
+        for (String c : all) same3("H11", c);
     }
 
     // ═══════════════ 断言助手 ═══════════════

@@ -24185,7 +24185,12 @@ public final class TGAutoSignCore {
                         String[] looseExtraFail = judgeCustomOn(prefix)
                                 ? SignLogic.parseExtraWords(prefs.getString(Keys.failWordsGlobal(), "")) : null;
                         String[] looseFail = mergeWords(SignLogic.FAIL_WORDS_DEFAULT, looseExtraFail);
-                        Object[] lvd = SignLogic.verdictDetail(replyText, new String[0], new String[0], looseFail);
+                        // 2026-11-01 S3：dup 传 null（= 用内置 DUP 表）而不是空数组。
+                        // 空数组会被当成"用户自定义空表"，导致整张 DUP_WORDS_DEFAULT 失效 ——
+                        // 「您今天已经签到过了」这类**终态陈述**于是退化成"判不出"。
+                        // ok 侧传 WORDS_NONE：宽松模式的成功判定本来就由下面的兜底负责，
+                        // 这里显式表达"成功词表不参与"，与①的"未提供"区分开。
+                        Object[] lvd = SignLogic.verdictDetail(replyText, null, SignLogic.WORDS_NONE, looseFail);
                         if (((Integer) lvd[0]).intValue() == SignLogic.V_FAILED) {
                             String lhit = String.valueOf(lvd[1]);
                             for (Map<String, Object> m : judgeTargets) {
@@ -24207,6 +24212,31 @@ public final class TGAutoSignCore {
                                 noteResult(ctrlAcc >= 0 ? ctrlAcc : currentAccount(), false);
                                 return;
                             }
+                            return;
+                        }
+                        // ── 2026-11-01 S3：词表给出**明确结论**时直接采信 ──
+                        //
+                        // 与下面那条"有回复即算成功"的本质区别：
+                        //   那条是**无证据的兜底**，必须"今天在途"才算，否则
+                        //   用户点 bot 的其它按钮、bot 随便回句话也会被判成功；
+                        //   这条是**词表给出的明确证据**（DUP 命中：「今天已经签过了」），
+                        //   它是终态陈述，不该因为没有在途记录就被丢掉。
+                        // 实测：T2/T12/T13/T18 四例在宽松模式下丢结论就是栽在这里。
+                        if (((Integer) lvd[0]).intValue() == SignLogic.V_SIGNED) {
+                            String lhit2 = String.valueOf(lvd[1]);
+                            int lz2 = 0;
+                            for (Map<String, Object> m : judgeTargets) {
+                                if (entryDid(m) != did) continue;
+                                String lid = entryId(m);
+                                prefs.edit().putInt(kRetry(prefix, lid), 0)
+                                     .remove(kRetryAt(prefix, lid)).remove(kRetryDay(prefix, lid)).apply();
+                                markSigned(prefix, lid);
+                                clearSendAttempts(prefix, lid);
+                                lz2++;
+                            }
+                            logw("【回复判定】宽松模式：命中明确结论「" + lhit2 + "」→ 计入已签（" + lz2 + " 条）"
+                                 + "  原文: " + clip(replyText, 60));
+                            noteResult(ctrlAcc >= 0 ? ctrlAcc : currentAccount(), true);
                             return;
                         }
                         // 没有明确失败词 → 有回复即算成功
