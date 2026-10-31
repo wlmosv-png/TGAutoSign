@@ -54,6 +54,7 @@ public final class TriggerPolicyTest {
         duplicateReminder20261101();
         p0ClauseAndNegation20261101();
         p2ExhaustedAndLoose20261101();
+        resultCodeRoundTrip20261101();
 
         fourStates();
         multiAccountIsolation();
@@ -763,6 +764,29 @@ public final class TriggerPolicyTest {
                 "签到成功", "签到失败", "请勿重复签到", "签到成功了吗？"
         };
         for (String c : all) same3("H11", c);
+    }
+
+    // ═══════════ I 组：归类码往返闭合（2026-11-01 阶段 2 新发现缺陷） ═══════════
+    //
+    // 根因：resultCode(int) 会把 R_EXHAUSTED 写成 "exhausted"，
+    //   但 resultOfCode(String) 的 switch **没有 "exhausted" 分支** → 落到 default 得 -1
+    //   → 读回被判成"无归类"。后果：次数用尽的目标在界面侧丢失归类。
+    // 由阶段 2 持久化测试 F2b 实测抓到（写入后读回 -1，期望 R_EXHAUSTED）。
+    // 不变式：两个映射必须**互为逆**，新增码必须同时加两处。
+
+    private static void resultCodeRoundTrip20261101() {
+        int[] codes = {
+                SignLogic.R_SIGNED, SignLogic.R_FAILED, SignLogic.R_BTN_STALE,
+                SignLogic.R_REPLIED_UNK, SignLogic.R_NO_REPLY, SignLogic.R_JUDGE_OFF,
+                SignLogic.R_EXHAUSTED
+        };
+        for (int c : codes) {
+            String str = SignLogic.resultCode(c);
+            int back = SignLogic.resultOfCode(str);
+            eq("I·归类码往返 " + c + " → \"" + str + "\" → " + back, Integer.valueOf(back), Integer.valueOf(c));
+        }
+        eq("I2·未知串返回 -1（不误判）", Integer.valueOf(SignLogic.resultOfCode("nonsense")), Integer.valueOf(-1));
+        eq("I3·null 返回 -1", Integer.valueOf(SignLogic.resultOfCode(null)), Integer.valueOf(-1));
     }
 
     // ═══════════════ 断言助手 ═══════════════

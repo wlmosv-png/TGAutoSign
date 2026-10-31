@@ -2352,6 +2352,13 @@ public final class SignLogic {
             case "replied_unknown": return R_REPLIED_UNK;
             case "no_reply":        return R_NO_REPLY;
             case "judge_off":       return R_JUDGE_OFF;
+            // ── 2026-11-01 阶段 2 修：往返不闭合 ──
+            // resultCode(R_EXHAUSTED) 会写出 "exhausted"，但这里原先**没有对应分支**
+            // → 读回落到 default 得 -1，被判成"无归类"。
+            // 后果：次数用尽的目标在界面侧丢失归类（状态显示不出"额度用尽"）。
+            // 由阶段 2 的持久化测试 F2b 实测抓到（写入后读回得到 -1，期望 R_EXHAUSTED）。
+            // 不变式：resultCode 与 resultOfCode 必须**互为逆映射**，新增码必须同时加两处。
+            case "exhausted":       return R_EXHAUSTED;
             default:                return -1;
         }
     }
