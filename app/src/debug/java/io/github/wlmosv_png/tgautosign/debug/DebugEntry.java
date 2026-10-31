@@ -44,6 +44,23 @@ public final class DebugEntry {
      * @return true = 本命令已被识别并处理；false = 不认识的命令（交回原流程）
      */
     public static boolean run(Object core, String sub) {
+        // ── 进程重启持久化验证：两阶段（2026-11-01）──
+        // 必须在**两次不同进程**里执行：write 在进程 A，read 在进程 B（冷启动后）。
+        if ("__probewrite".equals(sub)) {
+            if (core == null) { writeRaw(core, "FAIL: 实例未捕获"); return true; }
+            try { probeWrite(core); } catch (Throwable t) { writeRaw(core, "FATAL(write): " + t); }
+            return true;
+        }
+        if ("__proberead".equals(sub)) {
+            if (core == null) { writeRaw(core, "FAIL: 实例未捕获"); return true; }
+            try { probeRead(core); } catch (Throwable t) { writeRaw(core, "FATAL(read): " + t); }
+            return true;
+        }
+        if ("__probeclean".equals(sub)) {
+            try { writeRaw(core, "=== 清理测试数据 ===\n" + cleanup(core)); }
+            catch (Throwable t) { writeRaw(core, "FATAL(clean): " + t); }
+            return true;
+        }
         if (!"__selftest".equals(sub)) return false;
         synchronized (LOCK) {
             if (running) {
@@ -76,6 +93,181 @@ public final class DebugEntry {
             "上线了赶紧来体验超值福利活动马上开始",
             "今日签到成功！感谢参与！要试试轰炸吗？"
     };
+
+    // ═══════════ 进程重启持久化：两阶段探针 ═══════════
+    // 专用隔离标识：绝不与真实账号/目标重合，测后可精确清理。
+    private static final String P_ACC_A  = "__probe_acc_A_";
+    private static final String P_ACC_B  = "__probe_acc_B_";
+    private static final String P_ACC_C1 = "__probe_acc_C1_";
+    private static final String P_ACC_C2 = "__probe_acc_C2_";
+    private static final String P_ACC_D  = "__probe_acc_D_";
+    private static final String P_ACC_E  = "__probe_acc_E_";
+    private static final String T_A1 = "__probe_t_A1";
+    private static final String T_B1 = "__probe_t_B1";
+    private static final String T_C1 = "__probe_t_C1";
+    private static final String T_C2 = "__probe_t_C2";
+    private static final String T_D1 = "__probe_t_D1";
+    private static final String T_E1 = "__probe_t_E1";
+
+    private static Object storeOf(Object core) throws Exception {
+        Field f = core.getClass().getDeclaredField("stateStore");
+        f.setAccessible(true);
+        return f.get(core);
+    }
+
+    private static void call(Object st, String name, Class<?>[] sig, Object... args) throws Exception {
+        Method m = findMethod(st.getClass(), name, sig);
+        m.setAccessible(true);
+        m.invoke(st, args);
+    }
+
+    /** 阶段一：写入 5 个场景（在**进程 A**）。 */
+    private static void probeWrite(Object core) throws Exception {
+        Object st = storeOf(core);
+        long pid = android.os.Process.myPid();
+        StringBuilder sb = new StringBuilder();
+        sb.append("=== 阶段一 · 写入（进程 A）===\n");
+        sb.append("PID=").append(pid).append("\n");
+        sb.append("时间=").append(nowStr()).append("\n\n");
+
+        // A 正常已签
+        call(st, "markSigned", new Class[]{String.class, String.class, String.class}, P_ACC_A, T_A1, "probe-A");
+        sb.append("[A] markSigned(").append(P_ACC_A).append(T_A1).append(")\n");
+
+        // B 已签 + 后续 UNKNOWN（不得覆盖）
+        call(st, "markSigned", new Class[]{String.class, String.class, String.class}, P_ACC_B, T_B1, "probe-B");
+        call(st, "markResult", new Class[]{String.class, String.class, int.class}, P_ACC_B, T_B1,
+                Integer.valueOf(SignLogicConst.R_REPLIED_UNK(core)));
+        sb.append("[B] markSigned + markResult(REPLIED_UNK)\n");
+
+        // C 多账号隔离（同 id 跨账号也可以）
+        call(st, "markSigned", new Class[]{String.class, String.class, String.class}, P_ACC_C1, T_C1, "probe-C1");
+        call(st, "markResult", new Class[]{String.class, String.class, int.class}, P_ACC_C2, T_C2,
+                Integer.valueOf(SignLogicConst.R_FAILED(core)));
+        sb.append("[C] accC1 已签 / accC2 失败\n");
+
+        // D EXHAUSTED
+        call(st, "markSigned", new Class[]{String.class, String.class, String.class}, P_ACC_D, T_D1, "probe-D");
+        call(st, "markResult", new Class[]{String.class, String.class, int.class}, P_ACC_D, T_D1,
+                Integer.valueOf(SignLogicConst.R_EXHAUSTED(core)));
+        sb.append("[D] markSigned + markResult(EXHAUSTED)\n");
+
+        // E 撤销
+        call(st, "markSigned", new Class[]{String.class, String.class, String.class}, P_ACC_E, T_E1, "probe-E");
+        call(st, "markUnsigned", new Class[]{String.class, String.class}, P_ACC_E, T_E1);
+        sb.append("[E] markSigned → markUnsigned（撤销）\n");
+
+        sb.append("\n写入后即时读回（同进程）：\n");
+        sb.append(describeState(st, "同进程"));
+        sb.append("\n→ 阶段一结束。请杀进程后执行 __probe_read。\n");
+        writeRaw(core, sb.toString());
+    }
+
+    /** 阶段二：读取（在**进程 B**，冷启动后）。 */
+    private static void probeRead(Object core) throws Exception {
+        Object st = storeOf(core);
+        long pid = android.os.Process.myPid();
+        StringBuilder sb = new StringBuilder();
+        int pass = 0, fail = 0;
+
+        sb.append("=== 阶段二 · 读取（进程 B，冷启动后）===\n");
+        sb.append("PID=").append(pid).append("\n");
+        sb.append("时间=").append(nowStr()).append("\n\n");
+        sb.append(describeState(st, "新进程"));
+
+        // ── 断言 ──
+        boolean aSigned = (Boolean) call2(st, "isSignedToday", new Class[]{String.class, String.class}, P_ACC_A, T_A1);
+        sb.append("\n[A] 正常已签：").append(aSigned ? "仍为 SIGNED ✓" : "**丢失** ✗").append("\n");
+        if (aSigned) pass++; else fail++;
+
+        boolean bSigned = (Boolean) call2(st, "isSignedToday", new Class[]{String.class, String.class}, P_ACC_B, T_B1);
+        sb.append("[B] UNKNOWN 未覆盖已签：").append(bSigned ? "已签仍在 ✓" : "**被覆盖** ✗").append("\n");
+        if (bSigned) pass++; else fail++;
+
+        boolean c1 = (Boolean) call2(st, "isSignedToday", new Class[]{String.class, String.class}, P_ACC_C1, T_C1);
+        boolean c2 = (Boolean) call2(st, "isSignedToday", new Class[]{String.class, String.class}, P_ACC_C2, T_C2);
+        sb.append("[C] 多账号隔离：C1已签=").append(c1).append(" C2未签=").append(!c2)
+          .append((c1 && !c2) ? " ✓" : " **串数据** ✗").append("\n");
+        if (c1 && !c2) pass++; else fail++;
+
+        boolean dSigned = (Boolean) call2(st, "isSignedToday", new Class[]{String.class, String.class}, P_ACC_D, T_D1);
+        sb.append("[D] EXHAUSTED：重载后仍为已签态=").append(dSigned)
+          .append(dSigned ? " ✓（未被映射成 UNKNOWN/FAILED）" : " ✗").append("\n");
+        if (dSigned) pass++; else fail++;
+
+        boolean eSigned = (Boolean) call2(st, "isSignedToday", new Class[]{String.class, String.class}, P_ACC_E, T_E1);
+        sb.append("[E] 撤销：重载后仍为未签=").append(!eSigned)
+          .append(!eSigned ? " ✓（旧记录未被复原）" : " **旧记录回来了** ✗").append("\n");
+        if (!eSigned) pass++; else fail++;
+
+        // ── 调度行为（生产纯函数）──
+        sb.append("\n调度行为（SignLogic.decideSign）：\n");
+        try {
+            Class<?> SL = Class.forName("io.github.wlmosv_png.tgautosign.SignLogic", true,
+                    core.getClass().getClassLoader());
+            Class<?> G = Class.forName("io.github.wlmosv_png.tgautosign.SignLogic$SignGate", true,
+                    core.getClass().getClassLoader());
+            Object g = G.getDeclaredConstructor().newInstance();
+            G.getField("signedToday").set(g, Boolean.valueOf(aSigned));
+            Method ds = SL.getMethod("decideSign", G);
+            Object r = ds.invoke(null, g);
+            Field f = SL.getField("SKIP_ALREADY_SIGNED");
+            boolean skip = f.getInt(null) == ((Integer) r).intValue();
+            sb.append("  已签目标 -> ").append(skip ? "SKIP_ALREADY_SIGNED ✓（不会重复安排）" : ("code=" + r)).append("\n");
+            if (skip) pass++; else fail++;
+        } catch (Throwable t) { sb.append("  调度断言失败: ").append(t).append("\n"); fail++; }
+
+        sb.append("\n=== 断言：通过 ").append(pass).append(" / 失败 ").append(fail).append(" ===\n");
+        writeRaw(core, sb.toString());
+    }
+
+    private static Object call2(Object st, String name, Class<?>[] sig, Object... args) throws Exception {
+        Method m = findMethod(st.getClass(), name, sig);
+        m.setAccessible(true);
+        return m.invoke(st, args);
+    }
+
+    /** 直接读 store 的当前状态快照（同时打印真实 prefs 键值，作为落盘证据）。 */
+    private static String describeState(Object st, String tag) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("--- 状态快照（").append(tag).append("）---\n");
+        String[][] items = {
+                {"accA", P_ACC_A, T_A1}, {"accB", P_ACC_B, T_B1},
+                {"accC1", P_ACC_C1, T_C1}, {"accC2", P_ACC_C2, T_C2},
+                {"accD", P_ACC_D, T_D1}, {"accE", P_ACC_E, T_E1}
+        };
+        for (String[] it : items) {
+            try {
+                boolean s = (Boolean) call2(st, "isSignedToday", new Class[]{String.class, String.class},
+                        it[1], it[2]);
+                sb.append("  ").append(it[0]).append(" isSignedToday=").append(s).append("\n");
+            } catch (Throwable t) { sb.append("  ").append(it[0]).append(" ERR ").append(t).append("\n"); }
+        }
+        return sb.toString();
+    }
+
+    /** 写原始文本（不经过 outDir 之外的加工）。 */
+    private static void writeRaw(Object core, String text) {
+        write(core, text);
+    }
+
+    /**
+     * 结果码：**反射读真实常量**（不硬编码）。
+     * 阶段 2 修过一个"往返不闭合"缺陷（resultOfCode 缺 exhausted 分支），
+     * 若这里再写死数字，测试本身就会变成第二个隐患。
+     */
+    private static final class SignLogicConst {
+        static int of(Object core, String name) {
+            try {
+                Class<?> SL = Class.forName("io.github.wlmosv_png.tgautosign.SignLogic", true,
+                        core.getClass().getClassLoader());
+                return SL.getField(name).getInt(null);
+            } catch (Throwable t) { return -1; }
+        }
+        static int R_FAILED(Object c)      { return of(c, "R_FAILED"); }
+        static int R_REPLIED_UNK(Object c) { return of(c, "R_REPLIED_UNK"); }
+        static int R_EXHAUSTED(Object c)   { return of(c, "R_EXHAUSTED"); }
+    }
 
     private static void runMatrix(Object core) {
         StringBuilder sb = new StringBuilder();
@@ -274,7 +466,8 @@ public final class DebugEntry {
             SharedPreferences.Editor ed = sp.edit();
             int n = 0;
             for (String k : new ArrayList<String>(sp.getAll().keySet())) {
-                if (k.startsWith(PROBE_ACC) || k.contains(PROBE_TID)) {
+                if (k.startsWith(PROBE_ACC) || k.contains(PROBE_TID)
+                        || k.contains("__probe_")) {
                     ed.remove(k); n++;
                 }
             }
