@@ -50,6 +50,7 @@ public final class TriggerPolicyTest {
         planGateC20261101();
         missBackTargetStart20261101();
         realLogFixtures20261101();
+        signedFlipProtection20261101();
 
         fourStates();
         multiAccountIsolation();
@@ -571,6 +572,33 @@ public final class TriggerPolicyTest {
         tru("D8·isPanelLike 认面板公告", SignLogic.isPanelLike(F_PANEL.replace(" ", "")));
         tru("D9·isPanelLike 不认真结果",
                 !SignLogic.isPanelLike(F_REAL_OK.replace(" ", "")));
+    }
+
+    // ═══════════ E 组：已签保护闸（2026-11-01） ═══════════
+    //
+    // 通用逻辑缺口：多消息 bot 一次签到连发多条，后面那条会把成功结论翻转。
+    // 真实案例 bot 6379863842（「短信轰炸机」）：
+    //   01:28:45 「签到成功！」→ 判成功
+    //   01:28:45 「恭喜您获取到扩展任务…」→ 走另一路径 → 结论被撤 → 界面要用户手动标记
+    // 规则：当天已签 → 自动判定只读不写。
+
+    private static void signedFlipProtection20261101() {
+        String today = "2026-11-01";
+
+        tru("E1·今天已签 → 拦截自动翻转",
+                SignLogic.shouldProtectSigned(today, today));
+        tru("E2·昨天签的 → 不拦（新的一天该重新签）",
+                !SignLogic.shouldProtectSigned("2026-10-31", today));
+        tru("E3·从未签过（空值）→ 不拦",
+                !SignLogic.shouldProtectSigned("", today));
+        tru("E4·null → 不拦（防 NPE）",
+                !SignLogic.shouldProtectSigned(null, today));
+        tru("E5·today 为 null → 不拦（防 NPE）",
+                !SignLogic.shouldProtectSigned(today, null));
+        tru("E6·带空格的值 → 仍识别为已签",
+                SignLogic.shouldProtectSigned(" 2026-11-01 ", today));
+        tru("E7·脏值（非日期）→ 不拦，交给自愈清理",
+                !SignLogic.shouldProtectSigned("garbage", today));
     }
 
     // ═══════════════ 断言助手 ═══════════════

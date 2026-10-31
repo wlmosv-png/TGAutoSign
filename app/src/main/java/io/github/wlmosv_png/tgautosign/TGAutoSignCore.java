@@ -16100,7 +16100,26 @@ public final class TGAutoSignCore {
             for (Map<String, Object> m : l) {
                 String key = kLast(prefix, entryId(m));
                 String v = prefs.getString(key, "");
-                if (v == null || v.length() == 0) continue;
+                if (v == null || v.length() == 0) {
+                    // ── 状态撕裂自愈（2026-11-01）──
+                    // signed_at_ 是今天、last_ 却缺失：旧版本撤销路径只清 last_
+                    // 不清 signed_at_ 留下的残骸。表现为「明明签成功了却让你手动确认」。
+                    // 这里幂等补回 last_；用户手动「标记未签」会连 signed_at_ 一起清，
+                    // 因此不会跟人的判断打架。
+                    long _sa = 0L;
+                    try { _sa = prefs.getLong(Keys.signedAt(prefix, entryId(m)), 0L); }
+                    catch (Throwable ignored) {}
+                    if (_sa > 0L) {
+                        String _d = new java.text.SimpleDateFormat("yyyy-MM-dd",
+                                java.util.Locale.US).format(new java.util.Date(_sa));
+                        if (todayStr().equals(_d)) {
+                            ed.putString(key, todayStr());
+                            fixed++;
+                            logw("【自愈】last_ 缺失但今天有签到时刻 → 已补回: " + entryId(m));
+                        }
+                    }
+                    continue;
+                }
                 // ① 格式非法（历史版本残留的非日期内容）
                 // ② 格式合法但**超过 14 天**：last_ 语义是「最近一次签到」，
                 //    出现两周前的值只可能是导入旧配置带进来的过期数据 ——
@@ -16389,6 +16408,34 @@ public final class TGAutoSignCore {
             /* 双保险：条目已删（清空配置 / 手动删除）时，残留的 pendcfm_ 不该让
                "重新添加的同一 bot" 一上来就显示「待确认」。 */
             if (findEntryById(id, accountOfPrefix(prefix)) == null) return false;
+            return true;
+        } catch (Throwable t) { return false; }
+    }
+
+    /**
+     * 今日已签保护闸（2026-11-01）。
+     *
+     * 事故（用户实测，bot 6379863842「短信轰炸机」）：
+     *   01:28:45 第一条回复「签到成功！」→ 正确判成功、写 last_；
+     *   同一秒第二条回复是营销语（「恭喜您获取到扩展任务…」）→ 走了另一条判定路径；
+     *   之后 last_ 被撤销、retry 涨到上限 5 → 界面让用户「手动标记」，
+     *   而他明明看到 bot 说了签到成功。
+     *
+     * 根因不是某个 bot，是**通用逻辑**：自动判定的撤销路径从不检查
+     *   「这个目标今天是不是已经有成功结论了」。多消息 bot（签到成功 + 广告/任务提示）
+     *   会把结论翻来翻去 —— 任何一次签到可能连发 2~3 条消息，第二条就足以翻转状态。
+     *
+     * 规则：**当天已有成功结论 → 自动判定不得翻转。**
+     *   要纠正误判，用界面上的「今天已签 → 标记未签」（用户显式操作），
+     *   那是人的判断，不是营销消息触发的。
+     *
+     * @return true = 应该跳过本次状态变更（已留痕）
+     */
+    private boolean signedTodayProtected(String prefix, String id, String why) {
+        try {
+            if (!todayStr().equals(prefs.getString(kLast(prefix, id), ""))) return false;
+            logw("【判定保护】" + id + " 今日已签，忽略本次「" + why + "」"
+                 + "（自动判定不翻转成功结论；如需纠正请在「卡住的目标 → 今天已签」手动标记未签）");
             return true;
         } catch (Throwable t) { return false; }
     }
@@ -23244,6 +23291,14 @@ public final class TGAutoSignCore {
                 try { noteSkippedUnknown(prefix, "像是公告/广告", text); } catch (Throwable ignored) {}
                 return;
             }
+            // ── 2026-11-01：今天已签 → 不再进「未识别回复」池 ──
+            //
+            // 这是用户「明明成功了却要我手动标记」的另一个来源：
+            // 多消息 bot 第一条判成功之后，又发来一条认不出的内容
+            //（营销语/任务提示/别的业务回复）→ 原实现照样进池 →
+            // 界面提示「有回复需要你确认」→ 用户被迫去点一遍。
+            // 已经签上了就不该再让他为同一个目标的后续噪声做判断。
+            if (signedTodayProtected(prefix, id, "回复认不出")) return;
             jlog("【回复判定】" + did + " 回复认不出，已记录一条（可去「设置 → 回复判定词」补词）："
                  + clip(text, 60));
             try {
@@ -23262,10 +23317,14 @@ public final class TGAutoSignCore {
      */
     private void scheduleRetryAfterFail(String prefix, String id, long did, String why) {
         try {
+            // 2026-11-01：自动失败路径不得翻转当天已有的成功结论。
+            // 这是"撤销已签"的集中入口，闸设在这里能一次覆盖多条自动路径。
+            if (signedTodayProtected(prefix, id, why)) return;
             int cur = prefs.getInt(kRetry(prefix, id), 0);
             if (cur > 0 && !todayStr().equals(prefs.getString(kRetryDay(prefix, id), ""))) cur = 0;
             boolean blocked = bumpFailsToday(prefix, id, false);
             prefs.edit().remove(kLast(prefix, id))
+                 .remove(Keys.signedAt(prefix, id))
                  .putInt(kRetry(prefix, id), blocked ? RETRY_LIMIT : Math.min(cur + 1, RETRY_LIMIT))
                  .putLong(kRetryAt(prefix, id), System.currentTimeMillis() + backoffDelay(Math.max(cur, 1)))
                  .putString(kRetryDay(prefix, id), todayStr()).commit();
@@ -24216,6 +24275,8 @@ public final class TGAutoSignCore {
                         for (Map<String, Object> m : judgeTargets) {
                             if (entryDid(m) != did) continue;
                             String id = entryId(m);
+                            // 2026-11-01：已签不翻转（否则第二条营销消息就会把成功结论撤掉）
+                            if (signedTodayProtected(prefix, id, "命中「" + hitWord + "」判定未成功")) continue;
                             long sentAt = prefs.getLong(prefix + "sent_at_" + id, 0);
                             if (System.currentTimeMillis() - sentAt > PENDING_TTL_MS) continue;   // 与 isPendingFresh 同一常量
                             int cur = prefs.getInt(kRetry(prefix, id), 0);
@@ -24228,6 +24289,10 @@ public final class TGAutoSignCore {
                             clearSendAttempts(prefix, id);   // 已有结论（失败），交给重试机制
                             prefs.edit()
                                 .remove(kLast(prefix, id))
+                                // 2026-11-01：撤销必须连 signed_at_ 一起清。
+                                // 只清 last_ 会留下「有签到时刻却没签」的撕裂态，
+                                // 界面上就是"明明成功了却要你手动确认"（用户实测踩到）。
+                                .remove(Keys.signedAt(prefix, id))
                                 .putInt(kRetry(prefix, id), blocked ? RETRY_LIMIT : cur + 1)
                                 .putLong(kRetryAt(prefix, id), System.currentTimeMillis() + backoffDelay(Math.max(cur, 1)))
                                 .putString(kRetryDay(prefix, id), todayStr())
@@ -24286,12 +24351,15 @@ public final class TGAutoSignCore {
                                 clearSendAttempts(prefix, id);
                                 marked++;
                             } else {
+                                // 2026-11-01：同上，已签不翻转
+                                if (signedTodayProtected(prefix, id, "判不出·拦截档")) continue;
                                 long sentAt = prefs.getLong(prefix + "sent_at_" + id, 0);
                                 if (System.currentTimeMillis() - sentAt > PENDING_TTL_MS) continue;
                                 int cur = prefs.getInt(kRetry(prefix, id), 0);
                                 boolean blocked = bumpFailsToday(prefix, id, false);
                                 clearSendAttempts(prefix, id);
                                 prefs.edit().remove(kLast(prefix, id))
+                                     .remove(Keys.signedAt(prefix, id))
                                      .putInt(kRetry(prefix, id), blocked ? RETRY_LIMIT : cur + 1)
                                      .putLong(kRetryAt(prefix, id),
                                               System.currentTimeMillis() + backoffDelay(Math.max(cur, 1)))

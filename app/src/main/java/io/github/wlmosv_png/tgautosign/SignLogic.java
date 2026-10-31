@@ -223,6 +223,29 @@ public final class SignLogic {
     /** 本周期无事可做 / 冷却未到 / 明确不该动。 */
     public static final int T_SKIP     = 3;
 
+    /**
+     * 「当天已有成功结论 → 自动判定不得翻转」的纯判据（2026-11-01）。
+     *
+     * 事故（用户实测，bot 6379863842「短信轰炸机」）：
+     *   多消息 bot 一次签到会连发 2~3 条 —— 第一条「签到成功！」判成功、
+     *   第二条营销语（「恭喜您获取到扩展任务…」）走另一条判定路径，
+     *   把刚写下的成功结论撤销掉，界面于是要求用户「手动标记」，
+     *   而用户明明看到 bot 说了签到成功。
+     *
+     * 这是**通用逻辑缺口**，不是某个 bot 的问题：任何多消息 bot 都可能触发。
+     * 规则：当天已签 → 自动判定只读不写；要纠正误判必须由用户显式操作。
+     *
+     * @param lastValue 该目标的 last_ 值（yyyy-MM-dd 或空）
+     * @param today     今天（yyyy-MM-dd）
+     * @return true = 应拦截本次自动状态变更
+     */
+    public static boolean shouldProtectSigned(String lastValue, String today) {
+        if (lastValue == null || today == null) return false;
+        String v = lastValue.trim();
+        if (v.length() == 0) return false;
+        return v.equals(today);
+    }
+
     /** decideTrigger 的输入快照（全部按**账号**维度填，不得使用全局单值）。 */
     public static final class TriggerCtx {
         public boolean timerEnabled;          // 本账号「定时签到」
