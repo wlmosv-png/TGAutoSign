@@ -1018,6 +1018,14 @@ public final class Lang {
         EN.put("已有判定词都在页面底部「我已经学会的词」里，可以随时加一个、删一个。", "All your learned phrases live under \"Phrases I've learned\" at the bottom — add or remove any time.");
         EN.put("判为成功后，撤掉模块自己发出的那条签到指令，群里不留痕。只删自己发的，失败或判不出时保留现场。", "Once a check-in is judged successful, delete the command this module sent, leaving no trace in the group. Only its own messages are removed; on failure or unknown, everything stays for inspection.");
         EN.put("签到成功后删除指令", "Delete the command after a successful check-in");
+        // ── 手动撤销今日已签（2026-11-01）──
+        EN.put("标记未签", "Mark as unsigned");
+        EN.put("标记未签并暂停", "Mark unsigned & pause");
+        EN.put("已标记为未签：{0}", "Marked as unsigned: {0}");
+        EN.put("已标记为未签并暂停：{0}", "Marked unsigned and paused: {0}");
+        EN.put("该目标今天本来就不是已签状态", "This target wasn't marked signed today");
+        EN.put("今天已签（{0} 条 · 判错了可以撤销）", "Signed today ({0}) \u00b7 undo if misjudged");
+        EN.put("（今天本来就不是已签状态）", " (wasn't signed today to begin with)");
         EN.put("机器人说今日次数已用尽（通常表示今天已经签过了）",
                "The bot says today's quota is used up (usually means you already checked in today)");
         EN.put("我已经学会的词（成功 {0} · 失败 {1}）  ▾", "Phrases I've learned (ok {0} · fail {1})  ▾");

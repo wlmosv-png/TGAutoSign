@@ -236,10 +236,13 @@ public final class SignLogic {
         public long    sinceLastAutoCheckMs = -1L;   // 距上次自动检查；<0 = 从未查过
         public long    autoCooldownMs;        // 自动检查冷却（0 = 不限）
         /**
-         * 当日未签目标里**最早**的计划时刻（分钟，0..1439）。
-         * 定时模式下的含义：now &lt; earliestPlanMin 时绝不该有任何目标被签
-         * —— 这正是「窗口 00:00-23:59 + 目标 08:00，0 点打开 TG 就被批量签掉」
-         * 那个 bug 的修复依据。&lt;0 = 无计划/取不到，退化为旧行为。
+         * 当日未签目标里**最早**的固定签到时刻（分钟，0..1439）。
+         *
+         * 含义：now &lt; earliestPlanMin 时绝不该有任何目标被签。
+         * **与账号级「定时」开关无关** —— 目标级固定时刻（sign_at_）是用户
+         * 对单个目标的显式约定，不该因为全局定时关着就失效（2026-11-01 用户实测）。
+         *
+         * &lt;0 = 没有任何已设固定时刻的未签目标 → 退化为旧行为（窗口内即签）。
          */
         public int     earliestPlanMin = -1;
     }
@@ -262,11 +265,16 @@ public final class SignLogic {
 
         int[] any = c.windowAny;
 
-        // ── 定时模式：时刻表优先（2026-11-01 修复）──
-        // 事故：窗口 00:00-23:59 时「窗口内」恒为真，原判定顺序让 RUN_NOW
-        // 压过时刻表 → 0 点打开 TG 就把 08:00 的目标批量签掉，定时形同虚设。
-        // 修正：定时开启且已知最早计划时刻时，未到点一律排队，不再看窗口。
-        if (c.timerEnabled && c.earliestPlanMin >= 0 && c.nowMin < c.earliestPlanMin) {
+        // ── 目标固定时刻优先（2026-11-01 修复，v2）──
+        // 事故：用户 Gheoix 全局窗口 00:00-23:59 + 某目标固定 08:00，
+        //   0 点打开 TG 就把该目标签掉。他的日志明确写着「定时=关」——
+        //   **账号级定时开关是关的，8:00 是目标级设置**。
+        //
+        // v1 修复（要求 timerEnabled=true）覆盖不到他：定时关时走不到这里。
+        // v2：门槛只看 earliestPlanMin（由宿主按「固定时刻目标」填充，
+        //   **与账号级定时开关无关**）。无固定时刻目标时宿主填 -1 → 零影响。
+        // 语义：设了 08:00 的目标，在 08:00 之前绝不该被签 —— 无论全局定时开没开。
+        if (c.earliestPlanMin >= 0 && c.nowMin < c.earliestPlanMin) {
             if (c.autoCooldownMs > 0L && c.sinceLastAutoCheckMs >= 0L
                     && c.sinceLastAutoCheckMs < c.autoCooldownMs) return T_SKIP;
             return T_QUEUE;
@@ -943,9 +951,20 @@ public final class SignLogic {
             // 于是 verdictDetail 里加的守卫在真实路径上完全没生效
             // （行为验证 Flow 场景4 实测：公告句仍被判失败）。
             // 与 verdictDetail 同一套判据：内置裸词要过语境，用户加的词豁免。
-            if (isBareFailWord(m) && !isUserAddedWord(m, words)
-                    && !bareFailSupported(lower.replace(" ", "").replace("\u3000", ""), m)) {
-                continue;   // 模板复述 → 不作数，继续看下一条链
+            // ── 2026-11-01：语境守卫扩展到**所有内置失败词**（不再只限裸词）──
+            // 事故（用户 Gheoix 日志 2026-11-01 00:05:14 实证）：
+            //   乐呵乐呵 bot 的面板公告「🏠 乐呵乐呵 私聊控制台 👤 当前绑定：… 👑 会员状态：已过期」
+            //   含内置失败词「已过期」→ 直接判 V_FAILED → 撤销已签 + 排重试；
+            //   紧接着真回复「📅 签到成功」到达时目标已被清掉在途，记「计入已签（0 条）」。
+            //   用户看到的就是「明明签成功了，模块说失败；下次又说重复签到」。
+            // 根因：旧写法只对 BARE_FAIL_WORDS 里的词做 bareFailSupported 语境校验，
+            //   而「已过期」「活动已结束」这类**词组**不在裸词表里 → 守卫整段被跳过。
+            // 现在：内置词（非用户添加）一律要过语境校验；用户词仍豁免（显式表态优先）。
+            if (!isUserAddedWord(m, words)) {
+                String _flatFail = lower.replace(" ", "").replace("\u3000", "");
+                // 面板/菜单形态一律不作数：这类文本是功能入口，不是签到结论。
+                if (isPanelLike(_flatFail)) continue;
+                if (!bareFailSupported(_flatFail, m)) continue;
             }
             // 2026-10-24：用户自己加的词仍按用户语义生效；
             // 只有内置/条件型词才允许被「同句成功结论」翻过来。
@@ -1129,8 +1148,28 @@ public final class SignLogic {
         // 改前用 isCustomFailTable(fail) 判整表 —— 而判定链传的是
         // mergeWords(FAIL_WORDS_DEFAULT, extraFail) 合并体，永远不等于默认表，
         // 于是只要用户加过一个词，「拉黑」守卫就整个失效（行为验证实测到）。
-        if (m != null && (!isBareFailWord(m) || isUserAddedWord(m, fail) || bareFailSupported(
-                lower.replace(" ", "").replace("\u3000", ""), m))) {
+        // 2026-11-01：与 verdictDetailScoped 同一套守卫 —— 两处必须一致。
+        // 事故：verdictDetailScoped 里被我加了面板守卫后，未命中会**回退到本函数**，
+        //   而这里没有守卫 → 「会员状态：已过期」照样判 V_FAILED（实测 fixture 复现）。
+        //   判定链有两处 FAIL 判定，只修一处等于没修（这个坑我 2026-10-18 踩过一次）。
+        boolean _failOk = false;
+        if (m != null) {
+            String _flatD = lower.replace(" ", "").replace("\u3000", "");
+            if (isUserAddedWord(m, fail)) {
+                _failOk = true;                       // 用户显式表态，豁免守卫
+            } else if (isBareFailWord(m)) {
+                // 裸短词（拉黑/未注册/禁止…）：公告模板里也常见 → 语境校验（原逻辑不变）
+                if (!isPanelLike(_flatD) && bareFailSupported(_flatD, m)) _failOk = true;
+            } else {
+                // 词组型失败词（已过期/请先加入/activity ended…）：
+                // **只过面板守卫**，不走 bareFailSupported。
+                // 为什么（2026-11-01，SignLogicTest 13 条回归实测）：
+                //   bareFailSupported 是给裸短词设计的长句筛查，对「请先加入频道」
+                //   这类完整拒绝语会因"无自称代词"而返回 false → 把真拒绝吞掉。
+                if (!isPanelLike(_flatD)) _failOk = true;
+            }
+        }
+        if (_failOk) {
             // 2026-10-24：条件型失败词 + 同句成功结论 → 以成功为准（修假失败）
             String okOv = conditionalSuccessOverride(lower, m, ok);
             if (okOv != null) return new Object[]{Integer.valueOf(V_SIGNED), okOv};
@@ -1139,11 +1178,17 @@ public final class SignLogic {
         m = matched(lower, PERMANENT_FAIL_WORDS);
         // 2026-10-17：同 FAIL 分支 —— 「未关注」「没有资格」在公告里也常见
         // （「未关注公众号的用户没有资格参加」），需要语境校验才认可。
-        if (m != null && (!isBareFailWord(m) || bareFailSupported(
-                lower.replace(" ", "").replace("\u3000", ""), m))) {
-            String okOv2 = conditionalSuccessOverride(lower, m, ok);
-            if (okOv2 != null) return new Object[]{Integer.valueOf(V_SIGNED), okOv2};
-            return new Object[]{Integer.valueOf(V_FAILED), m};
+        if (m != null) {
+            String _flatP = lower.replace(" ", "").replace("\u3000", "");
+            // 同 FAIL 分支：面板形态 + 语境双校验（2026-11-01）
+            boolean _permOk = isBareFailWord(m)
+                    ? (!isPanelLike(_flatP) && bareFailSupported(_flatP, m))
+                    : !isPanelLike(_flatP);
+            if (_permOk) {
+                String okOv2 = conditionalSuccessOverride(lower, m, ok);
+                if (okOv2 != null) return new Object[]{Integer.valueOf(V_SIGNED), okOv2};
+                return new Object[]{Integer.valueOf(V_FAILED), m};
+            }
         }
         // 今日已用尽（2026-10-01 新增）：排在重复/成功词之前。
         // 这类回复常同时含"已"字（如"今日次数已用完"），若不抢先判定，
@@ -1449,6 +1494,62 @@ public final class SignLogic {
      * @param word 命中的裸词
      * @return true = 语境支持"这是真失败"；false = 模板复述，作废
      */
+    /** 面板/菜单形态识别（2026-11-01）。
+     *
+     *  与 isLikelyAnnouncement 的分工：
+     *    · isLikelyAnnouncement 抓的是「公告/广告/邀请链接」；
+     *    · 本函数抓的是「功能面板 / 控制台 / 菜单」—— 用户点按钮后 bot
+     *      先把主页刷新一遍，里面常挂着「会员已过期」「套餐已到期」这类
+     *      **状态描述**，它们和本次签到成败无关。
+     *
+     *  判据（命中任一即算面板）：
+     *    ① 含面板标志词（控制台/主菜单/请选择/功能列表/欢迎进入…）
+     *    ② 含 ≥3 个「标签：值」形态的键值对（当前绑定：X / 会员状态：Y / Emby 账号：Z）
+     *    ③ 含 ≥2 个 emoji 分段符（面板通常用 emoji 做分节）
+     *
+     *  只作用于**失败词**侧：成功词已有 isLikelyAnnouncement + 结果形态双重守卫，
+     *  这里再放宽会把真结果也挡掉。
+     */
+    static boolean isPanelLike(String flat) {
+        if (flat == null || flat.length() < 8) return false;
+        // ① 先排除「已有明确结论」的文本 —— 面板守卫只服务"模棱两可的状态描述"。
+        //    真结果里也满是「本次获得：」「当前爆米花：」这种键值对，
+        //    不先排除就会把「📅 签到成功 🎁 本次获得：+10 …」认成面板（fixture D9 实测到）。
+        for (String r : RESULT_MARK_WORDS) {
+            if (flat.contains(r)) return false;
+        }
+        for (String w : PANEL_MARK_WORDS) {
+            if (flat.contains(w)) return true;
+        }
+        // ② 键值对计数：「xx：yy」形态出现 ≥2 次
+        int kv = 0;
+        int idx = 0;
+        while (true) {
+            int a = flat.indexOf('：', idx);
+            int b = flat.indexOf(':', idx);
+            int pos = (a < 0) ? b : (b < 0 ? a : Math.min(a, b));
+            if (pos < 0) break;
+            kv++;
+            if (kv >= 3) return true;
+            idx = pos + 1;
+        }
+        return false;
+    }
+
+    /** 结果结论标志词：出现任一词 = 这条已经是结论，不是面板（2026-11-01）。 */
+    private static final String[] RESULT_MARK_WORDS = {
+            "签到成功", "打卡成功", "签到失败", "打卡失败", "签到过了", "已经签过",
+            "已签到", "签到完成", "本次获得", "获得奖励", "连续签到", "签到天数",
+            "success", "failed", "already signed"
+    };
+
+    /** 面板/控制台标志词（小写、去空白后比对）。 */
+    private static final String[] PANEL_MARK_WORDS = {
+            "控制台", "主菜单", "返回主菜单", "请选择功能", "请选择你需要的",
+            "功能列表", "欢迎进入", "欢迎回来", "用户面板", "个人中心",
+            "console", "main menu", "dashboard"
+    };
+
     static boolean bareFailSupported(String flat, String word) {
         if (flat == null || word == null || word.length() == 0) return true;
         int idx = flat.indexOf(word);

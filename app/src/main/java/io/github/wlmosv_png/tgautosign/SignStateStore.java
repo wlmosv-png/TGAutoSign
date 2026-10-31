@@ -378,6 +378,35 @@ public final class SignStateStore {
         } catch (Throwable t) { swallow("keepSignedClearBackoff", t); }
     }
 
+    /**
+     * 手动撤销「今日已签」（2026-11-01，用户诉求）。
+     *
+     * 背景（用户 Gheoix 原话）：
+     *   「S5 命中回复重复签到，直接就算签到了，我还没法给他标没签到成功，
+     *     只能把这个目标删了再添加；添加的时候又顺带帮你签到，又算成功。」
+     *   —— 误判成已签之后没有任何撤销手段，只能删目标，删了再加又被自动签一次。
+     *
+     * 与 markFailed 的区别：
+     *   · markFailed 是**判定链**的失败路径 —— 会涨重试计数、排退避；
+     *   · 本方法是**用户主动纠正** —— 不涨计数、不排重试，纯粹回到"未签"。
+     *
+     * 与 clearSigned 的区别：clearSigned 只删 last_，会留下 signed_at_ / opt_ /
+     *   sent_at_ 等残留（界面仍可能显示"已发出"或日历读到脏时刻）。本方法
+     *   一次清干净，复用 clearPostSignState 这个唯一入口。
+     *
+     * @return true = 之前确实处于"今日已签"状态（调用方据此给不同提示）
+     */
+    public boolean markUnsigned(String prefix, String id) {
+        try {
+            boolean was = isSignedToday(prefix, id);
+            store.tx(ed -> ed.remove(Keys.last(prefix, id))
+                             .remove(Keys.signedAt(prefix, id)));
+            clearPostSignState(prefix, id);
+            if (was) warn("手动撤销今日已签 " + id);
+            return was;
+        } catch (Throwable t) { swallow("markUnsigned", t); return false; }
+    }
+
     /** 撤销"今日已签"（不含重试计数）。 */
     public void clearSigned(String prefix, String id) {
         try { store.remove(Keys.last(prefix, id)); } catch (Throwable t) { swallow("clearSigned", t); }

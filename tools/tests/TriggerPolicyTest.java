@@ -49,6 +49,7 @@ public final class TriggerPolicyTest {
         // ── C 组：时刻表门槛 + 目标维度补签起点（2026-11-01 事故驱动）──
         planGateC20261101();
         missBackTargetStart20261101();
+        realLogFixtures20261101();
 
         fourStates();
         multiAccountIsolation();
@@ -414,13 +415,33 @@ public final class TriggerPolicyTest {
         setF(c3, "nowMin", Integer.valueOf(900));
         tg("C3·过点 15:00 → 立即执行", c3, "T_RUN_NOW");
 
-        // ④ 定时关：用户语义是「任何时间上线都该试」，不受计划门槛约束
+        // ④ 定时关 + **有目标设了固定时刻** → 也要排队（2026-11-01 v2 修正）
+        //
+        // 为什么改：用户 Gheoix 的日志写着「定时=关」，但某个目标设了 08:00。
+        // 目标级固定时刻是用户对单个目标的显式约定，不该被账号级开关否掉。
+        // v1 修复要求 timerEnabled=true —— 覆盖不到他，这是实测发现的漏网场景。
         Object c4 = ctx("planGate4");
         setF(c4, "timerEnabled", Boolean.FALSE);
         setF(c4, "windowAny", W_ALLDAY);
         setF(c4, "earliestPlanMin", Integer.valueOf(480));
         setF(c4, "nowMin", Integer.valueOf(5));
-        tg("C4·定时关 → 仍然立即执行（语义不变）", c4, "T_RUN_NOW");
+        tg("C4·定时关但有固定时刻目标 → 未到点仍排队", c4, "T_QUEUE");
+
+        // ④b 定时关 + **无任何固定时刻目标**(-1) → 上线即签（旧语义，必须保住）
+        Object c4b = ctx("planGate4b");
+        setF(c4b, "timerEnabled", Boolean.FALSE);
+        setF(c4b, "windowAny", W_ALLDAY);
+        setF(c4b, "earliestPlanMin", Integer.valueOf(-1));
+        setF(c4b, "nowMin", Integer.valueOf(5));
+        tg("C4b·定时关且无固定时刻 → 立即执行（旧语义不变）", c4b, "T_RUN_NOW");
+
+        // ④c 定时关 + 已过固定时刻 → 立即执行
+        Object c4c = ctx("planGate4c");
+        setF(c4c, "timerEnabled", Boolean.FALSE);
+        setF(c4c, "windowAny", W_ALLDAY);
+        setF(c4c, "earliestPlanMin", Integer.valueOf(480));
+        setF(c4c, "nowMin", Integer.valueOf(600));
+        tg("C4c·定时关且已过点 → 立即执行", c4c, "T_RUN_NOW");
 
         // ⑤ 取不到计划（earliestPlanMin=-1）→ 退化为旧行为，不得误锁
         Object c5 = ctx("planGate5");
@@ -476,6 +497,80 @@ public final class TriggerPolicyTest {
         // ⑬ 补签开关关 → 无论目标时刻如何都不可补
         tru("C13·补签关 → 恒 false",
                 !SignLogic.inMissBackTime(600, W_ALLDAY, 1439, false, 480));
+    }
+
+    // ═══════════ D 组：真实日志原文 fixture（2026-11-01） ═══════════
+    //
+    // 素材来源：用户 Gheoix 导出的日志
+    //   /storage/emulated/0/Android/data/org.telegram.messenger/files/Telegram/
+    //   Telegram Documents/5_6283034526910259847.txt
+    // 这条链上真实发生的事故（原文照抄，不改一字）：
+    //   00:05:14 面板公告含「已过期」→ 判 V_FAILED → 撤销已签 + 排重试
+    //   00:05:16 真回复「📅 签到成功」→ 记「计入已签（0 条）」（目标已被清）
+    //   00:10:05 「📅 今天已经签到过了」→ 记「计入已签（0 条）」
+    //   00:10:00 「今天已经签过了，明天再来。」→ 记「计入已签（1 条）」
+    // 也就是说：**真成功判失败，重复签到反而算成功**。
+    //
+    // 这些用例是修复前必红的真阳性。
+
+    private static final String F_PANEL =
+            "🏠 乐呵乐呵 私聊控制台  👤 当前绑定：quanwuhui 🎬 Emby 账号：quanwuhui 👑 会员状态：已过期";
+    private static final String F_REAL_OK =
+            "📅 签到成功  🎁 本次获得：+10 爆米花 🍿 当前爆米花：130 🔥 连续签到：11 天";
+    private static final String F_DUP =
+            "📅 今天已经签到过了  🎁 本次获得：无额外奖励 🍿 当前爆米花：130 🔥 连续签到：11";
+    private static final String F_DUP2 = "今天已经签过了，明天再来。 😑";
+    private static final String F_EMBY_PANEL =
+            "👋 欢迎回来，quanwuhui！  🎬 EmbyPulse 用户自助服务 请选择你需要的服务：";
+
+    private static int verdictOf(String reply) {
+        try {
+            String[] ok = SignLogic.OK_WORDS_DEFAULT;
+            String[] fail = SignLogic.FAIL_WORDS_DEFAULT;
+            Object[] vd = SignLogic.verdictDetailScoped(reply, ok, fail, null, null, null, null);
+            return ((Integer) vd[0]).intValue();
+        } catch (Throwable t) { return -999; }
+    }
+
+    private static void realLogFixtures20261101() {
+        // ⓐ 面板公告含「已过期」→ 绝不能判失败（这是本次事故的入口）
+        int vPanel = verdictOf(F_PANEL);
+        tru("D1·面板公告含『已过期』不得判 V_FAILED（实得 " + vPanel + "）",
+                vPanel != SignLogic.V_FAILED);
+
+        // ⓑ 真成功回复必须判成功
+        eq("D2·真回复『📅 签到成功』→ V_SIGNED",
+                Integer.valueOf(verdictOf(F_REAL_OK)), Integer.valueOf(SignLogic.V_SIGNED));
+
+        // ⓒ 「今天已经签到过了」是成功（今天确实签过了）
+        int vDup = verdictOf(F_DUP);
+        tru("D3·『今天已经签到过了』不是失败（实得 " + vDup + "）",
+                vDup != SignLogic.V_FAILED);
+
+        // ⓓ 同上，另一版措辞
+        int vDup2 = verdictOf(F_DUP2);
+        tru("D4·『今天已经签过了，明天再来』不是失败（实得 " + vDup2 + "）",
+                vDup2 != SignLogic.V_FAILED);
+
+        // ⓔ Emby 面板（欢迎回来 + 请选择）→ 不得判失败
+        int vEmby = verdictOf(F_EMBY_PANEL);
+        tru("D5·Emby 欢迎面板不得判 V_FAILED（实得 " + vEmby + "）",
+                vEmby != SignLogic.V_FAILED);
+
+        // ⓕ 反向保护：真的失败句必须仍判失败，不能被守卫吞掉
+        int vRealFail = verdictOf("❌ 签到失败，请明天再来");
+        eq("D6·真失败句仍判 V_FAILED（守卫不得过度放行）",
+                Integer.valueOf(vRealFail), Integer.valueOf(SignLogic.V_FAILED));
+
+        // ⓖ 反向保护：「您不是群组管理员，无法进行此操作」这类拒绝仍是失败
+        int vReject = verdictOf("您不是群组管理员，无法进行此操作。");
+        tru("D7·管理员拒绝仍判失败或未知（实得 " + vReject + "），不得判成功",
+                vReject != SignLogic.V_SIGNED);
+
+        // ⓗ isPanelLike 直测
+        tru("D8·isPanelLike 认面板公告", SignLogic.isPanelLike(F_PANEL.replace(" ", "")));
+        tru("D9·isPanelLike 不认真结果",
+                !SignLogic.isPanelLike(F_REAL_OK.replace(" ", "")));
     }
 
     // ═══════════════ 断言助手 ═══════════════

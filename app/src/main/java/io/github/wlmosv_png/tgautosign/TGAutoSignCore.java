@@ -1498,6 +1498,7 @@ public final class TGAutoSignCore {
                     card.addView(words, wp);
                 }
 
+
                 /* 2026-10-30：面板类失败的通用解法是「给这个目标一条前置命令」。
                    原来这里只有 重试 / 记为已签 / 忽略今天 —— 用户点了重试还是同一条失败，
                    真正该做的那一步（去条目的「编辑」里填前置命令）在界面上根本没有入口。 */
@@ -1524,6 +1525,82 @@ public final class TGAutoSignCore {
                 clp.setMargins(0, 0, 0, dp(8));
                 box.addView(card, clp);
             }
+
+            //
+            // 用户诉求（Gheoix 原话）：
+            //   「S5 命中回复重复签到，直接就算签到了，我还没法给他标没签到成功，
+            //     只能把这个目标删了再添加；添加的时候又顺带帮你签到，又算成功。」
+            // —— 误判成已签后完全没有撤销手段。
+            //
+            // 放在这里而不是目标行：目标行保持统一两行结构（用户明确要求过），
+            // 处置动作集中在面板里，与「卡住的目标」同一处，用户只需要记一个入口。
+            try {
+                java.util.List<Map<String, Object>> signed = signedTodayList(prefix);
+                if (!signed.isEmpty()) {
+                    TextView hd = new TextView(act);
+                    hd.setTextSize(Theme.TS_CAPTION);
+                    hd.setTextColor(Theme.termGreen(act));
+                    hd.setTypeface(Theme.monoBold());
+                    hd.setPadding(dp(2), dp(14), dp(2), dp(6));
+                    hd.setText(Lang.tf("今天已签（{0} 条 · 判错了可以撤销）", signed.size()));
+                    box.addView(hd);
+
+                    for (final Map<String, Object> sm : signed) {
+                        final String sid = entryId(sm);
+                        LinearLayout sc = new LinearLayout(act);
+                        sc.setOrientation(LinearLayout.VERTICAL);
+                        sc.setPadding(dp(12), dp(10), dp(12), dp(10));
+                        sc.setBackground(termBorder(act, Theme.termCard(act),
+                                Theme.withAlpha(Theme.termGreen(act), 0x33)));
+
+                        TextView st = new TextView(act);
+                        st.setTextSize(Theme.TS_SUBTITLE);
+                        st.setTextColor(Theme.termTxt(act));
+                        st.setTypeface(Theme.text());
+                        st.setSingleLine(true);
+                        st.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                        st.setText(entryDisplayName(sm));
+                        sc.addView(st);
+
+                        LinearLayout sb = new LinearLayout(act);
+                        sb.setOrientation(LinearLayout.HORIZONTAL);
+                        sb.setPadding(0, dp(8), 0, 0);
+
+                        Button un1 = mkBtn(act);
+                        un1.setText(Lang.tr("标记未签"));
+                        un1.setTextSize(Theme.TS_CAPTION);
+                        un1.setOnClickListener(v -> {
+                            try {
+                                boolean was = markUnsignedManually(prefix, sid, false);
+                                invalidateTargetCache();
+                                renderRoundProblems(box, act, prefix, accName);
+                                toast(was ? Lang.tf("已标记为未签：{0}", entryDisplayName(sm))
+                                          : Lang.tr("该目标今天本来就不是已签状态"));
+                            } catch (Throwable t) { toast(Lang.tf("操作失败: {0}", t)); }
+                        });
+                        sb.addView(un1, new LinearLayout.LayoutParams(0, -2, 1f));
+
+                        Button un2 = mkBtn(act);
+                        un2.setText(Lang.tr("标记未签并暂停"));
+                        un2.setTextSize(Theme.TS_CAPTION);
+                        un2.setOnClickListener(v -> {
+                            try {
+                                boolean was = markUnsignedManually(prefix, sid, true);
+                                invalidateTargetCache();
+                                renderRoundProblems(box, act, prefix, accName);
+                                toast(Lang.tf("已标记为未签并暂停：{0}", entryDisplayName(sm))
+                                      + (was ? "" : Lang.tr("（今天本来就不是已签状态）")));
+                            } catch (Throwable t) { toast(Lang.tf("操作失败: {0}", t)); }
+                        });
+                        LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(0, -2, 1f);
+                        lp2.leftMargin = dp(6);
+                        sb.addView(un2, lp2);
+
+                        sc.addView(sb);
+                        box.addView(sc);
+                    }
+                }
+            } catch (Throwable _esg) { noteSwallowed("renderRoundProblems.signed", _esg); }
         } catch (Throwable t) { noteSwallowed("renderRoundProblems", t); }
     }
 
@@ -7983,6 +8060,27 @@ public final class TGAutoSignCore {
             kickScheduleFor(account);
             lastRound = accountLabel(account) + "：定时模式，按当日时刻表逐个签到";
             return 0;
+        }
+        // ── 目标固定时刻下限（2026-11-01，统一闸）──
+        //
+        // 事故（用户 Gheoix，日志实证）：全局窗口 00:00-23:59 + 某目标固定 08:00，
+        // 账号级「定时」**关**。0 点打开 TG 就把该目标签掉。
+        //
+        // 真凶路径不止一条：心跳 scheduleTickLoop 在「非定时 + 窗口内」时
+        // **直接调本函数**，完全绕过 decideTrigger —— 只修 decideTrigger 覆盖不到。
+        // 本函数是所有自动批量签发的唯一出口，把闸设在这里，一处覆盖全部自动路径
+        //（心跳 / 网络恢复 / 设置变更 / 事件补签…）。
+        //
+        // 语义：只要还有「设了固定时刻且今天没签」的目标没到点，本次就不发。
+        // 手动（force=true）不受限 —— 用户点了「立即签到」就该发。
+        if (!force) {
+            int _efm = earliestPlanMinToday2(account);
+            if (_efm >= 0 && nowMin() < _efm) {
+                logw("[" + reason + "] " + accountLabel(account)
+                     + " 未到目标固定时刻 " + hhmm(_efm) + "（当前 " + nowHM() + "），本次不发送");
+                lastRound = null;
+                return 0;
+            }
         }
         lastRound = null;
         long now = System.currentTimeMillis();
@@ -16216,6 +16314,56 @@ public final class TGAutoSignCore {
         showRoundProblems(act, accountPrefix(), accountLabel(currentAccount()));
     }
 
+    /**
+     * 今天已签的目标列表（2026-11-01）。
+     * 顺序 = 目标列表原序，便于用户对照；只含未删除、未被冻结的条目。
+     */
+    private java.util.List<Map<String, Object>> signedTodayList(String prefix) {
+        java.util.List<Map<String, Object>> out = new java.util.ArrayList<Map<String, Object>>();
+        try {
+            java.util.List<Map<String, Object>> all = new java.util.ArrayList<Map<String, Object>>();
+            loadTargetsInto(prefix, all);
+            String today = todayStr();
+            for (Map<String, Object> m : all) {
+                String id = entryId(m);
+                if (findEntryById(id, accountOfPrefix(prefix)) == null) continue;
+                if (!today.equals(prefs.getString(kLast(prefix, id), ""))) continue;
+                out.add(m);
+            }
+        } catch (Throwable t) { noteSwallowed("signedTodayList", t); }
+        return out;
+    }
+
+    /**
+     * 手动把目标改回「未签」（可选一并暂停今天）——2026-11-01 用户诉求。
+     *
+     * @param pause 是否同时暂停该目标（暂停到今天结束，明天自动恢复）
+     * @return true = 之前确实是已签状态
+     *
+     * 为什么暂停只到明天：用户在聊天里说的是「标成未签到并且暂停签到」，
+     *   意图是"这条别再自动签了"，而不是"永久停用"。写明天即今天生效、
+     *   次日恢复，与 toggleSnooze 的 7 天区分开（那个是明确的"暂停一周"）。
+     */
+    private boolean markUnsignedManually(String prefix, String id, boolean pause) {
+        boolean was = false;
+        try {
+            was = stateStore.markUnsigned(prefix, id);
+            // 顺手清掉界面上的归类缓存，否则列表还会显示"已签"或旧归类
+            try { roundMark(prefix, id, RS_WAITING, "已手动撤销"); } catch (Throwable ignored) {}
+            if (pause) {
+                java.util.Calendar c = java.util.Calendar.getInstance();
+                c.add(java.util.Calendar.DAY_OF_YEAR, 1);
+                String until = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+                        .format(c.getTime());
+                prefs.edit().putString(kSnooze(prefix, id), until).apply();
+                logs("【手动撤销】" + id + " 标记未签 + 暂停至 " + until);
+            } else {
+                logs("【手动撤销】" + id + " 标记未签");
+            }
+        } catch (Throwable t) { noteSwallowed("markUnsignedManually", t); }
+        return was;
+    }
+
     /** 账号级待确认池键。唯一真相源在 Keys，这里只做转发（勿再内联字面量）。 */
     private static String kPendingConfirm(int account) { return Keys.pendingConfirm(account); }
     private static String kFrozen(String prefix, String id) { return prefix + "frozen_" + id; }
@@ -18087,9 +18235,12 @@ public final class TGAutoSignCore {
                 logw("[触发] " + reason + " 账号已停用，跳过");
                 return;
             }
-            // 2026-11-01：先确保当日时刻表存在，否则 earliestPlanMin 恒为 -1，
-            // 定时门槛失效（表现就是这次的 bug 原样复发）。
-            try { ensureTimerPlan(accountPrefix(acc)); } catch (Throwable _etp) { noteSwallowed("timerHook.plan", _etp); }
+            // 2026-11-01：定时**开**时才需要当日时刻表（earliestPlanMin 走时刻表来源）。
+            // 定时关时改读目标级固定时刻，不生成时刻表 —— 避免无谓写盘。
+            if (timerOf(acc)) {
+                try { ensureTimerPlan(accountPrefix(acc)); }
+                catch (Throwable _etp) { noteSwallowed("timerHook.plan", _etp); }
+            }
             SignLogic.TriggerCtx ctx = buildTriggerCtx(acc, reason);
             int decision = SignLogic.decideTrigger(ctx);
             requestAutoSign(acc, reason, decision, ctx);
@@ -18112,8 +18263,15 @@ public final class TGAutoSignCore {
         long last = lastAutoCheckMs(acc);
         c.sinceLastAutoCheckMs = last > 0L ? (System.currentTimeMillis() - last) : -1L;
         c.autoCooldownMs = AUTO_CHECK_MIN_GAP_MS;
-        // 2026-11-01：当日未签目标里最早的计划时刻。定时模式下它是「能不能动手」的下限。
-        c.earliestPlanMin = earliestPlanMinToday(accountPrefix(acc));
+        // 2026-11-01：下限取「有固定时刻的未签目标里最早的那个」。
+        // 关键：**不看账号级定时开关** —— 用户日志实测「定时=关」但目标设了 08:00，
+        // 那种配置下 0 点打开 TG 仍会把该目标签掉（v1 修复覆盖不到）。
+        // 无任何固定时刻目标 → -1 → 完全退化为旧行为。
+        // 取哪个来源取决于账号级「定时」开关：
+        //   · 定时开 → 当日时刻表（含均分池目标 + 固定时刻目标，最完整）
+        //   · 定时关 → 只看目标级固定时刻（那时刻表根本不生成）
+        // 两者都为 -1 时退化为旧行为（窗口内即签）。
+        c.earliestPlanMin = earliestPlanMinToday2(acc);
         return c;
     }
 
@@ -18147,6 +18305,59 @@ public final class TGAutoSignCore {
     }
 
     /**
+     * 当日**设置了固定时刻**的未签目标里，最早的执行分钟（2026-11-01）。
+     *
+     * 与 earliestPlanMinToday 的区别：
+     *   · 后者读当日时刻表 —— 而时刻表只在账号级「定时」开时才生成；
+     *   · 本函数直接读目标级 sign_at_（用户对单个目标的显式约定），
+     *     **与账号级定时开关无关**。
+     *
+     * 为什么必须这样（用户 Gheoix 实测，2026-11-01）：
+     *   他的日志写着「定时=关」，但某个目标设了 08:00 —— 这在当前离线实现里
+     *   根本不生成时刻表，于是 0 点打开 TG 直接批量签掉该目标。
+     *   用户诉求「设了 8:00 就该 8:00 之后才签」是合理的，且不该被
+     *   全局开关否掉。
+     *
+     * 返回经 resolveSignMinute 夹取后的实际执行分钟（越窗目标按窗口边界算）。
+     * 无固定时刻目标 → -1。
+     */
+    /**
+     * 账号维度的「最早固定时刻」——按账号级定时开关选来源（2026-11-01）。
+     * 与 buildTriggerCtx 填 ctx.earliestPlanMin 用的是同一套判据：
+     *   定时开 → 当日时刻表最早；定时关 → 目标级固定时刻最早。
+     *
+     * 抽成方法的原因：trySignAllFor 里的统一闸与 decideTrigger 的入参必须同源，
+     * 两处各写一份迟早会漂（本文件历史上已因「双实现」踩过多次）。
+     */
+    private int earliestPlanMinToday2(int acc) {
+        String prefix = accountPrefix(acc);
+        return timerOf(acc) ? earliestPlanMinToday(prefix) : earliestFixedSignMinToday(prefix, acc);
+    }
+
+    private int earliestFixedSignMinToday(String prefix, int acc) {
+        try {
+            java.util.List<Map<String, Object>> list = new java.util.ArrayList<Map<String, Object>>();
+            loadTargetsInto(prefix, list);
+            String today = todayStr();
+            int[] winAny = windowAnyOf(acc);
+            int best = -1;
+            for (Map<String, Object> m : list) {
+                String id = entryId(m);
+                if (today.equals(prefs.getString(kLast(prefix, id), ""))) continue;   // 今天已签
+                if (isFrozen(prefix, id)) continue;
+                if (isSnoozed(prefix, id)) continue;
+                if (!prefs.contains(Keys.signAt(prefix, id))) continue;               // 非固定时刻
+                int want = prefs.getInt(Keys.signAt(prefix, id), -1);
+                if (want < 0) continue;
+                int[] rm = SignLogic.resolveSignMinute(want, winAny);
+                int mm = rm[0];
+                if (best < 0 || mm < best) best = mm;
+            }
+            return best;
+        } catch (Throwable t) { noteSwallowed("earliestFixedSignMinToday", t); return -1; }
+    }
+
+    /**
      * 统一自动签到出口（2026-10-30 M3）。所有自动触发源只准经过它：
      *   启动 / 打开TG / 心跳 / 网络恢复 / 进入窗口 / 设置变更。
      *
@@ -18162,7 +18373,11 @@ public final class TGAutoSignCore {
                 zone = "不限";
             } else if (SignLogic.inWindowAny(ctx.nowMin, ctx.windowAny)) {
                 zone = "窗口内";
-            } else if (SignLogic.inMissBackTime(ctx.nowMin, ctx.windowAny, ctx.missDeadlineMin, ctx.missBackOn)) {
+            } else if (SignLogic.inMissBackTime(ctx.nowMin, ctx.windowAny, ctx.missDeadlineMin,
+                    ctx.missBackOn, ctx.earliestPlanMin)) {
+                // 2026-11-01：这里必须与 decideTrigger 用同一套判据（含目标维度）。
+                // 原来传四参 → 日志会说「补签时段」而 decideTrigger 判 T_QUEUE，
+                // 排查时会对不上号（我踩过一次）。
                 zone = "补签时段";
             } else {
                 zone = "窗口外";
