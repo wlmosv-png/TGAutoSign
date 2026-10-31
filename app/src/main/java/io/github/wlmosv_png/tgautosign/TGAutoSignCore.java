@@ -2388,6 +2388,16 @@ public final class TGAutoSignCore {
         return SignLogic.inMissBackTime(nowMin(), windowAnyOf(acc), missDeadlineOf(acc), missBackOf(acc));
     }
 
+    /**
+     * 目标维度补签时段（2026-11-01）：起点抬到 max(窗口起点, 该目标今日计划时刻)。
+     * 用于 sweepDue / armTask 这类**已经拿着具体目标**的路径。
+     */
+    private boolean inMissBackTimeOf(int acc, String prefix, String id) {
+        int tm = timerPlanMin(prefix, id);
+        return SignLogic.inMissBackTime(nowMin(), windowAnyOf(acc), missDeadlineOf(acc),
+                missBackOf(acc), tm);
+    }
+
     // ── 自动检查冷却 / 排队时刻（2026-10-30 M3）──
     //
     // 冷却只用于抑制**窗口外**的重复探测（切后台再回来、网络抖动、心跳叠加），
@@ -18077,6 +18087,9 @@ public final class TGAutoSignCore {
                 logw("[触发] " + reason + " 账号已停用，跳过");
                 return;
             }
+            // 2026-11-01：先确保当日时刻表存在，否则 earliestPlanMin 恒为 -1，
+            // 定时门槛失效（表现就是这次的 bug 原样复发）。
+            try { ensureTimerPlan(accountPrefix(acc)); } catch (Throwable _etp) { noteSwallowed("timerHook.plan", _etp); }
             SignLogic.TriggerCtx ctx = buildTriggerCtx(acc, reason);
             int decision = SignLogic.decideTrigger(ctx);
             requestAutoSign(acc, reason, decision, ctx);
@@ -18099,7 +18112,38 @@ public final class TGAutoSignCore {
         long last = lastAutoCheckMs(acc);
         c.sinceLastAutoCheckMs = last > 0L ? (System.currentTimeMillis() - last) : -1L;
         c.autoCooldownMs = AUTO_CHECK_MIN_GAP_MS;
+        // 2026-11-01：当日未签目标里最早的计划时刻。定时模式下它是「能不能动手」的下限。
+        c.earliestPlanMin = earliestPlanMinToday(accountPrefix(acc));
         return c;
+    }
+
+    /**
+     * 当日未签（未冻结/未暂停）目标里最早的计划时刻；无计划返回 -1。
+     *
+     * 为什么要「最早」而不是逐目标判：decideTrigger 是**账号维度**的决策，
+     * 一次触发要么整批放行要么整批排。用最小 min 作门槛 = 只要还没到最早那个
+     * 目标的时间，就不该有任何目标被签 —— 语义精确且不引入目标维度状态。
+     *
+     * 已签目标不参与：否则签完早的那个，门槛反而被抬高，晚上的目标永远不动。
+     */
+    private int earliestPlanMinToday(String prefix) {
+        try {
+            java.util.List<Map<String, Object>> plan = timerPlan(prefix);
+            if (plan == null || plan.isEmpty()) return -1;
+            String today = todayStr();
+            int best = -1;
+            for (Map<String, Object> m : plan) {
+                String id = String.valueOf(m.get("id"));
+                if (today.equals(prefs.getString(kLast(prefix, id), ""))) continue;
+                if (isFrozen(prefix, id)) continue;
+                if (isSnoozed(prefix, id)) continue;
+                Object v = m.get("min");
+                if (!(v instanceof Number)) continue;
+                int mm = ((Number) v).intValue();
+                if (best < 0 || mm < best) best = mm;
+            }
+            return best;
+        } catch (Throwable t) { noteSwallowed("earliestPlanMinToday", t); return -1; }
     }
 
     /**

@@ -46,6 +46,10 @@ public final class TriggerPolicyTest {
         manualNotRelaxedHardGates();
 
         // ── B 组：目标 API decideTrigger 四态（修复前应全红）──
+        // ── C 组：时刻表门槛 + 目标维度补签起点（2026-11-01 事故驱动）──
+        planGateC20261101();
+        missBackTargetStart20261101();
+
         fourStates();
         multiAccountIsolation();
         startupCatchup();
@@ -372,6 +376,106 @@ public final class TriggerPolicyTest {
         } catch (Throwable t) {
             failed.add(tag + " → decideTrigger API 未实现（" + t.getClass().getSimpleName() + "）");
         }
+    }
+
+    // ═══════════ C 组：时刻表门槛（2026-11-01） ═══════════
+    //
+    // 事故（用户 Gheoix 实测）：全局窗口 00:00-23:59 + 单目标固定 08:00，
+    // 0 点打开 TG 就把该目标签掉了 —— 定时形同虚设。
+    // 根因：decideTrigger 里「窗口内 → RUN_NOW」排在时刻表之前，窗口全天为真时恒命中。
+    // 修复：定时开启且已知当日最早计划时刻时，未到点一律 T_QUEUE。
+    //
+    // 这两组是**真阳性用例**：对修复前的源码必须失败，否则等于没测。
+
+    private static final int[] W_ALLDAY = SignLogic.windowRangeAny("00:00-23:59");
+
+    private static void planGateC20261101() {
+        // ① 定时开 + 窗口全天 + 最早计划 08:00 + 现在 00:05 → 必须排队，不得签
+        Object c1 = ctx("planGate1");
+        setF(c1, "timerEnabled", Boolean.TRUE);
+        setF(c1, "windowAny", W_ALLDAY);
+        setF(c1, "earliestPlanMin", Integer.valueOf(480));
+        setF(c1, "nowMin", Integer.valueOf(5));
+        tg("C1·窗口全天+计划08:00+现在00:05 → 排队不签", c1, "T_QUEUE");
+
+        // ② 到点（08:00）→ 放行
+        Object c2 = ctx("planGate2");
+        setF(c2, "timerEnabled", Boolean.TRUE);
+        setF(c2, "windowAny", W_ALLDAY);
+        setF(c2, "earliestPlanMin", Integer.valueOf(480));
+        setF(c2, "nowMin", Integer.valueOf(480));
+        tg("C2·到点 08:00 → 立即执行", c2, "T_RUN_NOW");
+
+        // ③ 已过点（15:00）→ 立即执行
+        Object c3 = ctx("planGate3");
+        setF(c3, "timerEnabled", Boolean.TRUE);
+        setF(c3, "windowAny", W_ALLDAY);
+        setF(c3, "earliestPlanMin", Integer.valueOf(480));
+        setF(c3, "nowMin", Integer.valueOf(900));
+        tg("C3·过点 15:00 → 立即执行", c3, "T_RUN_NOW");
+
+        // ④ 定时关：用户语义是「任何时间上线都该试」，不受计划门槛约束
+        Object c4 = ctx("planGate4");
+        setF(c4, "timerEnabled", Boolean.FALSE);
+        setF(c4, "windowAny", W_ALLDAY);
+        setF(c4, "earliestPlanMin", Integer.valueOf(480));
+        setF(c4, "nowMin", Integer.valueOf(5));
+        tg("C4·定时关 → 仍然立即执行（语义不变）", c4, "T_RUN_NOW");
+
+        // ⑤ 取不到计划（earliestPlanMin=-1）→ 退化为旧行为，不得误锁
+        Object c5 = ctx("planGate5");
+        setF(c5, "timerEnabled", Boolean.TRUE);
+        setF(c5, "windowAny", W_ALLDAY);
+        setF(c5, "earliestPlanMin", Integer.valueOf(-1));
+        setF(c5, "nowMin", Integer.valueOf(5));
+        tg("C5·无计划(-1) → 退化旧行为，立刻执行", c5, "T_RUN_NOW");
+
+        // ⑥ 冷却未到：窗口外又不该动的场景下仍要 T_SKIP（不能被排队逻辑吃掉冷却）
+        Object c6 = ctx("planGate6");
+        setF(c6, "timerEnabled", Boolean.TRUE);
+        setF(c6, "windowAny", W_ALLDAY);
+        setF(c6, "earliestPlanMin", Integer.valueOf(480));
+        setF(c6, "nowMin", Integer.valueOf(5));
+        setF(c6, "sinceLastAutoCheckMs", Long.valueOf(1000L));   // 1 秒前刚查过
+        tg("C6·未到点且冷却内 → T_SKIP（不刷排队记录）", c6, "T_SKIP");
+    }
+
+    // ═══════════ C 组：目标维度补签起点（2026-11-01） ═══════════
+    //
+    // 旧签名只接受账号窗口起点。窗口 00:00-23:59 时，05:00 就被判成"补签时段内"，
+    // 于是 08:00 的目标会被提前签掉。用户诉求：8:00 的目标，可补区间 = 08:00-23:59。
+
+    private static void missBackTargetStart20261101() {
+        // ⑦ 窗口全天 + 目标 480 + 现在 30 → 不在补签时段
+        tru("C7·全天文窗口·目标08:00·现在00:30 → 不可补",
+                !SignLogic.inMissBackTime(30, W_ALLDAY, 1439, true, 480));
+
+        // ⑧ 同上，到点后 600 → 可补
+        tru("C8·全天文窗口·目标08:00·现在10:00 → 可补",
+                SignLogic.inMissBackTime(600, W_ALLDAY, 1439, true, 480));
+
+        // ⑨ 无目标计划（-1）→ 与旧签名完全一致（窗口起点 0:00，全天可补）
+        tru("C9·无目标计划(-1) → 旧行为：00:30 可补",
+                SignLogic.inMissBackTime(30, W_ALLDAY, 1439, true, -1));
+
+        // ⑩ 旧四参签名必须与新签名(-1)等价 —— 保证既有调用点不被破坏
+        boolean old4 = SignLogic.inMissBackTime(600, W_0635_1937, 1260, true);
+        boolean new5 = SignLogic.inMissBackTime(600, W_0635_1937, 1260, true, -1);
+        eq("C10·四参签名 ≡ 五参(-1)", Boolean.valueOf(old4), Boolean.valueOf(new5));
+
+        // ⑪ 目标时刻早于窗口起点 → 起点仍取窗口起点（只抬不降）
+        //    窗口 06:35 起，目标 05:00，现在 05:30 → 不可补（还没到窗口起点）
+        tru("C11·目标早于窗口起点 → 起点不下降",
+                !SignLogic.inMissBackTime(330, W_0635_1937, 1260, true, 300));
+
+        // ⑫ 跨天窗口 + 目标在次日的时段 → 不得把起点抬到第二天，导致当天失效
+        //    窗口 22:00-02:00，目标 00:30(30) 属次日段，现在 23:00(1380) → 可补
+        tru("C12·跨天窗口·目标落在次日段 → 起点不被误抬",
+                SignLogic.inMissBackTime(1380, W_CROSS, 1439, true, 30));
+
+        // ⑬ 补签开关关 → 无论目标时刻如何都不可补
+        tru("C13·补签关 → 恒 false",
+                !SignLogic.inMissBackTime(600, W_ALLDAY, 1439, false, 480));
     }
 
     // ═══════════════ 断言助手 ═══════════════

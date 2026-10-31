@@ -176,8 +176,30 @@ public final class SignLogic {
     }
 
     public static boolean inMissBackTime(int nowMin, int[] range, int missDeadline, boolean missBackOn) {
+        return inMissBackTime(nowMin, range, missDeadline, missBackOn, -1);
+    }
+
+    /**
+     * 补签时段判定（目标维度起点，2026-11-01）。
+     *
+     * 事故：用户把全局窗口设为 00:00-23:59、某个目标单独固定 08:00。
+     * 旧签名只接受账号窗口起点（= 0:00），于是 05:00 打开 TG
+     * 就判成「补签时段内」→ 该 08:00 目标被提前签掉。
+     * 用户诉求（合理）：单目标设了 08:00，它的可补区间应当是 08:00-23:59，
+     * 即「窗口起点」与「目标计划时刻」取较晚的那个。
+     *
+     * @param targetMin 该目标今日计划时刻（0..1439）；小于 0 表示无计划/非定时，
+     *                  行为与旧签名完全一致（向后兼容，既有单测不动）
+     */
+    public static boolean inMissBackTime(int nowMin, int[] range, int missDeadline,
+                                         boolean missBackOn, int targetMin) {
         if (!missBackOn) return false;
         int start = range != null ? range[0] : 0;
+        if (targetMin >= 0 && targetMin > start && targetMin < missDeadline) {
+            boolean cross = range != null && crossesMidnight(range);
+            boolean targetOnSecondDay = cross && targetMin <= range[1];
+            if (!targetOnSecondDay) start = targetMin;
+        }
         if (missDeadline >= start) return nowMin >= start && nowMin <= missDeadline;
         return nowMin >= start || nowMin <= missDeadline;
     }
@@ -213,6 +235,13 @@ public final class SignLogic {
         public boolean pendingToday = true;   // 本周期仍有关注目标（未签且未在途且未待确认）
         public long    sinceLastAutoCheckMs = -1L;   // 距上次自动检查；<0 = 从未查过
         public long    autoCooldownMs;        // 自动检查冷却（0 = 不限）
+        /**
+         * 当日未签目标里**最早**的计划时刻（分钟，0..1439）。
+         * 定时模式下的含义：now &lt; earliestPlanMin 时绝不该有任何目标被签
+         * —— 这正是「窗口 00:00-23:59 + 目标 08:00，0 点打开 TG 就被批量签掉」
+         * 那个 bug 的修复依据。&lt;0 = 无计划/取不到，退化为旧行为。
+         */
+        public int     earliestPlanMin = -1;
     }
 
     /**
@@ -232,6 +261,17 @@ public final class SignLogic {
         if (!c.pendingToday) return T_SKIP;
 
         int[] any = c.windowAny;
+
+        // ── 定时模式：时刻表优先（2026-11-01 修复）──
+        // 事故：窗口 00:00-23:59 时「窗口内」恒为真，原判定顺序让 RUN_NOW
+        // 压过时刻表 → 0 点打开 TG 就把 08:00 的目标批量签掉，定时形同虚设。
+        // 修正：定时开启且已知最早计划时刻时，未到点一律排队，不再看窗口。
+        if (c.timerEnabled && c.earliestPlanMin >= 0 && c.nowMin < c.earliestPlanMin) {
+            if (c.autoCooldownMs > 0L && c.sinceLastAutoCheckMs >= 0L
+                    && c.sinceLastAutoCheckMs < c.autoCooldownMs) return T_SKIP;
+            return T_QUEUE;
+        }
+
         // 窗口内：立即执行，不受冷却限制（冷却只用于抑制窗口外的重复探测）
         if (any == null || inWindowAny(c.nowMin, any)) return T_RUN_NOW;
 
@@ -243,7 +283,8 @@ public final class SignLogic {
         if (!c.timerEnabled) return T_RUN_NOW;
 
         // 定时开启 = 用户选择「只在窗口（含补签）内动作」
-        if (inMissBackTime(c.nowMin, any, c.missDeadlineMin, c.missBackOn)) return T_RUN_LATE;
+        if (inMissBackTime(c.nowMin, any, c.missDeadlineMin, c.missBackOn, c.earliestPlanMin))
+            return T_RUN_LATE;
         return T_QUEUE;
     }
 
