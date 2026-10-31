@@ -13392,8 +13392,27 @@ public final class TGAutoSignCore {
     private boolean handleJmbSub(String raw) {
         String t = String.valueOf(raw).trim();
         if (!isJmbCommand(t)) return false;
-        String sub = t.length() > 4 ? t.substring(4).trim() : "";
+        // ── 2026-11-01 阶段 2：按**实际命令前缀长度**切分参数 ──
+        // 旧写法硬编码 substring(4)：/jmb 与 /tgas 是 4 字符没问题，
+        // 但 isJmbCommand 同样接受 /j（2 字符）—— 用 /j 时这里会把参数切坏
+        // （例如 "/j log" 会得到 "og"），既有 bug，本次一并修正。
+        String usedCmd = "/jmb";
+        for (String c0 : new String[]{"/jmb", "/tgas", "/j"}) {
+            if (t.startsWith(c0)) { usedCmd = c0; break; }
+        }
+        String sub = t.length() > usedCmd.length() ? t.substring(usedCmd.length()).trim() : "";
         if (sub.length() == 0) return false;
+        // ── 2026-11-01 阶段 2：Debug 探针通道（仅 Debug 构建可用）──
+        // 这里**只判断前缀**，不出现任何探测命令字面量 ——
+        // 具体命令名（如 __selftest）只存在于 app/src/debug/java 的 DebugEntry 里。
+        // Release 构建不收集 debug 目录 → 目标类不存在 → tryHandle 恒返回 false
+        // → 该分支对 Release 完全无效（连命令名都无从得知）。
+        if (sub.startsWith("__")) {
+            jlog("[探针] 收到 __ 前缀命令，转 DebugBridge: " + sub);
+            if (DebugBridge.tryHandle(this, sub)) return true;
+            jlog("[探针] DebugBridge 未处理（Release 构建无此能力）: " + sub);
+            return false;   // 未识别的 __ 命令 → 交回普通流程
+        }
         if ("log".equals(sub) || "日志".equals(sub)) {
             copyRecentLogs();
             return true;
