@@ -1526,6 +1526,136 @@ public final class TGAutoSignCore {
                 box.addView(card, clp);
             }
 
+            // ══════════ 今天已签 · 可撤销（2026-11-01 v2）══════════
+            //
+            // 用户反馈（原话）：「暂停了不能恢复吗？而且你放在那个界面布局也不好」
+            // 上一版的两个问题：
+            //   ① 每条两个大按钮，18 条就是 36 个按钮 —— 又长又挤，
+            //      「标记未签并暂停」的文案被压得几乎读不出；
+            //   ② 「并暂停」会把目标从「今天已签」里移走（last_ 已清），
+            //      而主列表又把它当已暂停跳过 → **它从所有列表消失**，
+            //      用户只能靠长按条目才找得回 → 体感就是"暂停了没法恢复"。
+            //
+            // 本版设计原则：**任何让目标消失的操作，必须同时给出让它回来的入口。**
+            //   · 已签行压成一行：名字 + 右侧「撤销」，点开才出选项；
+            //   · 新增「已暂停」区块 —— 列出暂停中的目标与截止日，每条一个「恢复」；
+            //   · 暂停后目标不再人间蒸发。
+            try {
+                final java.util.List<Map<String, Object>> signed = signedTodayList(prefix);
+                if (!signed.isEmpty()) {
+                    TextView hd = new TextView(act);
+                    hd.setTextSize(Theme.TS_CAPTION);
+                    hd.setTextColor(Theme.termGreen(act));
+                    hd.setTypeface(Theme.monoBold());
+                    hd.setPadding(dp(2), dp(14), dp(2), dp(4));
+                    hd.setText(Lang.tf("今天已签（{0} 条 · 判错了可撤销）", signed.size()));
+                    box.addView(hd);
+
+                    final int CAP = 6;
+                    int show = signedExpanded ? signed.size() : Math.min(CAP, signed.size());
+                    for (int si = 0; si < show; si++) {
+                        final Map<String, Object> sm = signed.get(si);
+                        final String sid = entryId(sm);
+                        LinearLayout row = new LinearLayout(act);
+                        row.setOrientation(LinearLayout.HORIZONTAL);
+                        row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+                        row.setPadding(dp(4), dp(7), dp(4), dp(7));
+
+                        TextView nm = new TextView(act);
+                        nm.setTextSize(Theme.TS_BODY);
+                        nm.setTextColor(Theme.termTxt(act));
+                        nm.setTypeface(Theme.text());
+                        nm.setSingleLine(true);
+                        nm.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                        nm.setText(entryDisplayName(sm));
+                        row.addView(nm, new LinearLayout.LayoutParams(0, -2, 1f));
+
+                        Button undo = mkBtn(act);
+                        undo.setText(Lang.tr("撤销"));
+                        undo.setTextSize(Theme.TS_CAPTION);
+                        undo.setOnClickListener(v -> showUndoSignedSheet(act, prefix, accName, sid,
+                                entryDisplayName(sm),
+                                () -> renderRoundProblems(box, act, prefix, accName)));
+                        LinearLayout.LayoutParams ulp = new LinearLayout.LayoutParams(-2, -2);
+                        ulp.leftMargin = dp(8);
+                        row.addView(undo, ulp);
+
+                        box.addView(row);
+                    }
+                    if (signed.size() > CAP) {
+                        Button more = mkBtn(act);
+                        more.setText(signedExpanded
+                                ? Lang.tr("收起")
+                                : Lang.tf("展开全部 {0} 条", signed.size()));
+                        more.setTextSize(Theme.TS_CAPTION);
+                        more.setOnClickListener(v -> {
+                            signedExpanded = !signedExpanded;
+                            renderRoundProblems(box, act, prefix, accName);
+                        });
+                        LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(-1, -2);
+                        mp.topMargin = dp(4);
+                        box.addView(more, mp);
+                    }
+                }
+
+                // ── 已暂停 · 可恢复 ──
+                // 这是「暂停了不能恢复」的正解：暂停不再等于消失。
+                final java.util.List<Map<String, Object>> snoozed = snoozedList(prefix);
+                if (!snoozed.isEmpty()) {
+                    TextView hz = new TextView(act);
+                    hz.setTextSize(Theme.TS_CAPTION);
+                    hz.setTextColor(Theme.termAmber(act));
+                    hz.setTypeface(Theme.monoBold());
+                    hz.setPadding(dp(2), dp(16), dp(2), dp(4));
+                    hz.setText(Lang.tf("已暂停（{0} 条 · 暂停期间不会自动签）", snoozed.size()));
+                    box.addView(hz);
+
+                    for (final Map<String, Object> zm : snoozed) {
+                        final String zid = entryId(zm);
+                        LinearLayout row = new LinearLayout(act);
+                        row.setOrientation(LinearLayout.HORIZONTAL);
+                        row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+                        row.setPadding(dp(4), dp(7), dp(4), dp(7));
+
+                        LinearLayout col = new LinearLayout(act);
+                        col.setOrientation(LinearLayout.VERTICAL);
+                        TextView nm = new TextView(act);
+                        nm.setTextSize(Theme.TS_BODY);
+                        nm.setTextColor(Theme.termTxt(act));
+                        nm.setTypeface(Theme.text());
+                        nm.setSingleLine(true);
+                        nm.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                        nm.setText(entryDisplayName(zm));
+                        col.addView(nm);
+                        TextView sub = new TextView(act);
+                        sub.setTextSize(Theme.TS_CAPTION);
+                        sub.setTextColor(Theme.termFaint(act));
+                        sub.setTypeface(Theme.text());
+                        String until = prefs.getString(kSnooze(prefix, zid), "");
+                        sub.setText(Lang.tf("暂停至 {0}", until));
+                        col.addView(sub);
+                        row.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
+
+                        Button rs = mkBtn(act);
+                        rs.setText(Lang.tr("恢复"));
+                        rs.setTextSize(Theme.TS_CAPTION);
+                        rs.setOnClickListener(v -> {
+                            try {
+                                prefs.edit().remove(kSnooze(prefix, zid)).apply();
+                                invalidateTargetCache();
+                                renderRoundProblems(box, act, prefix, accName);
+                                toast(Lang.tf("已恢复：{0}", entryDisplayName(zm)));
+                            } catch (Throwable t) { toast(Lang.tf("操作失败: {0}", t)); }
+                        });
+                        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-2, -2);
+                        rlp.leftMargin = dp(8);
+                        row.addView(rs, rlp);
+
+                        box.addView(row);
+                    }
+                }
+            } catch (Throwable _esg2) { noteSwallowed("renderRoundProblems.signedV2", _esg2); }
+
             //
             // 用户诉求（Gheoix 原话）：
             //   「S5 命中回复重复签到，直接就算签到了，我还没法给他标没签到成功，
@@ -1534,73 +1664,7 @@ public final class TGAutoSignCore {
             //
             // 放在这里而不是目标行：目标行保持统一两行结构（用户明确要求过），
             // 处置动作集中在面板里，与「卡住的目标」同一处，用户只需要记一个入口。
-            try {
-                java.util.List<Map<String, Object>> signed = signedTodayList(prefix);
-                if (!signed.isEmpty()) {
-                    TextView hd = new TextView(act);
-                    hd.setTextSize(Theme.TS_CAPTION);
-                    hd.setTextColor(Theme.termGreen(act));
-                    hd.setTypeface(Theme.monoBold());
-                    hd.setPadding(dp(2), dp(14), dp(2), dp(6));
-                    hd.setText(Lang.tf("今天已签（{0} 条 · 判错了可以撤销）", signed.size()));
-                    box.addView(hd);
 
-                    for (final Map<String, Object> sm : signed) {
-                        final String sid = entryId(sm);
-                        LinearLayout sc = new LinearLayout(act);
-                        sc.setOrientation(LinearLayout.VERTICAL);
-                        sc.setPadding(dp(12), dp(10), dp(12), dp(10));
-                        sc.setBackground(termBorder(act, Theme.termCard(act),
-                                Theme.withAlpha(Theme.termGreen(act), 0x33)));
-
-                        TextView st = new TextView(act);
-                        st.setTextSize(Theme.TS_SUBTITLE);
-                        st.setTextColor(Theme.termTxt(act));
-                        st.setTypeface(Theme.text());
-                        st.setSingleLine(true);
-                        st.setEllipsize(android.text.TextUtils.TruncateAt.END);
-                        st.setText(entryDisplayName(sm));
-                        sc.addView(st);
-
-                        LinearLayout sb = new LinearLayout(act);
-                        sb.setOrientation(LinearLayout.HORIZONTAL);
-                        sb.setPadding(0, dp(8), 0, 0);
-
-                        Button un1 = mkBtn(act);
-                        un1.setText(Lang.tr("标记未签"));
-                        un1.setTextSize(Theme.TS_CAPTION);
-                        un1.setOnClickListener(v -> {
-                            try {
-                                boolean was = markUnsignedManually(prefix, sid, false);
-                                invalidateTargetCache();
-                                renderRoundProblems(box, act, prefix, accName);
-                                toast(was ? Lang.tf("已标记为未签：{0}", entryDisplayName(sm))
-                                          : Lang.tr("该目标今天本来就不是已签状态"));
-                            } catch (Throwable t) { toast(Lang.tf("操作失败: {0}", t)); }
-                        });
-                        sb.addView(un1, new LinearLayout.LayoutParams(0, -2, 1f));
-
-                        Button un2 = mkBtn(act);
-                        un2.setText(Lang.tr("标记未签并暂停"));
-                        un2.setTextSize(Theme.TS_CAPTION);
-                        un2.setOnClickListener(v -> {
-                            try {
-                                boolean was = markUnsignedManually(prefix, sid, true);
-                                invalidateTargetCache();
-                                renderRoundProblems(box, act, prefix, accName);
-                                toast(Lang.tf("已标记为未签并暂停：{0}", entryDisplayName(sm))
-                                      + (was ? "" : Lang.tr("（今天本来就不是已签状态）")));
-                            } catch (Throwable t) { toast(Lang.tf("操作失败: {0}", t)); }
-                        });
-                        LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(0, -2, 1f);
-                        lp2.leftMargin = dp(6);
-                        sb.addView(un2, lp2);
-
-                        sc.addView(sb);
-                        box.addView(sc);
-                    }
-                }
-            } catch (Throwable _esg) { noteSwallowed("renderRoundProblems.signed", _esg); }
         } catch (Throwable t) { noteSwallowed("renderRoundProblems", t); }
     }
 
@@ -5931,8 +5995,25 @@ public final class TGAutoSignCore {
             }
         } catch (Throwable _eP2) { noteSwallowed("showEntryActions(pendcfm)", _eP2); }
 
-        Button sn = menuItem(act, b, "pause", "暂停一周 / 恢复", null, 0);
+        // 2026-11-01 v2：文案改成**当前状态**，不再静态写「暂停一周 / 恢复」
+        //（用户不知道自己现在处于哪一态，点了会怎样全靠猜）。
+        final boolean snoozedNow = isSnoozed(accountPrefix(), entryId(m));
+        String snoozeLabel = snoozedNow
+                ? Lang.tf("恢复（当前暂停至 {0}）", prefs.getString(kSnooze(accountPrefix(), entryId(m)), ""))
+                : Lang.tr("暂停一周");
+        Button sn = menuItem(act, b, "pause", snoozeLabel, null, 0);
         sn.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ toggleSnooze(m, currentAccount()); showEntryActions(act, m); } });
+
+        // 2026-11-01 v2：撤销已签的正规入口就放在「条目操作」里 ——
+        // 用户处理单个目标时的自然位置，不必先钻进「卡住的目标」面板。
+        if (todayStr().equals(prefs.getString(kLast(accountPrefix(), entryId(m)), ""))) {
+            Button un = menuItem(act, b, "refresh", Lang.tr("标记为未签"),
+                    Lang.tr("判错了？撤销今天的已签记录"), 0);
+            final String uid = entryId(m);
+            un.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){
+                showUndoSignedSheet(act, accountPrefix(), "", uid, entryDisplayName(m), null);
+            } });
+        }
 
         // 冻结：永久不再签这条（与"暂停一周"区分）
         final boolean frozenNow = isFrozen(accountPrefix(), entryId(m));
@@ -16331,6 +16412,90 @@ public final class TGAutoSignCore {
      */
     private void showPendingWork(final Activity act) {
         showRoundProblems(act, accountPrefix(), accountLabel(currentAccount()));
+    }
+
+    /** 「今天已签」列表是否已展开（超过 6 条折叠）。 */
+    private boolean signedExpanded = false;
+
+    /**
+     * 暂停中的目标列表（2026-11-01 v2）。
+     *
+     * 为什么需要：用户点「标记未签并暂停」后，目标 last_ 被清、主列表又跳过
+     * snooze_ 的条目 —— **它从所有界面消失**，用户找不到恢复入口，
+     * 反馈就是「暂停了不能恢复」。把暂停状态显式列出来即可根治。
+     */
+    private java.util.List<Map<String, Object>> snoozedList(String prefix) {
+        java.util.List<Map<String, Object>> out = new java.util.ArrayList<Map<String, Object>>();
+        try {
+            java.util.List<Map<String, Object>> all = new java.util.ArrayList<Map<String, Object>>();
+            loadTargetsInto(prefix, all);
+            for (Map<String, Object> m : all) {
+                String id = entryId(m);
+                if (findEntryById(id, accountOfPrefix(prefix)) == null) continue;
+                if (isSnoozed(prefix, id)) out.add(m);
+            }
+        } catch (Throwable t) { noteSwallowed("snoozedList", t); }
+        return out;
+    }
+
+    /**
+     * 撤销已签的小面板（2026-11-01 v2）。
+     *
+     * 上一版把两个大按钮直接铺在列表里：18 条 = 36 个按钮，用户明确反馈
+     * 「布局不好」。现在列表只有一行一个「撤销」，点开才需要做选择 ——
+     * 选择本身也缩短成两句人话，不再把"并且暂停"这种复合语义塞进按钮文案。
+     */
+    private void showUndoSignedSheet(final Activity act, final String prefix, final String accName,
+                                     final String id, final String title, final Runnable onDone) {
+        try {
+            LinearLayout box = new LinearLayout(act);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(18), dp(10), dp(18), dp(6));
+
+            TextView t = new TextView(act);
+            t.setTextSize(Theme.TS_CAPTION);
+            t.setTextColor(Theme.termFaint(act));
+            t.setTypeface(Theme.text());
+            t.setPadding(0, 0, 0, dp(6));
+            t.setText(Lang.tf("「{0}」当前记为今天已签。", title));
+            box.addView(t);
+
+            Button b1 = mkBtn(act);
+            b1.setText(Lang.tr("撤销，今天重新签"));
+            b1.setOnClickListener(v -> {
+                try {
+                    boolean was = markUnsignedManually(prefix, id, false);
+                    invalidateTargetCache();
+                    if (onDone != null) onDone.run();
+                    toast(was ? Lang.tf("已标记为未签：{0}", title)
+                              : Lang.tr("该目标今天本来就不是已签状态"));
+                } catch (Throwable e) { toast(Lang.tf("操作失败: {0}", e)); }
+            });
+            box.addView(b1);
+
+            Button b2 = mkBtn(act);
+            b2.setText(Lang.tr("撤销，今天不再自动签它"));
+            b2.setOnClickListener(v -> {
+                try {
+                    boolean was = markUnsignedManually(prefix, id, true);
+                    invalidateTargetCache();
+                    if (onDone != null) onDone.run();
+                    toast(Lang.tf("已撤销并暂停：{0}", title)
+                          + (was ? "" : Lang.tr("（今天本来就不是已签状态）")));
+                } catch (Throwable e) { toast(Lang.tf("操作失败: {0}", e)); }
+            });
+            box.addView(b2);
+
+            TextView tip = new TextView(act);
+            tip.setTextSize(Theme.TS_CAPTION);
+            tip.setTextColor(Theme.termFaint(act));
+            tip.setTypeface(Theme.text());
+            tip.setPadding(0, dp(6), 0, 0);
+            tip.setText(Lang.tr("暂停的目标会留在「已暂停」列表里，随时可以恢复。"));
+            box.addView(tip);
+
+            showDialog(act, title, box, Lang.tr("取消"));
+        } catch (Throwable e) { toast(Lang.tf("打开失败: {0}", e)); }
     }
 
     /**

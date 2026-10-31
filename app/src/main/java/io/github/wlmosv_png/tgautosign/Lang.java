@@ -1025,6 +1025,22 @@ public final class Lang {
         EN.put("已标记为未签并暂停：{0}", "Marked unsigned and paused: {0}");
         EN.put("该目标今天本来就不是已签状态", "This target wasn't marked signed today");
         EN.put("今天已签（{0} 条 · 判错了可以撤销）", "Signed today ({0}) \u00b7 undo if misjudged");
+        // ── 撤销/暂停 v2（2026-11-01）──
+        EN.put("收起", "Collapse");
+        EN.put("暂停一周", "Pause for a week");
+        EN.put("暂停的目标会留在「已暂停」列表里，随时可以恢复。", "Paused targets stay in the \"Paused\" list and can be resumed anytime.");
+        EN.put("暂停至 {0}", "Paused until {0}");
+        EN.put("标记为未签", "Mark as unsigned");
+        EN.put("撤销", "Undo");
+        EN.put("撤销，今天重新签", "Undo \u2014 sign again today");
+        EN.put("撤销，今天不再自动签它", "Undo \u2014 stop auto sign-in for today");
+        EN.put("已暂停（{0} 条 · 暂停期间不会自动签）", "Paused ({0}) \u00b7 not auto-signed while paused");
+        EN.put("恢复（当前暂停至 {0}）", "Resume (paused until {0})");
+        EN.put("今天已签（{0} 条 · 判错了可撤销）", "Signed today ({0}) \u00b7 undo if misjudged");
+        EN.put("展开全部 {0} 条", "Show all {0}");
+        EN.put("「{0}」当前记为今天已签。", "\"{0}\" is currently marked signed today.");
+        EN.put("已撤销并暂停：{0}", "Undone and paused: {0}");
+        EN.put("判错了？撤销今天的已签记录", "Misjudged? Undo today's sign-in");
         EN.put("（今天本来就不是已签状态）", " (wasn't signed today to begin with)");
         EN.put("机器人说今日次数已用尽（通常表示今天已经签过了）",
                "The bot says today's quota is used up (usually means you already checked in today)");

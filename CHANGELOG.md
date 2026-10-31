@@ -62,6 +62,24 @@
   *Every revocation is now logged with its reason.*
   此前撤销已签有几条路径不写日志，出问题时查不到是谁撤销的（本次排查就卡在这里）。
 
+### 界面 · Changed（撤销与暂停）
+
+- **撤销入口重做：一行一个「撤销」，点开再选**
+  *The undo entry is now one compact row per target.*
+  上一版把两个大按钮直接铺进列表（18 条就是 36 个按钮，文字被压得读不出），
+  现在已签列表是一行一条「目标名 + 撤销」，点开才需要做选择。
+- **新增「已暂停」列表 —— 暂停不再等于消失**
+  *New "Paused" section: pausing no longer hides a target.*
+  旧版点「并暂停」会清掉已签状态，主列表又跳过已暂停的条目，
+  于是目标从所有界面消失、只剩长按才能找回 —— 用户反馈「暂停了不能恢复」。
+  现在暂停中的目标连同「暂停至 X」一起列出来，每条一个「恢复」。
+- **条目操作菜单显示真实状态**
+  *The entry menu now shows the actual state instead of a static label.*
+  原来是静态的「暂停一周 / 恢复」，用户不知道自己处于哪一态；
+  现在暂停中会写明「恢复（当前暂停至 2026-11-02）」。
+- **「标记为未签」也进了条目操作菜单**
+  *"Mark as unsigned" is also available from the entry actions menu.*
+
 ### 工程 · Engineering
 
 - **补签判据新增目标维度重载**
