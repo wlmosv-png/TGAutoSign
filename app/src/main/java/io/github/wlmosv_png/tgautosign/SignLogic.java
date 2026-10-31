@@ -520,6 +520,9 @@ public final class SignLogic {
      * 注意顺序：**先判「已签过」**，因为「已签到」里也含「签到」，
      * 若先判成功会把"已签过"误判成"刚签成功"（历史上踩过）。
      */
+    /** 命中该"词"表示走的是「命令式重复提示」判据（见 isDuplicateReminder）。 */
+    public static final String DUPLICATE_REMINDER_HIT = "已签过（重复提示）";
+
     public static final String[] DUP_WORDS_DEFAULT = {
             // 中文：把「今天已签到」的各种常见写法都覆盖掉，避免用户还要自己加词。
             // 注意顺序无关（都是子串匹配），但**别放太短的宽词**：
@@ -998,6 +1001,13 @@ public final class SignLogic {
             return new Object[]{Integer.valueOf(V_FAILED), m};
         }
 
+        // ── 命令式重复提示：明确结论，优先于成功侧词表与公告守卫（2026-11-01）──
+        // 「请勿重复签到！」= 今天已经签过了。它含推广语，但不该被当广告吞掉；
+        // 也因为它带"请勿"，凭否定守卫永远走不通 —— 必须在这里直接给出结论。
+        if (isDuplicateReminder(reply)) {
+            return new Object[]{Integer.valueOf(V_SIGNED), DUPLICATE_REMINDER_HIT};
+        }
+
         // 成功侧：具体级优先（目标 > Bot > 全局）
         //
         // 2026-10-28 P0 修复（真实事故：10-25 02:37 两条“未签到却显示成功”）：
@@ -1228,6 +1238,12 @@ public final class SignLogic {
         // 实测「😇暗影社工库 | 2026最新数据 👑政务接口…」因自定义词 👑 被判成功。
         // isLikelyAnnouncement 先看结果词（有「签到成功」等一律放行），再查公告特征词，
         // 真结论不会受影响。
+        // 2026-11-01：命令式重复提示先于通用 DUP 词表 ——
+        // 「请勿重复签到」既过不了 negated（"请勿"被判成否定），
+        // 也过不了 isLikelyAnnouncement（句子后半段是推广）。
+        if (isDuplicateReminder(reply)) {
+            return new Object[]{Integer.valueOf(V_SIGNED), DUPLICATE_REMINDER_HIT};
+        }
         m = matched(lower, dup != null ? dup : DUP_WORDS_DEFAULT);
         if (m != null && !negated(lower, m) && !isLikelyAnnouncement(reply)
                 && !(m.contains("重复") && hasTrailingNegation(lower))) {
@@ -2739,6 +2755,49 @@ public final class SignLogic {
             if (x.equalsIgnoreCase(w)) return true;
         }
         return false;
+    }
+
+    /**
+     * 「命令式重复提示」= 今天已经签过了（2026-11-01）。
+     *
+     * 事故（用户实测，bot 6379863842「短信轰炸机」）：
+     *   bot 回「请勿重复签到！」+ 一段轰炸推广，模块判**不出**，
+     *   把它丢进「卡住的目标」让用户手动处理 —— 而这句话的意思恰恰是
+     *   「你今天已经签过了」，本该直接算已签。
+     *
+     * 为什么现有词表救不了它（两重拦截，只修一处没用）：
+     *   ① 词表里其实**有**「重复签到」，但 negated() 只看命中词前 2 个字符，
+     *      「请勿」正好落在窗口里 → 被判成否定句 → 跳过；
+     *   ② 即便跳过否定的问题，整条还含推广语，
+     *      isLikelyAnnouncement() 又会把它当广告拦掉。
+     *   而「请勿重复签到」不是否定结论，是**命令式劝阻** ——
+     *   它陈述的是「已经签过了」这个事实。
+     *
+     * 判据（三条同时成立）：
+     *   · 有「重复 / 再次 / 又」这类"再来一次"语义
+     *   · 有签到类动作词
+     *   · 是劝阻口气（请勿 / 勿 / 不要 / 别 / 无需 / 不用）
+     * 明确失败词优先：出现「失败 / 错误 / 异常」一律不算。
+     *
+     * 本判据**优先于**公告守卫 —— 它是业务结论，不是营销语。
+     */
+    public static boolean isDuplicateReminder(String reply) {
+        try {
+            if (reply == null || reply.length() == 0) return false;
+            String r = reply.toLowerCase(java.util.Locale.US);
+            boolean hasRepeat = r.contains("重复") || r.contains("再次") || r.contains("又签到")
+                    || r.contains("又签了");
+            if (!hasRepeat) return false;
+            boolean hasAct = r.contains("签到") || r.contains("打卡") || r.contains("领取")
+                    || r.contains("签过") || r.contains("check");
+            if (!hasAct) return false;
+            // 明确失败 / 异常优先：这类文本里出现"重复"多为别的原因
+            if (r.contains("失败") || r.contains("错误") || r.contains("异常")
+                    || r.contains("已过期") || r.contains("过期")) return false;
+            return r.contains("请勿") || r.contains("勿") || r.contains("不要")
+                    || r.contains("别") || r.contains("无需") || r.contains("不用")
+                    || r.contains("禁止");
+        } catch (Throwable t) { return false; }
     }
 
     /** 命中成功词、却被「公告守卫」拦下的那个词（没有则返回 null）。

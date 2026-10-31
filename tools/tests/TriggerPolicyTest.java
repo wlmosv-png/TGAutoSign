@@ -51,6 +51,7 @@ public final class TriggerPolicyTest {
         missBackTargetStart20261101();
         realLogFixtures20261101();
         signedFlipProtection20261101();
+        duplicateReminder20261101();
 
         fourStates();
         multiAccountIsolation();
@@ -599,6 +600,46 @@ public final class TriggerPolicyTest {
                 SignLogic.shouldProtectSigned(" 2026-11-01 ", today));
         tru("E7·脏值（非日期）→ 不拦，交给自愈清理",
                 !SignLogic.shouldProtectSigned("garbage", today));
+    }
+
+    // ═══════════ F 组：命令式重复提示（2026-11-01） ═══════════
+    //
+    // 真实素材（用户设备 01:53，bot 6379863842）：
+    //   「Clsckdu Toole /qd 请勿重复签到！ 要试试轰炸吗？您当前可以轰炸12次
+    //     您可以尝试发送 /hz …」
+    // 这句话意思是「你今天已经签过了」，本该直接算已签，
+    // 却被两重守卫拦下判成"判不出"，用户被迫手动处理。
+
+    private static final String F_DUP_REMIND =
+            "Clsckdu Toole /qd 请勿重复签到！ 要试试轰炸吗？您当前可以轰炸12次 "
+            + "您可以尝试发送 /hz 您也可以尝试 /yshz 可以体验一下延时轰炸，这你爱的人送上“祝福”。";
+
+    private static void duplicateReminder20261101() {
+        tru("F1·带推广语的『请勿重复签到』应判已签（真实素材）",
+                SignLogic.isDuplicateReminder(F_DUP_REMIND));
+        eq("F1b·且 verdict 为 V_SIGNED",
+                Integer.valueOf(verdictOf(F_DUP_REMIND)), Integer.valueOf(SignLogic.V_SIGNED));
+
+        tru("F2·『不要重复签到』→ 已签", SignLogic.isDuplicateReminder("不要重复签到"));
+        tru("F3·『再次签到』式劝阻 → 已签",
+                SignLogic.isDuplicateReminder("请勿再次签到，明天再来"));
+        tru("F4·英文 already signed → 不靠本判据（词表另有覆盖）",
+                !SignLogic.isDuplicateReminder("already signed today"));
+
+        // 反向保护：不能把无关的"重复"吞进来
+        tru("F5·『请勿重复提交』不判已签（无签到动作）",
+                !SignLogic.isDuplicateReminder("请勿重复提交订单"));
+        tru("F6·失败优先：带『失败』不判已签",
+                !SignLogic.isDuplicateReminder("签到失败，请勿重复签到"));
+        tru("F7·带『已过期』不判已签",
+                !SignLogic.isDuplicateReminder("验证已过期，请勿重复签到"));
+        tru("F8·『请先加入频道』不受影响（不是重复语）",
+                !SignLogic.isDuplicateReminder("请先加入用户群，再签到"));
+
+        // 真失败句仍判失败
+        eq("F9·真失败句仍 V_FAILED",
+                Integer.valueOf(verdictOf("❌ 签到失败，请明天再来")),
+                Integer.valueOf(SignLogic.V_FAILED));
     }
 
     // ═══════════════ 断言助手 ═══════════════
