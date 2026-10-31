@@ -1021,6 +1021,12 @@ public final class SignLogic {
             String m = matched(lower, words);
             if (m == null) continue;
             if (negated(lower, m)) continue;                       // 否定守卫
+            // ── 2026-11-01 P0-2：疑问/假设子句不作证据 ──
+            // 「签到成功了吗？」「如果签到成功，将获得奖励」都不陈述"已签到"，
+            // 却都含成功词。做**子句级**判断可修掉这两个假成功，
+            // 同时不伤「今日签到成功！要试试轰炸吗？」（结果在前半子句）。
+            // 为什么不能整条含问号就否 —— 那会把上面这类真结果一起丢掉。
+            if (hitInNonResultClause(reply, m)) continue;
             if (isLikelyAnnouncement(reply)) continue;             // 公告守卫
             if (m.contains("重复") && hasTrailingNegation(lower)) continue;
             // ★ 统一证据标准：泛词（无论内置还是用户词）必须有结果形态
@@ -1251,6 +1257,8 @@ public final class SignLogic {
         }
         m = matched(lower, ok != null ? ok : OK_WORDS_DEFAULT);
         if (m != null && !negated(lower, m) && !isLikelyAnnouncement(reply)
+                // 2026-11-01 P0-2：与 scoped 链同一判据（两处必须一致）
+                && !hitInNonResultClause(reply, m)
                 && !(okWordNeedsContext(m) && (!hasSignContext(lower) || hasTrailingNegation(lower)))
                 // 2026-10-28：与 scoped 链同一标准 —— 泛词必须有结果形态
                 && !(isGenericOkWord(m) && !hasSuccessShape(lower))) {
@@ -1259,7 +1267,8 @@ public final class SignLogic {
         // ── 组合判定（兜底）：词表没覆盖，但语义上明显是成功 ──
         String cm = comboSuccess(lower);
         // 2026-10-28：组合判定同样要结果形态（否则"欢迎+签到"这类面板会被判成功）
-        if (cm != null && !negated(lower, cm.split("\\+")[0]) && hasSuccessShape(lower)) {
+        if (cm != null && !negated(lower, cm.split("\\+")[0]) && hasSuccessShape(lower)
+                && !hitInNonResultClause(reply, cm.split("\\+")[0])) {
             return new Object[]{Integer.valueOf(V_SIGNED), cm};
         }
         return new Object[]{Integer.valueOf(V_UNKNOWN), ""};
@@ -1286,15 +1295,176 @@ public final class SignLogic {
      * @param hitWord 命中的词（matched 返回的是小写词）
      * @return true = 该命中应作废
      */
+    /**
+     * 去空白串的第 n 个字符对应原文下标（P0 修复配套）。
+     *
+     * 为什么需要：否定守卫要同时满足两个看似矛盾的要求 ——
+     *   · 中文侧必须在**去空白**串上定位，否则「未签到+1」用带空格词绕过守卫；
+     *   · 英文侧必须在**原文**上分词，否则 "you haven't" 被粘成 "youhaven't"，
+     *     `haven't` 再也匹配不上（实测导致 2 条英文回归）。
+     * 做法：先在 flat 上定位，再把位置映射回原文，两套窗口各取所需。
+     */
+    static int rawIndexFromFlat(String raw, int flatIdx) {
+        try {
+            if (raw == null || flatIdx < 0) return -1;
+            int cnt = 0;
+            for (int i = 0; i < raw.length(); i++) {
+                char c = raw.charAt(i);
+                if (c == ' ' || c == '\u3000' || c == '\t' || c == '\n' || c == '\r') continue;
+                if (cnt == flatIdx) return i;
+                cnt++;
+            }
+        } catch (Throwable ignored) {}
+        return -1;
+    }
+
+    /** 去掉所有空白（含全角空格）。matched 与 negated 必须共用同一口径。 */
+    static String stripSpace(String s) {
+        if (s == null) return "";
+        return s.replace(" ", "").replace("\u3000", "").replace("\t", "")
+                .replace("\n", "").replace("\r", "");
+    }
+
+    // ═══════════ 子句级证据归属（2026-11-01 P0-2，S5 设计 §六 的最小子集）═══════════
+    //
+    // 事故：单测与离线实测均确认两条假成功 ——
+    //   「签到成功了吗？」            → 判已签（疑问句不陈述结果）
+    //   「如果签到成功，将获得奖励」   → 判已签（假设句尚未发生）
+    //
+    // 为什么不能"整条消息含问号就不过"：
+    //   「今日签到成功！要试试轰炸吗？」这类真实 bot 回复，
+    //   前半是**已发生的结果**、后半才是疑问/推广。一刀切会把真结果也丢掉。
+    // 所以必须做**子句级**的范围判断：只有结论**所在的子句**是疑问/假设时才算无效证据。
+
+    /** 子句边界字符。 */
+    private static boolean isClauseBoundary(char c) {
+        return c == '。' || c == '！' || c == '？' || c == '；' || c == '\n'
+                || c == '!' || c == '?' || c == ';' || c == '\uFF01'
+                || c == '\uFF1F' || c == '\uFF1B';
+    }
+
+    /** 该子句是否为「疑问 / 假设」——即不能作为"已发生结果"的证据。 */
+    static boolean clauseIsNonResult(String clause) {
+        try {
+            if (clause == null) return false;
+            String c = stripSpace(clause);
+            if (c.length() == 0) return false;
+
+            // ① 疑问：句尾疑问语气，或含疑问引导词
+            char last = c.charAt(c.length() - 1);
+            if (last == '？' || last == '?' || last == '\uFF1F') return true;
+            if (c.endsWith("吗") || c.endsWith("呢") || c.endsWith("么")) return true;
+            for (String q : CLAUSE_QUESTION_WORDS) {
+                if (c.contains(q)) return true;
+            }
+
+            // ② 假设 / 将来：句首条件连词，或含将来语且无完成态
+            for (String h : CLAUSE_HYPOTHESIS_HEADS) {
+                if (c.startsWith(h)) return true;
+            }
+            for (String f : CLAUSE_FUTURE_WORDS) {
+                if (c.contains(f) && !containsDoneMark(c)) return true;
+            }
+            return false;
+        } catch (Throwable t) { return false; }
+    }
+
+    /** 完成态标记：出现即认为句子在陈述"已经发生"。 */
+    private static boolean containsDoneMark(String c) {
+        for (String d : CLAUSE_DONE_WORDS) {
+            if (c.contains(d)) return true;
+        }
+        return false;
+    }
+
+    private static final String[] CLAUSE_QUESTION_WORDS = {
+            "是否", "能否", "如何", "怎么", "怎样", "什么时候", "几时", "哪种", "哪一个"
+    };
+    private static final String[] CLAUSE_HYPOTHESIS_HEADS = {
+            "如果", "假如", "假设", "若", "倘若", "要是", "一旦", "若想", "想获得", "想领取"
+    };
+    private static final String[] CLAUSE_FUTURE_WORDS = {
+            "将会", "将被", "即可获得", "就能获得", "会获得", "可获得", "即可领取", "将获得"
+    };
+    private static final String[] CLAUSE_DONE_WORDS = {
+            "已", "完成", "成功", "领到", "获得"
+    };
+
+    /**
+     * 命中词是否落在「疑问/假设」子句里（P0-2）。
+     *
+     * 用于成功侧：这类子句不陈述"已经签到了"，命中不作数。
+     * 若因口径问题定位不到命中词，**保守地**退化为整条判形态
+     *（宁可少判成功，不可假成功 —— 与验收标准一致）。
+     */
+    public static boolean hitInNonResultClause(String reply, String hitWord) {
+        try {
+            if (reply == null || reply.length() == 0) return false;
+            if (hitWord == null || hitWord.length() == 0) return clauseIsNonResult(reply);
+
+            int idx = reply.indexOf(hitWord);
+            int len = hitWord.length();
+            if (idx < 0) {
+                // matched 可能去掉空格后命中，这里同步用去空白串定位
+                String flat = stripSpace(reply);
+                String w = stripSpace(hitWord);
+                int fi = w.length() == 0 ? -1 : flat.indexOf(w);
+                if (fi < 0) return clauseIsNonResult(reply);
+                // flat 位置 → 原文位置（逐字符计数映射）
+                int cnt = 0, raw = -1;
+                for (int i = 0; i < reply.length(); i++) {
+                    char ch = reply.charAt(i);
+                    boolean sp = (ch == ' ' || ch == '\u3000' || ch == '\t'
+                            || ch == '\n' || ch == '\r');
+                    if (!sp) {
+                        if (cnt == fi) { raw = i; break; }
+                        cnt++;
+                    }
+                }
+                if (raw < 0) return clauseIsNonResult(reply);
+                idx = raw;
+                len = 0;   // 长度未知，向后扩到子句尾即可
+            }
+            int a = idx, b = idx + Math.max(len, 1);
+            while (a > 0 && !isClauseBoundary(reply.charAt(a - 1))) a--;
+            while (b < reply.length() && !isClauseBoundary(reply.charAt(b))) b++;
+            return clauseIsNonResult(reply.substring(a, Math.min(b, reply.length())));
+        } catch (Throwable t) { return false; }
+    }
+
     static boolean negated(String lower, String hitWord) {
         try {
             if (lower == null || hitWord == null || hitWord.length() == 0) return false;
-            int idx = lower.indexOf(hitWord);
-            if (idx < 0) return false;
-            // 取命中词之前的一小段
-            int from = Math.max(0, idx - 12);
-            String before = lower.substring(from, idx);
-            if (before.length() == 0) return false;
+            // ── 2026-11-01 P0-1：与 matched() 统一口径，都在「去空白」串上定位 ──
+            //
+            // 事故（离线实测复现）：matched() 在原文 contains 失败后会**去掉双方空格**
+            //   再试一次，因此能命中，但**返回的是词表原词**——内置词里
+            //   「签到 +1」「打卡 +1」本身带空格。
+            //   而旧 negated() 拿这个带空格的词去做**原文** indexOf：
+            //     「未签到+1」里根本找不到「签到 +1」→ idx = -1 → 直接 return false
+            //   → 否定守卫被静默绕过 → **「未签到」被判成「已签到」**（会导致断签）。
+            //   实测 7 个探针里 3 个假成功（未签到+1 / 今天未签到+1 / 未 签到 +1）。
+            //
+            // 现在：文本与命中词都先去空白再定位，位置必然对得上。
+            // 标点未被去除，所以「有分隔符则不回溯」的既有语义完整保留。
+            String flat = stripSpace(lower);
+            String hitFlat = stripSpace(hitWord);
+            int idxFlat = flat.indexOf(hitFlat);
+            if (idxFlat < 0) return false;
+
+            // ── 中文窗口：在**去空白**串上取（防「未签到+1」用空格绕过守卫）──
+            int from = Math.max(0, idxFlat - 12);
+            String before = flat.substring(from, idxFlat);
+
+            // ── 英文窗口：在**原文**上取（保住 "haven't" 这类独立词）──
+            int idxRaw = rawIndexFromFlat(lower, idxFlat);
+            String beforeRaw;
+            if (idxRaw > 0) {
+                beforeRaw = lower.substring(Math.max(0, idxRaw - 40), idxRaw);
+            } else {
+                beforeRaw = before;      // 映射失败 → 退化为 flat 窗口
+            }
+            if (before.length() == 0 && beforeRaw.length() == 0) return false;
 
             // ── 中文规则：只看命中词**紧邻的 2 个字符** ──
             // 为什么是 2 而不是 3（2026-10-06 实测迭代）：
@@ -1339,7 +1509,7 @@ public final class SignLogic {
             // ── 英文规则：只看命中词**紧邻的 1 个词** ──
             // 同理由 2 词收窄到 1 词：「no problem, checked in」里
             //   「no」与 checked 中间隔着 problem → 只有一个词窗口才不会误杀。
-            String[] parts = before.trim().split("[\\s,.;:!?、，。！？]+");
+            String[] parts = beforeRaw.trim().split("[\\s,.;:!?、，。！？]+");
             if (parts.length > 0) {
                 // 2026-10-07：窗口 1 词 → 2 词，但跳过不构成否定的名词。
                 //   1 词漏掉 "not yet signed in"；2 词又会把 "no problem, checked in"

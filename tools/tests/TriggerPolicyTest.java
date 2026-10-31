@@ -52,6 +52,7 @@ public final class TriggerPolicyTest {
         realLogFixtures20261101();
         signedFlipProtection20261101();
         duplicateReminder20261101();
+        p0ClauseAndNegation20261101();
 
         fourStates();
         multiAccountIsolation();
@@ -640,6 +641,55 @@ public final class TriggerPolicyTest {
         eq("F9·真失败句仍 V_FAILED",
                 Integer.valueOf(verdictOf("❌ 签到失败，请明天再来")),
                 Integer.valueOf(SignLogic.V_FAILED));
+    }
+
+    // ═══════════ G 组：阶段 1 · P0 安全修复（2026-11-01） ═══════════
+    //
+    // 基线实测的两个 P0（会把"没签到"记成"签到了"，直接导致断签）：
+    //   P0-1 negated 与 matched 口径不一致 → 「未签到+1」被判已签
+    //   P0-2 疑问/假设子句无守卫         → 「签到成功了吗？」被判已签
+    // 反向保护同样重要：修 P0-2 不能把「今日签到成功！要试试轰炸吗？」这类
+    // 真结果（结果在前半子句、疑问/推广在后半）一起丢掉。
+
+    private static void p0ClauseAndNegation20261101() {
+        // ── P0-1：带空格内置词不得绕过否定守卫 ──
+        tru("G1·『未签到+1』不得判已签",
+                verdictOf("未签到+1") != SignLogic.V_SIGNED);
+        tru("G2·『今天未签到+1』不得判已签",
+                verdictOf("今天未签到+1") != SignLogic.V_SIGNED);
+        tru("G3·『未 签到 +1』不得判已签",
+                verdictOf("未 签到 +1") != SignLogic.V_SIGNED);
+        tru("G4·『还没有签到 +1』不得判已签",
+                verdictOf("还没有签到 +1") != SignLogic.V_SIGNED);
+        // 对照组：没被误伤的肯定句必须仍判已签
+        eq("G5·『签到 +1』（对照）仍判已签",
+                Integer.valueOf(verdictOf("签到 +1")), Integer.valueOf(SignLogic.V_SIGNED));
+        // 英文侧不能被"去空白"改坏（实测曾被改坏过 2 条）
+        tru("G6·英文否定句不得判已签",
+                verdictOf("You haven't checked in today. Received 0 points") != SignLogic.V_SIGNED);
+
+        // ── P0-2：疑问 / 假设子句不作证据 ──
+        tru("G7·『签到成功了吗？』不得判已签",
+                verdictOf("签到成功了吗？") != SignLogic.V_SIGNED);
+        tru("G8·『如果签到成功，将获得奖励』不得判已签",
+                verdictOf("如果签到成功，将获得奖励") != SignLogic.V_SIGNED);
+        tru("G9·『是否签到成功』不得判已签",
+                verdictOf("是否签到成功") != SignLogic.V_SIGNED);
+        tru("G10·『若签到成功，即可获得积分』不得判已签",
+                verdictOf("若签到成功，即可获得积分") != SignLogic.V_SIGNED);
+        // 反向保护：真结果 + 后续疑问/推广，不能因问号被丢
+        eq("G11·『今日签到成功！感谢参与！要试试轰炸吗？』仍判已签",
+                Integer.valueOf(verdictOf("今日签到成功！感谢参与！要试试轰炸吗？")),
+                Integer.valueOf(SignLogic.V_SIGNED));
+        eq("G12·『今日已签到，感谢参与！要试试轰炸吗？』仍判已签",
+                Integer.valueOf(verdictOf("今日已签到，感谢参与！要试试轰炸吗？")),
+                Integer.valueOf(SignLogic.V_SIGNED));
+
+        // ── 子句工具直测 ──
+        tru("G13·疑问子句识别", SignLogic.clauseIsNonResult("签到成功了吗？"));
+        tru("G14·假设子句识别", SignLogic.clauseIsNonResult("如果签到成功，将获得奖励"));
+        tru("G15·结果子句不误判", !SignLogic.clauseIsNonResult("今日签到成功"));
+        tru("G16·进度问句不误判为结果子句", SignLogic.clauseIsNonResult("签到成功了吗"));
     }
 
     // ═══════════════ 断言助手 ═══════════════
