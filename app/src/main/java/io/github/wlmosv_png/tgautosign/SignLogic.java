@@ -1428,8 +1428,9 @@ public final class SignLogic {
             if (raw == null || flatIdx < 0) return -1;
             int cnt = 0;
             for (int i = 0; i < raw.length(); i++) {
-                char c = raw.charAt(i);
-                if (c == ' ' || c == '\u3000' || c == '\t' || c == '\n' || c == '\r') continue;
+                // 2026-11-01 M1：判据统一走 isSpaceChar（原先硬编码 5 类，
+                // 与 stripSpace 不同源 —— 修订后全仓只有一处空白判据）
+                if (isSpaceChar(raw.charAt(i))) continue;
                 if (cnt == flatIdx) return i;
                 cnt++;
             }
@@ -1437,11 +1438,44 @@ public final class SignLogic {
         return -1;
     }
 
-    /** 去掉所有空白（含全角空格）。matched 与 negated 必须共用同一口径。 */
+    /**
+     * 单个字符是否属于「归一化要剔除的空白」。
+     *
+     * 判据 = {@link Character#isWhitespace} ∪ 若干**非** isWhitespace 但语义为空白的字符：
+     *   \u00A0 NBSP / \u2007 图形空格 / \u202F 窄 NBSP / \uFEFF BOM。
+     * （Java 规范里这几个返回 false，但它们在真实 bot 回复里等价于空格。）
+     *
+     * **故意不含**零宽字符（\u200B ZWSP / \u200C ZWNJ / \u200D ZWJ）——
+     * 它们是有语义的分隔/连接符，删掉会改变文本含义。
+     */
+    static boolean isSpaceChar(char c) {
+        if (Character.isWhitespace(c)) return true;
+        return c == '\u00A0' || c == '\u2007' || c == '\u202F' || c == '\uFEFF';
+    }
+
+    /**
+     * 去掉所有空白（含全角空格与 Unicode 空白）。
+     *
+     * 2026-11-01 M1：判据由「硬编码 5 类」统一为 {@link #isSpaceChar}。
+     * 原先只去 `空格 / \u3000 / \t / \n / \r`，漏掉 \f、\u000B、NBSP 等 ——
+     * 而 `matched` 内部的 flat 又**只去 2 类**（空格 + \u3000），
+     * 三处口径互不相同（P0-1 的"守卫被空格绕过"就是这个成因的变体）。
+     * 现在：**全仓只有这一处空白判据**。
+     *
+     * matched 与 negated 必须共用同一口径。
+     */
     static String stripSpace(String s) {
         if (s == null) return "";
-        return s.replace(" ", "").replace("\u3000", "").replace("\t", "")
-                .replace("\n", "").replace("\r", "");
+        int n = s.length();
+        boolean need = false;
+        for (int i = 0; i < n; i++) { if (isSpaceChar(s.charAt(i))) { need = true; break; } }
+        if (!need) return s;                       // 无空白时零拷贝（常见路径）
+        StringBuilder sb = new StringBuilder(n);
+        for (int i = 0; i < n; i++) {
+            char c = s.charAt(i);
+            if (!isSpaceChar(c)) sb.append(c);
+        }
+        return sb.toString();
     }
 
     // ═══════════ 子句级证据归属（2026-11-01 P0-2，S5 设计 §六 的最小子集）═══════════
@@ -1591,9 +1625,38 @@ public final class SignLogic {
     }
 
     /**
+     * 命中词所在子句在**原文**中的范围 [start,end)；定位失败返回整条范围。
+     *
+     * 2026-11-01 M1：从 clauseOfHit 拆出，供 Match 结构复用；
+     * 空白判据统一走 isSpaceChar（原先内联硬编码 5 类）。
+     */
+    static int[] clauseRangeOf(String reply, String hitWord) {
+        try {
+            if (reply == null || reply.length() == 0) return new int[]{0, 0};
+            int total = reply.length();
+            if (hitWord == null || hitWord.length() == 0) return new int[]{0, total};
+            int idx = reply.indexOf(hitWord);
+            int len = hitWord.length();
+            if (idx < 0) {
+                String flat = stripSpace(reply);
+                String w = stripSpace(hitWord);
+                int fi = w.length() == 0 ? -1 : flat.indexOf(w);
+                if (fi < 0) return new int[]{0, total};
+                int raw = rawIndexFromFlat(reply, fi);
+                if (raw < 0) return new int[]{0, total};
+                idx = raw; len = 0;
+            }
+            int a = idx, b = idx + Math.max(len, 1);
+            while (a > 0 && !isClauseBoundary(reply.charAt(a - 1))) a--;
+            while (b < total && !isClauseBoundary(reply.charAt(b))) b++;
+            return new int[]{a, Math.min(b, total)};
+        } catch (Throwable t) { return new int[]{0, reply == null ? 0 : reply.length()}; }
+    }
+
+    /**
      * 取得命中词所在子句。定位失败时返回**整条**（保守：宁可多拦，不放假成功）。
      */
-    private static String clauseOfHit(String reply, String hitWord) {
+    static String clauseOfHit(String reply, String hitWord) {
         try {
             if (reply == null || reply.length() == 0) return "";
             if (hitWord == null || hitWord.length() == 0) return reply;
@@ -1604,13 +1667,7 @@ public final class SignLogic {
                 String w = stripSpace(hitWord);
                 int fi = w.length() == 0 ? -1 : flat.indexOf(w);
                 if (fi < 0) return reply;
-                int cnt = 0, raw = -1;
-                for (int i = 0; i < reply.length(); i++) {
-                    char ch = reply.charAt(i);
-                    boolean sp = (ch == ' ' || ch == '\u3000' || ch == '\t'
-                            || ch == '\n' || ch == '\r');
-                    if (!sp) { if (cnt == fi) { raw = i; break; } cnt++; }
-                }
+                int raw = rawIndexFromFlat(reply, fi);
                 if (raw < 0) return reply;
                 idx = raw; len = 0;
             }
@@ -2060,20 +2117,116 @@ public final class SignLogic {
     }
 
     /** 返回命中的第一条词；没命中返回 null。 */
-    private static String matched(String lower, String[] words) {
-        if (words == null) return null;
-        // 2026-10-04 修「学了词还是判不出」：词与回复的空格不一致会失配。
-        // 实测：词表「💢您都还没有绑」（提词走了归一化，空格被删），
-        // 而 bot 回「💢 您都还没有绑定囡囡呢」（💢 后有空格）→ contains 不中。
-        // 这里把两边空白都去掉再比：对原本无空格的词（签到成功等）行为不变。
-        String flat = lower.replace(" ", "").replace("\u3000", "");
+    /**
+     * 词表命中（返回**首个**命中的词条，小写形态）。
+     *
+     * 为什么这样写（2026-10-04 修「学了词还是判不出」）：
+     *   词与回复的空格不一致会失配 —— 实测词表「💢您都还没有绑」（提词走了归一化、
+     *   空格被删），而 bot 回「💢 您都还没有绑定囡囡呢」（💢 后有空格）→ contains 不中。
+     *   做法：两边空白都去掉再比；对原本无空格的词（签到成功等）行为不变。
+     *
+     * 2026-11-01 M1 · 统一实现：
+     *   · 空白判据统一走 {@link #stripSpace}（原先此处只去 2 类、stripSpace 去 5 类）
+     *   · **本方法改为 {@link #matchAt} 的薄封装** —— matchAt 是唯一实现，
+     *     避免"两份实现各自演化"（这正是本阶段要消除的问题模式）。
+     *   · 可见性 private → package：供测试做一致性对照。
+     *   · 命中顺序/判据与 matchAt 完全一致（有 MatchPositionTest 对照断言守着）。
+     */
+    static String matched(String lower, String[] words) {
+        Match m = matchAt(lower, words);
+        return m == null ? null : m.word;
+    }
+
+    // ═══════════════ 命中结构（M1，2026-11-01）═══════════════
+    //
+    // M1 目标：把"命中"从「只返回词条字符串」升级为**可追溯的证据结构** ——
+    //   词条 / 命中方式 / 原文位置 / 归一化位置 / 所在子句。
+    // 这是 M2（显式阶段表）与 M3（统一引擎）产出 evidence/stage 的前提。
+    //
+    // 设计约束（严格）：
+    //   · **纯增量** —— `matched()` 签名不变、14+ 既有调用点零改动；
+    //     本结构只被新调用点使用。
+    //   · **不改判定语义** —— matchAt 与 matched 的命中顺序、判据完全一致。
+    //   · **UTF-16 安全** —— 全程使用 String.indexOf/charAt 的 **UTF-16 code unit**
+    //     索引，二者天然同源，因此位置一一对应；
+    //     **不需要**按 Unicode 码点换算（那样反而会引入偏移）。
+    //     补充字符（emoji 等 surrogate pair）占 2 个 code unit，
+    //     rawStart/rawEnd 也如实按 code unit 计量 —— 与 String 语义一致。
+    public static final class Match {
+        /** 命中的词条（小写形态，与 matched() 返回值一致）。 */
+        public final String  word;
+        /** true = **去空白后**才命中（原文里可能被空白隔开，位置由映射还原）；
+         *  false = 原文直接命中（位置最精确）。 */
+        public final boolean viaFlat;
+        /** 原文中的范围 [rawStart, rawEnd)，UTF-16 code unit。 */
+        public final int     rawStart;
+        public final int     rawEnd;
+        /** 归一化串中的范围 [flatStart, flatEnd)；viaFlat=false 时才有独立含义。 */
+        public final int     flatStart;
+        public final int     flatEnd;
+        /** 命中词所在子句在原文中的范围 [clauseStart, clauseEnd)。 */
+        public final int     clauseStart;
+        public final int     clauseEnd;
+        /** 子句原文（供证据展示）。 */
+        public final String  clause;
+
+        Match(String word, boolean viaFlat, int rawStart, int rawEnd,
+              int flatStart, int flatEnd, int clauseStart, int clauseEnd, String clause) {
+            this.word = word; this.viaFlat = viaFlat;
+            this.rawStart = rawStart; this.rawEnd = rawEnd;
+            this.flatStart = flatStart; this.flatEnd = flatEnd;
+            this.clauseStart = clauseStart; this.clauseEnd = clauseEnd;
+            this.clause = clause;
+        }
+
+        @Override public String toString() {
+            return "Match{word=" + word + ", viaFlat=" + viaFlat
+                 + ", raw=[" + rawStart + "," + rawEnd + ")"
+                 + ", flat=[" + flatStart + "," + flatEnd + ")"
+                 + ", clause=[" + clauseStart + "," + clauseEnd + ")}";
+        }
+    }
+
+    /**
+     * 与 {@link #matched} 判据、顺序**完全一致**，但额外返回位置与子句信息。
+     *
+     * @param lower 已小写的待判定文本（与 matched 的入参同源）
+     * @param words 词表（顺序敏感 —— 返回**首个**命中，与 matched 一致）
+     * @return 命中结构；未命中返回 null
+     */
+    public static Match matchAt(String lower, String[] words) {
+        if (lower == null || words == null) return null;
+        String flat = null;                      // 惰性构建，避免无谓开销
         for (String w : words) {
             if (w == null) continue;
             String t = w.trim().toLowerCase();
             if (t.length() == 0) continue;
-            if (lower.contains(t)) return t;
-            String ft = t.replace(" ", "").replace("\u3000", "");
-            if (ft.length() > 0 && flat.contains(ft)) return t;
+
+            // ① 原文直接命中 —— 位置最精确（viaFlat = false）
+            int idx = lower.indexOf(t);
+            if (idx >= 0) {
+                int[] cr = clauseRangeOf(lower, t);
+                return new Match(t, false, idx, idx + t.length(),
+                        idx, idx + t.length(), cr[0], cr[1],
+                        lower.substring(cr[0], cr[1]));
+            }
+            // ② 去空白后命中 —— viaFlat = true，位置由 flat→raw 双向映射还原
+            if (flat == null) flat = stripSpace(lower);
+            String ft = stripSpace(t);
+            if (ft.length() == 0) continue;
+            int fi = flat.indexOf(ft);
+            if (fi >= 0) {
+                // 起点与**终点**都要映射：
+                // 原文里命中词可能被空白隔开（「签到 成功」），
+                // 若粗暴用 raw + 词长 会把范围截到半个词（实测反查到"签到 成"）。
+                int raw = rawIndexFromFlat(lower, fi);
+                int rawEnd2 = rawIndexFromFlat(lower, fi + ft.length());
+                if (rawEnd2 < 0) rawEnd2 = lower.length();     // 命中词位于串尾
+                int[] cr = clauseRangeOf(lower, t);             // 子句仍按词定位（与①同源）
+                return new Match(t, true, raw, rawEnd2,
+                        fi, fi + ft.length(), cr[0], cr[1],
+                        lower.substring(cr[0], cr[1]));
+            }
         }
         return null;
     }
