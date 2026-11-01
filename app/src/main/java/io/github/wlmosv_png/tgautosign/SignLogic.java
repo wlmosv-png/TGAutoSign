@@ -1168,39 +1168,6 @@ public final class SignLogic {
         return verdictDetail(reply, null, null, null);
     }
 
-    /**
-     * 判定，但**用户自定义词优先**。
-     *
-     * 为什么需要（2026-10-04 实测事故）：
-     *   内置表里 FAIL_WORDS_DEFAULT 含「未绑定」，而判定顺序是
-     *   FAIL → PERM_FAIL → EXHAUSTED → DUP → OK。
-     *   用户在自学习页把「您都还没有绑定囡囡呢」显式判成**成功**后，
-     *   下次同样的回复仍先命中内置的 FAIL「未绑定」→ 判失败 → 用户看到
-     *   「我明明学过了，还是判不出」。
-     *
-     * 原则：**用户显式表态 > 内置假设**。用户亲自点过「算成功 / 算失败」，
-     *   说明他确认过这句话的真实语义，应当直接生效。
-     *
-     * 顺序：userFail → userOk → （落回原 verdictDetail 的完整判定链）
-     *   注意 userFail 仍排在 userOk 前：否定词常内嵌在肯定词里
-     *   （「没有签到成功」既含「签到成功」又是否定），失败优先与本文件既有约定一致。
-     */
-    public static Object[] verdictDetailCustom(String reply, String[] dup, String[] ok,
-                                               String[] fail, String[] userOk, String[] userFail) {
-        if (reply == null || reply.length() == 0) return new Object[]{Integer.valueOf(V_UNKNOWN), ""};
-        String lower = reply.toLowerCase();
-        if (userFail != null && userFail.length > 0) {
-            String m = matched(lower, userFail);
-            if (m != null) return new Object[]{Integer.valueOf(V_FAILED), m};
-        }
-        if (userOk != null && userOk.length > 0) {
-            String m = matched(lower, userOk);
-            // 2026-10-06：用户词也过否定守卫 —— 学到的是肯定句，
-            //   却被「还没有绑定」这类否定句命中，会把失败判成功。
-            if (m != null && !negated(lower, m)) return new Object[]{Integer.valueOf(V_SIGNED), m};
-        }
-        return verdictDetail(reply, dup, ok, fail);
-    }
 
     /**
      * 判定词是不是「条件型失败词」（2026-10-24 修假失败）。
