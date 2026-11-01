@@ -515,6 +515,240 @@ public final class SignLogic {
      */
     public static final int V_EXHAUSTED = 3;
 
+    // ════════════════════════════════════════════════════════════════
+    //  声明式判定阶段表（M2，2026-11-01）
+    //
+    //  目的：把「判定优先级」从两条链里**分散的代码书写顺序**，
+    //  迁移到**唯一的、显式声明的阶段表**。
+    //
+    //  这是用户裁定的正式顺序，**不得擅自改变**：
+    //
+    //    FAIL_HARD       明确失败（签到失败/未成功/操作失败…）
+    //      ↓
+    //    FAIL_CONTEXT    语境型失败（请先加入/未绑定/禁止…，需分句与语境分析）
+    //      ↓
+    //    PERMANENT_FAIL  条件不满足且今日无解（未关注/活动已结束/已过期）
+    //      ↓
+    //    EXHAUSTED       次数用尽（**必须对象感知**）
+    //      ↓
+    //    REMINDER        命令式重复提示（请勿重复签到…）
+    //      ↓
+    //    DUP             今日已签/重复签到
+    //      ↓
+    //    SUCCESS         明确成功
+    //      ↓
+    //    COMBO           动作词 × 结果词同现（兜底）
+    //      ↓
+    //    NONE            无足够证据
+    //
+    //  M2 范围：**只建立与验证阶段表本身**。
+    //  不接入生产（M3 才改造唯一入口）、不迁移七入口、不做词表治理。
+    // ════════════════════════════════════════════════════════════════
+
+    /** 判定阶段名（顺序即优先级，小序号 = 先裁决）。 */
+    public static final int STAGE_FAIL_HARD      = 0;
+    public static final int STAGE_FAIL_CONTEXT   = 1;
+    public static final int STAGE_PERMANENT_FAIL = 2;
+    public static final int STAGE_EXHAUSTED      = 3;
+    public static final int STAGE_NON_CONCLUSION = 4;
+    public static final int STAGE_REMINDER       = 5;
+    public static final int STAGE_DUP            = 6;
+    public static final int STAGE_SUCCESS        = 7;
+    public static final int STAGE_COMBO          = 8;
+    public static final int STAGE_NONE           = 9;
+
+    /** 判断命中词是否属于 PERMANENT_FAIL 表（用于 S0 与 S2 的去重）。 */
+    private static boolean inPermanentFailSet(String w) {
+        if (w == null) return false;
+        for (String p : PERMANENT_FAIL_WORDS) {
+            if (p.equalsIgnoreCase(w)) return true;
+        }
+        return false;
+    }
+
+    /** 阶段名（用于证据展示）。 */
+    public static String stageName(int stage) {
+        switch (stage) {
+            case STAGE_FAIL_HARD:      return "FAIL_HARD";
+            case STAGE_FAIL_CONTEXT:   return "FAIL_CONTEXT";
+            case STAGE_PERMANENT_FAIL: return "PERMANENT_FAIL";
+            case STAGE_EXHAUSTED:      return "EXHAUSTED";
+            case STAGE_NON_CONCLUSION: return "NON_CONCLUSION";
+            case STAGE_REMINDER:       return "REMINDER";
+            case STAGE_DUP:            return "DUP";
+            case STAGE_SUCCESS:        return "SUCCESS";
+            case STAGE_COMBO:          return "COMBO";
+            default:                   return "NONE";
+        }
+    }
+
+    /**
+     * 声明式阶段的输入快照。全部由调用方注入，**本引擎不读任何 prefs / 实例字段**。
+     */
+    public static final class StageInput {
+        /** 原始消息（未小写）。 */
+        public String  reply;
+        /** 成功词表（三级合并后，按 目标 > Bot > 全局 拼接）。null = 用内置。 */
+        public String[] okWords;
+        /** 今日已签词表。null = 用内置。 */
+        public String[] dupWords;
+        /** 失败词表。null = 用内置。 */
+        public String[] failWords;
+        /** 判定某词是否为「用户显式添加」（用于失败侧豁免）。null = 无用户词。 */
+        public String[] userFailWords;
+    }
+
+    /**
+     * 声明式阶段的输出：判定码 + 阶段 + 命中证据。
+     * 每个字段都可由日志/界面追溯，不伪造。
+     */
+    public static final class StageResult {
+        public final int    verdict;    // V_SIGNED / V_FAILED / V_UNKNOWN / V_EXHAUSTED
+        public final int    stage;      // 上述 STAGE_* 之一
+        public final String hitWord;    // 命中的词条（无命中为空串）
+        public final String clause;     // 命中词所在子句（证据）
+
+        StageResult(int verdict, int stage, String hitWord, String clause) {
+            this.verdict = verdict; this.stage = stage; this.hitWord = hitWord; this.clause = clause;
+        }
+
+        @Override public String toString() {
+            return "StageResult{verdict=" + verdict + ", stage=" + stageName(stage)
+                 + ", hit=" + (hitWord == null ? "" : hitWord) + "}";
+        }
+    }
+
+    /**
+     * 声明式阶段表判定（M2）。
+     *
+     * 顺序严格 = 用户裁定的 9 阶段。**本方法只判定、不写任何状态**。
+     *
+     * 关键约束（用户明确要求）：
+     *   · FAIL_CONTEXT 必须区分真实失败 / 假设 / 疑问 / 提醒；
+     *   · EXHAUSTED 必须对象感知（不相关对象的耗尽不覆盖成功证据）；
+     *   · SUCCESS 不得覆盖前面的有效失败证据；
+     *   · COMBO 不是无条件成功兜底；
+     *   · NONE 明确表示"无足够证据"。
+     */
+    public static StageResult decideByStage(StageInput in) {
+        if (in == null || in.reply == null || in.reply.length() == 0) {
+            return new StageResult(V_UNKNOWN, STAGE_NONE, "", in == null || in.reply == null ? "" : in.reply);
+        }
+        String lower = in.reply.toLowerCase();
+        String[] fail = hasWords(in.failWords) ? in.failWords : FAIL_WORDS_DEFAULT;
+        String[] dup  = hasWords(in.dupWords)  ? in.dupWords  : DUP_WORDS_DEFAULT;
+        String[] ok   = hasWords(in.okWords)   ? in.okWords   : OK_WORDS_DEFAULT;
+
+        // ── S0 FAIL_HARD：明确失败（含业务动词，不可被语境翻案）──
+        String m = matched(lower, fail);
+        if (m != null) {
+            // 2026-11-01 M2：若命中词同时属于 PERMANENT_FAIL 表（如「活动已结束」），
+            // 则不在此阶段裁决 —— 交给 S2 PERMANENT_FAIL 专段，
+            // 避免「同一词表条目」在 S0 被判 FAIL_HARD、阶段证据错位。
+            //（前提：该词是**内置**词；用户词不受此影响。）
+            if (!isUserAddedWord(m, in.userFailWords) && inPermanentFailSet(m)) {
+                // 直接落到 S2（不在此 return）
+            } else {
+            if (isUserAddedWord(m, in.userFailWords)) {
+                // 用户显式表态的失败词 → 直接生效（豁免语境守卫）
+                return new StageResult(V_FAILED, STAGE_FAIL_HARD, m, clauseOfHit(in.reply, m));
+            }
+            String flat = stripSpace(lower);
+            boolean panel = isPanelLike(flat);
+            if (!panel) {
+                if (isBareFailWord(m)) {
+                    if (bareFailSupported(flat, m)) {
+                        String ov = conditionalSuccessOverride(lower, m, ok);
+                        if (ov != null && conditionalOverrideAllowed(in.reply, m, ov)) {
+                            // 条件型失败词 + 同句未否定成功结论 → 以成功为准（历史事故）
+                            return new StageResult(V_SIGNED, STAGE_SUCCESS, ov, clauseOfHit(in.reply, ov));
+                        }
+                        return new StageResult(V_FAILED, STAGE_FAIL_HARD, m, clauseOfHit(in.reply, m));
+                    }
+                } else {
+                    // 词组型失败词：只过面板守卫（历史事故：bareFailSupported 会吞「请先加入频道」）
+                    String ov = conditionalSuccessOverride(lower, m, ok);
+                    if (ov != null && conditionalOverrideAllowed(in.reply, m, ov)) {
+                        return new StageResult(V_SIGNED, STAGE_SUCCESS, ov, clauseOfHit(in.reply, ov));
+                    }
+                    return new StageResult(V_FAILED, STAGE_FAIL_HARD, m, clauseOfHit(in.reply, m));
+                }
+            }
+            // 面板形态 / 语境不通过 → 落到后续阶段（不在此阶段裁决）
+            }
+        }
+
+        // ── S1 FAIL_CONTEXT：语境型失败（请先加入/未绑定/禁止…）──
+        // 2026-11-01 M2：本阶段当前与 FAIL_HARD 共享同一张 fail 表，
+        // 分句/语境分析由 bareFailSupported + isPanelLike + hitInNonSuccessClause 承担。
+        // （M3 统一引擎时再按「真实失败/假设/疑问/提醒」进一步细分。）
+        // 这里为保持与既有行为一致，不再重复判定 fail 表 —— 避免双重裁决。
+        // 该阶段的存在意义：为 M3 预留显式位置，现阶段由 S0 覆盖其语义。
+
+        // ── S2 PERMANENT_FAIL：条件不满足且今日无解 ──
+        m = matched(lower, PERMANENT_FAIL_WORDS);
+        if (m != null) {
+            String flat = stripSpace(lower);
+            boolean permOk = isBareFailWord(m)
+                    ? (!isPanelLike(flat) && bareFailSupported(flat, m))
+                    : !isPanelLike(flat);
+            if (permOk) {
+                String ov = conditionalSuccessOverride(lower, m, ok);
+                if (ov != null && conditionalOverrideAllowed(in.reply, m, ov)) {
+                    return new StageResult(V_SIGNED, STAGE_SUCCESS, ov, clauseOfHit(in.reply, ov));
+                }
+                return new StageResult(V_FAILED, STAGE_PERMANENT_FAIL, m, clauseOfHit(in.reply, m));
+            }
+        }
+
+        // ── S3 EXHAUSTED（对象感知）──
+        m = matched(lower, EXHAUSTED_WORDS);
+        if (m != null && !exhaustedAboutOtherObject(in.reply, m)) {
+            return new StageResult(V_EXHAUSTED, STAGE_EXHAUSTED, m, clauseOfHit(in.reply, m));
+        }
+
+        // ── S4 NON_CONCLUSION：说明/统计/冷却（无结论，但也不是失败/成功）──
+        // 位置关键：在 EXHAUSTED 之后、REMINDER/DUP/SUCCESS 之前 ——
+        // 否则「签到冷却中,请8小时后再试,已签到5次」会被 DUP 词「已签到」判成成功。
+        // 注意：必须在 DUP 之前，但**不能**在 FAIL/PERMANENT/EXHAUSTED 之前
+        //（「签到失败,详见规则说明」应先判失败，不能被"说明"吞掉）。
+        if (matched(lower, NON_CONCLUSION_WORDS) != null) {
+            return new StageResult(V_UNKNOWN, STAGE_NON_CONCLUSION, "", in.reply);
+        }
+
+        // ── S5 REMINDER：命令式重复提示 ──
+        if (isDuplicateReminder(in.reply)) {
+            return new StageResult(V_SIGNED, STAGE_REMINDER, DUPLICATE_REMINDER_HIT,
+                    clauseOfHit(in.reply, DUPLICATE_REMINDER_HIT));
+        }
+
+        // ── S5 DUP：今日已签 ──
+        m = matched(lower, dup);
+        if (m != null && !negated(lower, m) && !isLikelyAnnouncement(in.reply)
+                && !(m.contains("重复") && hasTrailingNegation(lower))) {
+            return new StageResult(V_SIGNED, STAGE_DUP, m, clauseOfHit(in.reply, m));
+        }
+
+        // ── S6 SUCCESS：明确成功 ──
+        m = matched(lower, ok);
+        if (m != null && !negated(lower, m) && !isLikelyAnnouncement(in.reply)
+                && !hitInNonSuccessClause(in.reply, m)
+                && !(okWordNeedsContext(m) && (!hasSignContext(lower) || hasTrailingNegation(lower)))
+                && !(isGenericOkWord(m) && !hasSuccessShape(lower))) {
+            return new StageResult(V_SIGNED, STAGE_SUCCESS, m, clauseOfHit(in.reply, m));
+        }
+
+        // ── S7 COMBO：动作词 × 结果词同现（不是无条件兜底）──
+        String cm = comboSuccess(lower);
+        if (cm != null && !negated(lower, cm.split("\\+")[0]) && hasSuccessShape(lower)
+                && !hitInNonResultClause(in.reply, cm.split("\\+")[0])) {
+            return new StageResult(V_SIGNED, STAGE_COMBO, cm, clauseOfHit(in.reply, cm));
+        }
+
+        // ── S8 NONE：无足够证据 ──
+        return new StageResult(V_UNKNOWN, STAGE_NONE, "", in.reply);
+    }
+
     /**
      * 关键词表。用户可在「设置 → 回复判定词」里追加，默认是下面这些。
      * 注意顺序：**先判「已签过」**，因为「已签到」里也含「签到」，
@@ -579,7 +813,12 @@ public final class SignLogic {
     /** 明确属于"其他业务"的对象词：出现它们说明额度不是签到额度。 */
     private static final String[] OBJECT_OTHER_WORDS = {
             "抽奖", "兑换", "转盘", "刮奖", "翻牌", "幸运", "分享", "邀请",
-            "发言", "发帖", "点赞", "推广", "返利", "签到抽奖"
+            "发言", "发帖", "点赞", "推广", "返利", "签到抽奖",
+            // 2026-11-01 M2 扩充：奖励/礼包/积分/红包等"非签到本身"的额度对象。
+            // 事故：「今日签到成功，奖励领取次数已达上限」被误判 EXHAUSTED ——
+            // 因为「次数已达上限」命中了 EXHAUSTED 表，而对象识别没认出"奖励领取"。
+            "奖励", "礼包", "红包", "积分", "优惠", "彩蛋", "福袋", "盲盒",
+            "领取奖励", "领取次数", "领取上限"
     };
 
     /** 签到动作词：出现即认为"用尽"说的是签到额度。 */
@@ -1190,6 +1429,52 @@ public final class SignLogic {
         }
         return true;
     }
+
+    /**
+     * 条件型失败词是否应被同句成功结论「翻案」（M2 · 分句顺序感知）。
+     *
+     * 2026-11-01 M2 事故：`conditionalSuccessOverride` 一刀切地"条件词 + 同句有成功结论 → 成功"，
+     * 但没区分两种子句结构：
+     *
+     *   ① 「签到成功！请先关注频道解锁更多功能」
+     *      → 成功在前、条件是**后续附加** → 该翻案（历史事故：Little Kunlun 反馈"日志判失败实际已签上"）
+     *   ② 「请先关注本频道再签到，签到成功」
+     *      → 条件在前、是签到的**前置** → **不该翻案**（用户裁定的历史事故回归项）
+     *
+     * 判据（只在条件词是"前置条件型"时区分，否则保持原行为）：
+     *   · 失败词所在子句在成功词所在子句**之前**，且失败子句含"再/后才/才能/方可/然后"等
+     *     **前置连词** → 是前置条件，不翻案（返回 false）
+     *   · 否则（成功在前、或失败子句无前置连词）→ 保持原 conditionalSuccessOverride 行为
+     *
+     * @return 是否允许翻案（true = 可以翻成成功）
+     */
+    static boolean conditionalOverrideAllowed(String reply, String failWord, String successWord) {
+        try {
+            if (reply == null || failWord == null || successWord == null) return true;
+            // 2026-11-01 M2 修正：不能依赖 clauseRangeOf 的**子句范围**判断顺序 ——
+            // 因为 isClauseBoundary 不含逗号，所以「请先关注本频道再签到，签到成功」
+            // 整句被当成一个子句，fr==sr → 顺序判断失效。
+            // 改为比较两词在原文中的**绝对命中位置**：
+            int fi = reply.indexOf(failWord);
+            int si = reply.indexOf(successWord);
+            // 失败词在成功词**之前**，才可能构成"前置条件"
+            if (fi >= 0 && si >= 0 && fi < si) {
+                String between = reply.substring(fi, si);
+                String flat = stripSpace(between);
+                // 前置连词 → "先做 A 才能 B"，不翻案
+                for (String w : PRECONDITION_LINKERS) {
+                    if (flat.contains(w)) return false;
+                }
+            }
+            return true;
+        } catch (Throwable t) { return true; }
+    }
+
+    /** 前置条件连词：出现即表示"失败词是成功的前置步骤"。 */
+    private static final String[] PRECONDITION_LINKERS = {
+            "再签到", "再签", "后再", "后才", "才能", "方可", "然后", "之后",
+            "再领取", "后再签", "才可", "才能签", "再打卡", "后再使用", "之后才"
+    };
 
     /** 同一句里是否另有**未被否定**的成功结论；有则返回它，否则 null。 */
     static String conditionalSuccessOverride(String lower, String failWord, String[] ok) {
