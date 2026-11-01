@@ -8036,6 +8036,14 @@ public final class TGAutoSignCore {
                                 // 于是出现：Toast 说成功、列表不刷新、日志无判定、处置条不出现。
                                 // 这里用**同一套词表**当场判一次；判不出来才留给回复判定层。
                                 try {
+                                    // ── M3 收尾：judgeOn 总闸统一 ──
+                                    // 用户关闭「自动判定」后，就地对答不得再自动判成败、
+                                    // 写任何结果状态（成功/失败/归类/待确认/重试/连签）。
+                                    // 只清在途（opt_/sent_at_，避免永久卡「已发出」）+ 记日志。
+                                    if (!judgeOn(fPrefix)) {
+                                        logd("【就地对答】自动判定已关闭，本次回调只记录不判定: " + clip(ans, 40));
+                                        try { stateStore.clearOptimistic(fPrefix, fId); } catch (Throwable ignored) {}
+                                    } else {
                                     // 2026-10-07（方案 1.1）：改走统一入口，
                                     // 让这里也能读到 Bot 级 / 目标级自定义词。
                                     SignLogic.StageResult _vd = judgeWithScopesStage(fPrefix, fDialogId, 0L, fId, ans);
@@ -8069,6 +8077,7 @@ public final class TGAutoSignCore {
                                             }
                                         } catch (Throwable ignored) {}
                                     }
+                                    } // 闭合 judgeOn else
                                 } catch (Throwable _eJV) { noteSwallowed("sendSign(judgeAnswer)", _eJV); }
                                 // 只记录，不撤销、不猜成败。
                                 // （v1.5.8 中途按返回文本里的 false/fail 等字样撤销过乐观标记，
@@ -23558,6 +23567,16 @@ public final class TGAutoSignCore {
         try {
             String id = entryId(m);
             long did = entryDid(m);
+
+            // ── M3 收尾：judgeOn 总闸统一 ──
+            // 用户关闭「自动判定」后，锚点B 不得再自动判成败、写任何结果状态
+            // （成功/失败/归类/待确认/重试/连签/未识别池）。
+            // 只清在途（opt_/sent_at_，避免永久卡「已发出」）+ 记日志，不写归类。
+            if (!judgeOn(prefix)) {
+                logd("【回复判定】自动判定已关闭，本次回复只记录不判定: " + clip(text, 40));
+                try { stateStore.clearOptimistic(prefix, id); } catch (Throwable ignored) {}
+                return;
+            }
 
             // ① 统一判定链：失败优先，含所有内置词与用户自定义词
             try {
