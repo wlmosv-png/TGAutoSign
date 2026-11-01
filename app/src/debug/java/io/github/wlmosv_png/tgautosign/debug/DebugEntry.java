@@ -61,6 +61,11 @@ public final class DebugEntry {
             catch (Throwable t) { writeRaw(core, "FATAL(clean): " + t); }
             return true;
         }
+        if ("__probedual".equals(sub)) {
+            if (core == null) { writeRaw(core, "FAIL: 实例未捕获"); return true; }
+            try { probeDual(core); } catch (Throwable t) { writeRaw(core, "FATAL(dual): " + t + "\n" + stack(t)); }
+            return true;
+        }
         if (!"__selftest".equals(sub)) return false;
         synchronized (LOCK) {
             if (running) {
@@ -119,6 +124,180 @@ public final class DebugEntry {
         Method m = findMethod(st.getClass(), name, sig);
         m.setAccessible(true);
         m.invoke(st, args);
+    }
+
+    // ═══════════ P1 · 规则测试器双模式验证 ═══════════
+
+    /** 区分语料：公共词表 / 默认成功失败重复否定词表里都不存在，且不是宽泛动作词。 */
+    private static final String DUAL_TID_A = "__probe_dual_tgt_A";
+    private static final String DUAL_TID_B = "__probe_dual_tgt_B";
+    private static final String DUAL_ENABLED = "__probe_dual_enabled";
+    private static final String DUAL_PHRASE_A = "灵石已入库";     // 仅目标 A 词表
+    private static final String DUAL_PHRASE_B = "星砂已归位";     // 仅目标 B 词表
+    private static final String DUAL_MSG_A = "您的灵石已入库";    // 同一条消息
+    private static final String DUAL_MSG_B = "您的星砂已归位";
+
+    private static void probeDual(Object core) throws Exception {
+        StringBuilder sb = new StringBuilder();
+        java.lang.reflect.Field pf = core.getClass().getDeclaredField("prefs");
+        pf.setAccessible(true);
+        android.content.SharedPreferences sp = (android.content.SharedPreferences) pf.get(core);
+        String prefix = "acc0_";
+        int pass = 0, fail = 0;
+
+        sb.append("=== P1 规则测试器双模式验证 ===\n");
+        sb.append("PID=").append(android.os.Process.myPid()).append("  时间=").append(nowStr()).append("\n\n");
+
+        // ── 建测试目标 + 写目标级词表（数据隔离：专用 id，测后清理）──
+        // 注意：cfg_judge_custom 是 **boolean** 类型 —— 首版用 getString 读，
+        // 抛 ClassCastException（探针自身缺陷，生产未受影响）。改为按类型读取。
+        boolean hadCustom = sp.contains(prefix + "cfg_judge_custom");
+        boolean origCustom = sp.getBoolean(prefix + "cfg_judge_custom", false);
+        android.content.SharedPreferences.Editor ed = sp.edit();
+        ed.putBoolean(prefix + "cfg_judge_custom", true);          // 打开"使用自定义词"
+        // 目标 A
+        ed.putString(prefix + "learned_" + DUAL_TID_A, "签到");
+        ed.putLong(prefix + "did_" + DUAL_TID_A, -999000000002L);
+        ed.putString(prefix + "kind_" + DUAL_TID_A, "text");
+        ed.putString("jmb_ok_tgt_" + DUAL_TID_A, DUAL_PHRASE_A);
+        // 目标 B
+        ed.putString(prefix + "learned_" + DUAL_TID_B, "签到");
+        ed.putLong(prefix + "did_" + DUAL_TID_B, -999000000003L);
+        ed.putString(prefix + "kind_" + DUAL_TID_B, "text");
+        ed.putString("jmb_ok_tgt_" + DUAL_TID_B, DUAL_PHRASE_B);
+        ed.commit();
+        sb.append("[准备] 已建测试目标 A/B 并写入各自独有的目标级成功短语\n");
+        sb.append("  目标A(").append(DUAL_TID_A).append(") 词表=[").append(DUAL_PHRASE_A).append("]\n");
+        sb.append("  目标B(").append(DUAL_TID_B).append(") 词表=[").append(DUAL_PHRASE_B).append("]\n");
+        sb.append("  区分消息: 「").append(DUAL_MSG_A).append("」\n\n");
+
+        // 词表数量证据
+        int pubOk = 0;
+        try {
+            Class<?> SL = Class.forName("io.github.wlmosv_png.tgautosign.SignLogic", true,
+                    core.getClass().getClassLoader());
+            pubOk = ((String[]) SL.getField("OK_WORDS_DEFAULT").get(null)).length;
+        } catch (Throwable ignored) {}
+        int tgtACnt = SignLogicParseCount(sp.getString("jmb_ok_tgt_" + DUAL_TID_A, ""));
+        int tgtBCnt = SignLogicParseCount(sp.getString("jmb_ok_tgt_" + DUAL_TID_B, ""));
+        sb.append("[词表数量] 公共OK词=").append(pubOk)
+          .append("  目标A词=").append(tgtACnt).append("  目标B词=").append(tgtBCnt).append("\n\n");
+
+        // ── 主对比：同一条消息，两种模式 ──
+        sb.append("── 主对比（同一消息「").append(DUAL_MSG_A).append("」）──\n");
+        String[] pub = callJudgeTest(core, DUAL_MSG_A, null);
+        sb.append("  [公共预览]  targetId=null       -> ").append(join(pub)).append("\n");
+        String[] tgt = callJudgeTest(core, DUAL_MSG_A, DUAL_TID_A);
+        sb.append("  [指定目标]  targetId=").append(DUAL_TID_A).append(" -> ").append(join(tgt)).append("\n");
+
+        boolean pubUnknown = pub[0] != null && pub[0].contains("认不出");
+        boolean tgtSigned = tgt[0] != null && tgt[0].contains("已签");
+        sb.append("  期望：公共=认不出(UNKNOWN)、指定目标=已签(SIGNED)\n");
+        if (pubUnknown) { pass++; sb.append("  ✓ 公共模式 UNKNOWN\n"); }
+        else { fail++; sb.append("  ✗ 公共模式非 UNKNOWN：").append(join(pub)).append("\n"); }
+        if (tgtSigned) { pass++; sb.append("  ✓ 指定目标 SIGNED\n"); }
+        else { fail++; sb.append("  ✗ 指定目标非 SIGNED：").append(join(tgt)).append("\n"); }
+        sb.append("  命中词来源：公共模式=").append(pub[1])
+          .append("  指定目标=").append(tgt[1]).append("\n\n");
+
+        // ── 负向测试 ──
+        sb.append("── 负向测试 ──\n");
+
+        // N1 未选目标只用公共词表（用目标 B 的专属短语，公共模式必须认不出）
+        String[] n1 = callJudgeTest(core, DUAL_MSG_B, null);
+        boolean n1ok = n1[0] != null && n1[0].contains("认不出");
+        sb.append("  N1 未选目标→公共词表：消息「").append(DUAL_MSG_B).append("」-> ")
+          .append(n1ok ? "认不出 ✓" : ("**" + join(n1) + "** ✗")).append("\n");
+        if (n1ok) pass++; else fail++;
+
+        // N2 选有效目标 → 加载目标级（用 B 的消息 + B 的目标）
+        String[] n2 = callJudgeTest(core, DUAL_MSG_B, DUAL_TID_B);
+        boolean n2ok = n2[0] != null && n2[0].contains("已签") && n2[0].contains("jmb_ok_tgt")
+                || (n2[0] != null && n2[0].contains("已签"));
+        sb.append("  N2 选有效目标(B)→加载目标级：-> ").append(join(n2))
+          .append(n2ok ? " ✓" : " ✗").append("\n");
+        if (n2ok) pass++; else fail++;
+
+        // N3/N4 选不存在的目标 → 明确报错，不静默回退
+        String[] n3 = callJudgeTest(core, DUAL_MSG_A, "__probe_dual_tgt_NOTEXIST");
+        boolean n3ok = n3[0] != null && n3[0].contains("目标不存在");
+        sb.append("  N3/N4 不存在的目标 -> ").append(join(n3))
+          .append(n3ok ? " ✓（明确报错、未回退）" : " ✗").append("\n");
+        if (n3ok) pass++; else fail++;
+
+        // N5 切换目标后不残留（A 的消息 + B 的目标 → 不应命中 A 的词）
+        String[] n5 = callJudgeTest(core, DUAL_MSG_A, DUAL_TID_B);
+        boolean n5ok = !(n5[0] != null && n5[0].contains("已签"));
+        sb.append("  N5 切换目标后不残留：A的消息+B的目标 -> ").append(join(n5))
+          .append(n5ok ? " ✓（未串用）" : " **串用** ✗").append("\n");
+        if (n5ok) pass++; else fail++;
+
+        // N6 退出指定模式回公共 → 不残留
+        String[] n6 = callJudgeTest(core, DUAL_MSG_A, null);
+        boolean n6ok = n6[0] != null && n6[0].contains("认不出");
+        sb.append("  N6 退出指定目标回公共 -> ").append(join(n6))
+          .append(n6ok ? " ✓（无残留）" : " ✗").append("\n");
+        if (n6ok) pass++; else fail++;
+
+        // N7 两个目标之间不串用
+        String[] n7a = callJudgeTest(core, DUAL_MSG_B, DUAL_TID_A);
+        String[] n7b = callJudgeTest(core, DUAL_MSG_A, DUAL_TID_B);
+        boolean n7ok = !(n7a[0] != null && n7a[0].contains("已签"))
+                    && !(n7b[0] != null && n7b[0].contains("已签"));
+        sb.append("  N7 两目标不串词：B消息+A目标=").append(join(n7a))
+          .append(" / A消息+B目标=").append(join(n7b))
+          .append(n7ok ? " ✓" : " ✗").append("\n");
+        if (n7ok) pass++; else fail++;
+
+        // ── 清理 ──
+        sb.append("\n── 清理 ──\n");
+        android.content.SharedPreferences.Editor ce = sp.edit();
+        ce.remove(prefix + "learned_" + DUAL_TID_A).remove(prefix + "did_" + DUAL_TID_A)
+          .remove(prefix + "kind_" + DUAL_TID_A).remove("jmb_ok_tgt_" + DUAL_TID_A)
+          .remove(prefix + "learned_" + DUAL_TID_B).remove(prefix + "did_" + DUAL_TID_B)
+          .remove(prefix + "kind_" + DUAL_TID_B).remove("jmb_ok_tgt_" + DUAL_TID_B);
+        if (hadCustom) ce.putBoolean(prefix + "cfg_judge_custom", origCustom);
+        else ce.remove(prefix + "cfg_judge_custom");
+        ce.commit();
+        int left = 0;
+        for (String k : sp.getAll().keySet()) if (k.contains("__probe_dual")) left++;
+        sb.append("  清理后残留 __probe_dual 键 = ").append(left).append(left == 0 ? " ✓" : " ✗").append("\n");
+        if (left == 0) pass++; else fail++;
+
+        sb.append("\n=== 断言：通过 ").append(pass).append(" / 失败 ").append(fail).append(" ===\n");
+        writeRaw(core, sb.toString());
+    }
+
+    private static String[] callJudgeTest(Object core, String msg, String targetId) {
+        try {
+            Field f = core.getClass().getDeclaredField("stateStore");  // 仅为触发类加载
+            f.setAccessible(true);
+        } catch (Throwable ignored) {}
+        try {
+            java.lang.reflect.Method m = findMethod(core.getClass(), "judgeReplyForTest",
+                    new Class[]{String.class, String.class});
+            m.setAccessible(true);
+            Object r = m.invoke(core, msg, targetId);
+            return (String[]) r;
+        } catch (Throwable t) {
+            return new String[]{"ERR:" + t, "", "err"};
+        }
+    }
+
+    private static int SignLogicParseCount(String raw) {
+        try {
+            Class<?> SL = Class.forName("io.github.wlmosv_png.tgautosign.SignLogic");
+            java.lang.reflect.Method m = SL.getMethod("parseExtraWords", String.class);
+            Object r = m.invoke(null, raw);
+            return r == null ? 0 : ((String[]) r).length;
+        } catch (Throwable t) { return -1; }
+    }
+
+    private static String join(String[] a) {
+        if (a == null) return "null";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < a.length; i++) { if (i > 0) sb.append(" | "); sb.append(a[i]); }
+        return sb.toString();
     }
 
     /** 阶段一：写入 5 个场景（在**进程 A**）。 */
