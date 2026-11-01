@@ -621,7 +621,8 @@ public final class SignLogic {
     /**
      * 声明式阶段表判定（M2）。
      *
-     * 顺序严格 = 用户裁定的 9 阶段。**本方法只判定、不写任何状态**。
+     * 顺序严格 = 用户裁定的**十阶段**（最终裁定 2026-11-01，含 NON_CONCLUSION）。
+     * **本方法只判定、不写任何状态**。
      *
      * 关键约束（用户明确要求）：
      *   · FAIL_CONTEXT 必须区分真实失败 / 假设 / 疑问 / 提醒；
@@ -630,6 +631,163 @@ public final class SignLogic {
      *   · COMBO 不是无条件成功兜底；
      *   · NONE 明确表示"无足够证据"。
      */
+    // ═══════════ NON_CONCLUSION 对象归属（M2 方案 C，2026-11-01）═══════════
+    //
+    // 裁定：NON_CONCLUSION 必须对象感知，禁止整条关键词拦截。
+    // 区分五类：当前签到冷却 / 下一次签到提醒 / 其他业务冷却 / 历史统计 / 当前未完成。
+    // 无法可靠识别对象 → 保守 UNKNOWN（宁可不签，不误签）。
+
+    /**
+     * 命中词是否为「等待/冷却提醒」而非「次数用尽」（裁定 #1）。
+     */
+    static boolean isWaitPhrase(String hitWord) {
+        if (hitWord == null) return false;
+        String w = stripSpace(hitWord);
+        return w.contains("明天再试") || w.contains("明日再试")
+                || w.contains("明天再来") || w.contains("明日再来")
+                || w.contains("请稍后") || w.contains("稍后再试")
+                || w.contains("请稍候") || w.contains("再试")
+                || w.contains("再来") || w.contains("try again")
+                || w.contains("come back") || w.contains("tomorrow");
+    }
+
+    /** 等待措辞（从 EXHAUSTED 剥离后，归 NON_CONCLUSION 对象感知）。 */
+    private static final String[] WAIT_PHRASES = {
+            "请明天再试", "请明日再试", "明天再试", "明日再试",
+            "明天再来", "明日再来", "请稍后再试", "稍后再试", "请稍后", "请稍候"
+    };
+
+    /** 逗号感知的子句边界（仅对象归属用，不改全局 isClauseBoundary）。 */
+    static boolean isObjClauseBoundary(char c) {
+        return c == '，' || c == ',' || c == '。' || c == '！' || c == '？'
+                || c == '；' || c == '\n' || c == '!' || c == '?'
+                || c == ';' || c == '\uFF01' || c == '\uFF1F' || c == '\uFF1B'
+                || c == '\uFF0C';
+    }
+
+    /** 命中词所在逗号感知子句范围 [start,end)。 */
+    static int[] objClauseRangeOf(String reply, String hitWord) {
+        try {
+            int total = reply == null ? 0 : reply.length();
+            if (total == 0) return new int[]{0, 0};
+            if (hitWord == null || hitWord.length() == 0) return new int[]{0, total};
+            int idx = reply.indexOf(hitWord);
+            int len = hitWord.length();
+            if (idx < 0) {
+                String flat = stripSpace(reply);
+                String w = stripSpace(hitWord);
+                int fi = w.length() == 0 ? -1 : flat.indexOf(w);
+                if (fi < 0) return new int[]{0, total};
+                idx = rawIndexFromFlat(reply, fi);
+                len = 0;
+                if (idx < 0) return new int[]{0, total};
+            }
+            int a = idx, b = idx + Math.max(len, 1);
+            while (a > 0 && !isObjClauseBoundary(reply.charAt(a - 1))) a--;
+            while (b < total && !isObjClauseBoundary(reply.charAt(b))) b++;
+            return new int[]{a, Math.min(b, total)};
+        } catch (Throwable t) { return new int[]{0, reply == null ? 0 : reply.length()}; }
+    }
+
+    /** 未完成态（裁定 G「本次签到尚未完成」）。 */
+    private static final String[] NOT_COMPLETED_WORDS = {
+            "尚未完成", "还未完成", "没有完成", "未完成", "尚未成功", "未成功"
+    };
+
+    /** 「下一次 / 未来」时间词：冷却若指向未来，本次可能已成功。 */
+    private static final String[] FUTURE_WORDS = {
+            "明天", "明日", "下次", "下一轮", "再来", "再签", "改天", "稍后"
+    };
+
+    /** 「本次 / 当前」时间词：冷却指向当前动作 → 当前未完成。 */
+    private static final String[] CURRENT_WORDS = {
+            "本次", "当前", "正在", "今日", "今天", "本日"
+    };
+
+    /** 非结论对象类别（用于可追溯的证据归属）。 */
+    private static final int NCOBJ_SIGN_CURRENT = 0;   // 当前签到冷却/未完成 → 构成 NON_CONCLUSION
+    private static final int NCOBJ_SIGN_FUTURE  = 1;   // 下一次签到提醒 → 本次不构成
+    private static final int NCOBJ_OTHER        = 2;   // 其他业务冷却 → 不构成
+    private static final int NCOBJ_HISTORY      = 3;   // 历史统计 → 不构成（本次成功证据）
+    private static final int NCOBJ_UNKNOWN      = 4;   // 无法识别 → 保守
+
+    /**
+     * 识别非结论词（冷却/等待/未完成/说明）所属的业务对象与时间关系。
+     *
+     * @param reply  原文（未小写）
+     * @param hitWord 命中的非结论词（NON_CONCLUSION_WORDS / NOT_COMPLETED_WORDS 之一）
+     * @return NCOBJ_* 常量
+     *
+     * 判据（分句 + 动作主体 + 对象 + 时间）：
+     *   · 命中词所在分句含「签到动作词」→ 签到对象；否则看其他业务词
+     *   · 签到对象 + 未来时间词 + 无当前时间词 → NCOBJ_SIGN_FUTURE
+     *   · 签到对象 + 当前时间词 / 未完成词 → NCOBJ_SIGN_CURRENT
+     *   · 其他业务词命中 → NCOBJ_OTHER
+     *   · 「已签到 N 次」这类历史统计 → NCOBJ_HISTORY（不作为本次成功证据，但也非本次冷却）
+     *   · 都识别不出 → NCOBJ_UNKNOWN
+     */
+    static int nonConclusionObject(String reply, String hitWord) {
+        try {
+            if (reply == null || reply.length() == 0) return NCOBJ_UNKNOWN;
+            String flat = stripSpace(reply);
+            // 2026-11-01：改用**逗号感知**子句 ——「签到成功，抽奖冷却中」
+            // 若不按逗号切分，会把"签到"和"抽奖"混成一个子句，对象识别失效。
+            int[] _ocr = objClauseRangeOf(reply, hitWord);
+            String clause = reply.substring(_ocr[0], _ocr[1]);
+            String cflat = stripSpace(clause);
+            if (cflat.length() == 0) cflat = flat;
+
+            // ── 未完成词：直接判"当前签到未完成"（裁定 G）──
+            for (String w : NOT_COMPLETED_WORDS) {
+                if (cflat.contains(stripSpace(w))) return NCOBJ_SIGN_CURRENT;
+            }
+
+            // ── 其他业务词（抽奖/兑换/奖励/红包/积分…）──
+            boolean hasOther = false;
+            for (String w : OBJECT_OTHER_WORDS) {
+                if (cflat.contains(stripSpace(w))) { hasOther = true; break; }
+            }
+
+            // ── 签到动作词 ──
+            boolean hasSign = false;
+            for (String w : OBJECT_SIGN_WORDS) {
+                if (cflat.contains(stripSpace(w))) { hasSign = true; break; }
+            }
+
+            if (hasOther && !hasSign) {
+                return NCOBJ_OTHER;                    // 只有其他业务对象，无签到动作
+            }
+
+            if (!hasSign) {
+                // 分句里既无签到动作、也无其他业务词 → 对象省略/指代 → 保守
+                return NCOBJ_UNKNOWN;
+            }
+
+            // ── 有签到动作：区分 当前 / 未来 / 历史 ──
+            boolean hasCurrent = false;
+            for (String w : CURRENT_WORDS) {
+                if (cflat.contains(stripSpace(w))) { hasCurrent = true; break; }
+            }
+            boolean hasFuture = false;
+            for (String w : FUTURE_WORDS) {
+                if (cflat.contains(stripSpace(w))) { hasFuture = true; break; }
+            }
+            boolean hasHistory = false;
+            // 历史统计：已签到 + 数字/次数 形态（「已签到5次」「已签到 5 次」）
+            if (cflat.contains("已签到") || cflat.contains("已签") || cflat.contains("签到过")) {
+                // 粗判：含"次"或数字
+                if (cflat.contains("次") || cflat.matches(".*[0-9０-９].*")) hasHistory = true;
+            }
+
+            if (hasCurrent && !hasFuture) return NCOBJ_SIGN_CURRENT;   // 本次冷却
+            if (hasHistory && !hasCurrent) return NCOBJ_HISTORY;       // 历史统计（非本次）
+            if (hasFuture && !hasCurrent) return NCOBJ_SIGN_FUTURE;    // 下一次提醒
+            return NCOBJ_UNKNOWN;                                      // 歧义 → 保守
+        } catch (Throwable t) {
+            return NCOBJ_UNKNOWN;
+        }
+    }
+
     public static StageResult decideByStage(StageInput in) {
         if (in == null || in.reply == null || in.reply.length() == 0) {
             return new StageResult(V_UNKNOWN, STAGE_NONE, "", in == null || in.reply == null ? "" : in.reply);
@@ -701,19 +859,64 @@ public final class SignLogic {
             }
         }
 
-        // ── S3 EXHAUSTED（对象感知）──
+        // ── S3 EXHAUSTED（对象感知，2026-11-01 裁定 #1 修正）──
+        // EXHAUSTED 只负责「次数/额度/上限耗尽」。
+        // 「请明天再试」「请稍后再试」等**等待措辞**不能单独构成 EXHAUSTED ——
+        // 它们应由 S4 NON_CONCLUSION 结合业务对象判定。
         m = matched(lower, EXHAUSTED_WORDS);
-        if (m != null && !exhaustedAboutOtherObject(in.reply, m)) {
-            return new StageResult(V_EXHAUSTED, STAGE_EXHAUSTED, m, clauseOfHit(in.reply, m));
+        if (m != null) {
+            boolean _isWait = isWaitPhrase(m);
+            if (_isWait) {
+                // 等待措辞 → 不在此判 EXHAUSTED，交 NON_CONCLUSION
+            } else if (!exhaustedAboutOtherObject(in.reply, m)) {
+                return new StageResult(V_EXHAUSTED, STAGE_EXHAUSTED, m, clauseOfHit(in.reply, m));
+            }
         }
 
-        // ── S4 NON_CONCLUSION：说明/统计/冷却（无结论，但也不是失败/成功）──
+        // ── S4 NON_CONCLUSION：说明/统计/冷却/未完成（**对象感知**，M2 方案 C）──
         // 位置关键：在 EXHAUSTED 之后、REMINDER/DUP/SUCCESS 之前 ——
         // 否则「签到冷却中,请8小时后再试,已签到5次」会被 DUP 词「已签到」判成成功。
-        // 注意：必须在 DUP 之前，但**不能**在 FAIL/PERMANENT/EXHAUSTED 之前
-        //（「签到失败,详见规则说明」应先判失败，不能被"说明"吞掉）。
-        if (matched(lower, NON_CONCLUSION_WORDS) != null) {
-            return new StageResult(V_UNKNOWN, STAGE_NON_CONCLUSION, "", in.reply);
+        //
+        // 2026-11-01 M2 方案 C 重写（裁定）：
+        //   旧实现 = 整条 matched(NON_CONCLUSION_WORDS) 命中即 return，
+        //     →「签到成功！签到冷却中」的前置成功分句被整条吞掉（真实缺陷）；
+        //   新实现 = **对象感知**：
+        //     · 命中「未完成」词（尚未完成/未完成…）→ 当前签到未完成 → NON_CONCLUSION
+        //     · 命中「冷却/等待」词 → 用 nonConclusionObject 识别业务对象：
+        //        当前签到冷却 → NON_CONCLUSION
+        //        其他业务冷却 / 下一次提醒 / 历史统计 → **不构成**，继续后续阶段
+        //        无法识别 → 保守 NON_CONCLUSION（宁可不签，不误签）
+        //
+        // ── 先判「未完成」子类（裁定 G：独立 NOT_COMPLETED）──
+        {
+            Match ncMatch = matchAt(lower, NOT_COMPLETED_WORDS);
+            if (ncMatch != null) {
+                return new StageResult(V_UNKNOWN, STAGE_NON_CONCLUSION,
+                        ncMatch.word, ncMatch.clause);
+            }
+        }
+        // ── 再判「冷却/等待/说明」子类（对象感知）──
+        {
+            Match ncMatch = matchAt(lower, NON_CONCLUSION_WORDS);
+            if (ncMatch == null) {
+                ncMatch = matchAt(lower, WAIT_PHRASES);   // EXHAUSTED 剥离下来的等待词
+            }
+            if (ncMatch != null) {
+                int obj = nonConclusionObject(in.reply, ncMatch.word);
+                if (obj == NCOBJ_SIGN_CURRENT) {
+                    // 当前签到冷却 → 构成 NON_CONCLUSION
+                    return new StageResult(V_UNKNOWN, STAGE_NON_CONCLUSION,
+                            ncMatch.word, ncMatch.clause);
+                }
+                if (obj == NCOBJ_OTHER || obj == NCOBJ_SIGN_FUTURE || obj == NCOBJ_HISTORY) {
+                    // 其他业务冷却 / 下一次提醒 / 历史统计 → 不构成，
+                    // 落空继续 DUP/SUCCESS（成功分句仍有机会命中）
+                } else {
+                    // NCOBJ_UNKNOWN → 保守：宁可 UNKNOWN，不误签
+                    return new StageResult(V_UNKNOWN, STAGE_NON_CONCLUSION,
+                            ncMatch.word, ncMatch.clause);
+                }
+            }
         }
 
         // ── S5 REMINDER：命令式重复提示 ──

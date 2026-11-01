@@ -7,7 +7,7 @@ import java.util.List;
  * M2 · 声明式阶段表测试（2026-11-01）。
  *
  * 覆盖用户指定：
- *   ① 阶段优先级专项（9 阶段顺序）
+ *   ① 阶段优先级专项（十阶段顺序）
  *   ② 多条件同时命中（失败+成功 / 用尽+成功 / 重复+成功…）
  *   ③ 分句与对象归属
  *   ④ 历史事故回归（FAIL_CONTEXT 不吞真失败、冷却语不判成功…）
@@ -44,6 +44,7 @@ public final class StageTableTest {
         clauseAndObject();
         historyRegression();
         noneStage();
+        nonConclusionStage();
 
         System.out.println("----------------------------------------");
         System.out.println("StageTableTest：通过 " + passed + " / 失败 " + failed.size());
@@ -52,7 +53,7 @@ public final class StageTableTest {
         System.out.println("ALL OK");
     }
 
-    // ═══════════ ① 阶段优先级（9 阶段，每个阶段至少一个代表用例）═══════════
+    // ═══════════ ① 阶段优先级（十阶段，每个阶段至少一个代表用例）═══════════
 
     private static void stageOrder() {
         // S0 FAIL_HARD
@@ -71,22 +72,22 @@ public final class StageTableTest {
         eq("①EXHAUSTED·stage", Integer.valueOf(r.stage), Integer.valueOf(SignLogic.STAGE_EXHAUSTED));
         eq("①EXHAUSTED·verdict", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_EXHAUSTED));
 
-        // S4 REMINDER
+        // S5 REMINDER（NON_CONCLUSION=4 在 EXHAUSTED 与 REMINDER 之间）
         r = decide("请勿重复签到！");
         eq("①REMINDER·stage", Integer.valueOf(r.stage), Integer.valueOf(SignLogic.STAGE_REMINDER));
         eq("①REMINDER·verdict", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_SIGNED));
 
-        // S5 DUP
+        // S6 DUP
         r = decide("您今天已经签到过了");
         eq("①DUP·stage", Integer.valueOf(r.stage), Integer.valueOf(SignLogic.STAGE_DUP));
         eq("①DUP·verdict", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_SIGNED));
 
-        // S6 SUCCESS
+        // S7 SUCCESS
         r = decide("签到成功");
         eq("①SUCCESS·stage", Integer.valueOf(r.stage), Integer.valueOf(SignLogic.STAGE_SUCCESS));
         eq("①SUCCESS·verdict", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_SIGNED));
 
-        // S8 COMBO（兜底：词表未覆盖、但语义明显是成功）
+        // S8 COMBO（NON_CONCLUSION 占 S4，COMBO 仍=8）（兜底：词表未覆盖、但语义明显是成功）
         // 实测结论（2026-11-01）：当前 OK/DUP 词表已很全，绝大多数"动作词×结果词"
         // 都命中 SUCCESS/DUP；COMBO 兜底几乎不可达 —— 这是**正常现象**，不是缺陷。
         // 因此这里改为**如实断言 COMBO 的边界**：
@@ -213,5 +214,96 @@ public final class StageTableTest {
         i.reply = "";
         r = SignLogic.decideByStage(i);
         eq("⑤空输入 → UNKNOWN", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_UNKNOWN));
+
+    }
+    // ═══════════ ⑥ NON_CONCLUSION 专项（裁定 §3，2026-11-01）═══════════
+    //
+    // 裁定要求至少覆盖 7 类，且**必须证明它不会误拦截真实成功**。
+    // 断言纪律：同时断言 verdict + stage 精确值（不能只看最终码）。
+
+    private static void nonConclusionStage() {
+        // ═══ 裁定 A–G 七条语义（必须全部通过，断言 verdict + stage + 证据）═══
+
+        // A 签到成功，明天再来签到 → SIGNED（"明天"=下一次，本次已成功）
+        SignLogic.StageResult r = decide("签到成功，明天再来签到");
+        eq("A·verdict", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_SIGNED));
+        ok("A·stage 非 NON_CONCLUSION", r.stage != SignLogic.STAGE_NON_CONCLUSION);
+
+        // B 签到冷却中，请明天再试 → UNKNOWN（当前签到冷却）
+        r = decide("签到冷却中，请明天再试");
+        eq("B·verdict", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_UNKNOWN));
+        eq("B·stage", Integer.valueOf(r.stage), Integer.valueOf(SignLogic.STAGE_NON_CONCLUSION));
+
+        // C 签到成功，抽奖冷却中 → SIGNED（冷却对象=抽奖，非签到）
+        r = decide("签到成功，抽奖冷却中");
+        eq("C·verdict", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_SIGNED));
+
+        // D 签到冷却中，已签到5次 → UNKNOWN（历史统计不构成本次成功，也不抵消冷却）
+        r = decide("签到冷却中，已签到5次");
+        eq("D·verdict", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_UNKNOWN));
+        eq("D·stage", Integer.valueOf(r.stage), Integer.valueOf(SignLogic.STAGE_NON_CONCLUSION));
+
+        // E 抽奖冷却中，签到成功 → SIGNED（冷却对象=抽奖）
+        r = decide("抽奖冷却中，签到成功");
+        eq("E·verdict", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_SIGNED));
+
+        // F 请先关注本频道再签到，签到成功 → FAILED（前置条件失败，非冷却）
+        r = decide("请先关注本频道再签到，签到成功");
+        eq("F·verdict", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_FAILED));
+        ok("F·stage 属 FAIL/PERMANENT 族", r.stage == SignLogic.STAGE_FAIL_HARD
+                || r.stage == SignLogic.STAGE_FAIL_CONTEXT
+                || r.stage == SignLogic.STAGE_PERMANENT_FAIL);
+
+        // G 签到成功，但本次签到尚未完成 → UNKNOWN（当前未完成，NOT_COMPLETED 子类）
+        r = decide("签到成功，但本次签到尚未完成");
+        eq("G·verdict", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_UNKNOWN));
+        eq("G·stage", Integer.valueOf(r.stage), Integer.valueOf(SignLogic.STAGE_NON_CONCLUSION));
+        ok("G·hitWord 非空（证据可追溯）", r.hitWord != null && r.hitWord.length() > 0);
+
+        // ═══ 扩展边界 ═══
+
+        // 1. 多冷却对象同时出现
+        r = decide("签到成功，抽奖冷却中，兑换已关闭");
+        eq("扩1·多对象+成功 → SIGNED", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_SIGNED));
+
+        // 2. 成功与冷却分属不同分句（句号分隔）
+        r = decide("今日签到成功！抽奖冷却中");
+        eq("扩2·句号分句 → SIGNED", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_SIGNED));
+
+        // 3. 成功与冷却同一分句（无逗号，真歧义）
+        r = decide("签到成功但冷却中");
+        ok("扩3·同分句歧义 → 不误判 SIGNED（保守）", r.verdict != SignLogic.V_SIGNED);
+
+        // 4. 对象省略（只有"冷却中"，无签到/抽奖字样）
+        r = decide("冷却中，请稍后再试");
+        eq("扩4·对象省略 → UNKNOWN（保守）", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_UNKNOWN));
+
+        // 5. 指代不明
+        r = decide("该功能冷却中，请稍后再试");
+        eq("扩5·指代不明 → UNKNOWN（保守）", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_UNKNOWN));
+
+        // 6. 历史与当前混合
+        r = decide("昨天签到成功，今天冷却中");
+        eq("扩6·历史+当前 → UNKNOWN", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_UNKNOWN));
+
+        // 7. 疑问
+        r = decide("签到冷却中，多久能再签？");
+        ok("扩7·疑问 → 不 SIGNED", r.verdict != SignLogic.V_SIGNED);
+
+        // 8. 假设
+        r = decide("如果还在冷却，就不能签到");
+        ok("扩8·假设 → 不 SIGNED", r.verdict != SignLogic.V_SIGNED);
+
+        // 9. EXHAUSTED 与 NON_CONCLUSION 交叉（裁定 #1）
+        // 注：用「次数已达上限」而非「次数已用尽」—— EXHAUSTED_WORDS 里
+        // 只有「次数已用完/次数用完」，没有「次数已用尽」（词表覆盖缺口，属阶段 4）。
+        // 这里断言的是「明确额度词 优先于 同句的等待词」这一**语义**，不是词表完整性。
+        r = decide("今日签到次数已达上限，请明天再试");
+        eq("扩9·额度上限+明天再试 → EXHAUSTED（明确额度语义优先）",
+                Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_EXHAUSTED));
+
+        // 10. 纯等待措辞不构成 EXHAUSTED（裁定 #1 核心）
+        r = decide("请明天再试签到");
+        ok("扩10·纯等待措辞 → 不判 EXHAUSTED", r.stage != SignLogic.STAGE_EXHAUSTED);
     }
 }
