@@ -71,6 +71,11 @@ public final class DebugEntry {
             try { probeDual(core); } catch (Throwable t) { writeRaw(core, "FATAL(dual): " + t + "\n" + stack(t)); }
             return true;
         }
+        if ("__probejudgeon".equals(sub)) {
+            if (core == null) { writeRaw(core, "FAIL: 实例未捕获"); return true; }
+            try { probeJudgeOn(core); } catch (Throwable t) { writeRaw(core, "FATAL(judgeon): " + t + "\n" + stack(t)); }
+            return true;
+        }
         if (!"__selftest".equals(sub)) return false;
         synchronized (LOCK) {
             if (running) {
@@ -485,8 +490,8 @@ public final class DebugEntry {
             sb.append("  ").append(pad(msg)).append(" => ").append(r).append("\n");
         }
 
-        // ── C/D/E：包装层（judgeWithScopes 是 D/E 的公共包装核心）──
-        sb.append("\n[C/D/E] judgeWithScopes（包装层：按账号读开关 + 组装三级词表）\n");
+        // ── C/D/E：包装层（judgeWithScopesStage 是 C/D/E 的公共包装核心）──
+        sb.append("\n[C/D/E] judgeWithScopesStage（包装层：按账号读开关 + 组装三级词表）\n");
         for (String msg : CORPUS) {
             String r = invokeJudgeWithScopes(core, PROBE_ACC + "_", PROBE_DID, PROBE_DID, PROBE_TID, msg);
             sb.append("  ").append(pad(msg)).append(" => ").append(r).append("\n");
@@ -502,8 +507,8 @@ public final class DebugEntry {
             json.add("{\"entry\":\"F\",\"msg\":\"" + esc(msg) + "\",\"targetId\":null,\"targetWordsLoaded\":false,\"verdict\":\"" + esc(r) + "\"}");
         }
 
-        // ── F' 对照：同一消息带 targetId 走 judgeWithScopes ──
-        sb.append("\n[F'] 对照：同一消息经 judgeWithScopes 并**传入** targetId（目标级词表：已加载）\n");
+        // ── F' 对照：同一消息带 targetId 走 judgeWithScopesStage ──
+        sb.append("\n[F'] 对照：同一消息经 judgeWithScopesStage 并**传入** targetId（目标级词表：已加载）\n");
         for (String msg : CORPUS) {
             String r = invokeJudgeWithScopes(core, PROBE_ACC + "_", PROBE_DID, PROBE_DID, PROBE_TID, msg);
             sb.append("  ").append(pad(msg)).append(" => ").append(r).append("\n");
@@ -565,15 +570,24 @@ public final class DebugEntry {
         } catch (Throwable t) { return "ERR:" + t; }
     }
 
-    /** C/D/E 包装核心：TGAutoSignCore.judgeWithScopes(prefix,did,botDid,targetId,reply) */
+    /** C/D/E 包装核心：TGAutoSignCore.judgeWithScopesStage(prefix,did,botDid,targetId,reply) */
     private static String invokeJudgeWithScopes(Object core, String prefix, long did,
                                                 long botDid, String targetId, String msg) {
+        // M3 收尾适配：judgeWithScopes 已改名 judgeWithScopesStage，
+        // 返回类型从 Object[] 改为 SignLogic.StageResult。
         try {
-            Method m = findMethod(core.getClass(), "judgeWithScopes",
+            Method m = findMethod(core.getClass(), "judgeWithScopesStage",
                     new Class[]{String.class, long.class, long.class, String.class, String.class});
             m.setAccessible(true);
-            Object[] vd = (Object[]) m.invoke(core, prefix, did, botDid, targetId, msg);
-            return describe(vd) + "   [targetId=" + targetId + " → 目标级词表已加载]";
+            Object r = m.invoke(core, prefix, did, botDid, targetId, msg);
+            int verdict = r.getClass().getField("verdict").getInt(r);
+            int stage = r.getClass().getField("stage").getInt(r);
+            String hit = String.valueOf(r.getClass().getField("hitWord").get(r));
+            String clause = String.valueOf(r.getClass().getField("clause").get(r));
+            String vname = verdict == 0 ? "SIGNED" : verdict == 1 ? "FAILED"
+                         : verdict == 2 ? "UNKNOWN" : verdict == 3 ? "EXHAUSTED" : ("?" + verdict);
+            return vname + " stage=" + stage + " hit=\"" + hit + "\" clause=\"" + clause
+                 + "\"   [targetId=" + targetId + " → 目标级词表已加载]";
         } catch (Throwable t) { return "ERR:" + t; }
     }
 
@@ -793,6 +807,122 @@ public final class DebugEntry {
     // ═══════════ M3 · 生产入口集成验证（judgeWithScopesStage）═══════════
     // 在真实宿主进程里调 TGAutoSignCore.judgeWithScopesStage（private），
     // 跑裁定 A–G 七条语料，验证生产入口真正进入统一阶段引擎。
+    // ═══════════ M3 收尾：judgeOn 总闸专项验证（E 路径隔离测试）═══════════
+    private static void probeJudgeOn(Object core) throws Exception {
+        SharedPreferences sp = prefsOf(core);
+        Method m = findMethod(core.getClass(), "handleReplyText",
+                new Class[]{String.class, int.class, java.util.Map.class, String.class});
+        m.setAccessible(true);
+        String today = java.time.LocalDate.now().toString();
+        StringBuilder sb = new StringBuilder();
+        int[] cnt = new int[2]; // [0]=pass, [1]=fail
+
+        sb.append("=== judgeOn 总闸专项验证（E 路径 handleReplyText 隔离测试）===\n");
+        sb.append("PID=").append(android.os.Process.myPid()).append("  时间=").append(nowStr()).append("\n\n");
+
+        final String pA = "__probe_jon_A_";  // 开闸（默认）
+        final String pB = "__probe_jon_B_";  // 关闸
+        final String pC = "__probe_jon_C_";  // 先关后开
+        final String tA = "__probe_jon_tA", tB = "__probe_jon_tB", tC = "__probe_jon_tC";
+        final long did = -999000000051L;
+
+        // 清理本轮测试键
+        android.content.SharedPreferences.Editor cl = sp.edit();
+        for (String p : new String[]{pA, pB, pC}) {
+            for (String t : new String[]{tA, tB, tC}) {
+                cl.remove(p + "last_" + t).remove(p + "opt_" + t)
+                  .remove(p + "sent_at_" + t).remove(p + "pendcfm_" + t)
+                  .remove(p + "pendcfm_day_" + t).remove(p + "pendcfm_result_" + t)
+                  .remove(p + "retry_" + t).remove(p + "retry_at_" + t)
+                  .remove(p + "retry_day_" + t).remove("result_" + t)
+                  .remove("result_day_" + t).remove(p + "fail_streak_" + t)
+                  .remove(p + "fail_laststamp_" + t).remove(p + "fail_alert_" + t);
+            }
+            cl.remove(p + "cfg_judge");
+        }
+        cl.commit();
+
+        java.util.Map<String,Object> entryA = new java.util.HashMap<String,Object>();
+        entryA.put("id", tA); entryA.put("did", Long.valueOf(did));
+        entryA.put("text", "签到"); entryA.put("kind", "text");
+        java.util.Map<String,Object> entryB = new java.util.HashMap<String,Object>();
+        entryB.put("id", tB); entryB.put("did", Long.valueOf(did));
+        entryB.put("text", "签到"); entryB.put("kind", "text");
+        java.util.Map<String,Object> entryC = new java.util.HashMap<String,Object>();
+        entryC.put("id", tC); entryC.put("did", Long.valueOf(did));
+        entryC.put("text", "签到"); entryC.put("kind", "text");
+
+        // ── 场景 1：开闸 + 成功回复 → markSigned 写 last_，清在途 ──
+        sb.append("[1] 开闸 + 成功回复（期望 markSigned：last_=today，opt_/sent_at_ 清）\n");
+        sp.edit().putString(pA + "opt_" + tA, today).putLong(pA + "sent_at_" + tA, System.currentTimeMillis()).commit();
+        m.invoke(core, pA, Integer.valueOf(0), entryA, "签到成功");
+        checkJ(today.equals(sp.getString(pA + "last_" + tA, "")), "[1a] 开闸成功写 last_", sb, cnt);
+        checkJ(!sp.contains(pA + "opt_" + tA) && !sp.contains(pA + "sent_at_" + tA),
+                "[1b] 开闸后清在途 opt_/sent_at_", sb, cnt);
+        sb.append("    last_=").append(sp.getString(pA + "last_" + tA, "(无)")).append("\n");
+
+        // ── 场景 2：关闸 + 成功回复 → 不判定，仅清在途 ──
+        sb.append("\n[2] 关闸 + 成功回复（期望：不写任何结果，仅清在途）\n");
+        sp.edit().putBoolean(pB + "cfg_judge", false)
+           .putString(pB + "opt_" + tB, today)
+           .putLong(pB + "sent_at_" + tB, System.currentTimeMillis()).commit();
+        m.invoke(core, pB, Integer.valueOf(0), entryB, "签到成功");
+        checkJ(!today.equals(sp.getString(pB + "last_" + tB, "")), "[2a] 关闸不写 last_", sb, cnt);
+        checkJ(!sp.contains("result_" + tB), "[2b] 关闸不写 result_", sb, cnt);
+        checkJ(!sp.contains(pB + "pendcfm_" + tB), "[2c] 关闸不写 pendcfm_", sb, cnt);
+        checkJ(!sp.contains(pB + "retry_" + tB), "[2d] 关闸不写 retry_", sb, cnt);
+        checkJ(!sp.contains(pB + "opt_" + tB) && !sp.contains(pB + "sent_at_" + tB),
+                "[2e] 关闸仍清在途 opt_/sent_at_", sb, cnt);
+        sb.append("    last_=").append(sp.getString(pB + "last_" + tB, "(无)"))
+          .append("  result_=").append(sp.getString("result_" + tB, "(无)"))
+          .append("  pendcfm_=").append(sp.contains(pB + "pendcfm_" + tB) ? "有" : "无")
+          .append("  retry_=").append(sp.contains(pB + "retry_" + tB) ? "有" : "无")
+          .append("  opt_=").append(sp.contains(pB + "opt_" + tB) ? "残留" : "已清").append("\n");
+
+        // ── 场景 3：关闸 + 失败回复 → 不判定 ──
+        sb.append("\n[3] 关闸 + 失败回复（期望：不写失败结果、不记连签失败、不排重试）\n");
+        sp.edit().putString(pB + "opt_" + tB, today).putLong(pB + "sent_at_" + tB, System.currentTimeMillis()).commit();
+        m.invoke(core, pB, Integer.valueOf(0), entryB, "签到失败");
+        checkJ(!sp.contains("result_" + tB), "[3a] 关闸失败不写 result_", sb, cnt);
+        checkJ(!sp.contains(pB + "retry_" + tB), "[3b] 关闸失败不排重试 retry_", sb, cnt);
+        checkJ(!sp.contains(pB + "fail_streak_" + tB), "[3c] 关闸失败不记 fail_streak_", sb, cnt);
+        sb.append("    result_=").append(sp.getString("result_" + tB, "(无)"))
+          .append("  retry_=").append(sp.contains(pB + "retry_" + tB) ? "有" : "无")
+          .append("  fail_streak_=").append(sp.contains(pB + "fail_streak_" + tB) ? "有" : "无").append("\n");
+
+        // ── 场景 4：重开闸 → 恢复判定 ──
+        sb.append("\n[4] 重开闸（删 cfg_judge）+ 成功回复（期望：恢复 markSigned）\n");
+        sp.edit().putBoolean(pC + "cfg_judge", false)
+           .putString(pC + "opt_" + tC, today).putLong(pC + "sent_at_" + tC, System.currentTimeMillis()).commit();
+        m.invoke(core, pC, Integer.valueOf(0), entryC, "签到成功");
+        checkJ(!today.equals(sp.getString(pC + "last_" + tC, "")), "[4a] 关闸时不写 last_", sb, cnt);
+        // 重开闸
+        sp.edit().remove(pC + "cfg_judge").commit();
+        sp.edit().putString(pC + "opt_" + tC, today).putLong(pC + "sent_at_" + tC, System.currentTimeMillis()).commit();
+        m.invoke(core, pC, Integer.valueOf(0), entryC, "签到成功");
+        checkJ(today.equals(sp.getString(pC + "last_" + tC, "")), "[4b] 重开闸后恢复写 last_", sb, cnt);
+        sb.append("    最终 last_=").append(sp.getString(pC + "last_" + tC, "(无)")).append("\n");
+
+        // ── 场景 5：多账号隔离 ──
+        sb.append("\n[5] 多账号隔离（A 开闸 / B 关闸，各自独立）\n");
+        sp.edit().putString(pA + "opt_" + tA, today).putLong(pA + "sent_at_" + tA, System.currentTimeMillis()).commit();
+        sp.edit().putString(pB + "opt_" + tB, today).putLong(pB + "sent_at_" + tB, System.currentTimeMillis()).commit();
+        m.invoke(core, pA, Integer.valueOf(0), entryA, "签到成功");
+        m.invoke(core, pB, Integer.valueOf(0), entryB, "签到成功");
+        checkJ(today.equals(sp.getString(pA + "last_" + tA, "")), "[5a] A 开闸写 last_", sb, cnt);
+        checkJ(!today.equals(sp.getString(pB + "last_" + tB, "")), "[5b] B 关闸不写 last_（隔离）", sb, cnt);
+        sb.append("    A(last_)=").append(sp.getString(pA + "last_" + tA, "(无)"))
+          .append("  B(last_)=").append(sp.getString(pB + "last_" + tB, "(无)")).append("\n");
+
+        sb.append("\n=== judgeOn 总闸专项：通过 ").append(cnt[0]).append(" / 失败 ").append(cnt[1]).append(" ===\n");
+        writeRaw(core, sb.toString());
+    }
+
+    private static void checkJ(boolean cond, String label, StringBuilder sb, int[] cnt) {
+        if (cond) { cnt[0]++; sb.append("    \u2713 ").append(label).append("\n"); }
+        else { cnt[1]++; sb.append("    \u2717 ").append(label).append("\n"); }
+    }
+
     private static void probeStage(Object core) throws Exception {
         StringBuilder sb = new StringBuilder();
         int pass = 0, fail = 0;
