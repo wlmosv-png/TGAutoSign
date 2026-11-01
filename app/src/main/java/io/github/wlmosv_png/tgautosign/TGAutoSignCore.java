@@ -20394,36 +20394,6 @@ public final class TGAutoSignCore {
         return looseOn(prefix) ? "loose" : "strict";
     }
 
-    private Object[] judgeWithScopes(String prefix, long did, long botDid,
-                                     String targetId, String reply) {
-        try {
-            if (reply == null || reply.length() == 0) {
-                return new Object[]{Integer.valueOf(SignLogic.V_UNKNOWN), ""};
-            }
-            long scopeBot = botDid != 0L ? botDid : did;
-            String[] okGlobal = null, failGlobal = null;
-            String[] okBot = null, failBot = null;
-            String[] okTgt = null, failTgt = null;
-            if (judgeCustomOn(prefix)) {          // B：按目标所属账号读
-                okGlobal = SignLogic.parseExtraWords(prefs.getString(Keys.okWordsGlobal(), ""));
-                failGlobal = SignLogic.parseExtraWords(prefs.getString(Keys.failWordsGlobal(), ""));
-                okBot = SignLogic.parseExtraWords(prefs.getString(Keys.okWordsBot(scopeBot), ""));
-                failBot = SignLogic.parseExtraWords(prefs.getString(Keys.failWordsBot(scopeBot), ""));
-                if (targetId != null && targetId.length() > 0) {
-                    okTgt = SignLogic.parseExtraWords(prefs.getString(Keys.okWordsTarget(targetId), ""));
-                    failTgt = SignLogic.parseExtraWords(prefs.getString(Keys.failWordsTarget(targetId), ""));
-                }
-            }
-            String[] okMerged = mergeWords(SignLogic.OK_WORDS_DEFAULT, okGlobal);
-            String[] failMerged = mergeWords(SignLogic.FAIL_WORDS_DEFAULT, failGlobal);
-            return SignLogic.verdictDetailScoped(reply, okMerged, failMerged,
-                                                 okBot, failBot, okTgt, failTgt);
-        } catch (Throwable t) {
-            noteSwallowed("judgeWithScopes", t);
-            return new Object[]{Integer.valueOf(SignLogic.V_UNKNOWN), ""};
-        }
-    }
-
     /**
      * 统一阶段判定（M3，2026-11-01）。
      *
@@ -20436,9 +20406,8 @@ public final class TGAutoSignCore {
      *   · failWords = 同上失败侧
      *   · userFailWords = 纯用户失败词（不含内置），供 decideByStage 判「用户显式表态豁免」
      *
-     * 为什么不直接改 judgeWithScopes 而是新增：
-     *   · 先并行，旧签名不变，切换调用点后逐个验证再删旧逻辑；
-     *   · 避免一次改动同时影响 D/E/F 三入口导致无法定位回归。
+     * 2026-11-01 M3：原 judgeWithScopes（旧双链实现）已删除 ——
+     * D/E/F/C 四入口全部切换到此统一入口，生产链不再有第二套判定逻辑。
      */
     private SignLogic.StageResult judgeWithScopesStage(String prefix, long did, long botDid,
                                                         String targetId, String reply) {
@@ -24468,15 +24437,12 @@ public final class TGAutoSignCore {
                         noteResult(ctrlAcc >= 0 ? ctrlAcc : currentAccount(), true);
                         return;
                     }
-                    // ── 三级作用域词表（第二轮：真正接入实时判定链）──
-                    // 改前：只读全局 jmb_ok_words / jmb_fail_words ——
-                    //   用户在 UI 里选「这个 bot」「这个目标」学的词**写进了 prefs，
-                    //   但判定链从来不读**，表现就是「学了不生效」。
-                    // 现在：全局 + Bot + 目标 三级全部读出来交给 verdictDetailScoped，
-                    //   优先级 目标 > Bot > 全局（具体优于通用）。
+                    // ── 三级作用域词表（M3 收口：组装下沉到 judgeWithScopesStage）──
+                    // 2026-11-01 M3：这里不再自己复制三级词表组装 ——
+                    //   统一交给 judgeWithScopesStage（与 judgeWithScopes 同源），
+                    //   消除「两处组装漂移」的历史隐患（24499 注释即为此）。
+                    //   仅保留 extraOk/extraFail（全局用户词）用于日志标注「（你的自定义词）」。
                     String[] extraOk = null, extraFail = null;
-                    String[] okBotW = null, failBotW = null;
-                    String[] okTgtW = null, failTgtW = null;
                     Map<String, Object> hitEntry = null;
                     for (Map<String, Object> m : judgeTargets) {
                         if (entryDid(m) != did) continue;
@@ -24501,16 +24467,7 @@ public final class TGAutoSignCore {
                     if (judgeCustomOn(prefix)) {
                         extraOk = SignLogic.parseExtraWords(prefs.getString(Keys.okWordsGlobal(), ""));
                         extraFail = SignLogic.parseExtraWords(prefs.getString(Keys.failWordsGlobal(), ""));
-                        okBotW = SignLogic.parseExtraWords(prefs.getString(Keys.okWordsBot(scopeBotDid), ""));
-                        failBotW = SignLogic.parseExtraWords(prefs.getString(Keys.failWordsBot(scopeBotDid), ""));
-                        if (scopeTargetId != null) {
-                            okTgtW = SignLogic.parseExtraWords(prefs.getString(Keys.okWordsTarget(scopeTargetId), ""));
-                            failTgtW = SignLogic.parseExtraWords(prefs.getString(Keys.failWordsTarget(scopeTargetId), ""));
-                        }
                     }
-                    // 系统默认词作为兜底层（verdictDetailScoped 未命中时回退完整内置链）
-                    String[] okMerged = mergeWords(SignLogic.OK_WORDS_DEFAULT, extraOk);
-                    String[] failMerged = mergeWords(SignLogic.FAIL_WORDS_DEFAULT, extraFail);
 
                     // ── 进度提示优先（2026-09-30 修）──
                     // 实测日志：「【回复判定】… 命中「正在签到」→ 计入已签（用户自定义词）」
@@ -24528,13 +24485,12 @@ public final class TGAutoSignCore {
                     // verdictDetailScoped 三级都不命中时回退 verdictDetail（含
                     // PERMANENT_FAIL / EXHAUSTED / NON_CONCLUSION / 组合判定），
                     // 因此不削弱原有安全逻辑（失败优先、否定守卫、非结论词）。
-                    Object[] vd = SignLogic.verdictDetailScoped(replyText,
-                            okMerged, failMerged, okBotW, failBotW, okTgtW, failTgtW);
-                    int verdict = ((Integer) vd[0]).intValue();
-                    String hitWord = String.valueOf(vd[1]);
+                    SignLogic.StageResult vd = judgeWithScopesStage(prefix, did, scopeBotDid, scopeTargetId, replyText);
+                    int verdict = vd.verdict;
+                    String hitWord = vd.hitWord;
                     logd("[判定] target=" + (scopeTargetId == null ? String.valueOf(did) : scopeTargetId)
                          + " botDid=" + scopeBotDid
-                         + " scope=" + (okTgtW != null || failTgtW != null ? "TARGET" : "BOT_OR_GLOBAL")
+                         + " scope=" + (scopeTargetId != null ? "TARGET" : "BOT_OR_GLOBAL")
                          + " matchedWord=\"" + hitWord + "\""
                          + " result=" + (verdict == SignLogic.V_SIGNED ? "SUCCESS"
                                         : verdict == SignLogic.V_FAILED ? "FAILURE"

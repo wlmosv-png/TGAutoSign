@@ -56,6 +56,11 @@ public final class DebugEntry {
             try { probeRead(core); } catch (Throwable t) { writeRaw(core, "FATAL(read): " + t); }
             return true;
         }
+        if ("__probestage".equals(sub)) {
+            if (core == null) { writeRaw(core, "FAIL: 实例未捕获"); return true; }
+            try { probeStage(core); } catch (Throwable t) { writeRaw(core, "FATAL(stage): " + t + "\n" + stack(t)); }
+            return true;
+        }
         if ("__probeclean".equals(sub)) {
             try { writeRaw(core, "=== 清理测试数据 ===\n" + cleanup(core)); }
             catch (Throwable t) { writeRaw(core, "FATAL(clean): " + t); }
@@ -783,6 +788,51 @@ public final class DebugEntry {
             try { android.util.Log.e("TGAutoSignModule", "[EntryProbe] 写 JSON 失败: " + t); }
             catch (Throwable ignored) {}
         }
+    }
+
+    // ═══════════ M3 · 生产入口集成验证（judgeWithScopesStage）═══════════
+    // 在真实宿主进程里调 TGAutoSignCore.judgeWithScopesStage（private），
+    // 跑裁定 A–G 七条语料，验证生产入口真正进入统一阶段引擎。
+    private static void probeStage(Object core) throws Exception {
+        StringBuilder sb = new StringBuilder();
+        int pass = 0, fail = 0;
+
+        sb.append("=== M3 生产入口集成验证（judgeWithScopesStage）===\n");
+        sb.append("PID=").append(android.os.Process.myPid()).append("  时间=").append(nowStr()).append("\n");
+        sb.append("实例=").append(core).append("\n\n");
+
+        Method m = findMethod(core.getClass(), "judgeWithScopesStage",
+                new Class[]{String.class, long.class, long.class, String.class, String.class});
+        m.setAccessible(true);
+
+        // A–G 七条（用公共词表 targetId=null；did/botDid 用占位负值，不影响判定）
+        String[][] cases = {
+            {"A", "签到成功，明天再来签到", "SIGNED"},
+            {"B", "签到冷却中，请明天再试", "UNKNOWN"},
+            {"C", "签到成功，抽奖冷却中", "SIGNED"},
+            {"D", "签到冷却中，已签到5次", "UNKNOWN"},
+            {"E", "抽奖冷却中，签到成功", "SIGNED"},
+            {"F", "请先关注本频道再签到，签到成功", "FAILED"},
+            {"G", "签到成功，但本次签到尚未完成", "UNKNOWN"},
+        };
+
+        for (String[] c : cases) {
+            Object r = m.invoke(core, "acc0_", -999000000001L, -999000000001L, null, c[1]);
+            // StageResult 字段
+            int verdict = r.getClass().getField("verdict").getInt(r);
+            int stage = r.getClass().getField("stage").getInt(r);
+            String hit = String.valueOf(r.getClass().getField("hitWord").get(r));
+            String vname = verdict == 0 ? "SIGNED" : verdict == 1 ? "FAILED" : verdict == 2 ? "UNKNOWN" : verdict == 3 ? "EXHAUSTED" : ("?" + verdict);
+            boolean ok = vname.equals(c[2]);
+            if (ok) pass++; else fail++;
+            sb.append("  [").append(c[0]).append("] ").append(c[1]).append("\n")
+              .append("      verdict=").append(vname).append(" stage=").append(stage)
+              .append(" hit=\"").append(hit).append("\" 期望 ").append(c[2])
+              .append(ok ? " ✓" : " ✗").append("\n");
+        }
+
+        sb.append("\n=== 断言：通过 ").append(pass).append(" / 失败 ").append(fail).append(" ===\n");
+        writeRaw(core, sb.toString());
     }
 
     private static void toast(Object core, String s) {
