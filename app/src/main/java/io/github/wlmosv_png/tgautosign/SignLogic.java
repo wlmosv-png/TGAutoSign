@@ -643,18 +643,23 @@ public final class SignLogic {
     static boolean isWaitPhrase(String hitWord) {
         if (hitWord == null) return false;
         String w = stripSpace(hitWord);
+        // 2026-11-01 线上事故回归：不把「明天再来/明日再来」当等待语。
+        // 它们是「您已签到，明天再来」这类**成功附带语**（见 EXHAUSTED_WORDS 注释），
+        // M2 建 WAIT_PHRASES 时重蹈了该注释明确警告过的覆辙：bot 回
+        // 「🎉签到成功🎉…明天再来」被 NON_CONCLUSION 拦成 UNKNOWN，加词也救不回。
         return w.contains("明天再试") || w.contains("明日再试")
-                || w.contains("明天再来") || w.contains("明日再来")
                 || w.contains("请稍后") || w.contains("稍后再试")
                 || w.contains("请稍候") || w.contains("再试")
                 || w.contains("再来") || w.contains("try again")
                 || w.contains("come back") || w.contains("tomorrow");
     }
 
-    /** 等待措辞（从 EXHAUSTED 剥离后，归 NON_CONCLUSION 对象感知）。 */
+    /** 等待措辞（从 EXHAUSTED 剥离后，归 NON_CONCLUSION 对象感知）。
+     *  2026-11-01 事故回归：删「明天再来/明日再来」——它们是成功附带语，
+     *  不是等待语（否则「签到成功。明天再来」被 NON_CONCLUSION 拦成 UNKNOWN）。 */
     private static final String[] WAIT_PHRASES = {
             "请明天再试", "请明日再试", "明天再试", "明日再试",
-            "明天再来", "明日再来", "请稍后再试", "稍后再试", "请稍后", "请稍候"
+            "请稍后再试", "稍后再试", "请稍后", "请稍候"
     };
 
     /** 逗号感知的子句边界（仅对象归属用，不改全局 isClauseBoundary）。 */

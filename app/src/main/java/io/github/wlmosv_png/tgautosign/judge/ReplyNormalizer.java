@@ -42,6 +42,35 @@ public final class ReplyNormalizer {
      * @param raw 原文
      * @return 归一化文本；输入为空时返回空串
      */
+    /**
+     * 提词专用归一化（2026-11-01 事故修复）：只做小写 + 去空白，
+     * **保留标点与数字** —— 与生产判定匹配链 SignLogic.matched/matchAt 的
+     * stripSpace 口径完全一致。
+     *
+     * 为什么不能复用 normalize：normalize 会 unifyPunct（标点→空格→删掉）
+     * 和 replaceNumbers（数字→{N}），产出的词是「无标点、无数字」形态，
+     * 而生产匹配保标点保数字 → 学到的词在原文里永远失配。
+     * 事故：「今天已领过，明天再来～ 当前 32 分」被 normalize 成
+     * 「今天已领过明天再来~当前{N}分」，提词建议「今天已领过明天再来~当前」，
+     * 用户照抄后生产匹配（原文含「，」「～」「32」）恒不命中。
+     */
+    public static String normalizeForWord(String raw) {
+        try {
+            if (raw == null) return "";
+            String s = raw.trim();
+            if (s.length() == 0) return "";
+            s = stripEdgeDeco(s);            // 去首尾 emoji/装饰（不影响中间标点）
+            s = s.toLowerCase();             // 小写（与生产 matched 一致）
+            s = compressSpace(s);            // 压缩空白
+            s = trimEdges(s);
+            s = s.replace(" ", "");          // 去空白（= stripSpace，保标点保数字）
+            s = truncate(s, MAX_LEN);
+            return s;
+        } catch (Throwable t) {
+            return raw == null ? "" : raw.trim();
+        }
+    }
+
     public static String normalize(String raw) {
         try {
             if (raw == null) return "";

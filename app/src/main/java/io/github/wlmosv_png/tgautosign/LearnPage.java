@@ -701,7 +701,10 @@ public final class LearnPage {
         }
 
         // ── ② 词 + 作用域（同一行：词占满，作用域贴右）──
-        final String suggest = suggestFor(pt.norm);
+        // 2026-11-01 事故修复：提词基于**原文**（normalizeForWord 保标点保数字），
+        // 不再用 pt.norm（normalize 删了标点、数字→{N}）——否则建议词在生产匹配
+        // 链（stripSpace 保标点）里恒失配。
+        final String suggest = suggestFor(io.github.wlmosv_png.tgautosign.judge.ReplyNormalizer.normalizeForWord(raw0));
         final String suggestVal = (suggest != null && suggest.length() > 0) ? uiClip(suggest) : "";
 
         final LinearLayout wordRow = new LinearLayout(act);

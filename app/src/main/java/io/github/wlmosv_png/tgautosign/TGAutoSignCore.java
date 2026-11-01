@@ -16876,7 +16876,10 @@ public final class TGAutoSignCore {
                 java.util.List<io.github.wlmosv_png.tgautosign.judge.UnkPool.Item> items =
                         io.github.wlmosv_png.tgautosign.judge.UnkPool.list(prefs, prefix + "unk_pool");
                 for (io.github.wlmosv_png.tgautosign.judge.UnkPool.Item it : items) {
-                    if (it.d == did && it.r != null && it.r.length() > 0) { raw = it.r; break; }
+                    // 2026-11-01 事故修复：学词取**原文 o**（保标点），不用归一化 r。
+                    // r 是聚类键（normalize 删标点、数字→{N}），用它提词会与生产匹配失配。
+                    if (it.d == did && it.o != null && it.o.length() > 0) { raw = it.o; break; }
+                    if (it.d == did && it.r != null && it.r.length() > 0 && raw == null) { raw = it.r; }
                 }
             } catch (Throwable ignored) {}
             // ② 旧单条记录兜底
@@ -16892,7 +16895,7 @@ public final class TGAutoSignCore {
                 return;
             }
             String word = LearnPage.extractWord(
-                    io.github.wlmosv_png.tgautosign.judge.ReplyNormalizer.normalize(raw));
+                    io.github.wlmosv_png.tgautosign.judge.ReplyNormalizer.normalizeForWord(raw));
             if (word == null || word.length() == 0) {
                 logd("[学习] 确认已签：提不出关键词，仅标记今日已签（" + id + "）");
                 return;

@@ -24,6 +24,7 @@ public final class SuggestWordTest {
         negationRejected();
         sameDayTests();
         normalizeThenSuggest();
+        wordSuggestHitsRaw();
         adFilter();
         adNarrowed();
         negationWindow();
@@ -179,5 +180,32 @@ public final class SuggestWordTest {
         tru("归一化后能提出推荐（原句：" + raw + "）", sug != null && sug.length() > 0);
         // 推荐词必须是「有判别力」的片段，不能是纯占位
         if (sug != null) ntru("推荐词不是纯占位", "{n}".equals(sug));
+    }
+
+    // ══ 提词口径回归（2026-11-01 事故：学到的词在生产匹配恒失配）══
+    // 事故：normalize 删标点+数字→{N}，提词建议「今天已领过明天再来~当前」，
+    // 用户照抄后生产匹配（stripSpace 保标点保数字）恒不命中，加词重试也无效。
+    // 修复：提词改用 normalizeForWord（保标点保数字），产出的词必须能在原文命中。
+    private static void wordSuggestHitsRaw() {
+        String[] raws = {
+            "今天已领过，明天再来～ 当前 32 分",
+            "✅ 已领取每日补给 +5 分，当前 32 分，明天再来～",
+        };
+        for (String raw : raws) {
+            String nf = ReplyNormalizer.normalizeForWord(raw);
+            // 关键不变式：提词用保标点保数字的 normalizeForWord，产出的建议词
+            // 必须在生产匹配链（matched = stripSpace + contains）里命中原文。
+            String sug = SignLogic.suggestWord(nf);
+            if (sug != null && sug.length() > 0) {
+                String hit = SignLogic.matched(raw.toLowerCase(java.util.Locale.US),
+                        new String[]{sug});
+                tru("建议词能在原文命中（" + raw.substring(0, Math.min(12, raw.length()))
+                        + "… → [" + sug + "]）", hit != null);
+            }
+        }
+        // 反例：旧口径（normalize）会产出失配词——锁定 normalizeForWord 与 normalize 的差异
+        String nfOld = ReplyNormalizer.normalize("今天已领过，明天再来～ 当前 32 分");
+        ntru("normalizeForWord 保留标点（与 normalize 不同）",
+                ReplyNormalizer.normalizeForWord("今天已领过，明天再来～ 当前 32 分").equals(nfOld));
     }
 }

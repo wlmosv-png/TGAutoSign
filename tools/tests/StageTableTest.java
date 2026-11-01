@@ -339,5 +339,31 @@ public final class StageTableTest {
         // 10. 纯等待措辞不构成 EXHAUSTED（裁定 #1 核心）
         r = decide("请明天再试签到");
         ok("扩10·纯等待措辞 → 不判 EXHAUSTED", r.stage != SignLogic.STAGE_EXHAUSTED);
+
+        // ═══ 11. 「明天再来」是成功告别语，不是等待语（2026-11-01 线上事故回归）═══
+        // 事故：bot 回复「🎉签到成功🎉…邀请链接…明天再来」被 NON_CONCLUSION 阶段
+        // 拦成 UNKNOWN，用户加词重试也无效。根因：WAIT_PHRASES 收了「明天再来」，
+        // 而它其实是「您已签到，明天再来」这类**成功附带语**（SignLogic 463 行注释
+        // 早已警告过，M2 建阶段表时重蹈覆辙）。
+        r = decide("签到成功。明天再来");
+        eq("扩11a·签到成功。明天再来 → SIGNED",
+                Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_SIGNED));
+
+        r = decide("签到成功，明天再来");
+        eq("扩11b·签到成功，明天再来 → SIGNED",
+                Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_SIGNED));
+
+        r = decide("🎉签到成功🎉 获得积分。明天再来");
+        eq("扩11c·🎉签到成功🎉…明天再来 → SIGNED",
+                Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_SIGNED));
+
+        r = decide("您已签到，明天再来");
+        eq("扩11d·您已签到，明天再来 → SIGNED",
+                Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_SIGNED));
+
+        // 反例：真正的拒绝语气「请明天再试」仍应保持 UNKNOWN（不误伤冷却/拒绝语）
+        r = decide("签到冷却中，请明天再试");
+        eq("扩11e·签到冷却中，请明天再试 → 仍 UNKNOWN（冷却语不受影响）",
+                Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_UNKNOWN));
     }
 }
