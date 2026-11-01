@@ -936,7 +936,12 @@ public final class SignLogic {
         m = matched(lower, ok);
         if (m != null && !negated(lower, m) && !isLikelyAnnouncement(in.reply)
                 && !hitInNonSuccessClause(in.reply, m)
-                && !(okWordNeedsContext(m) && (!hasSignContext(lower) || hasTrailingNegation(lower)))
+                // 2026-11-01 M3 修复：语境要求只对**内置词**生效，用户词豁免。
+                // 与旧 verdictDetailScoped 一致：isBuiltinOkWord(m) && okWordNeedsContext(m)。
+                // 事故：M2 阶段表漏了 isBuiltinOkWord 前缀，导致用户自定义的、
+                // 不含「签到」字样的成功词（如「灵石已入库」「星砂已归位」）被
+                // okWordNeedsContext 误拦 —— 生产 scoped 判 SIGNED、阶段表判 UNKNOWN。
+                && !(isBuiltinOkWord(m) && okWordNeedsContext(m) && (!hasSignContext(lower) || hasTrailingNegation(lower)))
                 && !(isGenericOkWord(m) && !hasSuccessShape(lower))) {
             return new StageResult(V_SIGNED, STAGE_SUCCESS, m, clauseOfHit(in.reply, m));
         }

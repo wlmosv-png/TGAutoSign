@@ -45,6 +45,7 @@ public final class StageTableTest {
         historyRegression();
         noneStage();
         nonConclusionStage();
+        userOkWordContextExempt();
 
         System.out.println("----------------------------------------");
         System.out.println("StageTableTest：通过 " + passed + " / 失败 " + failed.size());
@@ -220,6 +221,39 @@ public final class StageTableTest {
     //
     // 裁定要求至少覆盖 7 类，且**必须证明它不会误拦截真实成功**。
     // 断言纪律：同时断言 verdict + stage 精确值（不能只看最终码）。
+
+    // ═══════════ ⑦ 用户成功词豁免语境（M3 修复回归，2026-11-01）═══════════
+    //
+    // 事故：M2 阶段表漏了 isBuiltinOkWord 前缀，导致用户自定义的、
+    // 不含「签到」字样的成功词（「灵石已入库」）被 okWordNeedsContext 误拦，
+    // 与旧 verdictDetailScoped 判 SIGNED 相悖。
+    // 修复：语境要求只对**内置词**生效，用户词豁免（与旧 scoped 一致）。
+
+    private static void userOkWordContextExempt() {
+        // 用户目标级成功词「灵石已入库」（不含签到字样）→ 应 SIGNED
+        SignLogic.StageInput i = new SignLogic.StageInput();
+        i.reply = "灵石已入库";
+        i.okWords = new String[]{ "灵石已入库" };
+        i.failWords = SignLogic.FAIL_WORDS_DEFAULT;
+        SignLogic.StageResult r = SignLogic.decideByStage(i);
+        eq("⑦用户成功词豁免语境 → SIGNED", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_SIGNED));
+
+        // 对照组：内置词「签到成功」仍正常 SIGNED
+        i = new SignLogic.StageInput();
+        i.reply = "签到成功";
+        i.okWords = SignLogic.OK_WORDS_DEFAULT;
+        i.failWords = SignLogic.FAIL_WORDS_DEFAULT;
+        r = SignLogic.decideByStage(i);
+        eq("⑦内置词正常 SIGNED", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_SIGNED));
+
+        // 反例：用户泛词「签到」单独出现仍不可成功（isGenericOkWord 守卫仍在）
+        i = new SignLogic.StageInput();
+        i.reply = "签到";
+        i.okWords = new String[]{ "签到" };
+        i.failWords = SignLogic.FAIL_WORDS_DEFAULT;
+        r = SignLogic.decideByStage(i);
+        ok("⑦用户泛词「签到」单独出现 → 不 SIGNED", r.verdict != SignLogic.V_SIGNED);
+    }
 
     private static void nonConclusionStage() {
         // ═══ 裁定 A–G 七条语义（必须全部通过，断言 verdict + stage + 证据）═══

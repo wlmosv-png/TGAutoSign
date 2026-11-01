@@ -8038,9 +8038,9 @@ public final class TGAutoSignCore {
                                 try {
                                     // 2026-10-07（方案 1.1）：改走统一入口，
                                     // 让这里也能读到 Bot 级 / 目标级自定义词。
-                                    Object[] _vd = judgeWithScopes(fPrefix, fDialogId, 0L, fId, ans);
-                                    int _v = ((Integer) _vd[0]).intValue();
-                                    String _hit = String.valueOf(_vd[1]);
+                                    SignLogic.StageResult _vd = judgeWithScopesStage(fPrefix, fDialogId, 0L, fId, ans);
+                                    int _v = _vd.verdict;
+                                    String _hit = _vd.hitWord;
                                     if (_v == SignLogic.V_SIGNED) {
                                         markSigned(fPrefix, fId);
                                         logs("【就地对答】" + fId + " 返回命中「" + _hit + "」→ 计入已签: " + clip(ans, 40));
@@ -17231,9 +17231,9 @@ public final class TGAutoSignCore {
             String[] failMerged = mergeWords(SignLogic.FAIL_WORDS_DEFAULT, extraFail);
 
             // 2026-11-01 P1：把 targetId 真正传下去（原实现恒传 null → 目标级词表从不生效）
-            Object[] vd = judgeWithScopes(accountPrefix(), 0L, 0L, targetId, r);
-            int v = ((Integer) vd[0]).intValue();
-            String hit = String.valueOf(vd[1]);
+            SignLogic.StageResult vd = judgeWithScopesStage(accountPrefix(), 0L, 0L, targetId, r);
+            int v = vd.verdict;
+            String hit = vd.hitWord;
             boolean customHit = JUDGE_USE_CUSTOM && hit.length() > 0
                     && (containsWord(extraOk, hit) || containsWord(extraFail, hit));
 
@@ -20425,6 +20425,81 @@ public final class TGAutoSignCore {
     }
 
     /**
+     * 统一阶段判定（M3，2026-11-01）。
+     *
+     * 与 judgeWithScopes 读**同一套三级词表**，但最终调 M2 验证过的
+     * {@link SignLogic#decideByStage} —— 十阶段 + 对象归属语义。
+     *
+     * 三级词表的拼接语义：
+     *   · okWords  = mergeWords(OK_WORDS_DEFAULT, 全局) → Bot级 → 目标级
+     *     （顺序「目标 > Bot > 全局 > 内置」，与旧 verdictDetailScoped 的 okChains 等价）
+     *   · failWords = 同上失败侧
+     *   · userFailWords = 纯用户失败词（不含内置），供 decideByStage 判「用户显式表态豁免」
+     *
+     * 为什么不直接改 judgeWithScopes 而是新增：
+     *   · 先并行，旧签名不变，切换调用点后逐个验证再删旧逻辑；
+     *   · 避免一次改动同时影响 D/E/F 三入口导致无法定位回归。
+     */
+    private SignLogic.StageResult judgeWithScopesStage(String prefix, long did, long botDid,
+                                                        String targetId, String reply) {
+        try {
+            if (reply == null || reply.length() == 0) {
+                return new SignLogic.StageResult(SignLogic.V_UNKNOWN, SignLogic.STAGE_NONE, "", "");
+            }
+            long scopeBot = botDid != 0L ? botDid : did;
+            String[] okGlobal = null, failGlobal = null;
+            String[] okBot = null, failBot = null;
+            String[] okTgt = null, failTgt = null;
+            if (judgeCustomOn(prefix)) {
+                okGlobal = SignLogic.parseExtraWords(prefs.getString(Keys.okWordsGlobal(), ""));
+                failGlobal = SignLogic.parseExtraWords(prefs.getString(Keys.failWordsGlobal(), ""));
+                okBot = SignLogic.parseExtraWords(prefs.getString(Keys.okWordsBot(scopeBot), ""));
+                failBot = SignLogic.parseExtraWords(prefs.getString(Keys.failWordsBot(scopeBot), ""));
+                if (targetId != null && targetId.length() > 0) {
+                    okTgt = SignLogic.parseExtraWords(prefs.getString(Keys.okWordsTarget(targetId), ""));
+                    failTgt = SignLogic.parseExtraWords(prefs.getString(Keys.failWordsTarget(targetId), ""));
+                }
+            }
+
+            // 成功侧：内置 + 全局 → Bot → 目标（顺序 = 具体优先）
+            String[] okAll = mergeWords(SignLogic.OK_WORDS_DEFAULT, okGlobal);
+            okAll = mergeWords(okAll, okBot);
+            okAll = mergeWords(okAll, okTgt);
+
+            // 失败侧：同上
+            String[] failAll = mergeWords(SignLogic.FAIL_WORDS_DEFAULT, failGlobal);
+            failAll = mergeWords(failAll, failBot);
+            failAll = mergeWords(failAll, failTgt);
+
+            // 纯用户失败词（不含内置）—— 供 isUserAddedWord 判「显式表态豁免」。
+            // 三级直接拼接（不 merge 内置默认表），顺序 目标 > Bot > 全局。
+            java.util.List<String> _uf = new java.util.ArrayList<String>();
+            for (String[] _src : new String[][]{ failTgt, failBot, failGlobal }) {
+                if (_src == null) continue;
+                for (String _w : _src) {
+                    if (_w == null || _w.trim().length() == 0) continue;
+                    boolean _dup = false;
+                    for (String _e : _uf) { if (_e.equalsIgnoreCase(_w.trim())) { _dup = true; break; } }
+                    if (!_dup) _uf.add(_w.trim());
+                }
+            }
+            String[] userFail = _uf.isEmpty() ? null : _uf.toArray(new String[0]);
+
+            SignLogic.StageInput in = new SignLogic.StageInput();
+            in.reply = reply;
+            in.okWords = okAll;
+            in.failWords = failAll;
+            in.dupWords = null;             // 用内置 DUP
+            in.userFailWords = (userFail != null && userFail.length > 0) ? userFail : null;
+            return SignLogic.decideByStage(in);
+        } catch (Throwable t) {
+            noteSwallowed("judgeWithScopesStage", t);
+            return new SignLogic.StageResult(SignLogic.V_UNKNOWN, SignLogic.STAGE_NONE, "", "");
+        }
+    }
+
+
+    /**
      * 这个 peer 是不是「发给我自己」（收藏夹 / 自己的会话）。
      *
      * 用途：/help 只在发给自己时才由模块接管 —— 否则会把 bot 的 /help 压掉。
@@ -23517,9 +23592,9 @@ public final class TGAutoSignCore {
 
             // ① 统一判定链：失败优先，含所有内置词与用户自定义词
             try {
-                Object[] vd = judgeWithScopes(prefix, did, 0L, id, text);
-                int v = ((Integer) vd[0]).intValue();
-                String hit = String.valueOf(vd[1]);
+                SignLogic.StageResult vd = judgeWithScopesStage(prefix, did, 0L, id, text);
+                int v = vd.verdict;
+                String hit = vd.hitWord;
                 if (v == SignLogic.V_SIGNED) {
                     // 2026-10-28 P2：同样带来源 + 原文片段，便于逐案回溯
                     logw("【回复判定】" + did + " 命中「" + hit + "」→ 计入已签（锚点B）"
