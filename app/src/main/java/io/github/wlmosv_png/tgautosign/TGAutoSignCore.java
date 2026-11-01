@@ -13729,6 +13729,50 @@ public final class TGAutoSignCore {
             final EditText ttIn = adInput(act, "把机器人回复粘到这里…", 0);
             ttIn.setMinLines(2);
             s2.addView(ttIn, new LinearLayout.LayoutParams(-1, -2));
+            // ── 2026-11-01 P1：测试对象（公共预览 / 指定目标）──
+            final String[] selTarget = new String[]{null};   // null = 公共规则预览
+            final TextView scopeLabel = new TextView(act);
+            scopeLabel.setTextSize(Theme.TS_CAPTION);
+            scopeLabel.setTypeface(Theme.text());
+            scopeLabel.setPadding(dp(10), dp(6), dp(10), dp(6));
+            final Runnable refreshScope = new Runnable() { @Override public void run() {
+                try {
+                    if (selTarget[0] == null) {
+                        scopeLabel.setText(Lang.tr("公共规则预览 · 目标级词表未加载（仅测试全局/Bot 级词表）"));
+                        scopeLabel.setTextColor(Theme.termAmber(act));
+                    } else {
+                        Map<String, Object> ent = findEntryById(selTarget[0], currentAccount());
+                        String nm = ent != null ? entryDisplayName(ent) : selTarget[0];
+                        scopeLabel.setText(Lang.tf("词表来源：目标 {0}（{1}）+ 公共", nm, selTarget[0]));
+                        scopeLabel.setTextColor(Theme.termGreen(act));
+                    }
+                } catch (Throwable ignored) {}
+            } };
+            refreshScope.run();
+            LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, -2);
+            slp.topMargin = dp(6);
+            s2.addView(scopeLabel, slp);
+
+            LinearLayout scopeBtns = new LinearLayout(act);
+            scopeBtns.setOrientation(LinearLayout.HORIZONTAL);
+            Button pickBtn = quietBtn(act, "选择目标（可选）", "bot");
+            pickBtn.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                showProbeTargetPicker(act, new java.util.function.Consumer<String>() {
+                    @Override public void accept(String id) { selTarget[0] = id; refreshScope.run(); }
+                });
+            } });
+            scopeBtns.addView(pickBtn, new LinearLayout.LayoutParams(0, -2, 1f));
+            Button resetBtn = quietBtn(act, "改为公共预览", "refresh");
+            resetBtn.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                selTarget[0] = null; refreshScope.run();
+            } });
+            LinearLayout.LayoutParams rbl = new LinearLayout.LayoutParams(0, -2, 1f);
+            rbl.leftMargin = dp(6);
+            scopeBtns.addView(resetBtn, rbl);
+            LinearLayout.LayoutParams sbl = new LinearLayout.LayoutParams(-1, -2);
+            sbl.topMargin = dp(4);
+            s2.addView(scopeBtns, sbl);
+
             final LinearLayout ttOut = new LinearLayout(act);
             ttOut.setOrientation(LinearLayout.VERTICAL);
             LinearLayout.LayoutParams tol = new LinearLayout.LayoutParams(-1, -2);
@@ -13740,7 +13784,7 @@ public final class TGAutoSignCore {
                     try {
                         ttOut.removeAllViews();
                         String inp = String.valueOf(ttIn.getText()).trim();
-                        String[] res = judgeReplyForTest(inp);
+                        String[] res = judgeReplyForTest(inp, selTarget[0]);
                         int col = "ok".equals(res[2]) ? Theme.termGreen(act)
                                 : "err".equals(res[2]) ? Theme.termPink(act)
                                 : "warn".equals(res[2]) ? Theme.termAmber(act)
@@ -17088,11 +17132,78 @@ public final class TGAutoSignCore {
      *
      * @return String[]{结果文案, 命中词, 语义色}；语义色 = ok / warn / err / info
      */
+    /**
+     * 目标选择弹窗（2026-11-01 P1）。
+     * 供规则测试器指定「要按哪个目标的词表测试」。选定后由调用方保存 id。
+     */
+    private void showProbeTargetPicker(final Activity act,
+                                       final java.util.function.Consumer<String> onPick) {
+        try {
+            LinearLayout box = new LinearLayout(act);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(16), dp(8), dp(16), dp(8));
+            java.util.List<Map<String, Object>> list = new java.util.ArrayList<Map<String, Object>>();
+            loadTargetsInto(accountPrefix(), list);
+            if (list.isEmpty()) {
+                TextView t = new TextView(act);
+                t.setTextSize(Theme.TS_BODY);
+                t.setTextColor(Theme.termTxt(act));
+                t.setText(Lang.tr("当前账号没有目标"));
+                box.addView(t);
+            }
+            final Object[] dlg = new Object[]{null};
+            for (final Map<String, Object> m : list) {
+                final String id = entryId(m);
+                Button b = quietBtn(act, id, "bot");
+                b.setText(entryDisplayName(m) + "\n" + id);
+                b.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) {
+                    try { if (dlg[0] != null) dismissOne(dlg[0]); } catch (Throwable ignored) {}
+                    onPick.accept(id);
+                } });
+                LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, -2);
+                blp.topMargin = dp(4);
+                box.addView(b, blp);
+            }
+            ScrollView scv = new ScrollView(act);
+            scv.addView(box, new android.widget.ScrollView.LayoutParams(-1, -2));
+            dlg[0] = showDialog(act, Lang.tr("选择目标"), scv, Lang.tr("取消"));
+        } catch (Throwable t) { toast(Lang.tf("打开失败: {0}", String.valueOf(t))); }
+    }
+
     private String[] judgeReplyForTest(String reply) {
+        return judgeReplyForTest(reply, null);
+    }
+
+    /**
+     * 规则测试器（双模式，2026-11-01 P1）。
+     *
+     * 用户要求的产品语义：
+     *   · 未指定目标 → **公共规则预览**：只用全局/Bot 级词表，
+     *     并在界面上明确说明「目标级词表未加载」，不得让用户误以为测过完整配置；
+     *   · 指定目标   → 加载该目标级词表 + 公共词表，结果里标注目标 ID 与词表来源；
+     *   · 目标不存在 → **明确报错**，不静默回退到公共模式。
+     *
+     * @param targetId 目标 id；null = 公共规则预览模式
+     */
+    private String[] judgeReplyForTest(String reply, String targetId) {
         try {
             if (reply == null || reply.trim().length() == 0)
                 return new String[]{Lang.tr("没有输入内容"), "", "info"};
             String r = reply.trim();
+
+            // ── 指定目标模式：先校验存在性（不存在必须报错，不静默回退）──
+            String scopeTag;
+            if (targetId != null && targetId.length() > 0) {
+                Map<String, Object> ent = findEntryById(targetId, currentAccount());
+                if (ent == null) {
+                    return new String[]{Lang.tf("目标不存在：{0}（未加载任何目标级词表，也未回退公共模式）",
+                            targetId), "", "err"};
+                }
+                scopeTag = Lang.tf("词表来源：目标 {0}（{1}）+ 公共",
+                        entryDisplayName(ent), targetId);
+            } else {
+                scopeTag = Lang.tr("词表来源：公共（目标级词表未加载）");
+            }
 
             // (1) 进度提示：一律不产生结论（与生产链路一致）
             if (SignLogic.looksLikeProgress(r)) {
@@ -17119,15 +17230,16 @@ public final class TGAutoSignCore {
             String[] okMerged = mergeWords(SignLogic.OK_WORDS_DEFAULT, extraOk);
             String[] failMerged = mergeWords(SignLogic.FAIL_WORDS_DEFAULT, extraFail);
 
-            Object[] vd = judgeWithScopes(accountPrefix(), 0L, 0L, null, r);
+            // 2026-11-01 P1：把 targetId 真正传下去（原实现恒传 null → 目标级词表从不生效）
+            Object[] vd = judgeWithScopes(accountPrefix(), 0L, 0L, targetId, r);
             int v = ((Integer) vd[0]).intValue();
             String hit = String.valueOf(vd[1]);
             boolean customHit = JUDGE_USE_CUSTOM && hit.length() > 0
                     && (containsWord(extraOk, hit) || containsWord(extraFail, hit));
 
             if (v == SignLogic.V_SIGNED)
-                return new String[]{Lang.tf("命中「{0}」{1} -> 判定：已签",
-                        hit, customHit ? Lang.tr("（你的自定义词）") : ""), hit, "ok"};
+                return new String[]{Lang.tf("命中「{0}」{1} -> 判定：已签 · {2}",
+                        hit, customHit ? Lang.tr("（你的自定义词）") : "", scopeTag), hit, "ok"};
             if (v == SignLogic.V_FAILED)
                 return new String[]{Lang.tf("命中失败词「{0}」{1} -> 判定：失败",
                         hit, customHit ? Lang.tr("（你的自定义词）") : ""), hit, "err"};

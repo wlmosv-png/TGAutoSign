@@ -1037,6 +1037,17 @@ public final class Lang {
         EN.put("已暂停（{0} 条 · 暂停期间不会自动签）", "Paused ({0}) \u00b7 not auto-signed while paused");
         EN.put("恢复（当前暂停至 {0}）", "Resume (paused until {0})");
         EN.put("今天已签（{0} 条 · 判错了可撤销）", "Signed today ({0}) \u00b7 undo if misjudged");
+        // ── 规则测试器双模式（2026-11-01 P1）──
+        EN.put("命中「{0}」{1} -> 判定：已签 · {2}", "Matched \"{0}\" {1} -> verdict: SIGNED \u00b7 {2}");
+        EN.put("目标不存在：{0}（未加载任何目标级词表，也未回退公共模式）", "Target not found: {0} (no target-level words loaded; no fallback to public mode)");
+        EN.put("词表来源：公共（目标级词表未加载）", "Word source: public (target-level words NOT loaded)");
+        EN.put("词表来源：目标 {0}（{1}）+ 公共", "Word source: target {0} ({1}) + public");
+        EN.put("公共规则预览 · 目标级词表未加载（仅测试全局/Bot 级词表）", "Public rule preview \u00b7 target-level words NOT loaded (tests global/bot words only)");
+        EN.put("测试对象", "Test scope");
+        EN.put("选择目标（可选）", "Pick a target (optional)");
+        EN.put("改为公共预览", "Back to public preview");
+        EN.put("当前账号没有目标", "No targets in the current account");
+        EN.put("选择目标", "Pick a target");
         EN.put("展开全部 {0} 条", "Show all {0}");
         EN.put("「{0}」当前记为今天已签。", "\"{0}\" is currently marked signed today.");
         EN.put("已撤销并暂停：{0}", "Undone and paused: {0}");
