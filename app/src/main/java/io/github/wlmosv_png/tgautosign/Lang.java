@@ -730,10 +730,12 @@ public final class Lang {
         EN.put("已设为每天 {0}", "Set to daily {0}");
         EN.put("已恢复跟随全局", "Back to global");
         EN.put("打开失败：{0}", "Open failed: {0}");
-        EN.put("开：只要今天还有没签的目标，打开 Telegram 就立刻补签一次，不受时间窗口限制。\n关：只在设定的时间窗口内签到（旧行为）。\n手机冻结 TG、或窗口设在半夜的用户建议开着。",
-               "On: if any target is still unsigned today, sign immediately when Telegram opens, ignoring the time window.\n"
+        EN.put("开：只要今天还有没签的目标，打开 Telegram 就立刻签到一次，\n   不受时间窗口、目标固定时刻限制（即时模式）。\n关：只在设定的时间窗口内签到（旧行为）。\n只想拉起 TG 就签、不想管定时/窗口的用户，开这个就行，\n「定时签到」可以关掉，二者互不影响。",
+               "On: if any target is still unsigned today, sign immediately when Telegram opens,\n"
+             + "   ignoring the time window AND per-target fixed times (instant mode).\n"
              + "Off: only sign inside the configured window (old behaviour).\n"
-             + "Recommended on if your phone freezes Telegram or your window is at night.");
+             + "If you just want to sign the moment you open TG, turn this on and\n"
+             + "turn off scheduled signing \u2014 the two are independent.");
         EN.put("下面两行只对「所有目标」生效（全局）。\n「未识别回复」里补的词默认只对那只机器人生效，不在这里显示。\n当前：全局 成功 {0} 条 / 失败 {1} 条；另有机型/目标专属 成功 {2} 条 / 失败 {3} 条。",
                "The two lines below apply to ALL targets (global).\nWords learned under \"Unrecognised replies\" apply to that bot only and are not listed here.\nNow: global ok {0} / fail {1}; per-bot or per-target ok {2} / fail {3}.");
         EN.put("记为已签", "Mark as signed");
@@ -912,7 +914,7 @@ public final class Lang {
         EN.put("以下目标来自「网络学习」，确认后才会加入自动签到。点「加入」确认，点「忽略」丢弃。", "These targets came from \"network learning\" and are only added after you confirm. Tap Add to accept or Skip to discard.");
         EN.put("当前共 {0} 个账号。默认只改本账号（{1}…），点上面按钮才会同步到其它账号。", "{0} accounts in total. By default only this account ({1}…) is changed; use the button above to sync to the others.");
         EN.put("{0}：签到完成 {1} 个，{2} 个没成功（/jmb →  运行日志 里有原因）", "{0}: signed {1}, {2} failed (see /jmb →  Logs for reasons)");
-        EN.put("开 = 窗口内按随机时刻逐个签（防风控，推荐）；关 = 检测到未签就马上签（限窗口内）", "On = sign each target at a random time inside the window (recommended, avoids rate limits); Off = sign as soon as an unsigned target is detected (still inside the window)");
+        EN.put("开 = 窗口内按随机时刻逐个签（防风控，推荐）；关 = 检测到未签就马上签（不看时间）", "On = sign each target at a random time inside the window (recommended, avoids rate limits); Off = sign as soon as an unsigned target is detected (regardless of time)");
         EN.put("清空会同时删掉当前列表和落盘的历史日志文件。\n建议先「导出再清空」留一份，方便之后对账。", "Clearing removes both the current list and the log files on disk.\nExport a copy first so you still have it for reference.");
         EN.put("自动 = 读宿主当前配色（取不到再看系统深色）；识别不准时可手动锁定，保存后重开界面生效", "Auto = read the host's current colours (falls back to the system dark setting). If it's wrong, lock it manually — takes effect after saving and reopening.");
         EN.put("每账号每天一条摘要，发到自己的「收藏夹」（不弹系统通知）。目标连续 3 天失败会额外提醒。", "One summary per account per day, sent to your own Saved Messages (no system notification). A target failing 3 days in a row triggers an extra alert.");

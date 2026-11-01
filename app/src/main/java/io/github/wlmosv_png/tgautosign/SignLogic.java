@@ -288,6 +288,19 @@ public final class SignLogic {
 
         int[] any = c.windowAny;
 
+        // ── 即时模式：勾「打开 TG 时补签」且本次是「刚打开宿主」→ 立即签 ──
+        // 2026-11-01 事故驱动：catchupOnOpen 此前是死字段（decideTrigger 从不消费），
+        // 「打开就签到」形同虚设 —— 用户勾了它、只开定时没关窗口，打开 TG 仍被
+        // 时刻表/窗口拦成 QUEUE，误以为模块坏了。
+        // 语义（用户裁定）：「打开就签到」= 即时模式，与定时互斥 —— 拉起 TG 就签，
+        // 不看窗口、不看目标固定时刻。只保留自动检查冷却防抖（切后台秒回不重复发）。
+        // 定时派用户不受影响：不开「打开就签到」时，走下面的时刻表/窗口逻辑。
+        if (c.startupTrigger && c.catchupOnOpen) {
+            if (c.autoCooldownMs > 0L && c.sinceLastAutoCheckMs >= 0L
+                    && c.sinceLastAutoCheckMs < c.autoCooldownMs) return T_SKIP;
+            return T_RUN_NOW;
+        }
+
         // ── 目标固定时刻优先（2026-11-01 修复，v2）──
         // 事故：用户 Gheoix 全局窗口 00:00-23:59 + 某目标固定 08:00，
         //   0 点打开 TG 就把该目标签掉。他的日志明确写着「定时=关」——
@@ -319,9 +332,19 @@ public final class SignLogic {
         return T_QUEUE;
     }
 
-    /** 队列语义：下一个合法执行时刻（分钟）。用于日志与 next_allowed_at_ 计算。 */
+    /**
+     * 队列语义：下一个合法执行时刻（分钟）。用于日志与 next_allowed_at_ 计算。
+     *
+     * 2026-11-01 文案修复：T_QUEUE 有两个来源，返回哪个必须对齐来源 ——
+     *   ① 目标固定时刻没到（earliestPlanMin > nowMin）→ 该等**固定时刻** earliestPlanMin；
+     *   ② 定时开 + 窗口前/截止后                       → 该等**窗口开始** any[0]。
+     * 旧实现恒返回 any[0]，导致「固定时刻没到」时日志显示「排队至窗口开始」、
+     * next_allowed_at_ 也存错成窗口开始（可能已过、被顺延到明天），
+     * 与 decideTrigger 实际判据对不上，排查时误导。
+     */
     public static int nextAllowedMin(TriggerCtx c) {
         if (c == null) return -1;
+        if (c.earliestPlanMin >= 0 && c.nowMin < c.earliestPlanMin) return c.earliestPlanMin;
         int[] any = c.windowAny;
         if (any == null) return -1;
         return any[0];     // 定时开 + 窗口前 / 截止后 → 等下一个窗口开始

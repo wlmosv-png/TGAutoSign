@@ -292,14 +292,43 @@ public final class TriggerPolicyTest {
         setF(c, "windowAny", W_0535_1937);
         tg("启动补签·非定时窗口前 → RUN_NOW", c, "T_RUN_NOW");
 
-        // 定时 + 窗口外：应排队，不得静默 SKIP
-        c = ctx("启动补签·定时");
+        // ── 2026-11-01 即时模式：勾「打开就签到」+ 本次是打开宿主 → 立即签，
+        //    无视定时/窗口/固定时刻（用户语义：拉起 TG 就签，不关心时间）。──
+        c = ctx("启动补签·定时+打开就签");
+        setF(c, "timerEnabled", Boolean.TRUE);
+        setF(c, "catchupOnOpen", Boolean.TRUE);
+        setF(c, "startupTrigger", Boolean.TRUE);
+        setF(c, "nowMin", Integer.valueOf(300));            // 05:00 窗口外
+        setF(c, "windowAny", W_0635_1937);
+        tg("启动补签·定时+打开就签 → RUN_NOW（即时模式优先）", c, "T_RUN_NOW");
+
+        // 反例：定时 + 没开「打开就签」→ 仍走时刻表（定时派不受影响）
+        c = ctx("启动补签·定时+未开即时");
+        setF(c, "timerEnabled", Boolean.TRUE);
+        setF(c, "catchupOnOpen", Boolean.FALSE);
+        setF(c, "startupTrigger", Boolean.TRUE);
+        setF(c, "nowMin", Integer.valueOf(300));
+        setF(c, "windowAny", W_0635_1937);
+        tg("启动补签·定时+未开即时 → QUEUE", c, "T_QUEUE");
+
+        // 反例：非启动触发（心跳/网络恢复）即使开了「打开就签」，也不走即时模式
+        c = ctx("心跳·开了打开就签");
+        setF(c, "timerEnabled", Boolean.TRUE);
+        setF(c, "catchupOnOpen", Boolean.TRUE);
+        setF(c, "startupTrigger", Boolean.FALSE);
+        setF(c, "nowMin", Integer.valueOf(300));
+        setF(c, "windowAny", W_0635_1937);
+        tg("心跳·开了打开就签(非启动) → QUEUE", c, "T_QUEUE");
+
+        // 即时模式也受冷却防抖约束（切后台秒回不退化成重复发）
+        c = ctx("启动补签·即时+冷却中");
         setF(c, "timerEnabled", Boolean.TRUE);
         setF(c, "catchupOnOpen", Boolean.TRUE);
         setF(c, "startupTrigger", Boolean.TRUE);
         setF(c, "nowMin", Integer.valueOf(300));
         setF(c, "windowAny", W_0635_1937);
-        tg("启动补签·定时窗口外 → QUEUE", c, "T_QUEUE");
+        setF(c, "sinceLastAutoCheckMs", Long.valueOf(30L * 1000));  // 刚查过
+        tg("启动补签·即时+冷却中 → SKIP", c, "T_SKIP");
 
         // 已有在途 / 待确认（pendingToday=false）时，打开 TG 不得重复发
         c = ctx("启动补签·已有在途");

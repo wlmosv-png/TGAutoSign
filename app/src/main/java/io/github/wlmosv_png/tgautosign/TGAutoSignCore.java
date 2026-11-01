@@ -26425,7 +26425,7 @@ public final class TGAutoSignCore {
         R.timerSw.setTextSize(Theme.TS_BODY);
         card1.addView(R.timerSw);
         TextView tmSub = new TextView(act); tmSub.setTextSize(Theme.TS_CAPTION); tmSub.setTextColor(Theme.txtMuted(act)); tmSub.setTypeface(Theme.text());
-        tmSub.setText(Lang.tr("开 = 窗口内按随机时刻逐个签（防风控，推荐）；关 = 检测到未签就马上签（限窗口内）"));
+        tmSub.setText(Lang.tr("开 = 窗口内按随机时刻逐个签（防风控，推荐）；关 = 检测到未签就马上签（不看时间）"));
         tmSub.setPadding(dp(4), 0, dp(4), dp(6));
         card1.addView(tmSub);
         box.addView(card1);
@@ -26539,9 +26539,11 @@ public final class TGAutoSignCore {
         cuTip.setTextSize(Theme.TS_CAPTION);
         cuTip.setTextColor(Theme.txtMuted(act));
         cuTip.setTypeface(Theme.text());
-        cuTip.setText(Lang.tr("开：只要今天还有没签的目标，打开 Telegram 就立刻补签一次，不受时间窗口限制。\n"
+        cuTip.setText(Lang.tr("开：只要今天还有没签的目标，打开 Telegram 就立刻签到一次，\n"
+                            + "   不受时间窗口、目标固定时刻限制（即时模式）。\n"
                             + "关：只在设定的时间窗口内签到（旧行为）。\n"
-                            + "手机冻结 TG、或窗口设在半夜的用户建议开着。"));
+                            + "只想拉起 TG 就签、不想管定时/窗口的用户，开这个就行，\n"
+                            + "「定时签到」可以关掉，二者互不影响。"));
         cuTip.setPadding(dp(4), 0, dp(4), dp(6));
         card1.addView(cuTip);
         // 补签截止：窗口结束后仍可补到该时间（与签到窗口解耦，避免当天错过作废）
