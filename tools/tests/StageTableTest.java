@@ -46,6 +46,7 @@ public final class StageTableTest {
         noneStage();
         nonConclusionStage();
         userOkWordContextExempt();
+        dupVerbVariants();
 
         System.out.println("----------------------------------------");
         System.out.println("StageTableTest：通过 " + passed + " / 失败 " + failed.size());
@@ -364,6 +365,35 @@ public final class StageTableTest {
         // 反例：真正的拒绝语气「请明天再试」仍应保持 UNKNOWN（不误伤冷却/拒绝语）
         r = decide("签到冷却中，请明天再试");
         eq("扩11e·签到冷却中，请明天再试 → 仍 UNKNOWN（冷却语不受影响）",
+                Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_UNKNOWN));
+    }
+
+    // ═══ 完成时态「已+领取动词」变体通用覆盖（2026-11-01 Zaka 事故）═══
+    // 事故：bot 回「今天已领过，明天再来～」判不出，用户加词（归一化形态）也失配。
+    // 根因：DUP 词表只收「已领取」，漏了「已领过/领取过/已经领取」等变体，
+    // 导致「已领取」的"过"变体对每个 bot 都要单独学词。
+    // 修复：DUP 补「已领过/已领取过/领取过/已经领取」，一次性覆盖所有领取类完成时态。
+    private static void dupVerbVariants() {
+        SignLogic.StageResult r;
+        // 正例：领取类完成时态 → SIGNED（今日已签）
+        r = decide("今天已领过，明天再来～ 当前 32 分");
+        eq("领1·已领过 → SIGNED", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_SIGNED));
+        r = decide("✅ 已领取每日补给 +5 分，当前 32 分，明天再来～");
+        eq("领2·已领取每日补给 → SIGNED", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_SIGNED));
+        r = decide("您今天已经领取过了");
+        eq("领3·已经领取过 → SIGNED", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_SIGNED));
+        r = decide("已领取成功，明天再来");
+        eq("领4·已领取成功 → SIGNED", Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_SIGNED));
+
+        // 反例：不能误伤查询/否定/冷却
+        r = decide("您的查询已获得结果");
+        eq("领5·查询已获得结果 → UNKNOWN（宽词不误伤）",
+                Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_UNKNOWN));
+        r = decide("未领取，请先完成任务");
+        eq("领6·未领取 → UNKNOWN（否定不误伤）",
+                Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_UNKNOWN));
+        r = decide("还没有领取，请稍后");
+        eq("领7·还没有领取 → UNKNOWN",
                 Integer.valueOf(r.verdict), Integer.valueOf(SignLogic.V_UNKNOWN));
     }
 }
