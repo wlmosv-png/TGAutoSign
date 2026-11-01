@@ -55,6 +55,7 @@ public final class TriggerPolicyTest {
         p0ClauseAndNegation20261101();
         p2ExhaustedAndLoose20261101();
         resultCodeRoundTrip20261101();
+        p0UserWordCannotBypassGuard();
 
         fourStates();
         multiAccountIsolation();
@@ -787,6 +788,80 @@ public final class TriggerPolicyTest {
         }
         eq("I2·未知串返回 -1（不误判）", Integer.valueOf(SignLogic.resultOfCode("nonsense")), Integer.valueOf(-1));
         eq("I3·null 返回 -1", Integer.valueOf(SignLogic.resultOfCode(null)), Integer.valueOf(-1));
+    }
+
+    // ═══════════ J 组：P0 · 用户自定义词不得绕过语境守卫（2026-11-01） ═══════════
+    //
+    // 真机复现的缺陷：用户自定义成功词「签到」绕过语境守卫 ——
+    //   「签到冷却中，请8小时后再试」被判 SIGNED（假成功，用户会以为签上了）。
+    // 根因：成功侧的语境守卫带 `isBuiltinOkWord(m) &&` 前缀 → 用户词被豁免；
+    //       且 hasSuccessShape 把「8小时」当业务数字放行。
+    // 修复：新增**对所有词生效**的子句级负向语境守卫 + 宽泛动作词门槛。
+
+    private static int scoped4(String r, String[] okTarget, String[] okBot, String[] okGlobal) {
+        Object[] vd = SignLogic.verdictDetailScoped(r, okGlobal, SignLogic.FAIL_WORDS_DEFAULT,
+                okBot, null, okTarget, null);
+        return ((Integer) vd[0]).intValue();
+    }
+
+    private static void p0UserWordCannotBypassGuard() {
+        final String[] BUILTIN = SignLogic.OK_WORDS_DEFAULT;
+        final String[] USER_LOOSE  = new String[]{"签到"};        // 宽泛动作词
+        final String[] USER_STRONG = new String[]{"签到成功"};    // 明确成功短语
+
+        // ── 核心断言：用户宽泛词不得制造假成功 ──
+        tru("J1·[用户宽泛词] 签到冷却中 → 不得判成功",
+                scoped4("签到冷却中，请8小时后再试", USER_LOOSE, null, BUILTIN) != SignLogic.V_SIGNED);
+        tru("J2·[公共词表] 签到冷却中 → 不得判成功",
+                scoped4("签到冷却中，请8小时后再试", null, null, BUILTIN) != SignLogic.V_SIGNED);
+        tru("J3·[用户明确短语] 签到冷却中 → 不得判成功（明确短语也不能绕）",
+                scoped4("签到冷却中，请8小时后再试", USER_STRONG, null, BUILTIN) != SignLogic.V_SIGNED);
+        tru("J4·[冲突配置] 签到冷却中 → 不得判成功",
+                scoped4("签到冷却中，请8小时后再试", null, USER_LOOSE, BUILTIN) != SignLogic.V_SIGNED);
+
+        // ── 宽泛动作词不得单独形成 SIGNED ──
+        tru("J5·[用户宽泛词] 裸『签到』→ 不得判成功",
+                scoped4("签到", USER_LOOSE, null, BUILTIN) != SignLogic.V_SIGNED);
+        tru("J6·[公共词表] 裸『签到』→ 不得判成功",
+                scoped4("签到", null, null, BUILTIN) != SignLogic.V_SIGNED);
+
+        // ── 明确成功短语仍须正常判成功（不得误伤） ──
+        eq("J7·『签到成功』→ SIGNED",
+                Integer.valueOf(scoped4("签到成功", USER_LOOSE, null, BUILTIN)),
+                Integer.valueOf(SignLogic.V_SIGNED));
+        eq("J8·『已经签到』→ SIGNED",
+                Integer.valueOf(scoped4("已经签到", USER_STRONG, null, BUILTIN)),
+                Integer.valueOf(SignLogic.V_SIGNED));
+        eq("J9·『今天签到成功，明天继续』→ SIGNED（结果在前半子句）",
+                Integer.valueOf(scoped4("今天签到成功，明天继续", USER_LOOSE, null, BUILTIN)),
+                Integer.valueOf(SignLogic.V_SIGNED));
+        eq("J10·『签到成功，但还需要等待确认』→ SIGNED（子句级，不误伤主句）",
+                Integer.valueOf(scoped4("签到成功，但还需要等待确认", USER_LOOSE, null, BUILTIN)),
+                Integer.valueOf(SignLogic.V_SIGNED));
+
+        // ── 其它系统级语境对用户词同样生效 ──
+        tru("J11·[用户宽泛词] 『如果签到成功，将获得奖励』→ 不得判成功",
+                scoped4("如果签到成功，将获得奖励", USER_LOOSE, null, BUILTIN) != SignLogic.V_SIGNED);
+        tru("J12·[用户宽泛词] 『签到成功了吗？』→ 不得判成功",
+                scoped4("签到成功了吗？", USER_LOOSE, null, BUILTIN) != SignLogic.V_SIGNED);
+        tru("J13·[用户宽泛词] 『未签到+1』→ 不得判成功",
+                scoped4("未签到+1", USER_LOOSE, null, BUILTIN) != SignLogic.V_SIGNED);
+
+        eq("J14·『签到失败，请重试』→ FAILED（失败优先于一切自定义成功词）",
+                Integer.valueOf(scoped4("签到失败，请重试", USER_LOOSE, null, BUILTIN)),
+                Integer.valueOf(SignLogic.V_FAILED));
+
+        // ── 多账号自定义词隔离（Bot 级 vs 目标级 不同账号） ──
+        // Bot 级放了宽泛词、目标级没有 → 目标级判定不应受 Bot 级影响而误判成功
+        tru("J15·Bot级宽泛词不影响目标级判定（冷却句仍不成功）",
+                scoped4("签到冷却中，请8小时后再试", null, USER_LOOSE, BUILTIN) != SignLogic.V_SIGNED);
+
+        // ── 谓词直测 ──
+        tru("J16·clauseHasNegativeCtx 认冷却", SignLogic.clauseHasNegativeCtx("签到冷却中"));
+        tru("J17·clauseHasNegativeCtx 不认结果句", !SignLogic.clauseHasNegativeCtx("签到成功"));
+        tru("J18·isLooseActionOnly 认『签到』", SignLogic.isLooseActionOnly("签到"));
+        tru("J19·isLooseActionOnly 不认『签到成功』", !SignLogic.isLooseActionOnly("签到成功"));
+        tru("J20·hasExplicitSuccessPhrase 认『签到成功』", SignLogic.hasExplicitSuccessPhrase("签到成功"));
     }
 
     // ═══════════════ 断言助手 ═══════════════

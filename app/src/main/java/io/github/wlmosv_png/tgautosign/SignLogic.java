@@ -1144,12 +1144,18 @@ public final class SignLogic {
             // 却都含成功词。做**子句级**判断可修掉这两个假成功，
             // 同时不伤「今日签到成功！要试试轰炸吗？」（结果在前半子句）。
             // 为什么不能整条含问号就否 —— 那会把上面这类真结果一起丢掉。
-            if (hitInNonResultClause(reply, m)) continue;
+            // ── 2026-11-01 P0：改用合并守卫（疑问/假设 + 冷却/等待/未完成）──
+            // 关键变化：负向语境**对用户自定义词同样生效**（过去它们能绕过）。
+            if (hitInNonSuccessClause(reply, m)) continue;
             if (isLikelyAnnouncement(reply)) continue;             // 公告守卫
             if (m.contains("重复") && hasTrailingNegation(lower)) continue;
             // ★ 统一证据标准：泛词（无论内置还是用户词）必须有结果形态
             if (isGenericOkWord(m) && !hasSuccessShape(lower)) continue;
             if (isBuiltinOkWord(m) && okWordNeedsContext(m) && !hasSignContext(lower)) continue;
+            // ── P0 追加：宽泛动作词不得单独形成 SIGNED ──
+            // 用户词若只是"动作词"（签到/打卡/领取…），必须伴随**明确成功短语**
+            // 才算数 —— 否则「签到冷却中」这类句子里的动作词就会制造假成功。
+            if (isLooseActionOnly(m) && !hasExplicitSuccessPhrase(reply)) continue;
             return new Object[]{Integer.valueOf(V_SIGNED), m};
         }
 
@@ -1396,11 +1402,13 @@ public final class SignLogic {
         }
         m = matched(lower, hasWords(ok) ? ok : OK_WORDS_DEFAULT);
         if (m != null && !negated(lower, m) && !isLikelyAnnouncement(reply)
-                // 2026-11-01 P0-2：与 scoped 链同一判据（两处必须一致）
-                && !hitInNonResultClause(reply, m)
+                // 2026-11-01 P0：与 scoped 链同一判据（两处必须一致）
+                && !hitInNonSuccessClause(reply, m)
                 && !(okWordNeedsContext(m) && (!hasSignContext(lower) || hasTrailingNegation(lower)))
                 // 2026-10-28：与 scoped 链同一标准 —— 泛词必须有结果形态
-                && !(isGenericOkWord(m) && !hasSuccessShape(lower))) {
+                && !(isGenericOkWord(m) && !hasSuccessShape(lower))
+                // P0 追加：宽泛动作词必须伴随明确成功短语
+                && !(isLooseActionOnly(m) && !hasExplicitSuccessPhrase(reply))) {
             return new Object[]{Integer.valueOf(V_SIGNED), m};
         }
         // ── 组合判定（兜底）：词表没覆盖，但语义上明显是成功 ──
@@ -1528,6 +1536,132 @@ public final class SignLogic {
     private static final String[] CLAUSE_DONE_WORDS = {
             "已", "完成", "成功", "领到", "获得"
     };
+
+    // ═══════════ 系统级「负向语境」守卫（2026-11-01 P0）═══════════
+    //
+    // 事故（真机复现）：用户自定义成功词「签到」可以绕过语境守卫 ——
+    //   「签到冷却中，请8小时后再试」被判 **SIGNED**。
+    // 根因两条叠加：
+    //   ① 成功侧那条语境守卫带 `isBuiltinOkWord(m) &&` 前缀 → **用户词被豁免**；
+    //   ② `hasSuccessShape()` 把「8小时」当"业务数字邻接"放行。
+    // 后果：用户以为签上了，实际没有 —— 属于 P0。
+    //
+    // 本守卫的定位：**系统级语义，优先级高于任何自定义成功词**。
+    // 只要结论所在**子句**本身表达的是"冷却/等待/未完成"，
+    // 该子句里的成功词一律不作数 —— 无论内置词还是用户词。
+    //
+    // 为什么必须**子句级**而非整条：
+    //   「签到成功，但还需要等待确认」含"等待"，但成功是主句 —— 整条判断会误伤。
+
+    /** 冷却 / 需等待 / 未完成 —— 出现在结论所在子句里即表示"还没成功"。 */
+    private static final String[] NEG_CTX_WORDS = {
+            // 冷却
+            "冷却", "请稍后", "稍后再试", "小时后再", "分钟后再", "请明日", "请明天",
+            "明日再试", "明天再试", "明日再来", "明天再来",
+            // 等待 / 处理中
+            "等待确认", "等待审核", "待审核", "审核中", "排队中", "确认中", "处理中",
+            // 未完成
+            "尚未完成", "还未完成", "没有完成", "未能完成", "未完成", "尚未成功",
+            "还没签到", "尚未签到"
+    };
+
+    /** 宽泛「动作词」：只表达"做了某个动作"，不表达"做成了"。 */
+    private static final String[] LOOSE_ACTION_WORDS = {
+            "签到", "打卡", "签领", "报到", "领取", "参与", "check in", "check-in",
+            "sign in", "sign-in", "checkin"
+    };
+
+    /** 该命中词是否只是宽泛动作词（不含结果语义）。 */
+    static boolean isLooseActionOnly(String w) {
+        try {
+            if (w == null) return false;
+            String x = stripSpace(w).toLowerCase(java.util.Locale.US);
+            for (String a : LOOSE_ACTION_WORDS) {
+                if (x.equals(stripSpace(a).toLowerCase(java.util.Locale.US))) return true;
+            }
+            return false;
+        } catch (Throwable t) { return false; }
+    }
+
+    /** 明确成功短语：真正表达"已成功/已完成"的组合，宽泛动作词不能顶替它。 */
+    private static final String[] EXPLICIT_SUCCESS_WORDS = {
+            "签到成功", "打卡成功", "签到完成", "打卡完成", "已签到", "已打卡",
+            "已经签到", "已经打卡", "签到已成功", "打卡已成功", "成功签到", "成功打卡",
+            "已完成签到", "完成了签到", "签到完毕", "打卡完毕", "领取成功", "已领取",
+            "今日已签", "今天已签", "本日已签", "签过", "重复签到", "已参与",
+            "获得积分", "获得奖励", "签到获得", "已获得",
+            "success", "already signed", "checked in", "claimed"
+    };
+
+    /** 文本里是否出现**明确成功短语**（用于给宽泛动作词加一道门槛）。 */
+    static boolean hasExplicitSuccessPhrase(String reply) {
+        try {
+            if (reply == null) return false;
+            String flat = stripSpace(reply).toLowerCase(java.util.Locale.US);
+            for (String w : EXPLICIT_SUCCESS_WORDS) {
+                if (flat.contains(stripSpace(w).toLowerCase(java.util.Locale.US))) return true;
+            }
+            return false;
+        } catch (Throwable t) { return false; }
+    }
+
+    /** 该子句是否处于负向语境（冷却/等待/未完成）。 */
+    static boolean clauseHasNegativeCtx(String clause) {
+        try {
+            if (clause == null) return false;
+            String c = stripSpace(clause);
+            if (c.length() == 0) return false;
+            for (String w : NEG_CTX_WORDS) {
+                if (c.contains(stripSpace(w))) return true;
+            }
+            return false;
+        } catch (Throwable t) { return false; }
+    }
+
+    /**
+     * 取得命中词所在子句。定位失败时返回**整条**（保守：宁可多拦，不放假成功）。
+     */
+    private static String clauseOfHit(String reply, String hitWord) {
+        try {
+            if (reply == null || reply.length() == 0) return "";
+            if (hitWord == null || hitWord.length() == 0) return reply;
+            int idx = reply.indexOf(hitWord);
+            int len = hitWord.length();
+            if (idx < 0) {
+                String flat = stripSpace(reply);
+                String w = stripSpace(hitWord);
+                int fi = w.length() == 0 ? -1 : flat.indexOf(w);
+                if (fi < 0) return reply;
+                int cnt = 0, raw = -1;
+                for (int i = 0; i < reply.length(); i++) {
+                    char ch = reply.charAt(i);
+                    boolean sp = (ch == ' ' || ch == '\u3000' || ch == '\t'
+                            || ch == '\n' || ch == '\r');
+                    if (!sp) { if (cnt == fi) { raw = i; break; } cnt++; }
+                }
+                if (raw < 0) return reply;
+                idx = raw; len = 0;
+            }
+            int a = idx, b = idx + Math.max(len, 1);
+            while (a > 0 && !isClauseBoundary(reply.charAt(a - 1))) a--;
+            while (b < reply.length() && !isClauseBoundary(reply.charAt(b))) b++;
+            return reply.substring(a, Math.min(b, reply.length()));
+        } catch (Throwable t) { return reply == null ? "" : reply; }
+    }
+
+    /**
+     * 命中词是否落在「不能作为成功证据」的子句里。
+     *
+     * 合并两类系统级语义（**对所有词生效，包括用户自定义词**）：
+     *   · 疑问 / 假设（clauseIsNonResult）
+     *   · 冷却 / 等待 / 未完成（clauseHasNegativeCtx）
+     *
+     * 这是 P0 修复的核心：用户词过去能绕过语境守卫，现在绕不过。
+     */
+    public static boolean hitInNonSuccessClause(String reply, String hitWord) {
+        String c = clauseOfHit(reply, hitWord);
+        return clauseIsNonResult(c) || clauseHasNegativeCtx(c);
+    }
 
     /**
      * 命中词是否落在「疑问/假设」子句里（P0-2）。
