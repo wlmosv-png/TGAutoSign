@@ -177,8 +177,8 @@ def main():
     code = strip_strings(nc)
 
     add, add_ln = pick(code, 'addJudgeWordsInternal')
-    jws, jws_ln = pick(code, 'judgeWithScopes')
-    for nm, b in (('addJudgeWordsInternal', add), ('judgeWithScopes', jws)):
+    jws, jws_ln = pick(code, 'judgeWithScopesStage')
+    for nm, b in (('addJudgeWordsInternal', add), ('judgeWithScopesStage', jws)):
         if b is None:
             print('FATAL 未找到方法 %s（识别逻辑需更新，不能静默通过）' % nm)
             return 1
@@ -195,7 +195,7 @@ def main():
     # J2：**所有判定路径**都不得读裸 JUDGE_USE_CUSTOM。
     # 2026-10-30：原来只查 judgeWithScopes —— 长消息链（onUpdateProcessed）
     # 是第二条判定路径，当时被漏掉，导致两条路径的开关判据不一致。
-    jpaths = [('judgeWithScopes', jws, jws_ln)]
+    jpaths = [('judgeWithScopesStage', jws, jws_ln)]
     oup, oup_ln = pick(code, 'onUpdateProcessed')
     if oup is not None:
         jpaths.append(('onUpdateProcessed', oup, oup_ln))
