@@ -1152,10 +1152,15 @@ public final class SignLogic {
             // ★ 统一证据标准：泛词（无论内置还是用户词）必须有结果形态
             if (isGenericOkWord(m) && !hasSuccessShape(lower)) continue;
             if (isBuiltinOkWord(m) && okWordNeedsContext(m) && !hasSignContext(lower)) continue;
-            // ── P0 追加：宽泛动作词不得单独形成 SIGNED ──
-            // 用户词若只是"动作词"（签到/打卡/领取…），必须伴随**明确成功短语**
-            // 才算数 —— 否则「签到冷却中」这类句子里的动作词就会制造假成功。
-            if (isLooseActionOnly(m) && !hasExplicitSuccessPhrase(reply)) continue;
+            // ── 2026-11-01 线上回滚：原在此处的「宽泛动作词必须伴随明确成功短语」
+            // 门槛**已移除**。原因（真机反馈「之前可以，现在有问题」）：
+            //   用户全局成功词表含**裸「签到」**，而 matched() 按词表顺序返回首个命中，
+            //   「签到」排在「签到成功」之前 → 大量正常回复命中「签到」→
+            //   被本门槛要求"必须含明确成功短语"，而该短语列表不可能穷尽 →
+            //   **多个原本能签上的目标变成「判不出」**。
+            // 而这条门槛本来就是多余的：P0 要修的「签到冷却中，请8小时后再试」
+            // 假成功是由 `hitInNonSuccessClause`（负向语境守卫）拦下的，与它无关。
+            // 裸「签到」单独出现时的假成功仍由 `isGenericOkWord && !hasSuccessShape` 拦住。
             return new Object[]{Integer.valueOf(V_SIGNED), m};
         }
 
@@ -1406,9 +1411,9 @@ public final class SignLogic {
                 && !hitInNonSuccessClause(reply, m)
                 && !(okWordNeedsContext(m) && (!hasSignContext(lower) || hasTrailingNegation(lower)))
                 // 2026-10-28：与 scoped 链同一标准 —— 泛词必须有结果形态
-                && !(isGenericOkWord(m) && !hasSuccessShape(lower))
-                // P0 追加：宽泛动作词必须伴随明确成功短语
-                && !(isLooseActionOnly(m) && !hasExplicitSuccessPhrase(reply))) {
+                && !(isGenericOkWord(m) && !hasSuccessShape(lower))) {
+            // 注：原此处还有一道「宽泛动作词必须伴随明确成功短语」门槛，已随 scoped 侧一并移除
+            //（同上：对含裸动作词的正常回复误伤过大，且非 P0 修复所必需）。
             return new Object[]{Integer.valueOf(V_SIGNED), m};
         }
         // ── 组合判定（兜底）：词表没覆盖，但语义上明显是成功 ──
