@@ -20736,8 +20736,30 @@ public final class TGAutoSignCore {
             try { cls = classEx("org.telegram.messenger.DialogObject"); }
             catch (Throwable t) { diagCmd("DialogObject 类加载失败: " + t); return 0L; }
             diagCmd("peer 实类=" + peer.getClass().getName());
-            // 两个重载（InputPeer / Peer）都试，不猜参数类型
+            // 2026-11-08：混淆宿主上方法名（getPeerDialogId → i5.o / i5.n）已改写，
+            //   先走符号层按「static + 单参 + 返回 long」结构定位两个重载。
+            java.util.List<java.lang.reflect.Method> pdCands = new java.util.ArrayList<java.lang.reflect.Method>();
+            try {
+                for (Class<?> pt : new Class<?>[]{classEx("org.telegram.tgnet.TLRPC$Peer"),
+                                                  classEx("org.telegram.tgnet.TLRPC$InputPeer")}) {
+                    java.lang.reflect.Method cand = HostSymbols.method(cls, "getPeerDialogId",
+                            new Class<?>[]{pt}, Boolean.TRUE);
+                    if (cand != null) pdCands.add(cand);
+                }
+            } catch (Throwable ignored) {}
             int tried = 0;
+            for (java.lang.reflect.Method mm : pdCands) {
+                tried++;
+                try {
+                    mm.setAccessible(true);
+                    Object r = mm.invoke(null, peer);
+                    long v = (r instanceof Number) ? ((Number) r).longValue() : 0L;
+                    diagCmd("试 " + mm.getParameterTypes()[0].getSimpleName() + " → " + v);
+                    if (v != 0L) return v;
+                } catch (Throwable t) {
+                    diagCmd("试 " + mm.getParameterTypes()[0].getSimpleName() + " 抛异常: " + t);
+                }
+            }
             for (java.lang.reflect.Method mm : cls.getDeclaredMethods()) {
                 if (!"getPeerDialogId".equals(mm.getName())) continue;
                 if (mm.getParameterTypes().length != 1) continue;

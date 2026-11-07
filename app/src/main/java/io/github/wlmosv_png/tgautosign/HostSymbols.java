@@ -99,7 +99,8 @@ public final class HostSymbols {
     private static final String[][] CLASS_CONTRACTS = {
             // 旧名, 契约表达式
             {"org.telegram.messenger.MessagesController", "m:java.util.ArrayList,java.util.ArrayList,java.util.ArrayList,boolean,int:boolean"},
-            {"org.telegram.messenger.NotificationCenter", "m:int,java.lang.Object[]:void"},
+            // mx: = 至少存在一个（该类有 k/m 两个同签名重载，唯一性判据会误杀）
+            {"org.telegram.messenger.NotificationCenter", "mx:int,java.lang.Object[]:void"},
             {"org.telegram.messenger.BaseController", "f:int:currentAccount"},
             {"org.telegram.messenger.UserConfig", "f:org.telegram.tgnet.TLRPC$User:"},
             {"org.telegram.messenger.MessagesStorage", "s:org.telegram.messenger.BaseController"},
@@ -138,6 +139,23 @@ public final class HostSymbols {
 
     private static void h(String cls, String name, String params, String ret) {
         METHOD_RET_HINTS.put(key(cls, name, params), ret);
+    }
+
+    /**
+     * 成员名提示：按「旧类名#旧方法名(参数签名)」→ 该版本档里的实际方法名。
+     * 只收录<em>结构上无法唯一确定</em>的成员，由 tools/hostmap-gen.py 用方法体指纹生成。
+     * 目前唯一一处：NotificationCenter 同时存在 k / m 两个 (int,Object[])->void
+     *   （k 是真正分发到观察者的那个 —— 其方法体调用 SparseArray.keyAt；m 是它的包装），
+     *   纯参数+返回类型分不开，所以按版本档记住。
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<String, String> MEMBER_HINTS =
+            new java.util.concurrent.ConcurrentHashMap<String, String>();
+    private static void mh(long tier, String legacyCls, String legacyMethod, String paramsSig, String actual) {
+        MEMBER_HINTS.put(tier + "|" + legacyCls + "#" + legacyMethod + paramsSig, actual);
+    }
+    static {
+        mh(72800L, "org.telegram.messenger.NotificationCenter", "postNotificationName", "(int,java.lang.Object[])", "k");
+        mh(72900L, "org.telegram.messenger.NotificationCenter", "postNotificationName", "(int,java.lang.Object[])", "k");
     }
 
     /** 字段类型提示：字段名被混淆后按「类型唯一」定位。 */
@@ -333,7 +351,9 @@ public final class HostSymbols {
                 String spec = c[1];
                 if (spec.startsWith("s:")) {                       // 父类等于某旧名
                     String want = spec.substring(2);
-                    Class<?> wantCls = mapClass(want);
+                    // 2026-11-08 修复：原来用 mapClass（只管 org.telegram.messenger.*），
+                    // "java.lang.Object" 会返回 null → 契约恒假。改为先按旧名映射、再按真名加载。
+                    Class<?> wantCls = mapTgOrSystem(want);
                     return wantCls != null && cls.getSuperclass() == wantCls;
                 }
                 if (spec.startsWith("c:")) {                       // 存在某构造函数
@@ -342,6 +362,10 @@ public final class HostSymbols {
                 if (spec.startsWith("f:")) {                       // 存在某类型（可选名字）的字段
                     String[] parts = spec.substring(2).split(":", -1);
                     return findFieldByType(cls, typeOf(parts[0]), parts.length > 1 && parts[1].length() > 0 ? parts[1] : null) != null;
+                }
+                if (spec.startsWith("mx:")) {                      // 存在至少一个方法：参数 -> 返回
+                    String[] parts = spec.substring(3).split(":", -1);
+                    return !methodsStructural(cls, typeOfList(parts[0]), typeOf(parts[1]), null).isEmpty();
                 }
                 if (spec.startsWith("ms:")) {                      // static 方法：参数 -> 返回
                     String[] parts = spec.substring(3).split(":", -1);
@@ -367,6 +391,19 @@ public final class HostSymbols {
             case "boolean": return boolean.class;
             case "void": return void.class;
             default: break;
+        }
+        // 2026-11-08 修复：数组的规范名要单独处理。
+        //   Class.getName() 对数组返回 "[Ljava.lang.Object;"，而人类/契约里写的是
+        //   "java.lang.Object[]"。原来不处理 → Class.forName 失败 → 返回 null →
+        //   sameTypes 把该位置当通配符 → 契约被静默放宽（NotificationCenter 的
+        //   「唯一」契约因此被 k/m 两个候选判死，整个类被拒绝）。
+        if (n.endsWith("[]")) {
+            Class<?> comp = typeOf(n.substring(0, n.length() - 2));
+            return comp == null ? null : java.lang.reflect.Array.newInstance(comp, 0).getClass();
+        }
+        if (n.startsWith("[L") && n.endsWith(";")) {
+            Class<?> comp = mapTgOrSystem(n.substring(2, n.length() - 1).replace('/', '.'));
+            return comp == null ? null : java.lang.reflect.Array.newInstance(comp, 0).getClass();
         }
         Class<?> c = mapTgOrSystem(n);
         return c;
@@ -410,13 +447,29 @@ public final class HostSymbols {
         Method m = null;
         // ① 按原名直查（含父类链）—— 旧版与未混淆成员都走这里，行为与历史一致。
         m = findMethodByName(owner, legacy, types);
+        // ①' 版本档成员提示：结构分不开的重载（见 MEMBER_HINTS 说明）
+        if (m == null && sMapped) {
+            String actual = MEMBER_HINTS.get(pickTier(sVersionCode) + "|" + ownerLegacyName(owner)
+                    + "#" + legacy + sig(types));
+            if (actual != null) {
+                Class<?> c = owner;
+                while (c != null && c != Object.class) {
+                    try { m = c.getDeclaredMethod(actual, types); break; } catch (Throwable ignored) {}
+                    c = c.getSuperclass();
+                }
+                if (m != null) addDiag("成员提示命中 " + simple(owner.getName()) + "." + legacy
+                        + sig(types) + " → " + actual);
+            }
+        }
         if (m == null) {
             // ② 结构解析：参数表（+ 返回类型提示）唯一命中。
             Class<?> ret = null;
             String hint = METHOD_RET_HINTS.get(key(ownerLegacyName(owner), legacy, sig(types)));
             if ("@self".equals(hint)) ret = owner;
-            else if (hint != null) ret = mapTgOrSystem(hint);
-            if (ret == void.class) ret = null;
+            // 2026-11-08 修复：这里原来用 mapTgOrSystem，而它不认基本类型（long/boolean/void
+            // 都返回 null）→ 返回类型提示静默失效 → 只剩参数表 → 多候选被拒。
+            // typeOf() 才同时支持基本类型与类名。
+            else if (hint != null) ret = typeOf(hint);
             m = findMethodStructural(owner, types, ret, staticReq);
             if (m == null && ret != null) {
                 // 提示的返回类型可能因 fork/版本不同（例如返回自定义接口），退回参数表唯一性。
@@ -430,6 +483,51 @@ public final class HostSymbols {
         }
         MEMBER_CACHE.put(ck, m == null ? MISS : m);
         return m;
+    }
+
+    /**
+     * 返回**全部**结构候选（winding 到父类链为止）。
+     * 用于「同一签名有多个等价入口」的符号 —— 典型是 NotificationCenter 的
+     * k / m 两个 (int,Object[])-&gt;void：两者都是「发通知」入口，全部挂上即可，
+     * 重复投递由模块既有的 (peer, msgId) 去重吸收。
+     * 顺序：若命中成员提示，把提示的那个排在最前。
+     */
+    public static java.util.List<Method> methods(Class<?> owner, String legacy, Class<?>[] types,
+                                                 Class<?> ret, Boolean staticReq) {
+        java.util.List<Method> out = new java.util.ArrayList<Method>();
+        if (owner == null || legacy == null) return out;
+        Method hinted = method(owner, legacy, types, staticReq);      // 提示/直查优先
+        if (hinted != null) out.add(hinted);
+        for (Method m : methodsStructural(owner, types, ret, staticReq)) {
+            if (!out.contains(m)) out.add(m);
+        }
+        return out;
+    }
+
+    /** 结构候选全集（不去重提示，不做唯一性判定）。 */
+    private static java.util.List<Method> methodsStructural(Class<?> owner, Class<?>[] types,
+                                                            Class<?> ret, Boolean staticReq) {
+        java.util.List<Method> out = new java.util.ArrayList<Method>();
+        Class<?> c = owner;
+        while (c != null && c != Object.class) {
+            Method[] ms;
+            try { ms = c.getDeclaredMethods(); } catch (Throwable t) { ms = new Method[0]; }
+            for (Method m : ms) {
+                if (types != null && !sameTypes(m.getParameterTypes(), types)) continue;
+                if (ret != null && m.getReturnType() != ret) continue;
+                if (staticReq != null && Modifier.isStatic(m.getModifiers()) != staticReq.booleanValue()) continue;
+                if (!out.contains(m)) out.add(m);
+            }
+            c = c.getSuperclass();
+        }
+        return out;
+    }
+
+    /** 当前版挡位（versionCode 取百位）。 */
+    public static long pickTier(long versionCode) {
+        long best = -1L;
+        for (Long k : CLASS_MAPS.keySet()) if (versionCode >= k && k > best) best = k;
+        return best;
     }
 
     /**
@@ -460,12 +558,23 @@ public final class HostSymbols {
         return n;
     }
 
+    /** 参数签名（人类可读规范名）：数组写成 java.lang.Object[]，与各类提示表的键一致。 */
     private static String sig(Class<?>[] types) {
         StringBuilder sb = new StringBuilder("(");
         if (types != null) {
             for (int i = 0; i < types.length; i++) {
                 if (i > 0) sb.append(',');
-                sb.append(types[i] == null ? "*" : types[i].getName());
+                Class<?> t = types[i];
+                if (t == null) { sb.append('*'); continue; }
+                if (t.isArray()) {
+                    Class<?> comp = t;
+                    int dim = 0;
+                    while (comp.isArray()) { comp = comp.getComponentType(); dim++; }
+                    sb.append(comp.getName());
+                    for (int d = 0; d < dim; d++) sb.append("[]");
+                } else {
+                    sb.append(t.getName());
+                }
             }
         }
         return sb.append(')').toString();

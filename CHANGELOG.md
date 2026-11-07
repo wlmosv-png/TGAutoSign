@@ -1,5 +1,51 @@
 # 更新日志
 
+## 1.7.4 (174) — 2026-11-08
+
+> 修复符号层里四个真实 bug：NotificationCenter 被误杀导致回复收不全、DialogObject 与 getSendingMessageId 定位失败。
+
+### 修复 · Fixed
+
+- **NotificationCenter 被错误拒绝（锚点 B 挂不上）**
+  *NotificationCenter was wrongly rejected, so anchor B never got hooked.*
+  13.2.1 的 NotificationCenter(ys) 里有**两个** 签名完全相同的
+  方法：`k`（真正分发给观察者，方法体调用 `SparseArray.keyAt`）和
+  `m`（它的包装）。“唯一才采用”的契约把整个类判死 → MC=✓ 但 NC=✗ →
+  只剩锤点 A（长消息链）在工作，部分 bot 的回复收不到，用户看到一堆「回复判不出」。
+  现在：祖相契约改为「至少存在一个」（新加 `mx:` 类型），新增**成员名提示表**
+  记住「这个版本里真正分发的是 k」，并把同签名的候选**全部挂上**
+  （两者都是「发通知」入口，重复投递由既有 (peer, msgId) 去重吸收）。
+
+- **方法返回类型提示不认基本类型**
+  *Method return-type hints did not understand primitives.*
+  `mapTgOrSystem("long")` 返回 null（它只会 `Class.forName`）→ 返回类型提示静默失效 →
+  只剩参数表 → 多候选被拒。受影响：`getSendingMessageId`、`isValidAccount`、
+  `getPeerDialogId`、`postNotificationName` —— 日志里的「getSendingMessageId 方法没找到」
+  和「DialogObject.getPeerDialogId 候选数=0」就是它。现在改走 `typeOf()`。
+
+- **数组类型的规范名不认**
+  *Canonical array type names were not understood.*
+  `Class.getName()` 对数组返回 `[Ljava.lang.Object;`，而契约里写的是
+  `java.lang.Object[]` → 解析成 null → 参数表对比将该位置**当成通配符**，
+  契约被静默放宽。现在 `typeOf()` 与 `sig()` 都按人类可读规范名处理。
+
+- **父类契约恒为假**
+  *The superclass contract was always false.*
+  `s:java.lang.Object` 走的是只管 `org.telegram.messenger.*` 的 mapClass → 返回 null →
+  SharedConfig 永远未命中（日志里的「✗ SharedConfig → 未命中」）。已修。
+
+- **DialogObject 双重载改走符号层**
+  *DialogObject overload lookup now goes through the symbol layer.*
+  `getPeerDialogId` 在 13.2.1 里叫 `i5.o` / `i5.n`，按名扫描必然 0 命中。
+
+### 测试 · Tests
+
+- **HostSymbolsTest 77 项**
+  *HostSymbolsTest: 77 assertions.*
+  四个 bug 各有回归用例（基本类型提示、`mx:` 契约不误杀、
+  成员提示把真正分发的排首、父类契约能解析非 messenger 包名）。
+  夹具补上「两个同签名重载」的 NotificationCenter，与真实 APK 一致。
+
 ## 1.7.3 (173) — 2026-11-08
 
 > 修复 Telegram 13.2.1 的宿主映射：混淆名逐版本变化，新增 13.2.1 档与自动生成器。

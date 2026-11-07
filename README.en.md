@@ -183,19 +183,17 @@ You installed a debug build. Uninstall it, then install the official APK from th
 
 ## 更新日志 · Changelog
 
+### v1.7.4 (174) — 2026-11-08
+
+**Fixed**: NotificationCenter was wrongly rejected, so anchor B never got hooked. · Method return-type hints did not understand primitives. · Canonical array type names were not understood. · The superclass contract was always false. · DialogObject overload lookup now goes through the symbol layer.
+
+**测试**: HostSymbolsTest: 77 assertions.
+
 ### v1.7.3 (173) — 2026-11-08
 
 **Fixed**: Host symbol mapping for Telegram 13.2.1 was missing. · The mapping table can now be generated automatically.
 
 **测试**: HostSymbolsTest grows to 70 assertions.
-
-### v1.7.2 (172) — 2026-11-08
-
-**New**: New host symbol resolution layer (HostSymbols). · Every mapping entry is confirmed by structural evidence. · Adaptation status is now explicit.
-
-**Fixed**: Fixed false-positive injection. · Anchor A's prefix match no longer worked on the new build. · Fallback when the notification id cannot be read.
-
-**测试**: New HostSymbolsTest (57 assertions).
 
 [Full changelog →](https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md)
 

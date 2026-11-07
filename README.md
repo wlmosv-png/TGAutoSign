@@ -202,19 +202,17 @@ sha256sum TGAutoSign-*.apk                     # 比对 Release 里的 sha256sum
 
 ## 更新日志 · Changelog
 
+### v1.7.4 (174) — 2026-11-08
+
+**修复**：NotificationCenter 被错误拒绝（锚点 B 挂不上） · 方法返回类型提示不认基本类型 · 数组类型的规范名不认 · 父类契约恒为假 · DialogObject 双重载改走符号层
+
+**测试**：HostSymbolsTest 77 项
+
 ### v1.7.3 (173) — 2026-11-08
 
 **修复**：13.2.1 的宿主符号映射缺失 · 映射表可自动生成
 
 **测试**：HostSymbolsTest 扩到 70 项
-
-### v1.7.2 (172) — 2026-11-08
-
-**新增**：宿主符号解析层（HostSymbols） · 映射表逐个用结构证据确认 · 适配状态显式可见
-
-**修复**：假注入 · 锚点 A 的前缀匹配在新版失效 · 通知 id 读不到时的兜底
-
-**测试**：新增 HostSymbolsTest（57 项）
 
 [完整更新日志 →](https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md)
 

@@ -586,35 +586,51 @@ public final class TGAutoSignEntry extends XposedModule {
         }
         try {
             final int ID_DID_RECEIVE = HostSymbols.didReceiveNewMessagesId(ncCls);
-            Method m = HostSymbols.method(ncCls, "postNotificationName",
-                    new Class<?>[]{int.class, Object[].class}, Boolean.FALSE);
-            if (m == null) {
+            // 2026-11-08：13.2.1 的 NotificationCenter(ys) 里有 **两个** (int,Object[])->void
+            //   （ys.k 真正分发到观察者、ys.m 是它的包装），纯签名分不开。
+            //   策略：成员提示给出首选 k，同时把全部同签名候选都挂上 ——
+            //   两者都是「发通知」入口，重复投递由既有 (peer,msgId) 去重吸收。
+            java.util.List<Method> postMethods = HostSymbols.methods(ncCls, "postNotificationName",
+                    new Class<?>[]{int.class, Object[].class}, void.class, Boolean.FALSE);
+            if (postMethods.isEmpty()) {
+                // 最后兜底：按参数表取全部候选（不看返回类型）
+                postMethods.addAll(HostSymbols.methods(ncCls, "postNotificationName",
+                        new Class<?>[]{int.class, Object[].class}, null, Boolean.FALSE));
+            }
+            if (postMethods.isEmpty()) {
                 logError("NotificationCenter.postNotificationName(int,Object[]) 解析失败 → 锚点B发送端无效", null);
                 return;
             }
-            m.setAccessible(true);
-            String key = "postNotificationName#" + m.toGenericString();
-            synchronized (HOOKED_METHODS) {
-                if (HOOKED_METHODS.contains(key)) return;
-                HOOKED_METHODS.add(key);
+            int hookedPost = 0;
+            for (Method m : postMethods) {
+                try {
+                    m.setAccessible(true);
+                    String key = "postNotificationName#" + m.toGenericString();
+                    synchronized (HOOKED_METHODS) {
+                        if (HOOKED_METHODS.contains(key)) continue;
+                        HOOKED_METHODS.add(key);
+                    }
+                    hook(m)
+                            .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                            .intercept(chain -> {
+                                try {
+                                    Object a0 = chain.getArg(0);
+                                    Object a1 = chain.getArg(1);
+                                    int id = (a0 instanceof Number) ? ((Number) a0).intValue() : Integer.MIN_VALUE;
+                                    boolean hit = (id == ID_DID_RECEIVE)
+                                            || (HostSymbols.isMapped() && HostSymbols.looksLikeDidReceiveArgs(a1));
+                                    if (hit && a1 instanceof Object[]) {
+                                        try { CORE.onPostNotification(ID_DID_RECEIVE, (Object[]) a1); }
+                                        catch (Throwable ignored) {}
+                                    }
+                                } catch (Throwable ignored) {}
+                                return chain.proceed();
+                            });
+                    hookedPost++;
+                } catch (Throwable ignored) {}
             }
-            hook(m)
-                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
-                    .intercept(chain -> {
-                        try {
-                            Object a0 = chain.getArg(0);
-                            Object a1 = chain.getArg(1);
-                            int id = (a0 instanceof Number) ? ((Number) a0).intValue() : Integer.MIN_VALUE;
-                            boolean hit = (id == ID_DID_RECEIVE)
-                                    || (HostSymbols.isMapped() && HostSymbols.looksLikeDidReceiveArgs(a1));
-                            if (hit && a1 instanceof Object[]) {
-                                try { CORE.onPostNotification(ID_DID_RECEIVE, (Object[]) a1); }
-                                catch (Throwable ignored) {}
-                            }
-                        } catch (Throwable ignored) {}
-                        return chain.proceed();
-                    });
-            logInfo("hooked NotificationCenter.postNotificationName（锚点 B 发送端，id=" + ID_DID_RECEIVE + "）");
+            logInfo("hooked NotificationCenter.postNotificationName×" + hookedPost
+                    + "（锚点 B 发送端，id=" + ID_DID_RECEIVE + "）");
         } catch (Throwable t) {
             logError("hook postNotificationName failed", t);
         }

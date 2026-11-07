@@ -182,6 +182,30 @@ public final class HostSymbolsTest {
         eq("tier72800 仍独立可用: MessagesController → lp", "org.telegram.messenger.lp", nameOf(HostSymbols.mapClass(MC)));
         eq("tier72800 仍独立可用: NotificationCenter → os", "org.telegram.messenger.os", nameOf(HostSymbols.mapClass(NC)));
 
+        // ── 3c) 三个已修 bug 的回归用例（都曾在真机上真实发生）──
+        // (A) 方法返回类型提示必须认基本类型：isValidAccount(int)->boolean
+        Method mValid = HostSymbols.method(w10Cls2(), "isValidAccount", new Class<?>[]{int.class}, Boolean.TRUE);
+        check("fixA: isValidAccount(int)->boolean 结构解析（基本类型提示）", mValid != null);
+        // (B) 契约 s: 必须能解析非 messenger 包的目标名（SharedConfig extends java.lang.Object）
+        eq("fixB: tier72800 SharedConfig → nz", "org.telegram.messenger.nz",
+                nameOf(HostSymbols.mapClass("org.telegram.messenger.SharedConfig")));
+        HostSymbols.install(blocked, "org.telegram.messenger", 72911L);
+        eq("fixB: tier72900 SharedConfig → tz", "org.telegram.messenger.tz",
+                nameOf(HostSymbols.mapClass("org.telegram.messenger.SharedConfig")));
+        // (C) NotificationCenter 有两个同签名重载时：契约只要求「存在」，成员提示给出首选，候选可全取
+        Class<?> ysCls = HostSymbols.mapClass(NC);
+        eq("fixC: tier72900 NotificationCenter → ys（mx 契约不误杀）", "org.telegram.messenger.ys", nameOf(ysCls));
+        java.util.List<Method> posts = HostSymbols.methods(ysCls, "postNotificationName",
+                new Class<?>[]{int.class, Object[].class}, void.class, Boolean.FALSE);
+        check("fixC: 两个同签名候选都被返回", posts.size() == 2);
+        eq("fixC: 成员提示把真正分发的那个排在首位", "k", posts.isEmpty() ? null : posts.get(0).getName());
+        // DialogObject 两个重载（含基本类型返回 long）
+        Class<?> i5Cls = HostSymbols.mapClass("org.telegram.messenger.DialogObject");
+        Class<?> peerCls = Class.forName("org.telegram.tgnet.TLRPC$Peer", false, plain);
+        Method pd = HostSymbols.method(i5Cls, "getPeerDialogId", new Class<?>[]{peerCls}, Boolean.TRUE);
+        eq("fixA2: DialogObject.getPeerDialogId(Peer)->long 结构解析 → o", "o", nameOf2(pd));
+        HostSymbols.install(blocked, "org.telegram.messenger", 72809L);
+
         // ── 4) 错误映射必须被结构契约拒绝 ──
         HostSymbols.__testInstall(blocked, "org.telegram.messenger", 72809L, new String[][]{
                 {MC, "org.telegram.messenger.xd"}});
@@ -255,6 +279,7 @@ public final class HostSymbolsTest {
 
     private static String nameOf(Class<?> c) { return c == null ? null : c.getName(); }
     private static String nameOf2(Method m) { return m == null ? null : m.getName(); }
+    private static Class<?> w10Cls2() { return HostSymbols.mapClass("org.telegram.messenger.UserConfig"); }
 
     private HostSymbolsTest() { }
 }
