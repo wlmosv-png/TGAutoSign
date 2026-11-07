@@ -181,6 +181,36 @@ if [ "${TGAS_SKIP_JUDGETEST:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/JudgeTest
   fi
 fi
 
+# ── 宿主符号层门禁（2026-11-08 新增，为 Telegram 13.2.0 的 R8 变更）──
+# 来历：13.2.0 删除了 -keep class org.telegram.messenger.* { *; }，核心类名被改写，
+#   模块整条会话/Peer/账号/判定链静默失效 —— 而白名单硬放行还让它显示「已加载」。
+#   引入 HostSymbols 后，「名字没了但没人发现」必须能被离线单测拦住：
+#   夹具与 android.util.Log 桩只放 tools/tests/ 下，不进 app/src/main/，不参与正式构建。
+# 跳过：TGAS_SKIP_SYMBOLTEST=1
+if [ "${TGAS_SKIP_SYMBOLTEST:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/HostSymbolsTest.java" ]; then
+  echo "== 宿主符号层单测 =="
+  _scls="${TMPDIR:-/tmp}/tgas-scls-$$"
+  rm -rf "$_scls"; mkdir -p "$_scls"
+  _sfiles=""
+  for _sf in "$TGAS_SRC"/tools/tests/fixtures/org/telegram/messenger/*.java "$TGAS_SRC"/tools/tests/fixtures/org/telegram/tgnet/*.java; do
+    [ -f "$_sf" ] && _sfiles="$_sfiles $_sf"
+  done
+  if javac -nowarn -encoding UTF-8 -d "$_scls" \
+        "$TGAS_SRC/tools/tests/stubs/android/util/Log.java" \
+        $_sfiles \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/HostSymbols.java" \
+        "$TGAS_SRC/tools/tests/HostSymbolsTest.java" 2>&1; then
+    if ! java -cp "$_scls" io.github.wlmosv_png.tgautosign.HostSymbolsTest; then
+      rm -rf "$_scls"
+      echo "FATAL: 宿主符号层单测失败（临时跳过：TGAS_SKIP_SYMBOLTEST=1）" >&2; exit 1
+    fi
+  else
+    rm -rf "$_scls"
+    echo "FATAL: 宿主符号层单测编译失败（临时跳过：TGAS_SKIP_SYMBOLTEST=1）" >&2; exit 1
+  fi
+  rm -rf "$_scls"
+fi
+
 # ── 宿主作用域一致性门禁（2026-10-06 新增，P1）──
 # 来历：Turrit（org.telegram.group）曾在 Hosts.KNOWN 与 scope.list 里都有、
 #   module.prop 的 scope= 缺失，当时没有任何门禁能发现 ——
