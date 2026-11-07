@@ -1538,6 +1538,8 @@ public final class Lang {
         EN.put("宿主符号解析：{0}", "Host symbols: {0}");
         // 2026-11-08 P0：证据分级与「未确定」文案
         EN.put("未确定", "Unconfirmed");
+        EN.put("刚重试过，请等 {0} 秒；连点不会让 bot 更快回复",
+               "Retried just now \u2014 wait {0}s; tapping again will not make the bot reply sooner");
         EN.put("还没有结论：可能 bot 已回复但当前无法确认。可重试，或先忽略今天。",
                "No verdict yet: the bot may have replied but it cannot be confirmed right now. Retry, or ignore for today.");
         EN.put("回复认不出，可补判定词", "Reply not recognised \u2014 add a keyword in Settings");

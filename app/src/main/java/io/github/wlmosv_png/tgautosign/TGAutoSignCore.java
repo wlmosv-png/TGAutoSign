@@ -17166,6 +17166,18 @@ public final class TGAutoSignCore {
             // 2026-11-08 P0-3：两个重试入口统一走**轮次隔离**（不再各写一套清理）。
             // 关键：不破坏性删除 —— 旧轮的 result_/ev_* 证据原样保留，只把"在途与调度"
             // 这类属于上一轮的状态切走，并用轮次号把它们与新轮隔开。
+            // 2026-11-08 P0：**重试冷却**。
+            // 为什么必须有：每次重试都会清掉该目标的 opt_/sent_at_（在途标记），
+            // 而"在途标记为空"期间到达的 bot 回复会被接收链直接丢弃。
+            // 用户连点 5 次 = 5 段盲区（evt 日志里 round 涨到 6 就是这么来的）。
+            long _lastRetry = prefs.getLong(prefix + "retry_click_" + id, 0L);
+            long _nowMs = System.currentTimeMillis();
+            if (_lastRetry > 0L && _nowMs - _lastRetry < 60000L) {
+                toast(Lang.tf("刚重试过，请等 {0} 秒；连点不会让 bot 更快回复",
+                        (60000L - (_nowMs - _lastRetry)) / 1000L));
+                return;
+            }
+            prefs.edit().putLong(prefix + "retry_click_" + id, _nowMs).apply();
             try { stateStore.resetRoundStateForRetry(prefix, id); }
             catch (Throwable _e2) { noteSwallowed("pendConfirmRetry.reset", _e2); }
             try { evt("retry", id, did, accountOfPrefix(prefix), "entry=panel"); } catch (Throwable ignored) {}
@@ -20872,11 +20884,14 @@ public final class TGAutoSignCore {
             //   先走符号层按「static + 单参 + 返回 long」结构定位两个重载。
             java.util.List<java.lang.reflect.Method> pdCands = new java.util.ArrayList<java.lang.reflect.Method>();
             try {
-                for (Class<?> pt : new Class<?>[]{classEx("org.telegram.tgnet.TLRPC$Peer"),
-                                                  classEx("org.telegram.tgnet.TLRPC$InputPeer")}) {
-                    java.lang.reflect.Method cand = HostSymbols.method(cls, "getPeerDialogId",
-                            new Class<?>[]{pt}, Boolean.TRUE);
-                    if (cand != null) pdCands.add(cand);
+                // 2026-11-08：**按实参类型挑重载** —— 之前两个重载都塞同一个对象，
+                // 必然有一个抛 IllegalArgumentException（日志里的"试 Peer 抛异常"）。
+                for (java.lang.reflect.Method cand : cls.getDeclaredMethods()) {
+                    if (!"getPeerDialogId".equals(cand.getName())) continue;
+                    if (cand.getParameterTypes().length != 1) continue;
+                    if (!java.lang.reflect.Modifier.isStatic(cand.getModifiers())) continue;
+                    if (!cand.getParameterTypes()[0].isInstance(peer)) continue;
+                    pdCands.add(cand);
                 }
             } catch (Throwable ignored) {}
             int tried = 0;
@@ -23964,7 +23979,14 @@ public final class TGAutoSignCore {
             if (text == null || text.length() == 0) return 0;
             // 早退：该会话不在「正在等结论」的集合里就直接返回。
             // 群聊消息洪峰时（实测每分钟几十条无关消息），这一句把 90%+ 的调用挡在循环之前。
-            if (!awaitingPeers().contains(Long.valueOf(peerUid))) return 0;
+            if (!awaitingPeers().contains(Long.valueOf(peerUid))) {
+                // 2026-11-08 P0 取证：这是"消息到了却被丢"的头号嫌疑点，必须留痕
+                if (recvLogAllowed(peerUid ^ 0x9999L)) {
+                    jlog(2, "[drop] why=peer_not_awaiting peer=" + peerUid + " src=" + source
+                            + " awaiting=" + awaitingPeers().size());
+                }
+                return 0;
+            }
             int hitAcc = -1; String hitPrefix = null; Map<String, Object> hitTarget = null;
             // ── 精确优先：引用回复按 msg_id_ 对上「我们发出的那条」──
             if (replyToId > 0) {
@@ -24091,6 +24113,19 @@ public final class TGAutoSignCore {
      *  @param args     通知参数 { Long dialogId, ArrayList<MessageObject> }
      *  @return 判定到的目标数 */
     public int onDidReceiveNewMessages(int account, Object[] args) {
+        // 2026-11-08 P0 取证：锚点B 到底有没有被调用、参数长什么样（限频）
+        try {
+            if (recvLogAllowed(0xBBBBL)) {
+                int len = args == null ? -1 : args.length;
+                StringBuilder kinds = new StringBuilder();
+                if (args != null) {
+                    for (int i = 0; i < args.length && i < 4; i++) {
+                        kinds.append(i > 0 ? "," : "").append(args[i] == null ? "null" : args[i].getClass().getSimpleName());
+                    }
+                }
+                jlog(2, "[inB] acc=" + account + " len=" + len + " types=" + kinds);
+            }
+        } catch (Throwable ignored) {}
         try {
             // 无条件计数（不受诊断限时开关影响）——自检面板靠它证明锚点 B 活着
             anchorBSeen.incrementAndGet();
@@ -24393,6 +24428,18 @@ public final class TGAutoSignCore {
                 Object _o = getFieldVal(msg, "out");
                 msgOut = Boolean.TRUE.equals(_o);
             } catch (Throwable ignored) {}
+            // ── 2026-11-08 入站诊断（P0 取证）：每条入站新消息按 peer 限频落一行 WARN ──
+            // 用途：回答"bot 明明回了，模块到底看没看见、在哪一步丢的"。
+            if (recvLogAllowed(peerUid ^ 0x5A5AL)) {
+                try {
+                    Object _rm = getFieldValSafe(msg, "reply_markup");
+                    boolean _awaiting = false;
+                    try { _awaiting = awaitingPeers().contains(Long.valueOf(peerUid)); } catch (Throwable ignored) {}
+                    jlog(2, "[in] peer=" + peerUid + " from=" + fromUid + " bot=" + (fromIsBot ? 1 : 0)
+                            + " rm=" + (_rm != null ? 1 : 0) + " await=" + (_awaiting ? 1 : 0)
+                            + " acc=" + ctrlAcc);
+                } catch (Throwable ignored) {}
+            }
             if (msgOut) continue;                                   // 自己发的，一律不处理
             if (selfId > 0 && fromUid == selfId) continue;          // 同上（兜底）
             if (isGroupPeer) {
@@ -24401,7 +24448,13 @@ public final class TGAutoSignCore {
                 // 面板时有时无、要等下一批推送才出现，根子常在这里。
                 // （自己发的已在上面统一过滤）
             } else {
-                if (peerUid <= 0 || fromUid != peerUid) continue;
+                if (peerUid <= 0 || fromUid != peerUid) {
+                    if (recvLogAllowed(peerUid ^ 0x1234L)) {
+                        jlog(2, "[drop] why=private_self_or_mismatch peer=" + peerUid
+                                + " from=" + fromUid + " self=" + selfId);
+                    }
+                    continue;
+                }
             }
             // 1.4.5 Live Panel：bot 自己发的带键盘消息 → 缓存当前面板（无需该 bot 已是目标）
             try {
@@ -24474,6 +24527,13 @@ public final class TGAutoSignCore {
                 }
                 boolean relateDebug = false;
                 try { relateDebug = prefs.getBoolean("jmb_log_relate", false); } catch (Throwable ignored) {}
+                // 2026-11-08 P0 取证：关联失败明确留一行，回答"消息进来了却没判"
+                if (chatIsTarget && recvLogAllowed(peerUid ^ 0x7777L)) {
+                    try {
+                        jlog(2, "[drop] why=no_target peer=" + peerUid + " from=" + fromUid
+                                + " bot=" + (fromIsBot ? 1 : 0) + " replyTo=" + replyToMsgId);
+                    } catch (Throwable ignored) {}
+                }
                 // ── 2026-10-09 详细档降噪 ──
                 // 用户截图里这一条反复出现：
                 //   [回复关联] chat=… isBot=false lookBot=false candidateCount=0 method=NONE

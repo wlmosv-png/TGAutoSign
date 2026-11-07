@@ -202,19 +202,17 @@ sha256sum TGAutoSign-*.apk                     # 比对 Release 里的 sha256sum
 
 ## 更新日志 · Changelog
 
+### v1.7.7 (177) — 2026-11-08
+
+**新增**：入站诊断日志（按会话限频）
+
+**修复**：重试连点会造成接收盲区 · DialogObject 重载选择
+
 ### v1.7.6 (176) — 2026-11-08
 
 **修复**：观察链路健康标记永远不置位 · 点完「重试」目标又出现在卡住列表里（导致连点） · 脏 `no_reply` 不再冒充结论 · 卡片两行文案自相矛盾
 
 **测试**：PendingStateTest 扩到 43 项
-
-### v1.7.5 (175) — 2026-11-08
-
-**修复**：「未回复」不再由发送时间推导 · 回复证据分级与轮次隔离 · 两个重试入口统一为 `resetRoundStateForRetry` · 状态转换保护与原子更新
-
-**新增**：最小化事件日志（send / recv / corr / verdict / timeout / ui / retry）
-
-**测试**：新增 PendingStateTest（40 项）与第 9 道静态门禁 `check-pending-state.py`
 
 [完整更新日志 →](https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md)
 

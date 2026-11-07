@@ -405,6 +405,7 @@ public final class SignStateStore {
           .remove(Keys.answered(prefix, id))
           .remove(Keys.resultRound(prefix, id))
           .remove(Keys.noReplyOk(prefix, id))
+          .remove(prefix + "retry_click_" + id)
           .remove("nr_" + prefix + id)
           .remove("nrday_" + prefix + id)
           .remove("result_" + id)

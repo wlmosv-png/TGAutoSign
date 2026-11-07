@@ -183,19 +183,17 @@ You installed a debug build. Uninstall it, then install the official APK from th
 
 ## 更新日志 · Changelog
 
+### v1.7.7 (177) — 2026-11-08
+
+**New**: Inbound diagnostics, throttled per chat.
+
+**Fixed**: Rapid retries created a receive blind spot. · Overload selection for DialogObject.
+
 ### v1.7.6 (176) — 2026-11-08
 
 **Fixed**: The watch-chain health flag was never set. · After tapping Retry the target stayed in the stuck list, so users tapped repeatedly. · Stale "no reply" records no longer pass as verdicts. · Two lines on the same card contradicted each other.
 
 **测试**: PendingStateTest grows to 43 assertions.
-
-### v1.7.5 (175) — 2026-11-08
-
-**Fixed**: Reply evidence is now graded and round-scoped. · Both retry entries now share one round-reset routine. · State-transition guards and atomic updates.
-
-**New**: Minimal event log for the whole reply chain.
-
-**测试**: New PendingStateTest (40 assertions) plus a static gate.
 
 [Full changelog →](https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md)
 

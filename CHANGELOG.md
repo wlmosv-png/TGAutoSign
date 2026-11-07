@@ -1,5 +1,33 @@
 # 更新日志
 
+## 1.7.7 (177) — 2026-11-08
+
+> 入站取证版：把「消息到底有没进模块、在哪一步丢的」变成日志里可读的事实；并修掉连点导致的接收盲区。
+
+### 新增 · Added
+
+- **入站诊断日志（按会话限频）**
+  *Inbound diagnostics, throttled per chat.*
+  `[in] peer= from= bot= rm= await= acc=`：每条进来的新消息都留一行，
+  回答「模块有没有看见这条回复」；
+  `[inB] acc= len= types=`：锚点B 到底有没有被调用、参数形状如何；
+  `[drop] why=peer_not_awaiting / private_self_or_mismatch / no_target`：消息进来了却没判，到底卡在哪一条闸。
+  全部 WARN 级，保证进落盘日志（之前 INFO 级会被采样丢掉，这正是四轮排查都看不到真相的原因）。
+
+### 修复 · Fixed
+
+- **重试连点会造成接收盲区**
+  *Rapid retries created a receive blind spot.*
+  每次重试都会清掉该目标的 `opt_`\/`sent_at_`（在途标记），而接收链的第一道闸就是
+  「该会话是否有在途目标」—— **盲区期间到达的 bot 回复会被直接丢弃**。
+  真机实测：用户在 4 秒内把同一目标重试到第 6 轮（日志 round=2…6）。
+  现在加 60 秒重试冷却：冷却期内点击会提示「刚重试过，请等 N 秒」，不再重置在途状态。
+
+- **DialogObject 重载选择**
+  *Overload selection for DialogObject.*
+  之前两个重载都塞同一个实参，必然有一个抛 `IllegalArgumentException`
+  （日志里那行「试 Peer 抛异常」）。现在按实参类型挑重载。
+
 ## 1.7.6 (176) — 2026-11-08
 
 > 1.7.5 真机回访四个缺陷：链路健康标记时机错、重试后目标反复回列表导致连点、脏 no_reply 冒充结论、卡片两行文案自相矛盾。
