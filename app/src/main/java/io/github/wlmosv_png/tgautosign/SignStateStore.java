@@ -203,6 +203,12 @@ public final class SignStateStore {
                 ed.putString("result_" + id, SignLogic.resultCode(result));
                 ed.putString("result_day_" + id, today());
                 ed.putInt(Keys.resultRound(prefix, id), _curRound);   // 本轮专属，供跨轮隔离
+                if (result == SignLogic.R_NO_REPLY) {
+                    // 只有过了证据门才走到这里 → 打上资格标记；读取方认标记才敢说"未回复"
+                    ed.putString(Keys.noReplyOk(prefix, id), today());
+                } else {
+                    ed.remove(Keys.noReplyOk(prefix, id));
+                }
                 if (SignLogic.needsAttention(result)) {
                     ed.putBoolean(Keys.pendingCfm(prefix, id), true);
                     // 同时记"哪天标的"：sweepStalePendingConfirm 靠它区分
@@ -268,6 +274,11 @@ public final class SignStateStore {
                     int rr = store.i(Keys.resultRound(prefix, id), 0);
                     int cur = roundOf(prefix, id);
                     if (rr != 0 && rr != cur) return -1;
+                    // 2026-11-08 P0：**"未回复"必须带资格标记**。
+                    // 脏数据（旧版本/链路不健康时期写下的 no_reply）不得冒充结论，
+                    // 一律降级为"本轮还没有结论"（界面落「未确定」）。
+                    if (r == SignLogic.R_NO_REPLY
+                            && !today().equals(store.s(Keys.noReplyOk(prefix, id), ""))) return -1;
                     return r;
                 }
             }
@@ -393,6 +404,7 @@ public final class SignStateStore {
           .remove(Keys.retryDay(prefix, id))
           .remove(Keys.answered(prefix, id))
           .remove(Keys.resultRound(prefix, id))
+          .remove(Keys.noReplyOk(prefix, id))
           .remove("nr_" + prefix + id)
           .remove("nrday_" + prefix + id)
           .remove("result_" + id)
@@ -622,6 +634,7 @@ public final class SignStateStore {
                   .remove(Keys.retryAt(prefix, id))
                   .remove(Keys.retryDay(prefix, id))
                   .remove(Keys.sendAttempts(prefix, id))
+                  .remove(Keys.noReplyOk(prefix, id))
                   .remove("nr_" + prefix + id)
                   .remove("nrday_" + prefix + id);
                 // 注意：**不删** last_ / result_ / ev_grade_ / ev_round_ / answered_

@@ -126,15 +126,16 @@ public final class TGAutoSignEntry extends XposedModule {
             }
         }
         CORE.start();
-        // 2026-11-08：观察链路健康标记 —— 任一锚点收到事件即视为"链路可用"。
-        // 用途：待处理归因里只有"链路健康且无任何证据"才允许判「bot 未回复」，
-        // 宿主刚重启/Hook 未就绪期间不得假装"没有回复"。
+        installBusinessHooks();
+        // 2026-11-08（1.7.6 修）：观察链路健康标记必须在**装完 Hook 之后**判定。
+        // 1.7.5 把它放在 CORE.start() 之后，那时 anchorA/BHooked 还是 false →
+        //   标记永远不置位 → 所有待处理目标都被显示成"链路不健康"（真机截图实测）。
+        // 判据：任一锚点已挂上即视为链路可用（Hook 挂上 = 事件会到达）。
         try {
-            if (CORE.anchorAHooked || CORE.anchorBHooked) {
+            if (CORE.anchorAHooked || CORE.anchorBHooked || CORE.anchorCHooked) {
                 CORE.markChainHealthyNow();
             }
         } catch (Throwable ignored) {}
-        installBusinessHooks();
         notifyInjected(appContext, packageName);
     }
 

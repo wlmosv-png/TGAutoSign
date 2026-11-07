@@ -1,5 +1,40 @@
 # 更新日志
 
+## 1.7.6 (176) — 2026-11-08
+
+> 1.7.5 真机回访四个缺陷：链路健康标记时机错、重试后目标反复回列表导致连点、脏 no_reply 冒充结论、卡片两行文案自相矛盾。
+
+### 修复 · Fixed
+
+- **观察链路健康标记永远不置位**
+  *The watch-chain health flag was never set.*
+  1.7.5 把标记放在 `CORE.start()` 之后，那时锚点还没挂上 → 标记永远是 false →
+  **所有待处理目标都被显示成「观察链路不健康」**（真机截图实测）。
+  现在改在**装完 Hook 之后**判定，任一锚点已挂上即视为链路可用。
+
+- **点完「重试」目标又出现在卡住列表里（导致连点）**
+  *After tapping Retry the target stayed in the stuck list, so users tapped repeatedly.*
+  1.7.5 把窗口内的「等回复」显式设成 `RS_SENT`，而列表筛除只认 `state<0` →
+  目标立刻又回列表 → 用户以为没生效 → **连点 4~5 次**（日志实测：6379863842_1 四秒内跑到 round=6）。
+  现已恢复既有语义：等待窗口内不打扰用户。（新增的轮次号让这一点在日志里一目了然）
+
+- **脏 `no_reply` 不再冒充结论**
+  *Stale "no reply" records no longer pass as verdicts.*
+  `result_=no_reply` 可能是观察链路不健康时期（旧版锚点B 未挂上、宿主刚重启）
+  写下的脏结论。现在只有**过了证据门**写入的 no_reply 才带「资格标记」`nr_ok_`；
+  无标记的一律降级为「本轮还没有结论」，界面落「未确定」。
+
+- **卡片两行文案自相矛盾**
+  *Two lines on the same card contradicted each other.*
+  一行写「不代表 bot 没回复」，另一行又写「bot 全程没回复」。现在「未确定」状态下第三行改为
+  「还没有结论：可能 bot 已回复但当前无法确认」—— 不再对 bot 行为下断言。
+
+### 测试 · Tests
+
+- **PendingStateTest 扩到 43 项**
+  *PendingStateTest grows to 43 assertions.*
+  新增「脏 no_reply 无资格标记 → 视为无结论」与「有资格标记才算结论」。
+
 ## 1.7.5 (175) — 2026-11-08
 
 > 待处理状态与回复判定链 P0/P1 修复：废除「90 秒推导未回复」、拆分回复证据、统一重试入口与轮次隔离。

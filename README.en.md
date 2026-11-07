@@ -183,6 +183,12 @@ You installed a debug build. Uninstall it, then install the official APK from th
 
 ## 更新日志 · Changelog
 
+### v1.7.6 (176) — 2026-11-08
+
+**Fixed**: The watch-chain health flag was never set. · After tapping Retry the target stayed in the stuck list, so users tapped repeatedly. · Stale "no reply" records no longer pass as verdicts. · Two lines on the same card contradicted each other.
+
+**测试**: PendingStateTest grows to 43 assertions.
+
 ### v1.7.5 (175) — 2026-11-08
 
 **Fixed**: Reply evidence is now graded and round-scoped. · Both retry entries now share one round-reset routine. · State-transition guards and atomic updates.
@@ -190,12 +196,6 @@ You installed a debug build. Uninstall it, then install the official APK from th
 **New**: Minimal event log for the whole reply chain.
 
 **测试**: New PendingStateTest (40 assertions) plus a static gate.
-
-### v1.7.4 (174) — 2026-11-08
-
-**Fixed**: NotificationCenter was wrongly rejected, so anchor B never got hooked. · Method return-type hints did not understand primitives. · Canonical array type names were not understood. · The superclass contract was always false. · DialogObject overload lookup now goes through the symbol layer.
-
-**测试**: HostSymbolsTest: 77 assertions.
 
 [Full changelog →](https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md)
 

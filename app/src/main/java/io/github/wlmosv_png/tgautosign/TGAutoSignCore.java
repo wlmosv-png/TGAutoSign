@@ -1399,7 +1399,7 @@ public final class TGAutoSignCore {
                 card.addView(t2);
 
                 // 第三行：处置提示（告诉用户「该做什么」，而不只是「出什么事了」）
-                String hintText = attentionHint(prefix, rs.id);
+                String hintText = attentionHint(prefix, rs.id, rs.state);
                 if (hintText != null && hintText.length() > 0) {
                     TextView t3 = new TextView(act);
                     t3.setTextSize(Theme.TS_CAPTION);
@@ -8574,7 +8574,12 @@ public final class TGAutoSignCore {
                         state = RS_PANEL;
                         note = Lang.tr("等不到带按钮的新消息：在条目「编辑」里填一条前置命令（如 /menu）"); break;
                     case SignLogic.PS_SENT:
-                        state = RS_SENT; note = "已发出，等回复"; break;
+                        // 2026-11-08 回归修复：窗口内"等回复"**不进**「卡住的目标」列表。
+                        // 1.7.5 里把它显式设成 RS_SENT(1)，而列表筛除只认 state<0，
+                        // 于是用户点完「重试」目标立刻又出现 → 以为没生效 → 连点 4~5 次
+                        // （日志实测：6379863842_1 在 4 秒内跑到 round=6）。
+                        // 恢复既有语义：窗口内不打扰用户。
+                        state = -1; note = null; break;
                     case SignLogic.PS_UNCONFIRMED:
                         state = RS_UNCONFIRMED;
                         // 措辞里把「为什么还判不出」说清：链路是否健康 + 已观察到哪一级证据
@@ -16614,6 +16619,19 @@ public final class TGAutoSignCore {
 
     /** 归类 → 用户可读的处置说明（聚合条里逐条显示）。 */
     private String attentionHint(String prefix, String id) {
+        return attentionHint(prefix, id, -1);
+    }
+
+    /**
+     * 带状态的处置说明（2026-11-08）。
+     * 为什么多一个参数：状态为「未确定」时**绝不能**再叠一句"bot 全程没回复" ——
+     * 那是对 bot 行为的断言，而"未确定"的全部意义正是"证据不足以断言"。
+     * 真机实测：卡片上同时出现"不代表 bot 没回复"和"bot 全程没回复"，用户直接被绕晕。
+     */
+    private String attentionHint(String prefix, String id, int state) {
+        if (state == RS_UNCONFIRMED) {
+            return Lang.tr("还没有结论：可能 bot 已回复但当前无法确认。可重试，或先忽略今天。");
+        }
         int rc = resultCodeOf(prefix, id);
         if (rc == SignLogic.R_FAILED)       return Lang.tr("bot 明确说没签上（如「请先加入」），按提示处理后重试");
         if (rc == SignLogic.R_BTN_STALE)    return Lang.tr("面板未就绪：给该目标填一条前置命令（如 /menu），模块会自动拉面板");

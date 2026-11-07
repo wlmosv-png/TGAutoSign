@@ -128,6 +128,15 @@ public final class Keys {
     public static String resultRound(String p, String id)     { return p + "result_round_" + id; }
     /** 今天观察链路是否健康（锚点 A\/B 至少收到过一批事件），值 = 日期。 */
     public static String chainOk()                      { return "chain_ok"; }
+    /**
+     * 「未回复」这个结论的**资格标记**（值 = 日期）。
+     *
+     * 为什么需要：改前 result_=no_reply 可能是"观察链路不健康时期"写下的
+     * （例如 1.7.3 锚点B 未挂上、或宿主刚重启），那种 no_reply 没有证据支撑。
+     * 现在只有过了证据门（无任何回复证据 + 无 answered + 链路健康）才写这个标记；
+     * 读取方无标记就把 no_reply 降级为「未确定」，历史脏数据因此不会冒充结论。
+     */
+    public static String noReplyOk(String p, String id) { return p + "nr_ok_" + id; }
     // ── 2026-10-06 判定词作用域（交接单第八条）────────────────
     // 三级：全局 / Bot / 目标。旧键 jmb_ok_words、jmb_fail_words 是「全局」级，
     // 继续原样读写，不迁移、不丢失。

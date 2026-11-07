@@ -179,6 +179,18 @@ public final class PendingStateTest {
         check("8b. 重试后旧轮证据归档保留（非破坏性）",
                 store.i(Keys.evRoundArchived(P, id5a), 0) == 1 && store.i(Keys.evRoundArchived(P, id5b), 0) == 1);
 
+        // 场景：脏 no_reply（无资格标记）不得冒充结论；有资格标记才算数
+        String id7 = "999_1";
+        store.set("result_" + id7, SignLogic.resultCode(SignLogic.R_NO_REPLY));
+        store.set("result_day_" + id7, today);
+        eq("Q1. 旧脏 no_reply（无资格标记）→ 视为无结论", -1, st.resultOf(P, id7));
+        store.set(Keys.noReplyOk(P, id7), today);
+        eq("Q2. 带资格标记的 no_reply 才算结论",
+                SignLogic.R_NO_REPLY, st.resultOf(P, id7));
+        check("Q3. 资格门要求无证据+链路健康",
+                SignLogic.mayMarkNoReply(false, SignLogic.GRADE_NONE, true)
+                && !SignLogic.mayMarkNoReply(true, SignLogic.GRADE_NONE, true));
+
         // 补充：证据只升不降（判定失败也不能把"已关联"降级）
         String id6 = "888_1";
         st.noteEvidence(P, id6, SignLogic.GRADE_CORR);
