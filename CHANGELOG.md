@@ -1,5 +1,60 @@
 # 更新日志
 
+## 1.7.2 (172) — 2026-11-08
+
+> 适配 Telegram 13.2.0 的类名混淆变更：新增宿主符号解析层，恢复会话列表、Peer 解析、账号识别与回复判定；13.1.1 及更早行为不变。
+
+### 新增 · Added
+
+- **宿主符号解析层（HostSymbols）**
+  *New host symbol resolution layer (HostSymbols).*
+  Telegram 13.2.0 起不再保留 `org.telegram.messenger.*` 的类名（官方混淆规则删除
+  `-keep class org.telegram.messenger.* { *; }`，实测保留类名从 726 个降到 66 个），
+  模块过去完全靠「按原名反射」，新版上会话列表、Peer 解析、账号识别、回复判定整条链静默失效。
+  现在统一由符号层解析：① 按原名直查（旧版与不混淆 fork 走这条，行为逐字不变）；
+  ② 按宿主 versionCode 查映射表；③ 结构指纹校验（映射来的类必须满足方法／字段契约，否则拒绝）；
+  ④ 成员按「参数表 + 返回类型」结构匹配，多候选一律拒绝。
+
+- **映射表逐个用结构证据确认**
+  *Every mapping entry is confirmed by structural evidence.*
+  13.2.0 实测：MessagesController→lp、NotificationCenter→os、UserConfig→w10、
+  SharedConfig→nz、MessagesStorage→wr、DialogObject→k5、SendMessagesHelper→lz、
+  UserNameResolver→y10、BaseController→j1。其中 DialogObject 有两个候选（ej / k5），
+  按「同时具备 (Peer)→long 与 (InputPeer)→long 两个重载」消歧后才定为 k5。
+
+- **适配状态显式可见**
+  *Adaptation status is now explicit.*
+  `/jmb` 自检面板新增「宿主符号解析」一行，启动日志写「宿主适配」与逐项符号结果；
+  解析不出关键符号时明说「宿主版本未适配」，并停装对应的业务 Hook。
+
+### 修复 · Fixed
+
+- **假注入**
+  *Fixed false-positive injection.*
+  过去白名单命中就直接放行：即使关键类一个都解析不到，模块仍报「已加载」、面板照常打开。
+  现在白名单只代表「允许尝试适配」，每个业务 Hook 各自要求符号解析成功才安装；
+  不兼容时保留仍能独立工作的 `/jmb` 命令与按钮学习，并明确标注降级。
+
+- **锚点 A 的前缀匹配在新版失效**
+  *Anchor A's prefix match no longer worked on the new build.*
+  旧实现按方法名前缀 `processUpdate` 匹配；13.2.0 方法名同样被改写（processUpdateArray→K3），
+  前缀匹配 0 命中。现在先走前缀（旧版路径），0 命中时按结构指纹
+  `(ArrayList,ArrayList,ArrayList,boolean,int):boolean` 定位。
+
+- **通知 id 读不到时的兜底**
+  *Fallback when the notification id cannot be read.*
+  didReceiveNewMessages 的 id 过去读 NotificationCenter 的字段；新版字段名也被改写。
+  现在旧版读字段真值，新版退到官方源码常量（totalEvents 自 1 起、该通知是第一个使用者 → 恒为 1），
+  并额外按参数形状 (ArrayList, boolean) 二次过滤，保证常量出入时也不会漏事件或误触发。
+
+### 测试 · Tests
+
+- **新增 HostSymbolsTest（57 项）**
+  *New HostSymbolsTest (57 assertions).*
+  覆盖：旧版原名解析、新版映射解析、错误映射被结构契约拒绝、
+  同参数同返回的多候选拒绝、缓存隔离（切版本不串）、未知版本降级、
+  关键符号缺失、旧版路径不受新版映射影响、消息对象结构判定与通知参数形状。
+
 ## 1.7.1 (171) — 2026-11-01
 
 > 修复目标固定时刻被全局窗口旁路、面板公告被误判为失败；新增手动撤销「今日已签」。

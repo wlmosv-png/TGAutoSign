@@ -106,6 +106,18 @@ public final class TGAutoSignEntry extends XposedModule {
         Context appContext = context.getApplicationContext() != null ? context.getApplicationContext() : context;
         if (appLoader == null) appLoader = context.getClassLoader();
 
+        // ── 宿主符号解析（2026-11-08）──────────────────────────────
+        // Telegram 13.2.0 起 org.telegram.messenger.* 类名被 R8 改写；
+        // 这里把「旧名 → 实际类/方法/字段」的翻译装好，之后所有业务反射都经它。
+        long vc = 0L;
+        try {
+            android.content.pm.PackageInfo pi = appContext.getPackageManager().getPackageInfo(packageName, 0);
+            vc = pi.getLongVersionCode();
+        } catch (Throwable ignored) {}
+        HostSymbols.install(appLoader, packageName, vc);
+        logInfo("宿主符号解析：" + HostSymbols.summaryLine());
+        for (String _sym : HostSymbols.symbolLog()) logInfo(_sym);
+
         if (CORE == null) {
             synchronized (TGAutoSignEntry.class) {
                 if (CORE == null) {
@@ -300,8 +312,9 @@ public final class TGAutoSignEntry extends XposedModule {
         if (args == null) return null;
         for (Object a : args) {
             if (a == null) continue;
-            String n = a.getClass().getName();
-            if (n != null && n.contains("MessageObject")) return a;
+            // 2026-11-08：混淆宿主里类名不再含 "MessageObject"，改按结构判定
+            // （类里持有 TLRPC$Message 字段 = 消息对象）。
+            if (HostSymbols.looksLikeMessageObject(a.getClass())) return a;
         }
         return null;
     }
@@ -435,14 +448,24 @@ public final class TGAutoSignEntry extends XposedModule {
     }
 
     // 触发源 3.5：bot 回复语义判定
+    //
+    // 2026-11-08 适配 Telegram 13.2.0：
+    //   旧实现靠「方法名前缀 processUpdate」匹配。13.2.0 起 org.telegram.messenger.* 的
+    //   方法名也被 R8 改写（实测 processUpdateArray → lp.K3），前缀匹配会 0 命中。
+    //   现在改为：先按原名前缀（旧版路径，逐字不变），0 命中时按**结构指纹**取目标。
+    //   解析不到就明确报「宿主未适配」并停装锚点 A —— 绝不假装已挂上。
     private void hookProcessUpdate() {
+        Class<?> mc;
         try {
-            Class<?> mc = loadClass("org.telegram.messenger.MessagesController");
-            Method[] ms = mc.getDeclaredMethods();
+            mc = loadClass("org.telegram.messenger.MessagesController");
+        } catch (Throwable t) {
+            logError("宿主未适配：MessagesController 无法解析 → 锚点A(协议层)不安装", t);
+            return;
+        }
+        try {
+            java.util.List<Method> targets = HostSymbols.processUpdateMethods(mc);
             int hooked = 0;
-            for (Method m : ms) {
-                // TG 12.10.1 起改名为 processUpdateArray，按前缀匹配兼容新旧两代
-                if (!m.getName().startsWith("processUpdate")) continue;
+            for (Method m : targets) {
                 String key = "processUpdate#" + m.toGenericString();
                 synchronized (HOOKED_METHODS) {
                     if (HOOKED_METHODS.contains(key)) continue;
@@ -468,29 +491,42 @@ public final class TGAutoSignEntry extends XposedModule {
             }
             logInfo("hooked MessagesController.processUpdate*（匹配 " + hooked + " 个方法）");
             if (hooked > 0) CORE.anchorAHooked = true;
-            if (hooked == 0) logError("未找到 " + "MessagesController.processUpdate*" + "，该触发源在此宿主上无效", null);
+            if (hooked == 0) logError("未找到 processUpdate* 的对应方法 → 锚点A在此宿主上无效", null);
         } catch (Throwable t) {
             logError("hook processUpdate failed", t);
         }
     }
 
-    // 触发源 3.6（锚点 B）：NotificationCenter.didReceiveNewMessages
+    // 触发源 3.6（锚点 B）：NotificationCenter.didReceiveNewMessages（实现端）
     //
     // 为什么要有它：锚点 A（processUpdate*）是协议层入口，锚点 B 是「消息已入库」的事件层。
     // 两者互不依赖 —— TG 换 fork 或大版本重构时，不可能同时消失（消失了自己就崩）。
-    // 这条不依赖任何 TL update 类型名，只认 NotificationCenter 的通知 id（十年未变）。
     //
-    // 入口选 MessagesController.didReceivedNotification：它是 NotificationCenterDelegate
-    // 的已实现方法，所有通知都会经过它，比 hook 接口方法稳（接口要遍历所有实现者）。
+    // 2026-11-08：官方版向来没有 MessagesController.didReceivedNotification 这个名字
+    //   （13.1.1 实测也是 0 命中），所以实现端在官方版一直是「记一行 info 就返回」。
+    //   这里保持该语义不变，只把类/方法解析换成符号层；混淆宿主读不到 id 字段时退到
+    //   官方源码常量（1）并在发送端用「参数形状」二次过滤，见 hookPostNotification。
     private void hookDidReceiveNewMessages() {
+        Class<?> ncCls;
         try {
-            Class<?> mc = loadClass("org.telegram.messenger.MessagesController");
-            Class<?> ncCls = loadClass("org.telegram.messenger.NotificationCenter");
-            // 读取 didReceiveNewMessages 通知 id（public static final int）
-            final int ID_DID_RECEIVE = ncCls.getField("didReceiveNewMessages").getInt(null);
-            Method m = findMethod(mc, "didReceivedNotification", int.class, int.class, Object[].class);
+            ncCls = loadClass("org.telegram.messenger.NotificationCenter");
+        } catch (Throwable t) {
+            logError("宿主未适配：NotificationCenter 无法解析 → 锚点B(事件层)不安装", t);
+            return;
+        }
+        Class<?> mc;
+        try {
+            mc = loadClass("org.telegram.messenger.MessagesController");
+        } catch (Throwable t) {
+            logInfo("MessagesController 不可用，锚点B实现端跳过（发送端仍会尝试）");
+            return;
+        }
+        try {
+            final int ID_DID_RECEIVE = HostSymbols.didReceiveNewMessagesId(ncCls);
+            Method m = HostSymbols.method(mc, "didReceivedNotification",
+                    new Class<?>[]{int.class, int.class, Object[].class}, Boolean.FALSE);
             if (m == null) {
-                logError("MessagesController.didReceivedNotification not found，锚点 B 在此宿主上无效", null);
+                logInfo("该宿主没有 MessagesController.didReceivedNotification（官方版向来如此），锚点B走发送端");
                 return;
             }
             m.setAccessible(true);
@@ -504,17 +540,20 @@ public final class TGAutoSignEntry extends XposedModule {
                     .intercept(chain -> {
                         try {
                             int id = ((Number) chain.getArg(0)).intValue();
+                            Object argsObj = chain.getArg(2);
                             // 只关心「新消息到达」这一条通知；其余立刻放行，开销可忽略。
-                            if (id == ID_DID_RECEIVE) {
+                            // 混淆宿主上 id 字段名不可读时，用参数形状兜底（(ArrayList, boolean)）。
+                            boolean hit = (id == ID_DID_RECEIVE)
+                                    || (HostSymbols.isMapped() && HostSymbols.looksLikeDidReceiveArgs(argsObj));
+                            if (hit) {
                                 Object account = chain.getArg(1);
-                                Object args = chain.getArg(2);
                                 Object ctrl = null;
                                 try { ctrl = chain.getThisObject(); } catch (Throwable ignored) {}
                                 int acc = CORE.accountOfController(ctrl);
                                 int accFinal = acc >= 0 ? acc
                                         : (account instanceof Number ? ((Number) account).intValue() : -1);
-                                if (args instanceof Object[]) {
-                                    try { CORE.onDidReceiveNewMessages(accFinal, (Object[]) args); }
+                                if (argsObj instanceof Object[]) {
+                                    try { CORE.onDidReceiveNewMessages(accFinal, (Object[]) argsObj); }
                                     catch (Throwable ignored) {}
                                 }
                             }
@@ -532,13 +571,25 @@ public final class TGAutoSignEntry extends XposedModule {
     //
     // 与原「实现端」钩子并存：实现端依赖「谁注册了 id=1」，发送端不依赖任何注册关系。
     // 两者都成功时按 (peer, msgId) 天然去重（同一条消息判定两次结果一致、幂等）。
+    //
+    // 2026-11-08：混淆宿主上 NotificationCenter 的字段名也不可读，didReceiveNewMessages 的
+    //   id 取值退到官方源码常量（totalEvents 从 1 起、didReceiveNewMessages 是第一个使用它的
+    //   字段 → 恒为 1）。为了「常量万一变了也不漏事件」，额外允许**参数形状**命中：
+    //   仅当宿主是混淆形态时启用，且要求 (ArrayList, boolean) 且首元素是消息对象。
     private void hookPostNotification() {
+        Class<?> ncCls;
         try {
-            Class<?> ncCls = loadClass("org.telegram.messenger.NotificationCenter");
-            final int ID_DID_RECEIVE = ncCls.getField("didReceiveNewMessages").getInt(null);
-            Method m = findMethod(ncCls, "postNotificationName", int.class, Object[].class);
+            ncCls = loadClass("org.telegram.messenger.NotificationCenter");
+        } catch (Throwable t) {
+            logError("宿主未适配：NotificationCenter 无法解析 → 锚点B发送端不安装", t);
+            return;
+        }
+        try {
+            final int ID_DID_RECEIVE = HostSymbols.didReceiveNewMessagesId(ncCls);
+            Method m = HostSymbols.method(ncCls, "postNotificationName",
+                    new Class<?>[]{int.class, Object[].class}, Boolean.FALSE);
             if (m == null) {
-                logError("NotificationCenter.postNotificationName(int,Object[]) not found，锚点 B 发送端无效", null);
+                logError("NotificationCenter.postNotificationName(int,Object[]) 解析失败 → 锚点B发送端无效", null);
                 return;
             }
             m.setAccessible(true);
@@ -552,12 +603,13 @@ public final class TGAutoSignEntry extends XposedModule {
                     .intercept(chain -> {
                         try {
                             Object a0 = chain.getArg(0);
-                            if (a0 instanceof Number && ((Number) a0).intValue() == ID_DID_RECEIVE) {
-                                Object a1 = chain.getArg(1);
-                                if (a1 instanceof Object[]) {
-                                    try { CORE.onPostNotification(ID_DID_RECEIVE, (Object[]) a1); }
-                                    catch (Throwable ignored) {}
-                                }
+                            Object a1 = chain.getArg(1);
+                            int id = (a0 instanceof Number) ? ((Number) a0).intValue() : Integer.MIN_VALUE;
+                            boolean hit = (id == ID_DID_RECEIVE)
+                                    || (HostSymbols.isMapped() && HostSymbols.looksLikeDidReceiveArgs(a1));
+                            if (hit && a1 instanceof Object[]) {
+                                try { CORE.onPostNotification(ID_DID_RECEIVE, (Object[]) a1); }
+                                catch (Throwable ignored) {}
                             }
                         } catch (Throwable ignored) {}
                         return chain.proceed();
@@ -638,6 +690,10 @@ public final class TGAutoSignEntry extends XposedModule {
     }
 
     private Class<?> loadClass(String name) throws ClassNotFoundException {
+        // 2026-11-08：混淆宿主（Telegram 13.2.0+）先经符号层翻译；
+        // 旧版与不混淆 fork 在 mapClass 里直接命中原名，行为与历史逐字一致。
+        Class<?> mapped = HostSymbols.mapClass(name);
+        if (mapped != null) return mapped;
         return Class.forName(name, false, appLoader);
     }
 

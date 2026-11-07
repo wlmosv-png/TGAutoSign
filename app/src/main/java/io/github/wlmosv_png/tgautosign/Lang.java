@@ -1535,6 +1535,7 @@ public final class Lang {
         // ── 链路自检（1.6.7）──
         EN.put("── 链路自检（只读，不发任何消息） ──", "── Link self-check (read-only, sends nothing) ──");
         EN.put("锚点A 协议层(processUpdate*): {0}   命中 {1}", "Anchor A protocol (processUpdate*): {0}   hits {1}");
+        EN.put("宿主符号解析：{0}", "Host symbols: {0}");
         EN.put("锚点B 事件层(didReceiveNewMessages): {0}   收到 {1} 批 / 命中 {2}", "Anchor B events (didReceiveNewMessages): {0}   {1} batches / {2} hits");
         EN.put("锚点C 发送回执(sendRequest): {0}", "Anchor C send receipt (sendRequest): {0}");
         EN.put("已挂上", "installed");

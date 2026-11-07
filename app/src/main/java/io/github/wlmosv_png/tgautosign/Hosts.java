@@ -16,6 +16,13 @@ import java.util.Set;
  *
  * 注意：作用域由 Xposed 管理器决定，用户必须先把对应客户端勾选进模块作用域，
  * 本类只负责"进了作用域之后要不要真的注入"。
+ *
+ * <h3>2026-11-08 语义修订：白名单只代表「允许尝试适配」</h3>
+ * Telegram 13.2.0 起 R8 不再保留 {@code org.telegram.messenger.*} 类名。白名单命中
+ * <b>不等于</b>适配成功 —— 过去白名单直接放行，会出现「模块报告已加载、面板也能开，
+ * 但会话列表 / Peer / 账号 / 回复判定全部失效」的假注入。
+ * 现在：白名单 = 允许注入并尝试解析；<b>真正的门是 {@link HostSymbols} 对关键符号的解析结果</b>，
+ * 由模块入口按「每个业务 Hook 所需的符号」逐个判定是否安装（见 TGAutoSignEntry）。
  */
 public final class Hosts {
 
@@ -103,6 +110,34 @@ public final class Hosts {
 
     public static Set<String> knownPackages() {
         return KNOWN;
+    }
+
+    // ── 2026-11-08：适配状态（供日志与 /jmb 面板显示「兼容 / 降级」实在结果）──
+
+    /** 关键宿主符号是否解析成功（HostSymbols 的结果，不是白名单结果）。 */
+    public static boolean isAdapted() {
+        return HostSymbols.hostAdapted();
+    }
+
+    /** 是否有会话/账号数据能力（MessagesController 解析成功）。 */
+    public static boolean hasDataSymbols() {
+        return HostSymbols.hasMessagesController();
+    }
+
+    /** 是否有事件层能力（NotificationCenter 解析成功）。 */
+    public static boolean hasEventSymbols() {
+        return HostSymbols.hasNotificationCenter();
+    }
+
+    /** 适配状态一句话（日志 + 自检面板共用）。 */
+    public static String adaptationStatus(boolean en) {
+        if (!HostSymbols.isInstalled()) return en ? "not initialised" : "未初始化";
+        if (isAdapted()) {
+            return en ? "adapted (" + HostSymbols.mapLabel() + ")"
+                      : "已适配（" + HostSymbols.mapLabel() + "）";
+        }
+        return en ? "host version NOT supported — data/event features disabled"
+                  : "宿主版本未适配 —— 数据与事件功能已停用（仅保留命令与按钮学习）";
     }
 
     private static boolean canLoad(ClassLoader loader, String name) {

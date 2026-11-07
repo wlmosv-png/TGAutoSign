@@ -2096,24 +2096,72 @@ public final class TGAutoSignCore {
 
     /** 用 UserNameResolver.resolve(username) 主动从服务器拉取该 bot 的 user 并写入本账号。
      *  这是跨账号复制后「让新账号认识这些 bot」的根治手段：拉取成功后 TG 会把 user
-     *  （含当前有效的 access_hash）写进本账号 users 表，之后的 getUser / getInputPeer 全部正常。 */
+     *  （含当前有效的 access_hash）写进本账号 users 表，之后的 getUser / getInputPeer 全部正常。
+     *
+     *  2026-11-08：Telegram 13.2.0 起该类的类名/方法名/回调接口名全部被 R8 改写
+     *  （实测 UserNameResolver → org.telegram.messenger.y10，resolve → a，返回类型也不再是
+     *  java.lang.Runnable）。这里改为：
+     *    ① 类 → 宿主符号层；
+     *    ② 回调接口 → 优先原名，取不到就用 resolve 方法最后一个参数类型（自洽，无需猜名）；
+     *    ③ resolve → 先按旧签名精确取（旧版逐字不变），失败再按「前两参 String、末参接口」
+     *       的唯一结构命中；多候选一律拒绝。 */
     private void resolveUsernameInto(int account, final String username) {
         if (username == null || username.length() == 0) return;
         try {
             Class<?> urCls = classEx("org.telegram.messenger.UserNameResolver");
             if (urCls == null) return;
-            Object ur = urCls.getConstructor(int.class).newInstance(Integer.valueOf(account));
-            Class<?> cbCls = classEx("org.telegram.messenger.Utilities$Callback");
-            Object cb = java.lang.reflect.Proxy.newProxyInstance(cl, new Class<?>[]{cbCls},
+
+            java.lang.reflect.Constructor<?> ctor = null;
+            try { ctor = urCls.getConstructor(int.class); } catch (Throwable ignored) {}
+            if (ctor == null) {
+                for (java.lang.reflect.Constructor<?> cc : urCls.getDeclaredConstructors()) {
+                    if (cc.getParameterCount() == 1 && cc.getParameterTypes()[0] == int.class) { ctor = cc; break; }
+                }
+            }
+            if (ctor == null) { noteSwallowed("resolveUsernameInto.ctor", new NoSuchMethodException("int ctor")); return; }
+            ctor.setAccessible(true);
+            Object ur = ctor.newInstance(Integer.valueOf(account));
+
+            Class<?> cbCls = null;
+            try { cbCls = classEx("org.telegram.messenger.Utilities$Callback"); } catch (Throwable ignored) {}
+
+            java.lang.reflect.Method m = null;
+            if (cbCls != null) {
+                try { m = urCls.getMethod("resolve", String.class, String.class, boolean.class, cbCls); } catch (Throwable ignored) {}
+                if (m == null) try { m = urCls.getMethod("resolve", String.class, String.class, cbCls); } catch (Throwable ignored) {}
+                if (m == null) try { m = urCls.getMethod("resolve", String.class, cbCls); } catch (Throwable ignored) {}
+            }
+            if (m == null) {
+                // 混淆宿主：结构定位（唯一命中，歧义即放弃）
+                for (java.lang.reflect.Method mm : urCls.getDeclaredMethods()) {
+                    Class<?>[] ps = mm.getParameterTypes();
+                    if (ps.length < 2 || ps.length > 4) continue;
+                    if (ps[0] != String.class || ps[1] != String.class) continue;
+                    if (!ps[ps.length - 1].isInterface()) continue;
+                    if (m != null) { m = null; break; }
+                    m = mm;
+                }
+            }
+            if (m == null) { noteSwallowed("resolveUsernameInto.resolve", new NoSuchMethodException("resolve")); return; }
+            m.setAccessible(true);
+
+            Class<?>[] ps = m.getParameterTypes();
+            if (cbCls == null) cbCls = ps[ps.length - 1];
+            final Class<?> cbFinal = cbCls;
+            Object cb = java.lang.reflect.Proxy.newProxyInstance(urCls.getClassLoader(), new Class<?>[]{cbFinal},
                 new java.lang.reflect.InvocationHandler() {
                     @Override public Object invoke(Object proxy, java.lang.reflect.Method method, Object[] args) {
                         return null;
                     }
                 });
-            // resolve(String username, String referer, boolean force, Callback<Long>)
-            java.lang.reflect.Method m = urCls.getMethod("resolve",
-                    String.class, String.class, boolean.class, cbCls);
-            m.invoke(ur, username, null, Boolean.FALSE, cb);
+            Object[] callArgs = new Object[ps.length];
+            callArgs[0] = username;
+            callArgs[1] = null;
+            for (int i = 2; i < ps.length - 1; i++) {
+                callArgs[i] = (ps[i] == boolean.class) ? Boolean.FALSE : null;
+            }
+            callArgs[ps.length - 1] = cb;
+            m.invoke(ur, callArgs);
             logd("[复制激活] 已请求拉取 " + username + " @账号" + account);
         } catch (Throwable t) {
             noteSwallowed("resolveUsernameInto", t);
@@ -2296,6 +2344,16 @@ public final class TGAutoSignCore {
             + " · " + hostAbi() + " · Android " + android.os.Build.VERSION.RELEASE
             + " (SDK " + android.os.Build.VERSION.SDK_INT + ")");
         jlogForce("注入: " + injectHow(_hostPkg158) + " · 模块 " + MODULE_PKG);
+        // 2026-11-08：白名单只代表「允许尝试适配」；这里报**实际解析结果**，
+        //   不兼容就明说，避免出现「已加载但核心功能全废」的假成功。
+        jlogForce("宿主适配: " + Hosts.adaptationStatus(false) + " · " + HostSymbols.summaryLine());
+        if (HostSymbols.isMapped()) {
+            for (String _sl : HostSymbols.symbolLog()) jlogForce(_sl);
+        }
+        if (!Hosts.isAdapted()) {
+            jlogForce("[警告] 宿主版本未适配：会话列表 / Peer 解析 / 账号识别 / 回复判定已停用，"
+                    + "仅保留 /jmb 命令与按钮学习。请等待模块适配该 Telegram 版本。");
+        }
         // 目标数必须与账号同源：targetsSnapshot() 是按 lastAccount 装载的内存快照，
         // 启动时 loadTargetsLocked 还没跑，二者会不一致（实测打出"账号: 1 目标: 11"
         // 而账号1 其实不是当前账号）。改为按当前账号现场统计。
@@ -12204,7 +12262,7 @@ public final class TGAutoSignCore {
         //  信息全部来自内存计数，**不发消息、不发请求、不点按钮**。
         //  每次打开自诊断都会刷新一次；也可以点「刷新链路」重跑。
         // ════════════════════════════════════════════════════════════════
-        final TextView[] linkRows = new TextView[6];
+        final TextView[] linkRows = new TextView[7];
         final LinearLayout linkBox = new LinearLayout(act);
         linkBox.setOrientation(LinearLayout.VERTICAL);
         for (int li = 0; li < linkRows.length; li++) {
@@ -12227,6 +12285,8 @@ public final class TGAutoSignCore {
                 linkRows[i].setText(Lang.tf("锚点C 发送回执(sendRequest): {0}",
                         lc.cHooked ? Lang.tr("已挂上") : Lang.tr("未挂上")));
                 linkRows[i].setTextColor(lc.cHooked ? Theme.accent(act) : 0xFFE05252); i++;
+                linkRows[i].setText(Lang.tf("宿主符号解析：{0}", HostSymbols.summaryLine()));
+                linkRows[i].setTextColor(HostSymbols.hostAdapted() ? Theme.accent(act) : 0xFFE05252); i++;
                 linkRows[i].setText(lc.lastRecv.length() > 0
                         ? Lang.tf("最近收到消息：{0}（{1} 前）", lc.lastRecv, humanAge(lc.lastRecvAgeMs))
                         : Lang.tr("最近收到消息：（还没有记录 —— 若刚发过签到请等一会再刷新）"));
@@ -20525,8 +20585,10 @@ public final class TGAutoSignCore {
             Class<?> c;
             try { c = classEx("org.telegram.messenger.SendMessagesHelper"); }
             catch (Throwable t) { diagCmd("SendMessagesHelper 类加载失败: " + t); return; }
-            java.lang.reflect.Method getInst = null;
-            for (java.lang.reflect.Method mm : c.getDeclaredMethods()) {
+            // 2026-11-08：先走符号层（混淆宿主上成员名已改写），再退回原名扫描。
+            java.lang.reflect.Method getInst = HostSymbols.method(c, "getInstance",
+                    new Class<?>[]{int.class}, Boolean.TRUE);
+            if (getInst == null) for (java.lang.reflect.Method mm : c.getDeclaredMethods()) {
                 if ("getInstance".equals(mm.getName())
                         && mm.getParameterTypes().length == 1
                         && mm.getParameterTypes()[0] == int.class
@@ -20539,8 +20601,9 @@ public final class TGAutoSignCore {
             Object smh = getInst.invoke(null, Integer.valueOf(acc));
             if (smh == null) { diagCmd("getInstance 返回 null"); return; }
 
-            java.lang.reflect.Method getId = null;
-            for (java.lang.reflect.Method mm : c.getMethods()) {
+            java.lang.reflect.Method getId = HostSymbols.method(c, "getSendingMessageId",
+                    new Class<?>[]{long.class}, null);
+            if (getId == null) for (java.lang.reflect.Method mm : c.getMethods()) {
                 if ("getSendingMessageId".equals(mm.getName())
                         && mm.getParameterTypes().length == 1
                         && mm.getParameterTypes()[0] == long.class) {
@@ -20579,7 +20642,13 @@ public final class TGAutoSignCore {
                     try {
                         Object smh = null;
                         Class<?> sc = classEx("org.telegram.messenger.SendMessagesHelper");
-                        for (java.lang.reflect.Method mm : sc.getDeclaredMethods()) {
+                        java.lang.reflect.Method gi2 = HostSymbols.method(sc, "getInstance",
+                                new Class<?>[]{int.class}, Boolean.TRUE);
+                        if (gi2 != null) {
+                            gi2.setAccessible(true);
+                            smh = gi2.invoke(null, Integer.valueOf(fAcc));
+                        }
+                        if (smh == null) for (java.lang.reflect.Method mm : sc.getDeclaredMethods()) {
                             if ("getInstance".equals(mm.getName())
                                     && mm.getParameterTypes().length == 1
                                     && mm.getParameterTypes()[0] == int.class
@@ -20590,8 +20659,9 @@ public final class TGAutoSignCore {
                             }
                         }
                         if (smh != null) {
-                            java.lang.reflect.Method rm = null;
-                            for (java.lang.reflect.Method mm : sc.getMethods()) {
+                            java.lang.reflect.Method rm = HostSymbols.method(sc, "removeFromSendingMessages",
+                                    new Class<?>[]{int.class, boolean.class}, null);
+                            if (rm == null) for (java.lang.reflect.Method mm : sc.getMethods()) {
                                 if ("removeFromSendingMessages".equals(mm.getName())
                                         && mm.getParameterTypes().length == 2
                                         && mm.getParameterTypes()[0] == int.class) { rm = mm; break; }
@@ -25715,6 +25785,10 @@ public final class TGAutoSignCore {
 
     // ==================== 反射工具 ====================
     private Class<?> classEx(String name) throws ClassNotFoundException {
+        // 2026-11-08：混淆宿主（Telegram 13.2.0+）先经宿主符号层翻译。
+        // 旧版与不混淆 fork 在 mapClass 里直接命中原名，行为与历史逐字一致。
+        Class<?> mapped = HostSymbols.mapClass(name);
+        if (mapped != null) return mapped;
         return Class.forName(name, false, cl);
     }
 
@@ -25774,18 +25848,23 @@ public final class TGAutoSignCore {
         }
     }
 
+    // 2026-11-08：三个反射入口统一先经 HostSymbols 解析方法（旧版命中原名，行为不变；
+    //   混淆宿主按「参数表(+返回类型)」结构定位，唯一命中才采用）。
     private static Object call(Object obj, String name, Class<?>[] types, Object[] args) throws Exception {
-        Method m = obj.getClass().getMethod(name, types);
+        Method m = HostSymbols.method(obj.getClass(), name, types, null);
+        if (m == null) m = obj.getClass().getMethod(name, types);
         return m.invoke(obj, args);
     }
 
     private static Object invoke(Object obj, String name, Class<?>[] types, Object[] args) throws Exception {
-        Method m = obj.getClass().getMethod(name, types);
+        Method m = HostSymbols.method(obj.getClass(), name, types, null);
+        if (m == null) m = obj.getClass().getMethod(name, types);
         return m.invoke(obj, args);
     }
 
     private static Object staticInvoke(Class<?> cls, String name, Class<?>[] types, Object[] args) throws Exception {
-        Method m = cls.getMethod(name, types);
+        Method m = HostSymbols.method(cls, name, types, Boolean.TRUE);
+        if (m == null) m = cls.getMethod(name, types);
         return m.invoke(null, args);
     }
 
@@ -25872,6 +25951,11 @@ public final class TGAutoSignCore {
     private static Object getFieldVal(Object obj, Class<?> cls, String name) {
         try {
             Field f = cachedField(cls, name);
+            if (f == null) {
+                // 2026-11-08：混淆宿主字段名被改写 → 按「字段类型提示」结构定位（唯一命中才用）
+                Class<?> hint = HostSymbols.fieldTypeHint(cls, name);
+                if (hint != null) f = HostSymbols.field(cls, name, hint);
+            }
             if (f == null) throw new RuntimeException("no field " + name);
             return f.get(obj);
         } catch (Throwable t) {
@@ -25879,18 +25963,54 @@ public final class TGAutoSignCore {
         }
     }
 
-    private static Object getFieldVal(Object obj, String name) {
+    /** 表示「该字段确实不存在」（区别于「存在但值为 null」）。 */
+    private static final Object FIELD_ABSENT = new Object();
+
+    /**
+     * 2026-11-08：字段读取三级兜底。
+     *   ① 原名直查（旧版 / tgnet 包 —— 绝大多数调用走这里，行为与历史完全一致）；
+     *   ② 类型提示结构定位（混淆宿主的宿主类字段，例如 MessagesController.users）；
+     *   ③ 消息对象 → 内部 TLRPC$Message 中转（MessageObject.messageOwner 的结构替代，
+     *      用于 reply_markup 这类其实长在 TLRPC$Message 上的字段）。
+     */
+    private static Object fieldValDeep(Object obj, String name, int depth) {
+        if (obj == null || name == null || depth > 2) return FIELD_ABSENT;
         try {
             Field f = obj.getClass().getField(name);
             return f.get(obj);
-        } catch (Throwable t1) {
-            try {
-                Field f = obj.getClass().getDeclaredField(name);
-                f.setAccessible(true);
-                return f.get(obj);
-            } catch (Throwable t2) {
-                throw new RuntimeException(t2);
+        } catch (Throwable ignored) {}
+        try {
+            Field f = obj.getClass().getDeclaredField(name);
+            f.setAccessible(true);
+            return f.get(obj);
+        } catch (Throwable ignored) {}
+        try {
+            Class<?> hint = HostSymbols.fieldTypeHint(obj.getClass(), name);
+            if (hint != null) {
+                Field f = HostSymbols.field(obj.getClass(), name, hint);
+                if (f != null) return f.get(obj);
             }
+        } catch (Throwable ignored) {}
+        try {
+            Object owner = HostSymbols.ownerMessage(obj);
+            if (owner != null && owner != obj) {
+                Object v = fieldValDeep(owner, name, depth + 1);
+                if (v != FIELD_ABSENT) return v;
+            }
+        } catch (Throwable ignored) {}
+        return FIELD_ABSENT;
+    }
+
+    private static Object getFieldVal(Object obj, String name) {
+        Object v = fieldValDeep(obj, name, 0);
+        if (v != FIELD_ABSENT) return v;
+        // 保持既有契约：字段确实不存在时抛异常（大量调用方以此驱动回退分支）。
+        try {
+            Field f = obj.getClass().getDeclaredField(name);
+            f.setAccessible(true);
+            return f.get(obj);
+        } catch (Throwable t2) {
+            throw new RuntimeException(t2);
         }
     }
 
@@ -25900,6 +26020,14 @@ public final class TGAutoSignCore {
     }
 
     private static void setFieldVal(Object obj, String name, Object val) {
+        // 2026-11-08：混淆宿主上先经类型提示定位字段（tgnet 包名字保留，走原名即可）
+        try {
+            Class<?> hint = HostSymbols.fieldTypeHint(obj.getClass(), name);
+            if (hint != null) {
+                Field f = HostSymbols.field(obj.getClass(), name, hint);
+                if (f != null) { f.set(obj, val); return; }
+            }
+        } catch (Throwable ignored) {}
         try {
             Field f = obj.getClass().getField(name);
             f.set(obj, val);
