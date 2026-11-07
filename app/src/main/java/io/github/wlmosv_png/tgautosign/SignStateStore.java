@@ -641,6 +641,13 @@ public final class SignStateStore {
                 // 注意：**不删** last_ / result_ / ev_grade_ / ev_round_ / answered_
                 //   —— 旧轮证据与旧轮结论都保留，靠轮次号隔离，而不是靠删除。
             });
+            // 2026-11-08 F7：轮次时间线（reset 开始/结束、在途已清、新 roundId）
+            try {
+                Diag.event("round", "CORE", -1, 0L, 0L, 0, nr - 1,
+                        "in_flight", "resetting", "-", Diag.hookStatus("A"));
+                Diag.event("round", "CORE", -1, 0L, 0L, 0, nr,
+                        "resetting", "cleared(in_flight/opt_/sent_at_/retry/send_n_)", "-", Diag.hookStatus("A"));
+            } catch (Throwable ignored) {}
             warn("轮次切换 → 第 " + nr + " 轮（旧轮证据归档保留，不清除）：" + id);
         } catch (Throwable t) { swallow("resetRoundStateForRetry", t); }
     }

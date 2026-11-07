@@ -211,6 +211,29 @@ if [ "${TGAS_SKIP_SYMBOLTEST:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/HostSymb
   rm -rf "$_scls"
 fi
 
+# ── 接收链观测单测（2026-11-08 F8）：真跑 Diag / InboundGate 纯逻辑 ──
+# 为什么单独一道：接收链的判断全在 TGAutoSignCore 的实例方法里（依赖 Android），
+#   纯 JVM 跑不起来；F8 把它们抽成无依赖纯函数，这道门禁**真正执行**这些函数。
+# 跳过：TGAS_SKIP_RECVCHAIN=1
+if [ "${TGAS_SKIP_RECVCHAIN:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/ReceiveChainTest.java" ]; then
+  echo "== 接收链观测单测 =="
+  _rcls="${TMPDIR:-/tmp}/tgas-rcls-$$"
+  rm -rf "$_rcls"; mkdir -p "$_rcls"
+  if javac -nowarn -encoding UTF-8 -d "$_rcls" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/Diag.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/InboundGate.java" \
+        "$TGAS_SRC/tools/tests/ReceiveChainTest.java" 2>&1; then
+    if ! java -cp "$_rcls" io.github.wlmosv_png.tgautosign.ReceiveChainTest; then
+      rm -rf "$_rcls"
+      echo "FATAL: 接收链观测单测失败（临时跳过：TGAS_SKIP_RECVCHAIN=1）" >&2; exit 1
+    fi
+  else
+    rm -rf "$_rcls"
+    echo "FATAL: 接收链观测单测编译失败（临时跳过：TGAS_SKIP_RECVCHAIN=1）" >&2; exit 1
+  fi
+  rm -rf "$_rcls"
+fi
+
 # ── 待处理状态机门禁（2026-11-08 P0/P1 配套）──
 # 来历：界面上「未回复」由"距发送超过 90 秒"推导而来 —— 不崩、不报错、日志里看不出，
 #   只能靠静态检查把它钉死。P1-P8 见 tools/check-pending-state.py 头注释。

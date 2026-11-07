@@ -383,6 +383,11 @@ public final class TGAutoSignEntry extends XposedModule {
                 } catch (Throwable ignored) {}
             }
             if (hooked > 0) logInfo("hooked 气泡按钮回调 " + cls.getName() + "（匹配 " + hooked + " 个方法）");
+            try {
+                Diag.hookTarget("UI_cell:" + cls.getSimpleName(), cn, true, true, 0, "-");
+                Diag.hookInstall("UI_cell:" + cls.getSimpleName(), cn, hooked > 0,
+                        hooked > 0 ? null : "该类无可挂方法");
+            } catch (Throwable ignored) {}
             return hooked;
         } catch (Throwable t) {
             // 类不存在是常态（各客户端混淆名不同），降为 info 不再刷 error
@@ -410,7 +415,8 @@ public final class TGAutoSignEntry extends XposedModule {
                             .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                             .intercept(chain -> {
                                 try {
-                                    if (CORE.onSendRequest(chain.getArgs().toArray())) {
+                                    try { Diag.hookFired("C"); } catch (Throwable ignored) {}
+                            if (CORE.onSendRequest(chain.getArgs().toArray())) {
                                         return null; // /jmb 管理命令：拦截不发送
                                     }
                                 } catch (Throwable ignored) {}
@@ -422,6 +428,12 @@ public final class TGAutoSignEntry extends XposedModule {
             CORE.anchorCHooked = true;
             logInfo("hooked ConnectionsManager.sendRequest（匹配 " + hooked + " 个方法）");
             if (hooked == 0) logError("未找到 " + "ConnectionsManager.sendRequest" + "，该触发源在此宿主上无效", null);
+            try {
+                Diag.hookTarget("C", "ConnectionsManager.sendRequest", true, hooked > 0, hooked,
+                        hooked > 0 ? "sendRequest" : "-");
+                Diag.hookInstall("C", "ConnectionsManager.sendRequest", hooked > 0,
+                        hooked > 0 ? null : "未找到 sendRequest");
+            } catch (Throwable ignored) {}
         } catch (Throwable t) {
             logError("hook sendRequest failed", t);
         }
@@ -451,6 +463,8 @@ public final class TGAutoSignEntry extends XposedModule {
                         return chain.proceed();
                     });
             logInfo("hooked ChatActivity.onResume");
+            try { Diag.hookInstall("UI_chat", "org.telegram.ui.ChatActivity.onResume", true, null); }
+            catch (Throwable ignored) {}
         } catch (Throwable t) {
             logError("hook ChatActivity.onResume failed", t);
         }
@@ -501,6 +515,15 @@ public final class TGAutoSignEntry extends XposedModule {
             logInfo("hooked MessagesController.processUpdate*（匹配 " + hooked + " 个方法）");
             if (hooked > 0) CORE.anchorAHooked = true;
             if (hooked == 0) logError("未找到 processUpdate* 的对应方法 → 锚点A在此宿主上无效", null);
+            // 2026-11-08 F0：锚点 A 的解析/安装结果（未安装不得被描述为"已覆盖入口"）
+            try {
+                StringBuilder _ms = new StringBuilder();
+                for (Method _m : targets) { if (_ms.length() > 0) _ms.append(','); _ms.append(_m.getName()); }
+                Diag.hookTarget("A", "MessagesController.processUpdate*", true, !targets.isEmpty(),
+                        targets.size(), _ms.toString());
+                Diag.hookInstall("A", "MessagesController.processUpdate*", hooked > 0,
+                        hooked > 0 ? null : "未找到 processUpdate* 的对应方法");
+            } catch (Throwable ignored) {}
         } catch (Throwable t) {
             logError("hook processUpdate failed", t);
         }
@@ -521,6 +544,10 @@ public final class TGAutoSignEntry extends XposedModule {
             ncCls = loadClass("org.telegram.messenger.NotificationCenter");
         } catch (Throwable t) {
             logError("宿主未适配：NotificationCenter 无法解析 → 锚点B(事件层)不安装", t);
+            try {
+                Diag.hookTarget("B_impl", "MessagesController.didReceivedNotification", false, false, 0, "-");
+                Diag.hookInstall("B_impl", "MessagesController.didReceivedNotification", false, String.valueOf(t));
+            } catch (Throwable ignored) {}
             return;
         }
         Class<?> mc;
@@ -536,6 +563,12 @@ public final class TGAutoSignEntry extends XposedModule {
                     new Class<?>[]{int.class, int.class, Object[].class}, Boolean.FALSE);
             if (m == null) {
                 logInfo("该宿主没有 MessagesController.didReceivedNotification（官方版向来如此），锚点B走发送端");
+                // 2026-11-08 F0：**必须显式记为 HOOK_NOT_INSTALLED**，不能表现成"这条链恰好零消息"
+                try {
+                    Diag.hookTarget("B_impl", "MessagesController.didReceivedNotification", true, false, 0, "-");
+                    Diag.hookInstall("B_impl", "MessagesController.didReceivedNotification", false,
+                            "该宿主无此方法（官方版向来如此）");
+                } catch (Throwable ignored) {}
                 return;
             }
             m.setAccessible(true);
@@ -591,6 +624,10 @@ public final class TGAutoSignEntry extends XposedModule {
             ncCls = loadClass("org.telegram.messenger.NotificationCenter");
         } catch (Throwable t) {
             logError("宿主未适配：NotificationCenter 无法解析 → 锚点B发送端不安装", t);
+            try {
+                Diag.hookTarget("B_send", "NotificationCenter", false, false, 0, "-");
+                Diag.hookInstall("B_send", "NotificationCenter", false, String.valueOf(t));
+            } catch (Throwable ignored) {}
             return;
         }
         try {
@@ -608,6 +645,11 @@ public final class TGAutoSignEntry extends XposedModule {
             }
             if (postMethods.isEmpty()) {
                 logError("NotificationCenter.postNotificationName(int,Object[]) 解析失败 → 锚点B发送端无效", null);
+                try {
+                    Diag.hookTarget("B_send", "NotificationCenter.postNotificationName", true, false, 0, "-");
+                    Diag.hookInstall("B_send", "NotificationCenter.postNotificationName", false,
+                            "int,Object[] 签名未找到");
+                } catch (Throwable ignored) {}
                 return;
             }
             int hookedPost = 0;
@@ -640,6 +682,15 @@ public final class TGAutoSignEntry extends XposedModule {
             }
             logInfo("hooked NotificationCenter.postNotificationName×" + hookedPost
                     + "（锚点 B 发送端，id=" + ID_DID_RECEIVE + "）");
+            // 2026-11-08 F0
+            try {
+                StringBuilder _ms = new StringBuilder();
+                for (Method _m : postMethods) { if (_ms.length() > 0) _ms.append(','); _ms.append(_m.getName()); }
+                Diag.hookTarget("B_send", "NotificationCenter.postNotificationName", true,
+                        !postMethods.isEmpty(), postMethods.size(), _ms.toString());
+                Diag.hookInstall("B_send", "NotificationCenter.postNotificationName", hookedPost > 0,
+                        hookedPost > 0 ? null : "所有候选方法安装均失败");
+            } catch (Throwable ignored) {}
         } catch (Throwable t) {
             logError("hook postNotificationName failed", t);
         }
@@ -681,6 +732,8 @@ public final class TGAutoSignEntry extends XposedModule {
                         return chain.proceed();
                     });
             logInfo("hooked LaunchActivity.onResume (jmb host)");
+            try { Diag.hookInstall("UI_launch", "org.telegram.ui.LaunchActivity.onResume", true, null); }
+            catch (Throwable ignored) {}
         } catch (Throwable t) {
             logError("hook LaunchActivity failed", t);
         }

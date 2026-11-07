@@ -202,17 +202,17 @@ sha256sum TGAutoSign-*.apk                     # 比对 Release 里的 sha256sum
 
 ## 更新日志 · Changelog
 
+### v1.7.8 (178) — 2026-11-08
+
+**新增**：F0 Hook 生命周期取证 · F4 Update 类型直方图 · F7 重试时间线 · F8 纯函数 + 真跑测试
+
+**修复**：F1 探针级别 · F2 锚点 B 探针改位 · F3 入站探针前移 · F5 早退原因全量归因 · F6 限频可观察
+
 ### v1.7.7 (177) — 2026-11-08
 
 **新增**：入站诊断日志（按会话限频）
 
 **修复**：重试连点会造成接收盲区 · DialogObject 重载选择
-
-### v1.7.6 (176) — 2026-11-08
-
-**修复**：观察链路健康标记永远不置位 · 点完「重试」目标又出现在卡住列表里（导致连点） · 脏 `no_reply` 不再冒充结论 · 卡片两行文案自相矛盾
-
-**测试**：PendingStateTest 扩到 43 项
 
 [完整更新日志 →](https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md)
 

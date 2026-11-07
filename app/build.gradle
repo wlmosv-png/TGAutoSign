@@ -22,9 +22,9 @@ android {
 
         targetSdk 36
 
-        versionCode 177
+        versionCode 178
 
-        versionName "1.7.7"
+        versionName "1.7.8"
 
     }
 

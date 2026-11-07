@@ -1,5 +1,51 @@
 # 更新日志
 
+## 1.7.8 (178) — 2026-11-08
+
+> 接收链纯观测改造 F0–F8：把「哪条链没动、为什么丢、在哪一步丢」变成可读事实。**不涉及任何判定规则与业务状态。**
+
+### 新增 · Added
+
+- **F0 Hook 生命周期取证**
+  *Hook lifecycle forensics.*
+  逐个 Hook 记录：目标类是否解析、方法是否找到、重载个数、最终选中的签名、安装成功/失败与原因、实际触发次数。
+  未安装的链一律标 `HOOK_NOT_INSTALLED`，**不得表现成"这条链只是恰好零消息"**。
+  每 60 秒输出一张表：`id | target | class | method | overloads | chosen | installed | fired | 判定`。
+
+- **F4 Update 类型直方图**
+  *Update-type histogram.*
+  在类型过滤**之前**记录真实收到的 update 类名（仅类名，不记正文）——
+  这是区分「没收到 update」与「收到但类型不支持」的唯一手段。
+
+- **F7 重试时间线**
+  *Retry timeline.*
+  同一 roundId 串联：`clicked → reset_begin → cleared → send_begin → send_end → in_flight_written`，
+  另记冷却命中。用于**量化**重试盲区，而不是凭代码结构推测。
+
+- **F8 纯函数 + 真跑测试**
+  *Pure functions with real tests.*
+  新增 `Diag`（事件 schema、Hook 表、直方图、丢弃计数、限频抑制计数、写盘失败计数）与
+  `InboundGate`（update 类型识别、入站闸口逐条归因、链 A/B 差异化保留），
+  均为无 Android 依赖纯类 → `ReceiveChainTest` **48 项真实执行**（含 18 项验收场景）。
+
+### 修复 · Fixed
+
+- **F1 探针级别**
+  *Probe log level.*
+  现全部改走 `logw`（ LV_WARN，宿主日志对 WARN 必定落盘，`TGAutoSignCore:3367` 实测）。
+- **F2 锚点 B 探针改位**
+  *Anchor B probe moved to the real path.*
+  `onPostNotification`（真正被调用的发送端）与 `handleOneMessageObject` 入口。
+- **F3 入站探针前移**
+  *Inbound probe moved earlier.*
+  `[in]` 前移并改为结构化 `recv` 事件；`msg==null` / `peerUid==0` 各有独立原因记录。
+- **F5 早退原因全量归因**
+  *Every early exit now carries a reason.*
+  丢弃原因覆盖到入站前置闸口全部分支（update 空/类型不支持/消息空/peer 为 0/自己发/私聊不匹配/群无在途/无目标/链B各闸）。
+- **F6 限频可观察**
+  *Throttle is now observable.*
+  保留限频，但**统计被抑制数量**；磁盘写失败计数（不再静默假装成功）。
+
 ## 1.7.7 (177) — 2026-11-08
 
 > 入站取证版：把「消息到底有没进模块、在哪一步丢的」变成日志里可读的事实；并修掉连点导致的接收盲区。

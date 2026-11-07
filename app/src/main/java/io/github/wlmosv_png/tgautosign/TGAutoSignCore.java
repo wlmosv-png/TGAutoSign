@@ -2194,6 +2194,14 @@ public final class TGAutoSignCore {
         this.prefs = this.appContext.getSharedPreferences("tg_autosign_gen", 0);
         this.store = new PrefsStore(this.prefs);
         this.stateStore = new SignStateStore(this.store);
+        // 2026-11-08 F1/F6：诊断层输出通道 —— 统一走 WARN（宿主日志对 WARN 必定落盘，
+        // 而 LV_OK/LV_INFO 会被采样丢弃）。日志写失败由 Diag 自行计数，不影响业务。
+        try {
+            Diag.setSink(new Diag.Sink() {
+                @Override public void write(int lv, String line) { diagLine(lv, line); }
+            });
+            Diag.setPid(android.os.Process.myPid());
+        } catch (Throwable ignored) {}
         this.stateStore.setHooks(new SignStateStore.Hooks() {
             @Override public void onSigned(String prefix, String id) {
                 try { updateStreak(prefix); } catch (Throwable ignored) {}
@@ -3496,8 +3504,12 @@ public final class TGAutoSignCore {
                 java.io.FileOutputStream os = new java.io.FileOutputStream(cur, true);
                 os.write(sb.toString().getBytes("UTF-8"));
                 os.close();
+                Diag.noteWriteOk();
                 pruneLogs(dir);
-            } catch (Throwable ignored) {}
+            } catch (Throwable t) {
+                // 2026-11-08 F6：磁盘写失败必须可观察，不能静默假装成功
+                Diag.noteWriteFailure();
+            }
         }
 
         /** 只保留最近 7 天的日志文件。 */
@@ -7223,6 +7235,21 @@ public final class TGAutoSignCore {
         } catch (Throwable t) { return false; }
     }
 
+    /** Diag 的输出通道（F1：走 WARN，保证落盘）。任何异常都在 Diag 内部被吞并计数。 */
+    public void diagLine(int lv, String line) {
+        try { logw(line); } catch (Throwable ignored) {}
+    }
+
+    /** F0：由入口调用，输出 Hook 生命周期表 + 周期汇总。 */
+    public void flushDiagSummary() {
+        try { Diag.flushSummary(); } catch (Throwable ignored) {}
+    }
+
+    /** F0：Hook 安装调用次数（进程内重复安装检测）。 */
+    public long diagInstallCalls() {
+        try { return Diag.installCalls(); } catch (Throwable t) { return -1L; }
+    }
+
     /** 供模块入口与各锚点调用：标记"今天观察链路健康"。 */
     public void markChainHealthyNow() {
         try { stateStore.markChainHealthy(); } catch (Throwable ignored) {}
@@ -7533,6 +7560,14 @@ public final class TGAutoSignCore {
      *         调用方应据此提示用户，不要无条件 toast"已发起"。
      */
     private int sendSign(Map<String, Object> entry, AccountManager.Ctx ctx, boolean manual) {
+        // 2026-11-08 F7：发送开始事件（与"在途写回"配对，用于量化重试盲区）
+        try {
+            String _id = entryId(entry);
+            int _rd = 0;
+            try { _rd = stateStore.roundOf(accountPrefix(ctx != null ? ctx.account : -1), _id); } catch (Throwable ignored) {}
+            Diag.event("round", "C", ctx != null ? ctx.account : -1, entryDid(entry), 0L, 0, _rd,
+                    "send_begin", "sending", "-", Diag.hookStatus("A"));
+        } catch (Throwable ignored) {}
         /* 手动签到：先清掉所有"已发出/在途"状态，确保不被闸拦（2026-09-29） */
         /* manual 清障移到 decideSign 通过后：避免无意义的写操作（2026-09-30）*/
         final int account = ctx.account;
@@ -7778,7 +7813,13 @@ public final class TGAutoSignCore {
             }
             try { prefs.edit().putLong(prefix + "sent_at_" + id, System.currentTimeMillis()).commit(); } catch (Throwable _e11) { noteSwallowed("sendSign", _e11); }
             // 2026-11-08 P0：发送即确立本轮次（重试会 +1；旧轮结论由 result_round_ 隔离）
-            try { stateStore.ensureRound(prefix, id); } catch (Throwable ignored) {}
+            int _rd0 = 0;
+            try { _rd0 = stateStore.ensureRound(prefix, id); } catch (Throwable ignored) {}
+            // 2026-11-08 F7：在途状态写回（这是"重试盲区"的结束点 —— 与 reset 事件同一 roundId 配对）
+            try {
+                Diag.event("round", "C", account, dialogId, 0L, 0, _rd0,
+                        "send_end", "in_flight_written", "-", Diag.hookStatus("A"));
+            } catch (Throwable ignored) {}
             try { evt("send", id, dialogId, account, "kind=" + kind); } catch (Throwable ignored) {}
             try { roundMark(prefix, id, RS_SENT, "已发出，等回复"); } catch (Throwable ignored) {}
             // 当日发送次数 +1（2026-10-01）：V_UNKNOWN 不涨 kRetry，靠这个计数
@@ -17173,11 +17214,20 @@ public final class TGAutoSignCore {
             long _lastRetry = prefs.getLong(prefix + "retry_click_" + id, 0L);
             long _nowMs = System.currentTimeMillis();
             if (_lastRetry > 0L && _nowMs - _lastRetry < 60000L) {
+                try {
+                    Diag.event("retry", "CORE", accountOfPrefix(prefix), did, 0L, 0,
+                            stateStore.roundOf(prefix, id), "cooldown", "blocked",
+                            "cooldown:" + ((_nowMs - _lastRetry) / 1000L) + "s", Diag.hookStatus("A"));
+                } catch (Throwable ignored) {}
                 toast(Lang.tf("刚重试过，请等 {0} 秒；连点不会让 bot 更快回复",
                         (60000L - (_nowMs - _lastRetry)) / 1000L));
                 return;
             }
             prefs.edit().putLong(prefix + "retry_click_" + id, _nowMs).apply();
+            try {
+                Diag.event("retry", "CORE", accountOfPrefix(prefix), did, 0L, 0,
+                        stateStore.roundOf(prefix, id), "clicked", "reset_begin", "-", Diag.hookStatus("A"));
+            } catch (Throwable ignored) {}
             try { stateStore.resetRoundStateForRetry(prefix, id); }
             catch (Throwable _e2) { noteSwallowed("pendConfirmRetry.reset", _e2); }
             try { evt("retry", id, did, accountOfPrefix(prefix), "entry=panel"); } catch (Throwable ignored) {}
@@ -18372,6 +18422,18 @@ public final class TGAutoSignCore {
     // 同时给下一个未到点目标排精确闹钟。进程活着就一直跑，前台后台无差别。
     private boolean tickLoopOn = false;
 
+    private volatile long _diagSummaryAt = 0L;
+
+    /** F0：周期输出 Hook 生命周期表 + update 直方图 + 丢弃计数 + 限频抑制量。 */
+    private void diagTick() {
+        try {
+            long now = System.currentTimeMillis();
+            if (now - _diagSummaryAt < 60000L) return;
+            _diagSummaryAt = now;
+            Diag.flushSummary();
+        } catch (Throwable ignored) {}
+    }
+
     private void scheduleTickLoop() {
         if (tickLoopOn) return;
         tickLoopOn = true;
@@ -18380,6 +18442,8 @@ public final class TGAutoSignCore {
                 try {
                     syncNow();   // 跨客户端同步：先并别家的状态，再把本机写出去
                 } catch (Throwable _e23) { noteSwallowed("scheduleTickLoop", _e23); }
+                // 2026-11-08 F0：每 60 秒输出一次 Hook 生命周期表与计数汇总
+                diagTick();
                 try {
                     // 每轮心跳顺手把"发出很久仍无结论"的目标转成「待确认」。
                     // 放在这里而不是只放界面：用户不开面板时也能转换，
@@ -23980,11 +24044,15 @@ public final class TGAutoSignCore {
             // 早退：该会话不在「正在等结论」的集合里就直接返回。
             // 群聊消息洪峰时（实测每分钟几十条无关消息），这一句把 90%+ 的调用挡在循环之前。
             if (!awaitingPeers().contains(Long.valueOf(peerUid))) {
-                // 2026-11-08 P0 取证：这是"消息到了却被丢"的头号嫌疑点，必须留痕
-                if (recvLogAllowed(peerUid ^ 0x9999L)) {
-                    jlog(2, "[drop] why=peer_not_awaiting peer=" + peerUid + " src=" + source
-                            + " awaiting=" + awaitingPeers().size());
-                }
+                // 2026-11-08 F5：这是"消息到了却被丢"的头号嫌疑点，必须留痕
+                try {
+                    Diag.noteDrop("drop:peer_not_awaiting");
+                    if (Diag.allow("na:" + peerUid, 30000L)) {
+                        Diag.event("drop", source, -1, peerUid, 0L, 0, 0,
+                                "awaiting=" + awaitingPeers().size(), "-",
+                                "drop:peer_not_awaiting", Diag.hookStatus("B_send"));
+                    }
+                } catch (Throwable ignored) {}
                 return 0;
             }
             int hitAcc = -1; String hitPrefix = null; Map<String, Object> hitTarget = null;
@@ -24046,8 +24114,11 @@ public final class TGAutoSignCore {
             // 2026-11-08 P0：关联成功 = 最高级"非判定"证据。判定失败也**不得丢**这条事实。
             try { stateStore.noteEvidence(_pfx, entryId(_tg), SignLogic.GRADE_CORR); } catch (Throwable ignored) {}
             try {
-                evt("corr", entryId(_tg), peerUid, _acc, "src=" + source + " how="
-                        + (replyToId > 0 ? "reply_to" : "peer_unique") + " txt=" + clip(_txt, 20));
+                int _rd = 0;
+                try { _rd = stateStore.roundOf(_pfx, entryId(_tg)); } catch (Throwable ignored) {}
+                Diag.event("corr", source, _acc, peerUid, 0L, 0, _rd,
+                        "-", "-", (replyToId > 0 ? "how=reply_to" : "how=peer_unique"),
+                        Diag.hookStatus("B_send"));
             } catch (Throwable ignored) {}
             final boolean _isMedia = source != null && source.contains("media");
             jlog("[" + source + "] 命中在等的目标 " + entryId(_tg) + " @" + accountLabel(_acc)
@@ -24113,17 +24184,17 @@ public final class TGAutoSignCore {
      *  @param args     通知参数 { Long dialogId, ArrayList<MessageObject> }
      *  @return 判定到的目标数 */
     public int onDidReceiveNewMessages(int account, Object[] args) {
-        // 2026-11-08 P0 取证：锚点B 到底有没有被调用、参数长什么样（限频）
+        // 2026-11-08 F2：锚点 B 实现端。该入口依赖 MessagesController.didReceivedNotification，
+        //   官方版无此方法 → Hook 从不安装 → 本方法永不被调用。
+        //   这里打的不只是"零消息"，而是**带 hookStatus 的可解释状态**。
         try {
-            if (recvLogAllowed(0xBBBBL)) {
+            Diag.hookFired("B_impl");
+            if (Diag.allow("inB_impl", 30000L)) {
                 int len = args == null ? -1 : args.length;
-                StringBuilder kinds = new StringBuilder();
-                if (args != null) {
-                    for (int i = 0; i < args.length && i < 4; i++) {
-                        kinds.append(i > 0 ? "," : "").append(args[i] == null ? "null" : args[i].getClass().getSimpleName());
-                    }
-                }
-                jlog(2, "[inB] acc=" + account + " len=" + len + " types=" + kinds);
+                boolean list2 = (len >= 2 && args[1] instanceof java.util.List);
+                Diag.event("recv", "B_impl", account, 0L, 0L, 0, 0,
+                        "args=" + len, "list2=" + (list2 ? 1 : 0), "-",
+                        Diag.hookStatus("B_impl"));
             }
         } catch (Throwable ignored) {}
         try {
@@ -24158,6 +24229,19 @@ public final class TGAutoSignCore {
      *  @return 判定到的目标数
      */
     public int onPostNotification(int id, Object[] args) {
+        // 2026-11-08 F2：锚点 B（发送端）触发标记 + 参数形状 —— 未安装时状态为 HOOK_NOT_INSTALLED，
+        //   绝不表现成"普通的零消息"。
+        try {
+            Diag.hookFired("B_send");
+            if (Diag.allow("inB2", 30000L)) {
+                int n = args == null ? -1 : args.length;
+                boolean list2 = (n >= 2 && args[1] instanceof java.util.List);
+                Diag.event("recv", "B2", 0, 0L, 0L, id, 0,
+                        "args=" + n, "list2=" + (list2 ? 1 : 0),
+                        InboundGate.anchorBArgsOk(n, list2) ? "-" : "drop:b_args_shape",
+                        Diag.hookStatus("B_send"));
+            }
+        } catch (Throwable ignored) {}
         try {
             anchorBSeen.incrementAndGet();
             if (args == null || args.length < 2) return 0;
@@ -24192,7 +24276,16 @@ public final class TGAutoSignCore {
             try { peerUid = resolveDialogIdFromPeer(getFieldValSafe(owner, "peer_id")); } catch (Throwable ignored) {}
             try { fromUid = resolveFromDid(getFieldValSafe(owner, "from_id")); } catch (Throwable ignored) {}
             if (peerUid == 0L) peerUid = dialogIdHint;
-            if (peerUid == 0L) return 0;
+            if (peerUid == 0L) {
+                try {
+                    Diag.noteDrop("drop:b_peer_zero");
+                    if (Diag.allow("b0:" + dialogIdHint, 30000L)) {
+                        Diag.event("drop", "B2", -1, dialogIdHint, fromUid, 0, 0, "-", "-",
+                                "drop:b_peer_zero", Diag.hookStatus("B_send"));
+                    }
+                } catch (Throwable ignored) {}
+                return 0;
+            }
             // 私聊要求发送者就是会话本人（群聊不要求）
             if (peerUid > 0L && fromUid != 0L && fromUid != peerUid) return 0;
             // ── 正文抽取（2026-10-14 重写，修「带说明文字的图」误判）──
@@ -24344,6 +24437,7 @@ public final class TGAutoSignCore {
     }
 
     public void onUpdateProcessed(Object update, Object controller) {
+        try { Diag.hookFired("A"); } catch (Throwable ignored) {}
         // 启动 30 秒的"未就绪"窗口**不能丢事件**。
         //
         // 这里以前是 `if (notReadyYet()) return;` —— 但本方法同时承担两件事：
@@ -24375,13 +24469,33 @@ public final class TGAutoSignCore {
             // 2026-10-06 P4：null 元素必须先跳过 ——
             // 否则 u.getClass() 抛 NPE，被外层 try 捕获后**整批 update 一起丢**，
             // 含同批的目标 bot 回复与面板消息（与此前 return/continue 事故同类）。
-            if (u == null) continue;
-            String un = u.getClass().getName();
-            // 只处理「新消息」两类；其余 update（已读/输入中/删除…）与本模块无关。
-            if (!un.contains("TL_updateNewMessage")
-                    && !un.contains("TL_updateNewChannelMessage")) continue;
+            // 2026-11-08 F4：类型直方图必须在过滤**之前**记录 ——
+            //   否则"没收到 update"与"收到但不支持"永远分不开。
+            try { if (u != null) Diag.noteUpdateType(u.getClass().getName()); } catch (Throwable ignored) {}
+            String un = u == null ? null : u.getClass().getName();
+            int _updKind = InboundGate.updateKind(un);
+            // 2026-11-08 F8：类型判定抽到 InboundGate（纯函数，有测试），语义与原来逐字一致。
+            if (u == null || _updKind == InboundGate.UPD_NONE) {
+                String _why = InboundGate.classifyEarly(u == null, _updKind, false, 1L, false, 1L, 1L);
+                try {
+                    Diag.noteDrop(_why);
+                    if (Diag.allow("upd:" + Diag.shortName(un), 30000L)) {
+                        Diag.event("drop", "A", -1, 0L, 0L, 0, 0, "-", "-", _why, Diag.hookStatus("A"));
+                    }
+                } catch (Throwable ignored) {}
+                continue;
+            }
             Object msg = getFieldVal(u, "message");
-            if (msg == null) continue;   // 曾经是 return：单条异常会吞掉整批 update（含同批的面板消息）
+            if (msg == null) {
+                try {
+                    Diag.noteDrop(InboundGate.DROP_MSG_NULL);
+                    if (Diag.allow("msgnull:" + _updKind, 30000L)) {
+                        Diag.event("drop", "A", -1, 0L, 0L, 0, 0, "-", "-",
+                                InboundGate.DROP_MSG_NULL, Diag.hookStatus("A"));
+                    }
+                } catch (Throwable ignored) {}
+                continue;   // 曾经是 return：单条异常会吞掉整批 update（含同批的面板消息）
+            }
             // ── 2026-10-06 群聊修复：peer / from 一律走统一解析 ──
             // 改前：peerUid 只读 user_id —— 群聊（peerChat / peerChannel）取不到，
             //   于是保持哨兵 -1，targetContains(-1) 永不匹配，群聊回复被判不出。
@@ -24405,7 +24519,17 @@ public final class TGAutoSignCore {
                 if (r instanceof Number) replyToMsgId = ((Number) r).intValue();
             } catch (Throwable _eR) { noteSwallowed("onUpdateProcessed(replyTo)", _eR); }
             // 解析不出 peer 就跳过本条（continue 而非 return，避免丢整批）
-            if (peerUid == 0L) continue;
+            if (peerUid == 0L) {
+                // 2026-11-08 F3/F5：peer 解析失败必须有独立原因，不能与"没收到"混淆
+                try {
+                    Diag.noteDrop(InboundGate.DROP_PEER_ZERO);
+                    if (Diag.allow("peer0:" + _updKind, 30000L)) {
+                        Diag.event("drop", "A", ctrlAcc, 0L, fromUid, 0, 0, "-", "-",
+                                InboundGate.DROP_PEER_ZERO, Diag.hookStatus("A"));
+                    }
+                } catch (Throwable ignored) {}
+                continue;
+            }
             // 私聊 bot：要求消息来自该 bot 本人
             // 群 / 频道：peer 是负数，回复来自群内任意机器人；只接收「非自己发的」消息
             //
@@ -24428,19 +24552,35 @@ public final class TGAutoSignCore {
                 Object _o = getFieldVal(msg, "out");
                 msgOut = Boolean.TRUE.equals(_o);
             } catch (Throwable ignored) {}
-            // ── 2026-11-08 入站诊断（P0 取证）：每条入站新消息按 peer 限频落一行 WARN ──
-            // 用途：回答"bot 明明回了，模块到底看没看见、在哪一步丢的"。
-            if (recvLogAllowed(peerUid ^ 0x5A5AL)) {
-                try {
+            // ── 2026-11-08 F3：结构化入站事件（走 WARN 保证落盘；按会话限频并统计抑制量）──
+            //  字段固定、不含消息正文。此点位于 msg==null / peer==0 过滤之后、其余所有过滤之前，
+            //  因此"没收到"与"收到但被后续闸丢弃"可由 drop 原因区分。
+            try {
+                if (Diag.allow("in:" + peerUid, 30000L)) {
                     Object _rm = getFieldValSafe(msg, "reply_markup");
                     boolean _awaiting = false;
                     try { _awaiting = awaitingPeers().contains(Long.valueOf(peerUid)); } catch (Throwable ignored) {}
-                    jlog(2, "[in] peer=" + peerUid + " from=" + fromUid + " bot=" + (fromIsBot ? 1 : 0)
-                            + " rm=" + (_rm != null ? 1 : 0) + " await=" + (_awaiting ? 1 : 0)
-                            + " acc=" + ctrlAcc);
-                } catch (Throwable ignored) {}
+                    Diag.event("recv", "A", ctrlAcc, peerUid, fromUid,
+                            (Integer) 0, 0,
+                            "in_flight=" + (_awaiting ? 1 : 0), "rm=" + (_rm != null ? 1 : 0),
+                            "-", Diag.hookStatus("A"));
+                }
+            } catch (Throwable ignored) {}
+            // 2026-11-08 F8：三条过滤（自噬）抽到 InboundGate.classifyEarly，纯函数有测试。
+            {
+                String _why = InboundGate.classifyEarly(false, _updKind, false, peerUid, msgOut, selfId, fromUid);
+                if (!InboundGate.ACCEPT.equals(_why)) {
+                    try {
+                        Diag.noteDrop(_why);
+                        if (Diag.allow("drop:" + _why + ":" + peerUid, 30000L)) {
+                            Diag.event("drop", "A", ctrlAcc, peerUid, fromUid, 0, 0, "-", "-",
+                                    _why, Diag.hookStatus("A"));
+                        }
+                    } catch (Throwable ignored) {}
+                    continue;
+                }
             }
-            if (msgOut) continue;                                   // 自己发的，一律不处理
+            if (msgOut) continue;                                   // 自己发的，一律不处理（保留原语句，语义不变）
             if (selfId > 0 && fromUid == selfId) continue;          // 同上（兜底）
             if (isGroupPeer) {
                 // continue 而非 return：TG 一次投递可带多条 update（Updates 容器），
@@ -24448,11 +24588,15 @@ public final class TGAutoSignCore {
                 // 面板时有时无、要等下一批推送才出现，根子常在这里。
                 // （自己发的已在上面统一过滤）
             } else {
-                if (peerUid <= 0 || fromUid != peerUid) {
-                    if (recvLogAllowed(peerUid ^ 0x1234L)) {
-                        jlog(2, "[drop] why=private_self_or_mismatch peer=" + peerUid
-                                + " from=" + fromUid + " self=" + selfId);
-                    }
+                if (!InboundGate.privateFromMatches(peerUid, fromUid)) {
+                    try {
+                        Diag.noteDrop(InboundGate.DROP_PRIVATE_MISMATCH);
+                        if (Diag.allow("priv:" + peerUid, 30000L)) {
+                            Diag.event("drop", "A", ctrlAcc, peerUid, fromUid, 0, 0,
+                                    "self=" + selfId, "-", InboundGate.DROP_PRIVATE_MISMATCH,
+                                    Diag.hookStatus("A"));
+                        }
+                    } catch (Throwable ignored) {}
                     continue;
                 }
             }
@@ -24508,7 +24652,16 @@ public final class TGAutoSignCore {
                         }
                     }
                 } catch (Throwable ignored) {}
-                if (!_anyAwaiting) continue;
+                if (!_anyAwaiting) {
+                    try {
+                        Diag.noteDrop(InboundGate.DROP_GROUP_NO_AWAIT);
+                        if (Diag.allow("grp:" + peerUid, 30000L)) {
+                            Diag.event("drop", "A", _rtAcc, peerUid, fromUid, 0, 0, "-", "-",
+                                    InboundGate.DROP_GROUP_NO_AWAIT, Diag.hookStatus("A"));
+                        }
+                    } catch (Throwable ignored) {}
+                    continue;
+                }
             }
             ReplyMatch rm = resolveReplyTarget(replyTargets, peerUid, fromUid, fromIsBot,
                                                replyToMsgId, _rtPrefix);
@@ -24528,12 +24681,14 @@ public final class TGAutoSignCore {
                 boolean relateDebug = false;
                 try { relateDebug = prefs.getBoolean("jmb_log_relate", false); } catch (Throwable ignored) {}
                 // 2026-11-08 P0 取证：关联失败明确留一行，回答"消息进来了却没判"
-                if (chatIsTarget && recvLogAllowed(peerUid ^ 0x7777L)) {
-                    try {
-                        jlog(2, "[drop] why=no_target peer=" + peerUid + " from=" + fromUid
-                                + " bot=" + (fromIsBot ? 1 : 0) + " replyTo=" + replyToMsgId);
-                    } catch (Throwable ignored) {}
-                }
+                try {
+                    Diag.noteDrop("drop:no_target");
+                    if (chatIsTarget && Diag.allow("notgt:" + peerUid, 30000L)) {
+                        Diag.event("drop", "A", _rtAcc, peerUid, fromUid, 0, 0,
+                                "bot=" + (fromIsBot ? 1 : 0), "replyTo=" + replyToMsgId,
+                                "drop:no_target", Diag.hookStatus("A"));
+                    }
+                } catch (Throwable ignored) {}
                 // ── 2026-10-09 详细档降噪 ──
                 // 用户截图里这一条反复出现：
                 //   [回复关联] chat=… isBot=false lookBot=false candidateCount=0 method=NONE
