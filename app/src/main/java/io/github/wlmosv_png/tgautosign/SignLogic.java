@@ -3144,6 +3144,96 @@ public final class SignLogic {
         }
     }
 
+    // ══════════════════════════════════════════════════════════════════════
+    //  2026-11-08 · 待处理归因（P0 修复）—— 纯函数，可离线单测
+    //
+    //  问：界面凭什么说"未回复"？
+    //  答（修复前）：距发出超过 90 秒且没有结论。**这是时间推导，不是证据。**
+    //      它把三件完全不同的状态压成了一个词：
+    //        ① bot 回了、判不出（应显示「判不出」）
+    //        ② 什么都没观察到（应显示「证据不足/未确定」）
+    //        ③ 真的没回且观察链路健康（才该显示「未回复」）
+    //  修复后：**先看证据，再看时间**；证据不足一律落在 PS_UNCONFIRMED。
+    // ══════════════════════════════════════════════════════════════════════
+
+    /** 证据等级：0 = 无观察（注意：不等于"没有回复"）。 */
+    public static final int GRADE_NONE    = 0;
+    /** 观察到该会话的入站消息（还不能确定是不是目标 bot）。 */
+    public static final int GRADE_SEEN    = 1;
+    /** 确认来自目标 bot 的会话（peer 身份匹配）。 */
+    public static final int GRADE_BOT     = 2;
+    /** 成功关联到本任务（唯一性 \/ 引用回复校验通过）。 */
+    public static final int GRADE_CORR    = 3;
+    /** 已完成判定。 */
+    public static final int GRADE_VERDICT = 4;
+
+    /** 供 UI 使用的待处理归因（与 TGAutoSignCore 的 RS_* 一一对应，8 为新增）。 */
+    public static final int PS_NONE        = -1;
+    public static final int PS_WAITING     = 0;   // 排队中
+    public static final int PS_SENT        = 1;   // 等回复（窗口内）
+    public static final int PS_SIGNED      = 2;   // 已签
+    public static final int PS_NO_REPLY    = 3;   // 未回复（**必须有明确超时归类 + 链路健康 + 无任何证据**）
+    public static final int PS_UNKNOWN     = 4;   // 判不出（已有回复证据）
+    public static final int PS_SENDFAIL    = 5;   // 发送失败
+    public static final int PS_PANEL       = 6;   // 面板过期
+    public static final int PS_SKIPPED     = 7;   // 已跳过
+    public static final int PS_UNCONFIRMED = 8;   // **证据不足 / 未确定**（修复新增）
+
+    /** 距发出多久之后，"仍在等"要显示为"未确定"（只影响措辞，绝不用于判定未回复）。 */
+    public static final long UNCONFIRMED_AFTER_MS = 90L * 1000L;
+
+    /**
+     * 待处理归因。判据顺序 = **证据 → 明确归类 → 时间**。
+     *
+     * @param signedToday    今天是否已确认签到成功
+     * @param pendingConfirm 是否已标待确认
+     * @param sentToday      今天是否已发出
+     * @param sentAgeMs      距发出的毫秒数（&lt;0 或 0 表示取不到）
+     * @param grade          本轮证据等级（GRADE_*）
+     * @param rc             已有归类码（SignLogic.R_*），-1 表示无
+     * @param chainHealthy   今天观察链路是否健康（锚点收到过事件）
+     * @return PS_*
+     */
+    public static int resolvePendingState(boolean signedToday, boolean pendingConfirm,
+                                          boolean sentToday, long sentAgeMs,
+                                          int grade, int rc, boolean chainHealthy) {
+        if (signedToday) return PS_SIGNED;
+        if (pendingConfirm) return PS_UNKNOWN;
+        // ① 先看证据：有回复证据（含判不出）→ 永远不会被判成"未回复"
+        if (grade >= GRADE_SEEN || rc == R_REPLIED_UNK) return PS_UNKNOWN;
+        if (rc == R_FAILED) return PS_SENDFAIL;
+        if (rc == R_BTN_STALE) return PS_PANEL;
+        // ② 明确归类：只有超时 sweep 在"链路健康且无任何证据"时才写过 R_NO_REPLY
+        if (rc == R_NO_REPLY) {
+            return chainHealthy ? PS_NO_REPLY : PS_UNCONFIRMED;
+        }
+        if (!sentToday) return PS_NONE;
+        // ③ 最后才看时间：窗口内 = 等回复；超窗口但无任何证据 = **未确定**，不是未回复
+        if (sentAgeMs <= 0L) return PS_SENT;
+        return sentAgeMs < UNCONFIRMED_AFTER_MS ? PS_SENT : PS_UNCONFIRMED;
+    }
+
+    /**
+     * 是否**允许**把"没等到结论"归类为「bot 未回复」。
+     * 三个条件缺一不可（任务书 P0-4/P0-5）：
+     *   ① 没有任何回复证据；② 没有 answered 留痕；③ 观察链路健康（不是 Hook 没就绪/宿主刚重启）。
+     * 任一不满足 → 只能落 PS_UNCONFIRMED。
+     */
+    public static boolean mayMarkNoReply(boolean answered, int grade, boolean chainHealthy) {
+        return !answered && grade < GRADE_SEEN && chainHealthy;
+    }
+
+    /** 证据等级界面文案。 */
+    public static String gradeLabel(int grade) {
+        switch (grade) {
+            case GRADE_SEEN:    return "已观察";
+            case GRADE_BOT:     return "目标Bot";
+            case GRADE_CORR:    return "已关联";
+            case GRADE_VERDICT: return "已判定";
+            default:            return "无观察";
+        }
+    }
+
     /** 该归类是否需要用户处置（界面据此决定是否进「待处理」聚合条）。 */
     public static boolean needsAttention(int r) {
         return r == R_BTN_STALE || r == R_REPLIED_UNK || r == R_NO_REPLY || r == R_JUDGE_OFF;

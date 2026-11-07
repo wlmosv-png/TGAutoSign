@@ -99,6 +99,35 @@ public final class Keys {
     public static String missAt(String p, String id)    { return p + "miss_at_" + id; }
     /** bot 在 callback answer 里回过内容（但词表没识别出结果）。用于区分"有响应/无响应"。 */
     public static String answered(String p, String id)  { return p + "answered_" + id; }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  2026-11-08 · 回复证据分级 + 轮次隔离（P0/P1 修复）
+    //
+    //  为什么需要：过去"是否回过"只由 answered_ 一个布尔承担，而它只在回调查询
+    //  路径写、按天有效、跨轮次不复位 —— 于是"已回复但判不出"与"真没回复"
+    //  在状态层无法区分，界面只能靠时间猜（这就是「未回复」误判的根源）。
+    //
+    //  现在把"观察到什么"拆成 4 级证据，并全部**按轮次**标记：
+    //      GRADE_SEEN    该会话有入站消息被观察到
+    //      GRADE_BOT     确认来自目标 bot（peer 身份匹配）
+    //      GRADE_CORR    成功关联到本任务（且通过唯一性/引用回复校验）
+    //      GRADE_VERDICT 已完成判定
+    //  轮次隔离原则：**旧轮证据不删除**（值留在键里），但读取时只认当前轮次，
+    //  因此新一轮既不会继承旧轮的结论，也不会污染旧轮已归档的事实。
+    // ══════════════════════════════════════════════════════════════════════
+
+    /** 当前轮次号（int，按天）。sendSign 时确保存在，重试时 +1。 */
+    public static String round(String p, String id)     { return p + "round_" + id; }
+    /** round_ 的日期，跨天视为 1。 */
+    public static String roundDay(String p, String id)  { return p + "round_day_" + id; }
+    /** 本轮证据等级：值 "round|grade"。 */
+    public static String evGrade(String p, String id)   { return p + "ev_grade_" + id; }
+    /** 归档：最后一个有证据的轮次（不随重试删除，供回溯）。 */
+    public static String evRoundArchived(String p, String id) { return p + "ev_round_" + id; }
+    /** result_ 所属轮次：旧轮结论不得作用于新轮。 */
+    public static String resultRound(String p, String id)     { return p + "result_round_" + id; }
+    /** 今天观察链路是否健康（锚点 A\/B 至少收到过一批事件），值 = 日期。 */
+    public static String chainOk()                      { return "chain_ok"; }
     // ── 2026-10-06 判定词作用域（交接单第八条）────────────────
     // 三级：全局 / Bot / 目标。旧键 jmb_ok_words、jmb_fail_words 是「全局」级，
     // 继续原样读写，不迁移、不丢失。

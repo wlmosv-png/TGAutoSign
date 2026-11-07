@@ -44,9 +44,28 @@ rp = t.find('java.util.List<RoundState> roundProblemsOf')
 if rp < 0:
     print('FATAL: 找不到 roundProblemsOf'); sys.exit(1)
 rpBody = t[rp:rp + 6000]
-for code in ['R_FAILED', 'R_BTN_STALE', 'R_REPLIED_UNK', 'R_NO_REPLY']:
-    if code not in rpBody:
-        print('  ❌ roundProblemsOf 未覆盖归类 ' + code); bad = 1
+# 2026-11-08：归因已抽成纯函数 SignLogic.resolvePendingState（可离线单测）。
+# 允许 roundProblemsOf 委托给它 —— 此时改为检查**被委托方**是否覆盖这些归类码，
+# 并要求委托方把 PS_* 结果映射成界面状态（否则界面拿不到状态）。
+_CODES = ['R_FAILED', 'R_BTN_STALE', 'R_REPLIED_UNK', 'R_NO_REPLY']
+if 'resolvePendingState(' in rpBody:
+    LOGIC = os.path.join(SRC, 'app/src/main/java/io/github/wlmosv_png/tgautosign/SignLogic.java')
+    lg = io.open(LOGIC, encoding='utf-8').read()
+    k = lg.find('public static int resolvePendingState')
+    if k < 0:
+        print('  ❌ 找不到 SignLogic.resolvePendingState（返回类型可能已改名，请同步本检查器）'); bad = 1
+    else:
+        lgBody = lg[k:k + 3000]
+        for code in _CODES:
+            if code not in lgBody:
+                print('  ❌ resolvePendingState 未覆盖归类 ' + code); bad = 1
+    for ps in ['PS_NO_REPLY', 'PS_UNKNOWN', 'PS_SENDFAIL', 'PS_PANEL']:
+        if ps not in rpBody:
+            print('  ❌ roundProblemsOf 未把 ' + ps + ' 映射到界面状态'); bad = 1
+else:
+    for code in _CODES:
+        if code not in rpBody:
+            print('  ❌ roundProblemsOf 未覆盖归类 ' + code); bad = 1
 
 # 3) 三个必备动作必须都在自持面板里
 render = t.find('private void renderRoundProblems')

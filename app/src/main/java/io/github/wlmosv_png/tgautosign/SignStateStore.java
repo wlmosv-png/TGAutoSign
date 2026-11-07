@@ -160,6 +160,26 @@ public final class SignStateStore {
             // 2026-10-28 治本：**今天已经签上了**就不再接受异常归类。
             // 否则 sweep / 超时兜底等路径会在成功之后又把「判不出」写回去，
             // 界面与真实状态打架（真机实测 6379863842 就是这个形态）。
+            // ═══ 2026-11-08 P0 · 状态转换保护（写入前先过三关）═══
+            final int _curRound = roundOf(prefix, id);
+            int _cur = resultOf(prefix, id);
+            int _curResRound = store.i(Keys.resultRound(prefix, id), 0);
+            if (_curResRound != 0 && _curResRound != _curRound) _cur = -1;   // 旧轮结论不作用于新轮（数据保留）
+            // ① 已有"有证据"的归类，不得被"无证据"的超时结论覆盖
+            if (hasEvidenceResult(_cur) && !hasEvidenceResult(result)) {
+                warn("拒绝覆盖：已有证据归类(" + SignLogic.resultCode(_cur) + ")，本次为无证据归类("
+                     + SignLogic.resultCode(result) + ") —— " + id);
+                return;
+            }
+            // ② "未回复"必须有资格：没有任何回复证据 + 观察链路健康
+            if (result == SignLogic.R_NO_REPLY
+                    && !SignLogic.mayMarkNoReply(isAnsweredToday(prefix, id), evidenceGrade(prefix, id),
+                                                 chainHealthyToday())) {
+                warn("拒绝判「未回复」：证据不足或观察链路不健康（answered=" + isAnsweredToday(prefix, id)
+                     + " grade=" + SignLogic.gradeLabel(evidenceGrade(prefix, id))
+                     + " chain=" + chainHealthyToday() + "）—— " + id);
+                return;      // 不写归类 → 状态层落「未确定」，而不是"未回复"
+            }
             if (isSignedToday(prefix, id)) {
                 store.tx(ed -> ed.remove(Keys.opt(prefix, id))
                                  .remove(Keys.sentAt(prefix, id))
@@ -182,6 +202,7 @@ public final class SignStateStore {
                 // 现在 result_ 独立存，任何归类都能如实显示。
                 ed.putString("result_" + id, SignLogic.resultCode(result));
                 ed.putString("result_day_" + id, today());
+                ed.putInt(Keys.resultRound(prefix, id), _curRound);   // 本轮专属，供跨轮隔离
                 if (SignLogic.needsAttention(result)) {
                     ed.putBoolean(Keys.pendingCfm(prefix, id), true);
                     // 同时记"哪天标的"：sweepStalePendingConfirm 靠它区分
@@ -240,7 +261,15 @@ public final class SignStateStore {
             String d = store.s("result_day_" + id, "");
             if (d != null && d.equals(today())) {
                 int r = SignLogic.resultOfCode(store.s("result_" + id, ""));
-                if (r >= 0) return r;
+                if (r >= 0) {
+                    // 2026-11-08 P0：**轮次隔离** —— 旧轮的结论不得作用于新轮。
+                    // 重试不删除 result_（证据不破坏性删除），但用 result_round_ 标记它属于哪一轮；
+                    // 轮次对不上就当作"本轮还没有结论"，新轮从零开始。
+                    int rr = store.i(Keys.resultRound(prefix, id), 0);
+                    int cur = roundOf(prefix, id);
+                    if (rr != 0 && rr != cur) return -1;
+                    return r;
+                }
             }
         } catch (Throwable ignored) {}
 
@@ -292,16 +321,21 @@ public final class SignStateStore {
     public boolean markSigned(String prefix, String id, String reason) {
         try {
             boolean first = !isSignedToday(prefix, id);
-            if (first) {
-                // signed_at_ 与 last_ 必须**同一次 tx** 写入：分开写会出现
-                // 「有日期没时刻」的中间态（界面那一刻拿不到时刻、只能显示 ✔）。
-                // 语义 = 判定成功的时刻，不是发起时刻（那个是 sent_at_）。
-                final long nowMs = System.currentTimeMillis();
-                store.tx(ed -> ed.putString(Keys.last(prefix, id), today())
-                                 .putLong(Keys.signedAt(prefix, id), nowMs));
-            }
-            // 无论首次还是重复，清理都要做（清 opt_/pendcfm_/退避/熔断/失败计数）
-            clearPostSignState(prefix, id);
+            /* 2026-11-08 P0：**原子状态更新**。
+               原先「写 last_/signed_at_（tx1）」与「clearPostSignState（tx2）」是两次提交，
+               中间被打断就留下「已签 + 仍有 pendcfm_」的撕裂态（用户看到"明明签了还要确认"）。
+               现在两者合并进**同一个 commit**：要么全成、要么全不成。
+               signed_at_ 仍与 last_ 同一次写（分开会出现「有日期没时刻」的中间态）。 */
+            final long nowMs = System.currentTimeMillis();
+            final boolean _first = first;
+            store.tx(ed -> {
+                if (_first) {
+                    ed.putString(Keys.last(prefix, id), today())
+                      .putLong(Keys.signedAt(prefix, id), nowMs);
+                }
+                clearPostSignKeys(ed, prefix, id);
+            });
+            try { clearFailStreak(prefix, id); } catch (Throwable ignored) {}
             if (first) {
                 if (hooks != null) { try { hooks.onSigned(prefix, id); } catch (Throwable t) { swallow("markSigned.onSigned", t); } }
                 warn("标记今日已签 " + id
@@ -336,6 +370,33 @@ public final class SignStateStore {
             store.tx(ed -> ed.putString(Keys.opt(prefix, id), today())
                               .putLong(Keys.sentAt(prefix, id), sentAtMs));
         } catch (Throwable t) { swallow("markOptimistic", t); }
+    }
+
+    /**
+     * 清键集合（Editor 级）。与 clearPostSignState **同源** ——
+     * 抽出来是为了让 markSigned 能把「写 last_」与「清在途/归类/待确认」放进同一个 commit；
+     * 两处各抄一份键列表迟早漂移（历史上就漂过）。
+     */
+    private void clearPostSignKeys(android.content.SharedPreferences.Editor ed, String prefix, String id) {
+        ed.remove(Keys.opt(prefix, id))
+          .remove(Keys.sentAt(prefix, id))
+          .remove(Keys.pendingCfm(prefix, id))
+          .remove(Keys.pendingDay(prefix, id))
+          .remove(Keys.pendingNote(prefix, id))
+          .remove(Keys.pendingResult(prefix, id))
+          .remove(Keys.panelStale(prefix, id))
+          .remove(Keys.panelStaleDay(prefix, id))
+          .remove(Keys.silent(prefix, id))
+          .remove(Keys.silentDay(prefix, id))
+          .remove(Keys.retry(prefix, id))
+          .remove(Keys.retryAt(prefix, id))
+          .remove(Keys.retryDay(prefix, id))
+          .remove(Keys.answered(prefix, id))
+          .remove(Keys.resultRound(prefix, id))
+          .remove("nr_" + prefix + id)
+          .remove("nrday_" + prefix + id)
+          .remove("result_" + id)
+          .remove("result_day_" + id);
     }
 
     /** 清掉与"今日已签"互斥的全部状态键。【唯一入口】 */
@@ -449,5 +510,124 @@ public final class SignStateStore {
 
     public void markFailAlerted(String prefix, String id) {
         store.set(Keys.failAlert(prefix, id), today());
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  2026-11-08 · 轮次 / 回复证据 / 观察链路 / 重试轮次隔离（P0+P1）
+    // ══════════════════════════════════════════════════════════════════════
+
+    /** 该归类是否属于「有证据」类（不得被无证据的超时结论覆盖）。 */
+    private static boolean hasEvidenceResult(int r) {
+        return r == SignLogic.R_SIGNED || r == SignLogic.R_FAILED
+                || r == SignLogic.R_REPLIED_UNK || r == SignLogic.R_BTN_STALE;
+    }
+
+    /** 今天 bot 是否回过内容（含就地对答与消息回复两条路径）。 */
+    public boolean isAnsweredToday(String prefix, String id) {
+        try { return today().equals(store.s(Keys.answered(prefix, id), "")); }
+        catch (Throwable t) { return false; }
+    }
+
+    /** 今天观察链路是否健康（锚点 A/B 至少收到过一批事件）。 */
+    public boolean chainHealthyToday() {
+        try { return today().equals(store.s(Keys.chainOk(), "")); }
+        catch (Throwable t) { return false; }
+    }
+
+    /** 标记今天的观察链路健康（由模块入口在任一锚点收到事件时调用）。 */
+    public void markChainHealthy() {
+        try {
+            if (!chainHealthyToday()) store.set(Keys.chainOk(), today());
+        } catch (Throwable t) { swallow("markChainHealthy", t); }
+    }
+
+    /** 当前轮次（跨天/无记录 → 1）。 */
+    public int roundOf(String prefix, String id) {
+        try {
+            if (!today().equals(store.s(Keys.roundDay(prefix, id), ""))) return 1;
+            int r = store.i(Keys.round(prefix, id), 0);
+            return r <= 0 ? 1 : r;
+        } catch (Throwable t) { return 1; }
+    }
+
+    /** 发送前确保轮次存在（同一天同一目标保持同一轮次）。 */
+    public int ensureRound(String prefix, String id) {
+        try {
+            if (!today().equals(store.s(Keys.roundDay(prefix, id), ""))) {
+                store.tx(ed -> ed.putInt(Keys.round(prefix, id), 1).putString(Keys.roundDay(prefix, id), today()));
+                return 1;
+            }
+            return roundOf(prefix, id);
+        } catch (Throwable t) { return 1; }
+    }
+
+    /** 本轮证据等级（只认当前轮次；旧轮证据仍归档在键里，不删除）。 */
+    public int evidenceGrade(String prefix, String id) {
+        try {
+            String v = store.s(Keys.evGrade(prefix, id), "");
+            if (v == null || v.length() == 0) return SignLogic.GRADE_NONE;
+            int bar = v.indexOf('|');
+            if (bar <= 0) return SignLogic.GRADE_NONE;
+            int round = Integer.parseInt(v.substring(0, bar));
+            int grade = Integer.parseInt(v.substring(bar + 1));
+            return round == roundOf(prefix, id) ? grade : SignLogic.GRADE_NONE;
+        } catch (Throwable t) { return SignLogic.GRADE_NONE; }
+    }
+
+    /**
+     * 记录回复证据（取最高级，不降级）。
+     * 语义分级见 Keys.evGrade 的注释 —— 这是把"观察到 / 来自目标 bot / 已关联 / 已判定"
+     * 拆开的关键：判定失败也**不得丢弃已观察到的真实回复**。
+     */
+    public void noteEvidence(String prefix, String id, int grade) {
+        try {
+            if (grade <= SignLogic.GRADE_NONE) return;
+            final int r = roundOf(prefix, id);
+            if (grade > evidenceGrade(prefix, id)) {
+                store.tx(ed -> {
+                    ed.putString(Keys.evGrade(prefix, id), r + "|" + grade);
+                    // 归档"最后一个有证据的轮次"——重试时**不清**，供回溯
+                    if (grade >= SignLogic.GRADE_SEEN) ed.putInt(Keys.evRoundArchived(prefix, id), r);
+                });
+            }
+        } catch (Throwable t) { swallow("noteEvidence", t); }
+    }
+
+    /**
+     * 重试前的**轮次隔离**（P0-3）。
+     *
+     * 关键取舍（任务书明令）：**不做破坏性删除**。
+     *   · 轮次 +1 → 新轮只认新轮的证据与结论；旧轮的 result_ 由 result_round_ 隔离，
+     *     旧轮的证据归档在 ev_grade_/ev_round_ 里**原样保留**，可回溯、不丢失。
+     *   · 只清"在途与调度"这类**属于上一轮**的运行态（opt_/sent_at_/退避/发送计数/待确认），
+     *     它们若留着，就会让新轮一开跑就被旧轮的超时逻辑命中。
+     *   · last_（已签事实）与 ev_*（证据归档）**一律不动**。
+     */
+    public void resetRoundStateForRetry(String prefix, String id) {
+        try {
+            final int nr = roundOf(prefix, id) + 1;
+            store.tx(ed -> {
+                ed.putInt(Keys.round(prefix, id), nr).putString(Keys.roundDay(prefix, id), today());
+                ed.remove(Keys.opt(prefix, id))
+                  .remove(Keys.sentAt(prefix, id))
+                  .remove(Keys.pendingCfm(prefix, id))
+                  .remove(Keys.pendingDay(prefix, id))
+                  .remove(Keys.pendingNote(prefix, id))
+                  .remove(Keys.pendingResult(prefix, id))
+                  .remove(Keys.panelStale(prefix, id))
+                  .remove(Keys.panelStaleDay(prefix, id))
+                  .remove(Keys.silent(prefix, id))
+                  .remove(Keys.silentDay(prefix, id))
+                  .remove(Keys.retry(prefix, id))
+                  .remove(Keys.retryAt(prefix, id))
+                  .remove(Keys.retryDay(prefix, id))
+                  .remove(Keys.sendAttempts(prefix, id))
+                  .remove("nr_" + prefix + id)
+                  .remove("nrday_" + prefix + id);
+                // 注意：**不删** last_ / result_ / ev_grade_ / ev_round_ / answered_
+                //   —— 旧轮证据与旧轮结论都保留，靠轮次号隔离，而不是靠删除。
+            });
+            warn("轮次切换 → 第 " + nr + " 轮（旧轮证据归档保留，不清除）：" + id);
+        } catch (Throwable t) { swallow("resetRoundStateForRetry", t); }
     }
 }

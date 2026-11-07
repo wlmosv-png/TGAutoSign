@@ -126,6 +126,14 @@ public final class TGAutoSignEntry extends XposedModule {
             }
         }
         CORE.start();
+        // 2026-11-08：观察链路健康标记 —— 任一锚点收到事件即视为"链路可用"。
+        // 用途：待处理归因里只有"链路健康且无任何证据"才允许判「bot 未回复」，
+        // 宿主刚重启/Hook 未就绪期间不得假装"没有回复"。
+        try {
+            if (CORE.anchorAHooked || CORE.anchorBHooked) {
+                CORE.markChainHealthyNow();
+            }
+        } catch (Throwable ignored) {}
         installBusinessHooks();
         notifyInjected(appContext, packageName);
     }

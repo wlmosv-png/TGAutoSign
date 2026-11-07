@@ -1536,6 +1536,14 @@ public final class Lang {
         EN.put("── 链路自检（只读，不发任何消息） ──", "── Link self-check (read-only, sends nothing) ──");
         EN.put("锚点A 协议层(processUpdate*): {0}   命中 {1}", "Anchor A protocol (processUpdate*): {0}   hits {1}");
         EN.put("宿主符号解析：{0}", "Host symbols: {0}");
+        // 2026-11-08 P0：证据分级与「未确定」文案
+        EN.put("未确定", "Unconfirmed");
+        EN.put("回复认不出，可补判定词", "Reply not recognised \u2014 add a keyword in Settings");
+        EN.put("bot 未回复（观察链路健康且无任何回复证据）", "No reply (watch chain healthy and no reply evidence)");
+        EN.put("已发出 {0} 分钟仍无结论（证据：{1}）—— 未确定，不代表 bot 没回复",
+               "Sent {0} min ago, still no verdict (evidence: {1}) \u2014 unconfirmed, not the same as no reply");
+        EN.put("已发出但未得到结论，且当前观察链路不健康（宿主可能刚重启或 Hook 未就绪）—— 不代表 bot 没回复",
+               "Sent but no verdict, and the watch chain is unhealthy (host may have just restarted) \u2014 this does not mean the bot did not reply");
         EN.put("锚点B 事件层(didReceiveNewMessages): {0}   收到 {1} 批 / 命中 {2}", "Anchor B events (didReceiveNewMessages): {0}   {1} batches / {2} hits");
         EN.put("锚点C 发送回执(sendRequest): {0}", "Anchor C send receipt (sendRequest): {0}");
         EN.put("已挂上", "installed");

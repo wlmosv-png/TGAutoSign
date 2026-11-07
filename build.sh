@@ -211,6 +211,42 @@ if [ "${TGAS_SKIP_SYMBOLTEST:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/HostSymb
   rm -rf "$_scls"
 fi
 
+# ── 待处理状态机门禁（2026-11-08 P0/P1 配套）──
+# 来历：界面上「未回复」由"距发送超过 90 秒"推导而来 —— 不崩、不报错、日志里看不出，
+#   只能靠静态检查把它钉死。P1-P8 见 tools/check-pending-state.py 头注释。
+# 跳过：TGAS_SKIP_PENDINGGATE=1
+if [ "${TGAS_SKIP_PENDINGGATE:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/check-pending-state.py" ]; then
+  echo "== 待处理状态机 =="
+  python3 "$TGAS_SRC/tools/check-pending-state.py" || {
+    echo "FATAL: 待处理状态机门禁未通过（临时跳过：TGAS_SKIP_PENDINGGATE=1）" >&2; exit 1; }
+fi
+
+# ── 待处理状态机单测（纯函数 + 内存 PrefsStore）──
+# 跳过：TGAS_SKIP_PENDINGTEST=1
+if [ "${TGAS_SKIP_PENDINGTEST:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/PendingStateTest.java" ]; then
+  echo "== 待处理状态机单测 =="
+  _pcls="${TMPDIR:-/tmp}/tgas-pcls-$$"
+  rm -rf "$_pcls"; mkdir -p "$_pcls"
+  if javac -nowarn -encoding UTF-8 -d "$_pcls" \
+        "$TGAS_SRC/tools/tests/stubs/android/content/SharedPreferences.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/DateUtils.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/Keys.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/SignLogic.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/PrefsStore.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/SignStateStore.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/SoundGate.java" \
+        "$TGAS_SRC/tools/tests/PendingStateTest.java" 2>&1; then
+    if ! java -cp "$_pcls" io.github.wlmosv_png.tgautosign.PendingStateTest; then
+      rm -rf "$_pcls"
+      echo "FATAL: 待处理状态机单测失败（临时跳过：TGAS_SKIP_PENDINGTEST=1）" >&2; exit 1
+    fi
+  else
+    rm -rf "$_pcls"
+    echo "FATAL: 待处理状态机单测编译失败（临时跳过：TGAS_SKIP_PENDINGTEST=1）" >&2; exit 1
+  fi
+  rm -rf "$_pcls"
+fi
+
 # ── 宿主作用域一致性门禁（2026-10-06 新增，P1）──
 # 来历：Turrit（org.telegram.group）曾在 Hosts.KNOWN 与 scope.list 里都有、
 #   module.prop 的 scope= 缺失，当时没有任何门禁能发现 ——

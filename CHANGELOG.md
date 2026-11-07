@@ -1,5 +1,55 @@
 # 更新日志
 
+## 1.7.5 (175) — 2026-11-08
+
+> 待处理状态与回复判定链 P0/P1 修复：废除「90 秒推导未回复」、拆分回复证据、统一重试入口与轮次隔离。
+
+### 修复 · Fixed
+
+- **「未回复」不再由发送时间推导**
+  *"No reply" is no longer inferred from elapsed time.*
+  旧实现：距发出超过 90 秒且没有结论 → 无条件显示「未回复」。
+  这是**时间推导**，不是证据 —— 它把三件不同的事压成一个词：bot 回了但判不出、
+  什么都没观察到、真没回。现在归因交给纯函数 `SignLogic.resolvePendingState`，
+  **先看证据、再看时间**；90 秒阈值只影响措辞，绝不再用于判定。
+  新增状态「未确定」（`RS_UNCONFIRMED`）专门承接「证据不足」，与「判不出」「未回复」三者分开。
+
+- **回复证据分级与轮次隔离**
+  *Reply evidence is now graded and round-scoped.*
+  以前「是否回过」只靠 `answered_` 一个布尔，而它**只在按钮回调路径写** ——
+  消息回复路径判不出时什么都不留，界面只能靠时间猜。现在拆成 4 级：
+  已观察 → 目标 Bot → 已关联 → 已判定，**判定失败也不丢已观察到的真实回复**。
+  每条证据都带轮次号：新轮不继承旧轮结论，但**旧轮证据不被删除**（归档保留）。
+
+- **两个重试入口统一为 `resetRoundStateForRetry`**
+  *Both retry entries now share one round-reset routine.*
+  待确认面板「重试」与卡住面板「重发」以前各写一套（一个清 `answered_`、一个不清），
+  而且前者用 `accountOfPrefix`、后者用 `currentAccount()`（会串号）。现在两者走同一套：
+  轮次 +1、清在途与调度状态、**不破坏性删除任何历史证据**、统一用原任务对应的账号。
+
+- **状态转换保护与原子更新**
+  *State-transition guards and atomic updates.*
+  已确认的回复证据**不再被无证据的超时结论覆盖**；旧轮超时不能修改新轮状态；
+  「未回复」必须过三道门（无任何证据 + 无 `answered_` 留痕 + **观察链路健康**）；
+  `markSigned` 的「写已签」与「清在途/待确认」合并为**同一事务**，消除「已签 + 仍待确认」的撕裂态。
+
+### 新增 · Added
+
+- **最小化事件日志（send / recv / corr / verdict / timeout / ui / retry）**
+  *Minimal event log for the whole reply chain.*
+  每条带 `taskId / botId / acc / round / msgId / t / grade / reason`，用于回答四个问题：
+  为什么收到消息却没识别？为什么点了重试还是未回复？
+  为什么 UI 显示未回复？为什么旧任务能覆盖新任务？**不记录任何凭据**，文本一律截断。
+
+### 测试 · Tests
+
+- **新增 PendingStateTest（40 项）与第 9 道静态门禁 `check-pending-state.py`**
+  *New PendingStateTest (40 assertions) plus a static gate.*
+  覆盖：91 秒无证据不得判未回复、91 秒已观察不得判未回复、证据不足保留未确定、
+  明确超时且链路健康才可判未回复、链路中断不得假装没回复、重试后旧轮消息不污染新轮、
+  新轮回复先到时旧轮超时不得覆盖、两个重试入口初始化一致、已签不能变回未回复、
+  多 Bot 不串号、多账号不串号、重复消息不重复签到、已签与待确认不撕裂、UI 始终反映真实状态。
+
 ## 1.7.4 (174) — 2026-11-08
 
 > 修复符号层里四个真实 bug：NotificationCenter 被误杀导致回复收不全、DialogObject 与 getSendingMessageId 定位失败。

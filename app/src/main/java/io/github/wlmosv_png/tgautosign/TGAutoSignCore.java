@@ -1678,6 +1678,7 @@ public final class TGAutoSignCore {
             case RS_UNKNOWN:  return Lang.tr("判不出");
             case RS_SENDFAIL: return Lang.tr("发送失败");
             case RS_PANEL:    return Lang.tr("面板过期");
+            case RS_UNCONFIRMED: return Lang.tr("未确定");
             default:          return Lang.tr("已跳过");
         }
     }
@@ -6042,10 +6043,15 @@ public final class TGAutoSignCore {
                                 prefs.edit().remove("softfail_n_" + _pp + "_" + _pi)
                                      .remove("softfail_n_" + _pp + "_" + _pi + "_d").apply();
                             } catch (Throwable ignored) {}
-                            stateStore.clearPostSignState(_pp, _pi);
+                            // 2026-11-08 P0-3：与 pendConfirmRetry 走**同一套**状态管理。
+                            // 原来这里用 clearPostSignState（破坏性全清）+ currentAccount()（可能串号），
+                            // 与待确认面板的重试语义不一致 —— 同一动作两套行为是本项目的老病根。
+                            stateStore.resetRoundStateForRetry(_pp, _pi);
                         } catch (Throwable ignored) {}
                         dismissOne(entryActionsDlg[0]);
-                        try { sendSign(m, currentAccount(), true); } catch (Throwable ignored) {}
+                        try { evt("retry", _pi, entryDid(m), accountOfPrefix(_pp), "entry=stuck"); } catch (Throwable ignored) {}
+                        // 账号必须从 prefix 反解，禁止 currentAccount()（与 pendConfirmRetry 同判据）
+                        try { sendSign(m, accountOfPrefix(_pp), true); } catch (Throwable ignored) {}
                         toast(Lang.tr("已重发，请看状态变化"));
                         showList(act);
                     } });
@@ -7095,6 +7101,7 @@ public final class TGAutoSignCore {
     private void markSigned(String prefix, String id, String reason) {
         // 重构 1.6.1：实现搬到 SignStateStore（那里集中维护"写 last_ 必须连带清理"
         // 等不变式）。此处保留薄封装，既有 6 个调用点不变。
+        try { stateStore.noteEvidence(prefix, id, SignLogic.GRADE_VERDICT); } catch (Throwable ignored) {}
         stateStore.markSigned(prefix, id, reason);
         // 2026-10-28 B：趁"它刚回过消息/判成功"把名字固化下来 ——
         // 条目没备注名时曾经永远显示成一串数字（真机：两个 bot 显示 7622987039）。
@@ -7165,6 +7172,60 @@ public final class TGAutoSignCore {
                 prefs.edit().remove("nr_" + prefix + id).remove("nrday_" + prefix + id).apply();
             }
         } catch (Throwable ignored) {}
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  2026-11-08 P1 · 最小化事件日志
+    //
+    //  目的：把「为什么收不到/认不出/显示未回复/旧轮覆盖新轮」变成可回溯的事实。
+    //  字段固定：kind / taskId / botId / acc / round / msgId / t / grade / 其余附加。
+    //  **不记录任何凭据**；文本一律 clip 截断。
+    //  只在这些"有状态含义"的时点落盘：send / recv / corr / verdict / timeout / ui / retry。
+    // ══════════════════════════════════════════════════════════════════════
+    private final java.util.concurrent.ConcurrentHashMap<String, Long> _evtRecvAt =
+            new java.util.concurrent.ConcurrentHashMap<String, Long>();
+
+    private void evt(String kind, String id, long did, int acc, String extra) {
+        try {
+            String prefix = acc >= 0 ? accountPrefix(acc) : "";
+            int round = 0;
+            String msgid = "-";
+            int grade = SignLogic.GRADE_NONE;
+            if (prefix != null && prefix.length() > 0 && id != null && id.length() > 0) {
+                try { round = stateStore.roundOf(prefix, id); } catch (Throwable ignored) {}
+                try {
+                    int m = prefs.getInt(prefix + "msg_id_" + id, 0);
+                    if (m != 0) msgid = String.valueOf(m);
+                } catch (Throwable ignored) {}
+                try { grade = stateStore.evidenceGrade(prefix, id); } catch (Throwable ignored) {}
+            }
+            jlogForce("[evt] kind=" + kind
+                    + " taskId=" + (id == null || id.length() == 0 ? "-" : id)
+                    + " botId=" + did
+                    + " acc=" + (acc >= 0 ? acc : "-")
+                    + " round=" + round
+                    + " msgId=" + msgid
+                    + " t=" + System.currentTimeMillis()
+                    + " grade=" + SignLogic.gradeLabel(grade)
+                    + (extra == null || extra.length() == 0 ? "" : " " + extra));
+        } catch (Throwable ignored) {}
+    }
+
+    /** recv 事件限频：同一会话 30 秒最多一条，避免群聊洪峰刷爆日志。 */
+    private boolean recvLogAllowed(long did) {
+        try {
+            long now = System.currentTimeMillis();
+            String k = String.valueOf(did);
+            Long prev = _evtRecvAt.get(k);
+            if (prev != null && now - prev.longValue() < 30000L) return false;
+            _evtRecvAt.put(k, Long.valueOf(now));
+            return true;
+        } catch (Throwable t) { return false; }
+    }
+
+    /** 供模块入口与各锚点调用：标记"今天观察链路健康"。 */
+    public void markChainHealthyNow() {
+        try { stateStore.markChainHealthy(); } catch (Throwable ignored) {}
     }
 
     /** 读取归类码；无归类返回 -1。 */
@@ -7716,6 +7777,9 @@ public final class TGAutoSignCore {
                 markSelfSentText(account, dialogId, fText);
             }
             try { prefs.edit().putLong(prefix + "sent_at_" + id, System.currentTimeMillis()).commit(); } catch (Throwable _e11) { noteSwallowed("sendSign", _e11); }
+            // 2026-11-08 P0：发送即确立本轮次（重试会 +1；旧轮结论由 result_round_ 隔离）
+            try { stateStore.ensureRound(prefix, id); } catch (Throwable ignored) {}
+            try { evt("send", id, dialogId, account, "kind=" + kind); } catch (Throwable ignored) {}
             try { roundMark(prefix, id, RS_SENT, "已发出，等回复"); } catch (Throwable ignored) {}
             // 当日发送次数 +1（2026-10-01）：V_UNKNOWN 不涨 kRetry，靠这个计数
             // 给"发出后无结论"一个硬上限，见 SignLogic.MAX_SEND_ATTEMPTS。
@@ -7889,8 +7953,22 @@ public final class TGAutoSignCore {
                                     // 改前一律等 10 分钟转"待确认"，但 bot 要么已经回了、
                                     // 要么就是不会回，这 10 分钟没有信息增量。
                                     if (!optimisticSigned(fPrefix, fId)) {
-                                        boolean answered = todayStr().equals(prefs.getString(Keys.answered(fPrefix, fId), ""));
-                                        int rc = answered ? SignLogic.R_REPLIED_UNK : SignLogic.R_NO_REPLY;
+                                        boolean answered = stateStore.isAnsweredToday(fPrefix, fId);
+                                        int _g = stateStore.evidenceGrade(fPrefix, fId);
+                                        boolean _chain = stateStore.chainHealthyToday();
+                                        // 2026-11-08 P0：**只有证据门通过才允许判「未回复」**。
+                                        // 条件：无任何回复证据 + 无 answered 留痕 + 观察链路健康。
+                                        // 任一不满足 → 不写"未回复"，落「判不出/未确定」。
+                                        boolean canNoReply = SignLogic.mayMarkNoReply(answered, _g, _chain);
+                                        int rc = answered || _g >= SignLogic.GRADE_SEEN ? SignLogic.R_REPLIED_UNK
+                                                : (canNoReply ? SignLogic.R_NO_REPLY : SignLogic.R_REPLIED_UNK);
+                                        if (!canNoReply && !answered && _g < SignLogic.GRADE_SEEN) {
+                                            logw("超时无结论但**证据门未通过**（链路健康=" + _chain
+                                                 + "）→ 不判「未回复」，保留未确定：" + fId);
+                                        }
+                                        evt("timeout", fId, fDialogId, fAccount, "err=" + errText
+                                                + " answered=" + answered + " chain=" + _chain
+                                                + " decision=" + SignLogic.resultCode(rc));
                                         markResultCode(fPrefix, fId, rc);
                                         logw("超时且无结论（" + errText + "）：标记为「"
                                              + (answered ? "已回复但判不出" : "bot 未回复") + "」，"
@@ -8385,6 +8463,10 @@ public final class TGAutoSignCore {
     static final int RS_SENDFAIL= 5;   // 发送失败（会话不存在 / ID 无效）
     static final int RS_PANEL   = 6;   // 等面板 / 面板过期
     static final int RS_SKIPPED = 7;   // 已签跳过 / 冻结等
+    // 2026-11-08 P0 新增：**证据不足 / 未确定**。
+    // 为什么必须有它：过去把「什么都没观察到」直接说成「未回复」，而"未回复"是对 bot
+    // 行为的**断言**，需要证据；证据不足只能说"未确定"。
+    static final int RS_UNCONFIRMED = 8;
 
     /** 单条实时状态。 */
     static final class RoundState {
@@ -8451,49 +8533,78 @@ public final class TGAutoSignCore {
                 if (isFrozen(prefix, id) || isSnoozed(prefix, id)) continue;
                 boolean signedToday = today.equals(prefs.getString(kLast(prefix, id), ""));
                 int state = -1; String note = null;
-                if (signedToday) {
-                    state = RS_SIGNED;
-                } else if (isPendingConfirm(prefix, id)) {
-                    // 待确认 = bot 未回复 / 回复判不出（持久标记）
-                    state = RS_UNKNOWN;
-                    note = prefs.getString(prefix + "pendcfm_note_" + id, "");
-                    if (note == null || note.isEmpty()) note = "已发出但未得到结论，等处置";
-                } else {
-                    long sent = prefs.getLong(prefix + "sent_at_" + id, 0L);
-                    // ── 2026-10-16 修「全部目标都显示待处理 / 已发出 4999 分钟」──
-                    // 真凶：sent_at_ 是**裸毫秒**，没有按天语义。历史残留（昨天甚至更早发的、
-                    //   因故没被 clearPostSignState 清掉）在第二天打开面板时 now-sent 是几千分钟，
-                    //   旧代码只判「够不够久」→ 无条件判成「未回复」。
-                    //   而 statusOf() 那条路径有 sentButStale()（内含 sentToday 检查）兜底，
-                    //   所以**列表里的状态是对的**，只有走本函数的「需处理」聚合条与角标全错
-                    //   —— 用户看到的现象就是"一个都没签，却全部需要处理"。
-                    // 现在与 sentButStale 用同一口径：**只有今天确实发过**、且已过时效，才算未结案。
-                    boolean sentToday = today.equals(prefs.getString(Keys.opt(prefix, id), ""));
-                    boolean staleNoReply = sent > 0L
-                            && SignLogic.sentPhase(sentToday, sent, now, 90L * 1000L) == SignLogic.SENT_STALE;
-                    if (staleNoReply) {
+                // ══════════════════════════════════════════════════════════
+                //  2026-11-08 P0 修复：**先看证据，再看时间**
+                //
+                //  改前：sent_at_ 超过 90 秒且无结论 → 无条件 RS_NO_REPLY「未回复」。
+                //        这是**时间推导**，不是证据 —— 它把三件不同的事压成了一个词：
+                //          ① bot 回了但判不出      → 应答「判不出」
+                //          ② 什么都没观察到        → 应答「未确定」
+                //          ③ 真没回且观察链路健康  → 才配叫「未回复」
+                //        用户看到的"已发出 4 分钟仍未结案"正是这一分支。
+                //  改后：归因交给纯函数 SignLogic.resolvePendingState（有单测覆盖），
+                //        90 秒阈值只影响措辞，绝不再用于判定"未回复"。
+                // ══════════════════════════════════════════════════════════
+                boolean pendCfm = isPendingConfirm(prefix, id);
+                long sentMs = prefs.getLong(prefix + "sent_at_" + id, 0L);
+                boolean sentToday = today.equals(prefs.getString(Keys.opt(prefix, id), ""));
+                long sentAge = sentMs > 0L ? (now - sentMs) : -1L;
+                int rc = resultCodeOf(prefix, id);
+                int grade = SignLogic.GRADE_NONE;
+                boolean ansToday = false;
+                boolean chainOk = false;
+                try { grade = stateStore.evidenceGrade(prefix, id); } catch (Throwable ignored) {}
+                try { ansToday = stateStore.isAnsweredToday(prefix, id); } catch (Throwable ignored) {}
+                try { chainOk = stateStore.chainHealthyToday(); } catch (Throwable ignored) {}
+                if (ansToday && grade < SignLogic.GRADE_SEEN) grade = SignLogic.GRADE_SEEN;
+                int ps = SignLogic.resolvePendingState(signedToday, pendCfm, sentToday, sentAge,
+                                                       grade, rc, chainOk);
+                switch (ps) {
+                    case SignLogic.PS_SIGNED:
+                        state = RS_SIGNED; note = null; break;
+                    case SignLogic.PS_UNKNOWN:
+                        state = RS_UNKNOWN;
+                        note = Lang.tr("回复认不出，可补判定词"); break;
+                    case SignLogic.PS_NO_REPLY:
                         state = RS_NO_REPLY;
-                        note = Lang.tf("已发出 {0} 分钟仍未结案（bot 可能已回复但未被识别）", (now - sent) / 60000L);
-                    } else {
-                        int rc = resultCodeOf(prefix, id);
-                        if (rc == SignLogic.R_REPLIED_UNK) { state = RS_UNKNOWN; note = "回复认不出，可补判定词"; }
-                        else if (rc == SignLogic.R_NO_REPLY) { state = RS_NO_REPLY; note = "bot 未回复"; }
-                        else if (rc == SignLogic.R_BTN_STALE) { state = RS_PANEL; note = Lang.tr("等不到带按钮的新消息：在条目「编辑」里填一条前置命令（如 /menu）"); }
-                        else if (rc == SignLogic.R_FAILED) { state = RS_SENDFAIL; note = "签到失败"; }
-                        else {
-                            // ── 2026-10-14：补齐「已放弃 / 退避中」──
-                            // statusOf() 会显示这两个状态，但本函数（需处理列表/角标口径）
-                            // 原先完全不认它们 → 用户看到「盒武器：已放弃」，
-                            // 点「⚠ N 条卡住」却在里面找不到它（口径漏了一支）。
-                            String rdDay = prefs.getString(kRetryDay(prefix, id), "");
-                            int retries = todayStr().equals(rdDay) ? prefs.getInt(kRetry(prefix, id), 0) : 0;
-                            if (retries >= RETRY_LIMIT) {
-                                state = RS_SENDFAIL; note = Lang.tf("今日重试已用尽（{0} 次），可手动重试或忽略", retries);
-                            } else if (System.currentTimeMillis() < prefs.getLong(kRetryAt(prefix, id), 0L)) {
-                                state = RS_WAITING; note = "退避中，等下次自动重试";
-                            }
-                        }
+                        note = Lang.tr("bot 未回复（观察链路健康且无任何回复证据）"); break;
+                    case SignLogic.PS_SENDFAIL:
+                        state = RS_SENDFAIL; note = "签到失败"; break;
+                    case SignLogic.PS_PANEL:
+                        state = RS_PANEL;
+                        note = Lang.tr("等不到带按钮的新消息：在条目「编辑」里填一条前置命令（如 /menu）"); break;
+                    case SignLogic.PS_SENT:
+                        state = RS_SENT; note = "已发出，等回复"; break;
+                    case SignLogic.PS_UNCONFIRMED:
+                        state = RS_UNCONFIRMED;
+                        // 措辞里把「为什么还判不出」说清：链路是否健康 + 已观察到哪一级证据
+                        note = chainOk
+                                ? Lang.tf("已发出 {0} 分钟仍无结论（证据：{1}）—— 未确定，不代表 bot 没回复",
+                                          Math.max(1L, sentAge / 60000L), SignLogic.gradeLabel(grade))
+                                : Lang.tr("已发出但未得到结论，且当前观察链路不健康（宿主可能刚重启或 Hook 未就绪）—— 不代表 bot 没回复");
+                        break;
+                    default:
+                        state = -1; note = null; break;
+                }
+                // 退避中 / 今日重试用尽：仍是"有事发生"，保留可见（与既有口径一致）
+                if (state < 0) {
+                    String rdDay = prefs.getString(kRetryDay(prefix, id), "");
+                    int retries = todayStr().equals(rdDay) ? prefs.getInt(kRetry(prefix, id), 0) : 0;
+                    if (retries >= RETRY_LIMIT) {
+                        state = RS_SENDFAIL;
+                        note = Lang.tf("今日重试已用尽（{0} 次），可手动重试或忽略", retries);
+                    } else if (System.currentTimeMillis() < prefs.getLong(kRetryAt(prefix, id), 0L)) {
+                        state = RS_WAITING; note = "退避中，等下次自动重试";
                     }
+                }
+                // 2026-11-08 P1：把"界面为什么这么说"落成事实（供事后回溯，限频）。
+                if (state >= 0 && state != RS_SIGNED && state != RS_SKIPPED && recvLogAllowed(did + 900000L)) {
+                    try {
+                        evt("ui", id, did, accountOfPrefix(prefix), "state=" + roundStateLabel(state)
+                                + " rc=" + SignLogic.resultCode(rc) + " grade=" + SignLogic.gradeLabel(grade)
+                                + " chain=" + chainOk
+                                + " reason=" + (pendCfm ? "pending" : (rc >= 0 ? "result" : "time")));
+                    } catch (Throwable ignored) {}
                 }
                 // 已签 / 无问题 → 不进「需处理」。
                 // 注意 RS_WAITING 在此**保留**（退避中属于「有事发生」，用户应看到）。
@@ -17034,10 +17145,13 @@ public final class TGAutoSignCore {
     /** 用户选择重试：清掉待确认与重试计数，立刻再发一次。 */
     private void pendConfirmRetry(String prefix, String id, long did) {
         try {
-            prefs.edit().remove(kPendingConfirm(prefix, id))
-                 .putInt(kRetry(prefix, id), 0)
-                 .remove(kRetryAt(prefix, id))
-                 .remove(kRetryDay(prefix, id))
+            // 2026-11-08 P0-3：两个重试入口统一走**轮次隔离**（不再各写一套清理）。
+            // 关键：不破坏性删除 —— 旧轮的 result_/ev_* 证据原样保留，只把"在途与调度"
+            // 这类属于上一轮的状态切走，并用轮次号把它们与新轮隔开。
+            try { stateStore.resetRoundStateForRetry(prefix, id); }
+            catch (Throwable _e2) { noteSwallowed("pendConfirmRetry.reset", _e2); }
+            try { evt("retry", id, did, accountOfPrefix(prefix), "entry=panel"); } catch (Throwable ignored) {}
+            prefs.edit().putInt(kRetry(prefix, id), 0)
                  // 手动重试 = 用户明确要求"再试一次"，历史失效计数必须清零。
                  // 否则每点一次计数 +1，很快撞上"重发 2 次仍失效"的闸
                  // （实测 4 秒内从第 4 次涨到第 6 次，用户以为重试没生效）。
@@ -23662,6 +23776,13 @@ public final class TGAutoSignCore {
         try {
             String id = entryId(m);
             long did = entryDid(m);
+            // 2026-11-08 P0：**先落证据，再谈判定**。
+            //   这条消息已经通过 peer 归属 + 唯一性/引用回复校验走到这里，
+            //   所以"目标 bot 确实回过"是既定事实 —— 无论后面判得出还是判不出，
+            //   都不能把这条事实丢掉（改前只有回调查询路径才写 answered_，
+            //   消息路径判不出时**什么都没留**，界面只能靠时间猜 → 误报"未回复"）。
+            try { stateStore.noteEvidence(prefix, id, SignLogic.GRADE_BOT); } catch (Throwable ignored) {}
+            try { prefs.edit().putString(Keys.answered(prefix, id), todayStr()).apply(); } catch (Throwable ignored) {}
 
             // ── M3 收尾：judgeOn 总闸统一 ──
             // 用户关闭「自动判定」后，锚点B 不得再自动判成败、写任何结果状态
@@ -23684,6 +23805,7 @@ public final class TGAutoSignCore {
                          + "｜原文: " + clip(text, 60));
                     markSigned(prefix, id, "命中「" + hit + "」");
                     clearPendingConfirm(prefix, id);
+                    try { evt("verdict", id, did, account, "v=signed hit=" + hit); } catch (Throwable ignored) {}
                     return;
                 }
                 if (v == SignLogic.V_FAILED) {
@@ -23727,7 +23849,10 @@ public final class TGAutoSignCore {
             // 全都含「签到/积分」字样，于是整段防骗广告塞满主列表 ——
             // 用户看到的 10 条里 6 条是广告，真正该判的一条也没有。
             // 现在：公告只记进「被自动过滤」，可在那里一次收回，不污染主列表。
+            try { stateStore.noteEvidence(prefix, id, SignLogic.GRADE_VERDICT); } catch (Throwable ignored) {}
             markResultCode(prefix, id, SignLogic.R_REPLIED_UNK);
+            try { evt("verdict", id, did, account, "v=unknown grade=" + SignLogic.gradeLabel(
+                    stateStore.evidenceGrade(prefix, id)) + " txt=" + clip(text, 20)); } catch (Throwable ignored) {}
             // 2026-10-25：命中成功词却被公告守卫拦下时必须留痕 ——
             // 否则用户会以为「我学的词不生效」，且完全查不到原因。
             try {
@@ -23816,6 +23941,8 @@ public final class TGAutoSignCore {
     private int judgeReplyByPeer(long peerUid, String text, String source, int replyToId) {
         try {
             if (peerUid == 0L) return 0;
+            // 2026-11-08：能走到这里说明锚点确实在收事件 → 观察链路健康
+            try { stateStore.markChainHealthy(); } catch (Throwable ignored) {}
             if (text == null || text.length() == 0) return 0;
             // 早退：该会话不在「正在等结论」的集合里就直接返回。
             // 群聊消息洪峰时（实测每分钟几十条无关消息），这一句把 90%+ 的调用挡在循环之前。
@@ -23876,6 +24003,12 @@ public final class TGAutoSignCore {
             final Map<String, Object> _tg = hitTarget;
             final String _txt = text;
             noteRecv(source, peerUid, 0L, _txt);
+            // 2026-11-08 P0：关联成功 = 最高级"非判定"证据。判定失败也**不得丢**这条事实。
+            try { stateStore.noteEvidence(_pfx, entryId(_tg), SignLogic.GRADE_CORR); } catch (Throwable ignored) {}
+            try {
+                evt("corr", entryId(_tg), peerUid, _acc, "src=" + source + " how="
+                        + (replyToId > 0 ? "reply_to" : "peer_unique") + " txt=" + clip(_txt, 20));
+            } catch (Throwable ignored) {}
             final boolean _isMedia = source != null && source.contains("media");
             jlog("[" + source + "] 命中在等的目标 " + entryId(_tg) + " @" + accountLabel(_acc)
                  + " 正文=" + clip(_txt, 60) + (_isMedia ? "（媒体）" : ""));

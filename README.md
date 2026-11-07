@@ -202,17 +202,19 @@ sha256sum TGAutoSign-*.apk                     # 比对 Release 里的 sha256sum
 
 ## 更新日志 · Changelog
 
+### v1.7.5 (175) — 2026-11-08
+
+**修复**：「未回复」不再由发送时间推导 · 回复证据分级与轮次隔离 · 两个重试入口统一为 `resetRoundStateForRetry` · 状态转换保护与原子更新
+
+**新增**：最小化事件日志（send / recv / corr / verdict / timeout / ui / retry）
+
+**测试**：新增 PendingStateTest（40 项）与第 9 道静态门禁 `check-pending-state.py`
+
 ### v1.7.4 (174) — 2026-11-08
 
 **修复**：NotificationCenter 被错误拒绝（锚点 B 挂不上） · 方法返回类型提示不认基本类型 · 数组类型的规范名不认 · 父类契约恒为假 · DialogObject 双重载改走符号层
 
 **测试**：HostSymbolsTest 77 项
-
-### v1.7.3 (173) — 2026-11-08
-
-**修复**：13.2.1 的宿主符号映射缺失 · 映射表可自动生成
-
-**测试**：HostSymbolsTest 扩到 70 项
 
 [完整更新日志 →](https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md)
 
