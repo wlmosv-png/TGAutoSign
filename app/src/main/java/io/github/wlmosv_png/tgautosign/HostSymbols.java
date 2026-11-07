@@ -414,6 +414,16 @@ public final class HostSymbols {
         return m;
     }
 
+    /**
+     * 热路径专用：**非混淆宿主直接返回 null**，让调用方继续走原有的 getMethod 路径。
+     * 这样 13.1.1 及更早 / 不混淆 fork 的每次反射开销与本次改动前完全一致（零回归），
+     * 只有真正被混淆的宿主才付出解析成本。
+     */
+    public static Method methodFast(Class<?> owner, String legacy, Class<?>[] types, Boolean staticReq) {
+        if (!sInstalled || !sMapped) return null;
+        return method(owner, legacy, types, staticReq);
+    }
+
     /** 便捷重载：不带参数类型时用空参数表。 */
     public static Method method(Class<?> owner, String legacy) {
         return method(owner, legacy, new Class<?>[0], null);
@@ -547,6 +557,7 @@ public final class HostSymbols {
 
     /** 字段类型提示（旧名 + 字段名 → 期望类型）。查不到返回 null。 */
     public static Class<?> fieldTypeHint(Class<?> owner, String legacyField) {
+        if (!sMapped) return null;   // 非混淆宿主：字段名就是原名，走直查即可
         String hint = FIELD_TYPE_HINTS.get(key(ownerLegacyName(owner), legacyField, ""));
         if (hint == null) return null;
         return typeOf(hint);

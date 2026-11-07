@@ -25851,19 +25851,19 @@ public final class TGAutoSignCore {
     // 2026-11-08：三个反射入口统一先经 HostSymbols 解析方法（旧版命中原名，行为不变；
     //   混淆宿主按「参数表(+返回类型)」结构定位，唯一命中才采用）。
     private static Object call(Object obj, String name, Class<?>[] types, Object[] args) throws Exception {
-        Method m = HostSymbols.method(obj.getClass(), name, types, null);
+        Method m = HostSymbols.methodFast(obj.getClass(), name, types, null);
         if (m == null) m = obj.getClass().getMethod(name, types);
         return m.invoke(obj, args);
     }
 
     private static Object invoke(Object obj, String name, Class<?>[] types, Object[] args) throws Exception {
-        Method m = HostSymbols.method(obj.getClass(), name, types, null);
+        Method m = HostSymbols.methodFast(obj.getClass(), name, types, null);
         if (m == null) m = obj.getClass().getMethod(name, types);
         return m.invoke(obj, args);
     }
 
     private static Object staticInvoke(Class<?> cls, String name, Class<?>[] types, Object[] args) throws Exception {
-        Method m = HostSymbols.method(cls, name, types, Boolean.TRUE);
+        Method m = HostSymbols.methodFast(cls, name, types, Boolean.TRUE);
         if (m == null) m = cls.getMethod(name, types);
         return m.invoke(null, args);
     }
@@ -26021,7 +26021,7 @@ public final class TGAutoSignCore {
 
     private static void setFieldVal(Object obj, String name, Object val) {
         // 2026-11-08：混淆宿主上先经类型提示定位字段（tgnet 包名字保留，走原名即可）
-        try {
+        if (HostSymbols.isMapped()) try {
             Class<?> hint = HostSymbols.fieldTypeHint(obj.getClass(), name);
             if (hint != null) {
                 Field f = HostSymbols.field(obj.getClass(), name, hint);
