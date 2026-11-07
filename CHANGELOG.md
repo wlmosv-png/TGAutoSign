@@ -1,5 +1,37 @@
 # 更新日志
 
+## 1.7.3 (173) — 2026-11-08
+
+> 修复 Telegram 13.2.1 的宿主映射：混淆名逐版本变化，新增 13.2.1 档与自动生成器。
+
+### 修复 · Fixed
+
+- **13.2.1 的宿主符号映射缺失**
+  *Host symbol mapping for Telegram 13.2.1 was missing.*
+  1.7.2 只收录了 13.2.0（官网直连版实测 lp / os / w10 …）。
+  Telegram 13.2.1（Play 渠道，versionCode 72911）把混淆名**整套换了一轮**：
+  MessagesController→vp、NotificationCenter→ys、UserConfig→c20、
+  MessagesStorage→hs、DialogObject→i5、SendMessagesHelper→qz、
+  UserNameResolver→f20、BaseController→d1、SharedConfig→tz。
+  旧表下这些对不上，模块会明说「宿主版本未适配」并停用数据与事件功能——
+  这正是设计预期（宁可明说，不做假成功）。现在补上 13.2.1 档，
+  13.2.0 档保留，两档互不影响。
+
+- **映射表可自动生成**
+  *The mapping table can now be generated automatically.*
+  新增 `tools/hostmap-gen.py`：输入任意 Telegram APK，用结构指纹
+  （全包唯一 5 参 processUpdateArray、`(int,Object[])` + `SparseArray.keyAt`、
+  字符串锚点 `cache4.db` / `userconfing` / `mainconfig`、DialogObject 双重载消歧）
+  自动定位 9 个符号并输出可直接写进表的条目，`--apply` 一键插入。
+  以后 Telegram 更新只需一条命令。
+
+### 测试 · Tests
+
+- **HostSymbolsTest 扩到 70 项**
+  *HostSymbolsTest grows to 70 assertions.*
+  新增「13.2.1 档选中」与「两档互不串」用例：同一 loader 下以 72911 安装应得到 vp / ys / c20，
+  以 72809 安装应得到 lp / os / w10，切换后不互相污染。
+
 ## 1.7.2 (172) — 2026-11-08
 
 > 适配 Telegram 13.2.0 的类名混淆变更：新增宿主符号解析层，恢复会话列表、Peer 解析、账号识别与回复判定；13.1.1 及更早行为不变。

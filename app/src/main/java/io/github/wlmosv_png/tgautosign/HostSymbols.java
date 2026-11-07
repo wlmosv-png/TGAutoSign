@@ -56,6 +56,9 @@ public final class HostSymbols {
 
     /**
      * 按 versionCode 起效的类名映射。数组每项 = { 旧名(Telegram 原名), 该构建里的实际名 }。
+     * <b>Telegram 每发布一个版本就会重排一遍混淆名</b>（实测 13.2.0 官网版是 lp/os/w10…，
+     * 13.2.1 Play 版却是 vp/ys/c20…），所以这张表必须逐版本维护：
+     * 用 {@code tools/hostmap-gen.py <apk> --tier <versionCode高位>} 自动生成条目。
      * <b>只有类名在这里；方法与字段一律结构解析</b>，所以 Telegram 后续小版本重排成员名时无需改表。
      */
     private static final Map<Long, String[][]> CLASS_MAPS = new LinkedHashMap<>();
@@ -64,6 +67,21 @@ public final class HostSymbols {
         // 证据：官方 proguard-rules.pro 在提交 55356b2a("update to 13.2.0") 删除
         //   -keep class org.telegram.messenger.* { *; }，改为只保留 native 方法名。
         // 下面每个映射都由 apk-index 结构指纹独立确认（见 AUDIT 报告 §3.2 / §5）。
+        // Telegram 13.2.1（Play 渠道实测 versionCode 72911，base.apk sha256 faadd72f…bc762）
+        // 混淆名与 13.2.0 官网版**完全不同** —— 印证「混淆名逐版本变化，必须按版本档维护」。
+        // 全部由结构指纹独立定位（vp=全包唯一 5 参 processUpdateArray；ys=(int,Object[])+keyAt；
+        // c20 super=d1 且持 TLRPC$User；i5 同时有 (Peer)->long 与 (InputPeer)->long …）。
+        CLASS_MAPS.put(72900L, new String[][]{
+                {"org.telegram.messenger.MessagesController", "org.telegram.messenger.vp"},
+                {"org.telegram.messenger.NotificationCenter", "org.telegram.messenger.ys"},
+                {"org.telegram.messenger.BaseController", "org.telegram.messenger.d1"},
+                {"org.telegram.messenger.UserConfig", "org.telegram.messenger.c20"},
+                {"org.telegram.messenger.SharedConfig", "org.telegram.messenger.tz"},
+                {"org.telegram.messenger.MessagesStorage", "org.telegram.messenger.hs"},
+                {"org.telegram.messenger.DialogObject", "org.telegram.messenger.i5"},
+                {"org.telegram.messenger.SendMessagesHelper", "org.telegram.messenger.qz"},
+                {"org.telegram.messenger.UserNameResolver", "org.telegram.messenger.f20"},
+        });
         CLASS_MAPS.put(72800L, new String[][]{
                 {"org.telegram.messenger.MessagesController", "org.telegram.messenger.lp"},
                 {"org.telegram.messenger.NotificationCenter", "org.telegram.messenger.os"},

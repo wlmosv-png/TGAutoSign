@@ -155,6 +155,33 @@ public final class HostSymbolsTest {
         eq("mapped: didReceiveNewMessages id 退到常量 1", 1,
                 HostSymbols.didReceiveNewMessagesId(HostSymbols.mapClass(NC)));
 
+        // ── 3b) 13.2.1 档（Play 实测 72911）：混淆名与 13.2.0 完全不同，必须按版本档切换 ──
+        HostSymbols.install(blocked, "org.telegram.messenger", 72911L);
+        eq("tier72900: MessagesController → vp", "org.telegram.messenger.vp", nameOf(HostSymbols.mapClass(MC)));
+        eq("tier72900: NotificationCenter → ys", "org.telegram.messenger.ys", nameOf(HostSymbols.mapClass(NC)));
+        eq("tier72900: UserConfig → c20", "org.telegram.messenger.c20", nameOf(HostSymbols.mapClass(UC)));
+        eq("tier72900: BaseController → d1", "org.telegram.messenger.d1",
+                nameOf(HostSymbols.mapClass("org.telegram.messenger.BaseController")));
+        eq("tier72900: MessagesStorage → hs", "org.telegram.messenger.hs",
+                nameOf(HostSymbols.mapClass("org.telegram.messenger.MessagesStorage")));
+        eq("tier72900: DialogObject → i5", "org.telegram.messenger.k5".replace("k5", "i5"),
+                nameOf(HostSymbols.mapClass("org.telegram.messenger.DialogObject")));
+        eq("tier72900: SendMessagesHelper → qz", "org.telegram.messenger.qz",
+                nameOf(HostSymbols.mapClass("org.telegram.messenger.SendMessagesHelper")));
+        eq("tier72900: UserNameResolver → f20", "org.telegram.messenger.f20",
+                nameOf(HostSymbols.mapClass("org.telegram.messenger.UserNameResolver")));
+        check("tier72900: hostAdapted", HostSymbols.hostAdapted());
+        Class<?> vpCls = HostSymbols.mapClass(MC);
+        eq("tier72900: getDialogs 结构解析 → V0", "V0",
+                nameOf2(HostSymbols.method(vpCls, "getDialogs", new Class<?>[]{int.class}, null)));
+        eq("tier72900: postNotificationName 结构解析 → k", "k",
+                nameOf2(HostSymbols.method(HostSymbols.mapClass(NC), "postNotificationName",
+                        new Class<?>[]{int.class, Object[].class}, Boolean.FALSE)));
+        // 切回 13.2.0 档，两个档位互不串
+        HostSymbols.install(blocked, "org.telegram.messenger", 72809L);
+        eq("tier72800 仍独立可用: MessagesController → lp", "org.telegram.messenger.lp", nameOf(HostSymbols.mapClass(MC)));
+        eq("tier72800 仍独立可用: NotificationCenter → os", "org.telegram.messenger.os", nameOf(HostSymbols.mapClass(NC)));
+
         // ── 4) 错误映射必须被结构契约拒绝 ──
         HostSymbols.__testInstall(blocked, "org.telegram.messenger", 72809L, new String[][]{
                 {MC, "org.telegram.messenger.xd"}});
@@ -227,6 +254,7 @@ public final class HostSymbolsTest {
     }
 
     private static String nameOf(Class<?> c) { return c == null ? null : c.getName(); }
+    private static String nameOf2(Method m) { return m == null ? null : m.getName(); }
 
     private HostSymbolsTest() { }
 }

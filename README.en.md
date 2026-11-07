@@ -183,6 +183,12 @@ You installed a debug build. Uninstall it, then install the official APK from th
 
 ## 更新日志 · Changelog
 
+### v1.7.3 (173) — 2026-11-08
+
+**Fixed**: Host symbol mapping for Telegram 13.2.1 was missing. · The mapping table can now be generated automatically.
+
+**测试**: HostSymbolsTest grows to 70 assertions.
+
 ### v1.7.2 (172) — 2026-11-08
 
 **New**: New host symbol resolution layer (HostSymbols). · Every mapping entry is confirmed by structural evidence. · Adaptation status is now explicit.
@@ -190,18 +196,6 @@ You installed a debug build. Uninstall it, then install the official APK from th
 **Fixed**: Fixed false-positive injection. · Anchor A's prefix match no longer worked on the new build. · Fallback when the notification id cannot be read.
 
 **测试**: New HostSymbolsTest (57 assertions).
-
-### v1.7.1 (171) — 2026-11-01
-
-**Fixed**: A target's fixed time is no longer bypassed by an all-day global window. · The heartbeat path no longer bypasses the sign-in gate. · The make-up window start is computed per target. · Account panels are no longer misread as sign-in failures. · Genuine rejections are still treated as failures.
-
-**New**: Mark a target as "not signed" again by hand.
-
-**Fixed**: Once a target is signed today, automatic verdicts no longer flip it. · Signed targets no longer enter the unrecognized-reply pool. · Revoking a sign-in now clears the signed timestamp too. · Self-heal for a torn signed state. · Every revocation is now logged with its reason.
-
-**UI**: The undo entry is now one compact row per target. · New "Paused" section: pausing no longer hides a target. · The entry menu now shows the actual state instead of a static label.
-
-**工程**: The make-up predicate gains a target-scoped overload. · The trigger-policy test is now part of the gate.
 
 [Full changelog →](https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md)
 
