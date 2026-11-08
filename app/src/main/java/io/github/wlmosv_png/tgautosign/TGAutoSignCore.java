@@ -22876,6 +22876,119 @@ public final class TGAutoSignCore {
     //
     // @return dialogId；解析不出返回 0（调用方须自行区分 0 与有效值）
     ///
+    // ══════════════════════════════════════════════════════════════════
+    //  2026-11-08 F10 · Short 形态新消息归一化（13.2.x 私聊入口）
+    //
+    //  实测证据（参数级探针，真实运行）：
+    //    [probe] first-call hook=A2 args=2
+    //    [probe] arg hook=A2 i=0 type=TL_updateShortMessage
+    //    A1(processUpdateArray) 的元素直方图里 TL_updateNewMessage = 0
+    //  → 私聊新消息在 13.2.1 上以 schema「短形态」直接进 processUpdates，不经过
+    //    update 列表；短形态没有 message 对象，只有 id / user_id(或 chat_id) /
+    //    from_id / message(String) / out / date。
+    //
+    //  处理方式：**只做形状归一化** —— 合成一个与 TL_updateNewMessage 同形的对象，
+    //  交给既有的同一条接收/判定链。这样不复制任何判定逻辑、不改任何闸、不碰状态键。
+    //  13.1.1 及更早：这些类同样存在，但私聊走 update 列表，本函数不会被调到 → 零回归。
+    // ══════════════════════════════════════════════════════════════════
+
+    /** 合成消息体：字段名与宿主 Message 对齐，仅被既有反射链读取。 */
+    private static final class ShortMsg {
+        public Object peer_id;
+        public Object from_id;
+        public Object message;
+        public Object out;
+        public Object id;
+        public Object date;
+        public Object reply_to_msg_id;
+    }
+
+    /** 合成 update 容器：与 TL_updateNewMessage 同形（只有 message 会被读到）。 */
+    private static final class ShortUpdate {
+        public Object message;
+    }
+
+    private static long asLongNum(Object o) {
+        return (o instanceof Number) ? ((Number) o).longValue() : 0L;
+    }
+
+    /** 用宿主 ClassLoader 造一个真实 TL_peerUser（反射链按字段读，不用合成类）。 */
+    private Object newPeerUser(long uid) {
+        try {
+            Object p = classEx("org.telegram.tgnet.TLRPC$TL_peerUser").newInstance();
+            setFieldVal(p, "user_id", Long.valueOf(uid));
+            return p;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 用宿主 ClassLoader 造一个真实 TL_peerChat（基本群：dialogId = -chat_id）。 */
+    private Object newPeerChat(long cid) {
+        try {
+            Object p = classEx("org.telegram.tgnet.TLRPC$TL_peerChat").newInstance();
+            setFieldVal(p, "chat_id", Long.valueOf(cid));
+            return p;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * Short 形态 → 与 TL_updateNewMessage 同形的合成对象；不适用时返回 null（调用方保持原样）。
+     * 只认**类名后缀**，不依赖任何混淆名：
+     *   updateShortMessage     → 私聊新消息
+     *   updateShortChatMessage → 基本群新消息
+     *   updateShort            → 容器，取其中 update 字段
+     *   updateShortSentMessage → 自己发出的（out=true），不合成，交给既有 out 闸
+     */
+    private Object shortUpdateToNormal(Object u) {
+        if (u == null) return null;
+        String cn;
+        try { cn = u.getClass().getName(); } catch (Throwable t) { return null; }
+        if (cn == null) return null;
+        boolean isMsg = cn.endsWith("TL_updateShortMessage");
+        boolean isChatMsg = cn.endsWith("TL_updateShortChatMessage");
+        boolean isBare = cn.endsWith("TL_updateShort");
+        if (isBare && !isMsg && !isChatMsg) {
+            try { return getFieldValSafe(u, "update"); } catch (Throwable t) { return null; }
+        }
+        if (!isMsg && !isChatMsg) return null;
+        try {
+            if (Boolean.TRUE.equals(getFieldValSafe(u, "out"))) return null;
+            Object text = getFieldValSafe(u, "message");
+            if (text == null) return null;
+            Object peer;
+            long fromUid;
+            if (isChatMsg) {
+                peer = newPeerChat(asLongNum(getFieldValSafe(u, "chat_id")));
+                fromUid = asLongNum(getFieldValSafe(u, "from_id"));
+            } else {
+                long uid = asLongNum(getFieldValSafe(u, "user_id"));
+                peer = newPeerUser(uid);
+                fromUid = (uid != 0L) ? uid : asLongNum(getFieldValSafe(u, "from_id"));
+            }
+            if (peer == null) return null;
+            Object from = newPeerUser(fromUid);
+            ShortMsg sm = new ShortMsg();
+            sm.peer_id = peer;
+            sm.from_id = (from != null) ? from : peer;
+            sm.message = text;
+            sm.out = Boolean.FALSE;
+            sm.id = getFieldValSafe(u, "id");
+            sm.date = getFieldValSafe(u, "date");
+            try {
+                Object rt = getFieldValSafe(u, "reply_to");
+                if (rt != null) sm.reply_to_msg_id = getFieldValSafe(rt, "reply_to_msg_id");
+            } catch (Throwable ignored) {}
+            ShortUpdate su = new ShortUpdate();
+            su.message = sm;
+            return su;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     private long resolveDialogIdFromPeer(Object peer) {
         if (peer == null) return 0L;
         // ① peerUser：user_id
@@ -24474,6 +24587,18 @@ public final class TGAutoSignCore {
             try { if (u != null) Diag.noteUpdateType(u.getClass().getName()); } catch (Throwable ignored) {}
             String un = u == null ? null : u.getClass().getName();
             int _updKind = InboundGate.updateKind(un);
+            // ── 2026-11-08 F10：13.2.x 私聊/基本群新消息的「Short」形态归一化 ──
+            // 参数级探针实测（真实运行）：私聊 bot 回复在 13.2.1 上**不经过**
+            //   processUpdateArray 的 update 列表，而是以
+            //     TLRPC$TL_updateShortMessage / TLRPC$TL_updateShortChatMessage
+            //   直接作为 processUpdates(TLRPC$Updates, boolean) 的第 0 个参数到达。
+            // 旧实现把整条当元素 → 类名不匹配 → drop:not_new_message → 私聊回复
+            //   永远进不了判定链（频道消息走 update 列表，所以只有私聊失效）。
+            // 这里只做**形状归一化**，交给下面同一条链；不复制判定逻辑、不改闸、不碰状态。
+            if (u != null && _updKind == InboundGate.UPD_NONE) {
+                Object _su = shortUpdateToNormal(u);
+                if (_su != null) { u = _su; _updKind = InboundGate.UPD_NEW_MESSAGE; }
+            }
             // 2026-11-08 F8：类型判定抽到 InboundGate（纯函数，有测试），语义与原来逐字一致。
             if (u == null || _updKind == InboundGate.UPD_NONE) {
                 String _why = InboundGate.classifyEarly(u == null, _updKind, false, 1L, false, 1L, 1L);

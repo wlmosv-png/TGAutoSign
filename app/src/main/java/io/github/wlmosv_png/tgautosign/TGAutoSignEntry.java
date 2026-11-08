@@ -489,16 +489,33 @@ public final class TGAutoSignEntry extends XposedModule {
             java.util.List<Method> targets = HostSymbols.processUpdateMethods(mc);
             int hooked = 0;
             for (Method m : targets) {
+                // 2026-11-08 F9：每个挂载点独立 id / 独立安装结果 / 独立触发计数。
+                // 为什么要拆：一个总状态无法区分「三个都装上」与「只装上其中一个」，
+                //   而「频道有、私聊没有」恰恰要靠这个区分。
+                final String hid = probeHookId(m);
+                final String hlabel = probeHookLabel(m);
+                final int hparams = m.getParameterTypes().length;
                 String key = "processUpdate#" + m.toGenericString();
                 synchronized (HOOKED_METHODS) {
                     if (HOOKED_METHODS.contains(key)) continue;
                     HOOKED_METHODS.add(key);
                 }
+                boolean ok = false;
+                String fail = null;
                 try {
                     m.setAccessible(true);
                     hook(m)
                             .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                             .intercept(chain -> {
+                                try { Diag.hookFired(hid); } catch (Throwable ignored) {}
+                                try {
+                                    // F9 探针：先记参数面（只统计，不参与判定）
+                                    Object[] _as = new Object[hparams];
+                                    for (int _i = 0; _i < hparams; _i++) {
+                                        try { _as[_i] = chain.getArg(_i); } catch (Throwable ignored) {}
+                                    }
+                                    Diag.probeCall(hid, _as);
+                                } catch (Throwable ignored) {}
                                 try {
                                     Object update = chain.getArg(0);
                                     // 把 MessagesController 实例一起传下去：它自己带 currentAccount
@@ -509,8 +526,13 @@ public final class TGAutoSignEntry extends XposedModule {
                                 } catch (Throwable ignored) {}
                                 return chain.proceed();
                             });
+                    ok = true;
                     hooked++;
-                } catch (Throwable ignored) {}
+                } catch (Throwable t) {
+                    fail = t.getClass().getSimpleName();
+                }
+                try { Diag.hookTarget(hid, hlabel, true, true, hparams, m.getName()); } catch (Throwable ignored) {}
+                try { Diag.hookInstall(hid, hlabel, ok, fail); } catch (Throwable ignored) {}
             }
             logInfo("hooked MessagesController.processUpdate*（匹配 " + hooked + " 个方法）");
             if (hooked > 0) CORE.anchorAHooked = true;
@@ -527,6 +549,33 @@ public final class TGAutoSignEntry extends XposedModule {
         } catch (Throwable t) {
             logError("hook processUpdate failed", t);
         }
+    }
+
+    /**
+     * F9：按参数表给锚点 A 的每个挂载点一个稳定 id —— 不再用单一总状态代替三个结果。
+     * 纯结构判定（不依赖混淆名）：
+     *   A1 = processUpdateArray(ArrayList, ArrayList, ArrayList, boolean, int)  ← 唯一 5 参
+     *   A2 = processUpdates(TLRPC$Updates, boolean)                             ← 2 参且第 2 参 boolean
+     *   A3 = processUpdatesQueue(int, int)                                      ← 2 参全 int
+     */
+    private static String probeHookId(Method m) {
+        try {
+            Class<?>[] ps = m.getParameterTypes();
+            if (ps.length == 5) return "A1";
+            if (ps.length == 2 && ps[1] == boolean.class) return "A2";
+            if (ps.length == 2 && ps[0] == int.class && ps[1] == int.class) return "A3";
+            return "A9";
+        } catch (Throwable t) {
+            return "A9";
+        }
+    }
+
+    private static String probeHookLabel(Method m) {
+        String id = probeHookId(m);
+        if ("A1".equals(id)) return "processUpdateArray";
+        if ("A2".equals(id)) return "processUpdates";
+        if ("A3".equals(id)) return "processUpdatesQueue";
+        return "processUpdate?";
     }
 
     // 触发源 3.6（锚点 B）：NotificationCenter.didReceiveNewMessages（实现端）

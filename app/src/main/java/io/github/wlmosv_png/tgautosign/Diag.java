@@ -199,6 +199,99 @@ public final class Diag {
     }
 
     // ══════════════════════════════════════════════════════════════════
+    //  F9 · 入口参数级探针（2026-11-08）
+    //
+    //  只回答一个问题：**私聊新消息到底从哪个入口、第几个参数进来**。
+    //  为什么需要它：A 的汇总直方图只统计「锚点 A 收到的元素」，无法区分
+    //    N3/O3/P3 三个挂载点，也无法区分 arg0/arg1/arg2 —— 于是当
+    //    「频道有、私聊没有」时，无法判断是「没挂上」还是「不走这条」。
+    //
+    //  约束（用户 2026-11-08 授权）：
+    //    1. 只统计，不参与任何判定；不读写签到状态。
+    //    2. 关键统计**不限频**：调用次数/参数面/元素类型全部计数，不受限频影响。
+    //       「首次出现」另打一行 INFO，保证私聊第一次到达时一定看得见。
+    //    3. 只记类型名与元素个数，**绝不记消息正文**。
+    // ══════════════════════════════════════════════════════════════════
+
+    private static final Map<String, AtomicLong> PROBE_CALL = new ConcurrentHashMap<String, AtomicLong>();
+    private static final Map<String, AtomicLong> PROBE_ARG  = new ConcurrentHashMap<String, AtomicLong>();
+    private static final Map<String, AtomicLong> PROBE_ELEM = new ConcurrentHashMap<String, AtomicLong>();
+    private static final Map<String, AtomicLong> PROBE_SIZE = new ConcurrentHashMap<String, AtomicLong>();
+    private static final Map<String, Boolean>    PROBE_SEEN = new ConcurrentHashMap<String, Boolean>();
+
+    /** 单次调用最多遍历的元素个数（防极端批次拖慢宿主；正常 update 批次远小于此）。 */
+    private static final int PROBE_ELEM_CAP = 20000;
+
+    private static void bump(Map<String, AtomicLong> m, String k) {
+        AtomicLong c = m.get(k);
+        if (c == null) {
+            c = new AtomicLong(0L);
+            AtomicLong prev = m.putIfAbsent(k, c);
+            if (prev != null) c = prev;
+        }
+        c.incrementAndGet();
+    }
+
+    private static String sizeBucket(int n) {
+        if (n <= 0) return "0";
+        if (n == 1) return "1";
+        if (n <= 3) return "2-3";
+        if (n <= 10) return "4-10";
+        if (n <= 100) return "11-100";
+        return "100+";
+    }
+
+    /** 记录一次 Hook 触发的完整参数面。hookId 由调用方按签名给出（A1/A2/A3）。 */
+    public static void probeCall(String hookId, Object[] args) {
+        if (!enabled) return;
+        final String id = (hookId == null || hookId.length() == 0) ? "?" : hookId;
+        bump(PROBE_CALL, id);
+        if (PROBE_SEEN.putIfAbsent("call|" + id, Boolean.TRUE) == null) {
+            emit(3, "[probe] first-call hook=" + id + " args=" + (args == null ? 0 : args.length));
+        }
+        if (args == null) return;
+        for (int i = 0; i < args.length; i++) {
+            Object a = args[i];
+            String tn = (a == null) ? "null" : shortName(a.getClass().getName());
+            bump(PROBE_ARG, id + "|a" + i + "|" + tn);
+            if (PROBE_SEEN.putIfAbsent("arg|" + id + "|" + i + "|" + tn, Boolean.TRUE) == null) {
+                emit(3, "[probe] arg hook=" + id + " i=" + i + " type=" + tn);
+            }
+            if (a instanceof List) {
+                List<?> l = (List<?>) a;
+                int n = l.size();
+                bump(PROBE_SIZE, id + "|a" + i + "|sz" + sizeBucket(n));
+                int guard = 0;
+                for (Object e : l) {
+                    if (++guard > PROBE_ELEM_CAP) break;
+                    String et = (e == null) ? "null" : shortName(e.getClass().getName());
+                    bump(PROBE_ELEM, id + "|a" + i + "|~" + et);
+                    if (PROBE_SEEN.putIfAbsent("elem|" + id + "|" + i + "|" + et, Boolean.TRUE) == null) {
+                        emit(3, "[probe] ELEM hook=" + id + " arg=" + i + " type=" + et + " listSize=" + n);
+                    }
+                }
+            }
+        }
+    }
+
+    private static String fmtLive(Map<String, AtomicLong> m) {
+        Map<String, Long> out = new LinkedHashMap<String, Long>();
+        for (Map.Entry<String, AtomicLong> e : m.entrySet()) out.put(e.getKey(), e.getValue().get());
+        return fmt(out);
+    }
+
+    /** 探针汇总（拼在 SUMMARY 之后；按 hook 分组，参数面与元素类型各一行）。 */
+    public static String probeSummary() {
+        if (PROBE_CALL.isEmpty()) return "\n  [probe] 无触发";
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n  [probe] 调用次数: ").append(fmtLive(PROBE_CALL));
+        sb.append("\n  [probe] 参数面: ").append(fmtLive(PROBE_ARG));
+        sb.append("\n  [probe] List长度: ").append(fmtLive(PROBE_SIZE));
+        sb.append("\n  [probe] 元素类型: ").append(fmtLive(PROBE_ELEM));
+        return sb.toString();
+    }
+
+    // ══════════════════════════════════════════════════════════════════
     //  F5 · 早退原因计数
     // ══════════════════════════════════════════════════════════════════
 
@@ -269,6 +362,7 @@ public final class Diag {
           .append("  日志写入成功=").append(WRITE_OK.get())
           .append("  失败=").append(WRITE_FAIL.get());
         sb.append("\n").append(hookTable());
+        sb.append(probeSummary());
         return sb.toString();
     }
 
@@ -290,6 +384,7 @@ public final class Diag {
     /** 仅供测试：清空所有状态。 */
     public static void resetForTest() {
         HOOKS.clear(); UPD.clear(); DROPS.clear(); THROTTLE.clear();
+        PROBE_CALL.clear(); PROBE_ARG.clear(); PROBE_ELEM.clear(); PROBE_SIZE.clear(); PROBE_SEEN.clear();
         INSTALL_CALLS.set(0L); THROTTLED.set(0L);
         WRITE_FAIL.set(0L); WRITE_OK.set(0L);
         pid = 0;
