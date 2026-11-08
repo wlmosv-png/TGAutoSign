@@ -22912,26 +22912,33 @@ public final class TGAutoSignCore {
         return (o instanceof Number) ? ((Number) o).longValue() : 0L;
     }
 
-    /** 用宿主 ClassLoader 造一个真实 TL_peerUser（反射链按字段读，不用合成类）。 */
-    private Object newPeerUser(long uid) {
-        try {
-            Object p = classEx("org.telegram.tgnet.TLRPC$TL_peerUser").newInstance();
-            setFieldVal(p, "user_id", Long.valueOf(uid));
-            return p;
-        } catch (Throwable t) {
-            return null;
-        }
+    /**
+     * 合成 Peer 持有体：字段名与宿主 Peer 对齐，**只被既有反射链按字段读取**。
+     * 为什么不用宿主真实的 TL_peerUser：那要走宿主 ClassLoader 反射构造，
+     * 多一层失败面；而 resolveDialogIdFromPeer / resolveFromDid / isBotSender
+     * 都只按字段名读，合成体完全等价（fieldValDeep 会 setAccessible 后读）。
+     */
+    private static final class ShortPeer {
+        public Object user_id;
+        public Object chat_id;
+        public Object channel_id;
     }
 
-    /** 用宿主 ClassLoader 造一个真实 TL_peerChat（基本群：dialogId = -chat_id）。 */
-    private Object newPeerChat(long cid) {
-        try {
-            Object p = classEx("org.telegram.tgnet.TLRPC$TL_peerChat").newInstance();
-            setFieldVal(p, "chat_id", Long.valueOf(cid));
-            return p;
-        } catch (Throwable t) {
-            return null;
-        }
+    private static ShortPeer shortPeerUser(long uid) {
+        ShortPeer p = new ShortPeer();
+        p.user_id = Long.valueOf(uid);
+        return p;
+    }
+
+    private static ShortPeer shortPeerChat(long cid) {
+        ShortPeer p = new ShortPeer();
+        p.chat_id = Long.valueOf(cid);
+        return p;
+    }
+
+    /** 归一化诊断计数（落到 SUMMARY 的「丢弃原因」行，一次运行即可定位）。 */
+    private static void normNote(String why) {
+        try { Diag.noteDrop("norm:" + why); } catch (Throwable ignored) {}
     }
 
     /**
@@ -22945,7 +22952,7 @@ public final class TGAutoSignCore {
     private Object shortUpdateToNormal(Object u) {
         if (u == null) return null;
         String cn;
-        try { cn = u.getClass().getName(); } catch (Throwable t) { return null; }
+        try { cn = u.getClass().getName(); } catch (Throwable t) { normNote("clsname"); return null; }
         if (cn == null) return null;
         boolean isMsg = cn.endsWith("TL_updateShortMessage");
         boolean isChatMsg = cn.endsWith("TL_updateShortChatMessage");
@@ -22955,24 +22962,29 @@ public final class TGAutoSignCore {
         }
         if (!isMsg && !isChatMsg) return null;
         try {
-            if (Boolean.TRUE.equals(getFieldValSafe(u, "out"))) return null;
+            // 短形态的数据**就在同一个对象上**（父类 TLRPC$Updates 的字段，R8 把
+            //   TL_updateShortMessage 的字段合并进了父类）：
+            //   user_id / chat_id / from_id(裸 long) / message(String) / out / id / date / reply_to
+            if (Boolean.TRUE.equals(getFieldValSafe(u, "out"))) { normNote("out_self"); return null; }
             Object text = getFieldValSafe(u, "message");
-            if (text == null) return null;
+            if (text == null) { normNote("no_text"); return null; }
             Object peer;
             long fromUid;
             if (isChatMsg) {
-                peer = newPeerChat(asLongNum(getFieldValSafe(u, "chat_id")));
+                long cid = asLongNum(getFieldValSafe(u, "chat_id"));
+                if (cid == 0L) { normNote("chat0"); return null; }
+                peer = shortPeerChat(cid);
                 fromUid = asLongNum(getFieldValSafe(u, "from_id"));
             } else {
                 long uid = asLongNum(getFieldValSafe(u, "user_id"));
-                peer = newPeerUser(uid);
-                fromUid = (uid != 0L) ? uid : asLongNum(getFieldValSafe(u, "from_id"));
+                if (uid == 0L) uid = asLongNum(getFieldValSafe(u, "from_id"));
+                if (uid == 0L) { normNote("user0"); return null; }
+                peer = shortPeerUser(uid);
+                fromUid = uid;
             }
-            if (peer == null) return null;
-            Object from = newPeerUser(fromUid);
             ShortMsg sm = new ShortMsg();
             sm.peer_id = peer;
-            sm.from_id = (from != null) ? from : peer;
+            sm.from_id = (fromUid != 0L) ? shortPeerUser(fromUid) : peer;
             sm.message = text;
             sm.out = Boolean.FALSE;
             sm.id = getFieldValSafe(u, "id");
@@ -22983,8 +22995,10 @@ public final class TGAutoSignCore {
             } catch (Throwable ignored) {}
             ShortUpdate su = new ShortUpdate();
             su.message = sm;
+            normNote("ok");
             return su;
         } catch (Throwable t) {
+            normNote("exc");
             return null;
         }
     }
@@ -24567,6 +24581,11 @@ public final class TGAutoSignCore {
         try {
             if (update == null) return;
             // 1.4.7：processUpdate* 的第一参数是 Updates 容器 / List，先解包再逐条判定（此前整条链路从未触发）
+            // 2026-11-08 F10c：Short 形态归一化**必须在解包之前** ——
+            //   实测 TLRPC$Updates 的 updates 字段在短形态实例上非 null（空 ArrayList），
+            //   下面的 ups.addAll(空) 会让 ups 为空 → 循环体一次都不走 → 归一化根本不被调用。
+            Object _shortNorm = shortUpdateToNormal(update);
+            if (_shortNorm != null) update = _shortNorm;
             java.util.List<Object> ups = new ArrayList<>();
             if (update instanceof List) { ups.addAll((List<?>) update); }
             else {
@@ -24596,8 +24615,12 @@ public final class TGAutoSignCore {
             //   永远进不了判定链（频道消息走 update 列表，所以只有私聊失效）。
             // 这里只做**形状归一化**，交给下面同一条链；不复制判定逻辑、不改闸、不碰状态。
             if (u != null && _updKind == InboundGate.UPD_NONE) {
-                Object _su = shortUpdateToNormal(u);
-                if (_su != null) { u = _su; _updKind = InboundGate.UPD_NEW_MESSAGE; }
+                if (u instanceof ShortUpdate) {
+                    _updKind = InboundGate.UPD_NEW_MESSAGE;   // 已在入口完成归一化
+                } else {
+                    Object _su = shortUpdateToNormal(u);
+                    if (_su != null) { u = _su; _updKind = InboundGate.UPD_NEW_MESSAGE; }
+                }
             }
             // 2026-11-08 F8：类型判定抽到 InboundGate（纯函数，有测试），语义与原来逐字一致。
             if (u == null || _updKind == InboundGate.UPD_NONE) {
