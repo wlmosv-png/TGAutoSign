@@ -56,9 +56,21 @@ public final class AccountManager {
 
     private Class<?> uc() {
         if (userConfigClass == null) {
+            // 2026-11-08：必须**先走 HostSymbols** ——
+            //   13.2.0 起 R8 不再保留 org.telegram.messenger.* 的类名，
+            //   13.2.1 上 UserConfig 已改名为 org.telegram.messenger.c20。
+            //   旧实现只按原名 Class.forName → 恒 ClassNotFound → 本方法恒 null
+            //   → current() 在第一行就 return 0 → **永远当成账号1**：
+            //     切号侦测永不触发、面板永远显示账号1的目标与状态。
+            //   （此前给 selectedAccountField 加的结构兜底因此从来没被执行到。）
             try {
-                userConfigClass = Class.forName("org.telegram.messenger.UserConfig", false, hostLoader);
-            } catch (Throwable t) { userConfigClass = null; }
+                userConfigClass = HostSymbols.mapClass("org.telegram.messenger.UserConfig");
+            } catch (Throwable ignored) {}
+            if (userConfigClass == null) {
+                try {
+                    userConfigClass = Class.forName("org.telegram.messenger.UserConfig", false, hostLoader);
+                } catch (Throwable t) { userConfigClass = null; }
+            }
         }
         return userConfigClass;
     }
@@ -150,6 +162,14 @@ public final class AccountManager {
             }
             if (only != null) {
                 try { lastFieldName = only.getName(); } catch (Throwable ignored) {}
+                if (!loggedFieldOnce) {
+                    loggedFieldOnce = true;
+                    try {
+                        android.util.Log.i("TGAutoSign",
+                                "账号字段解析：UserConfig 上唯一的 public static int = " + only.getName()
+                                + "（原名 selectedAccount 不可用时的结构兜底）");
+                    } catch (Throwable ignored) {}
+                }
             }
             return only;
         } catch (Throwable ignored) {
@@ -160,6 +180,7 @@ public final class AccountManager {
     /** 最近一次成功解析到的字段名（诊断用：能看出走的是原名还是结构判定）。 */
     public String lastFieldName() { return lastFieldName; }
     private static volatile String lastFieldName = "selectedAccount";
+    private static volatile boolean loggedFieldOnce = false;
 
     private void warn(int raw, int total, int used) {
         String sig = raw + "/" + total;
