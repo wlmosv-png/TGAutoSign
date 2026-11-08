@@ -10443,6 +10443,7 @@ public final class TGAutoSignCore {
             int _acc = currentAccount();
             StringBuilder _sb = new StringBuilder();
             _sb.append("账号实况: selectedAccount=").append(lastRawAccount)
+               .append("  字段=").append(accountManager.lastFieldName())
                .append("  解析=").append(accountLabel(_acc)).append("(acc").append(_acc).append("_)")
                .append("  已登录=").append(activatedAccounts());
             for (int i : accountSlots()) {

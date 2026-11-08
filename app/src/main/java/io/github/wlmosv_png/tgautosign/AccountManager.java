@@ -98,13 +98,8 @@ public final class AccountManager {
             } else {
                 Class<?> cls = uc();
                 if (cls == null) return 0;
-                Field f;
-                try {
-                    f = cls.getField("selectedAccount");
-                } catch (Throwable t) {
-                    f = cls.getDeclaredField("selectedAccount");
-                    f.setAccessible(true);
-                }
+                Field f = selectedAccountField(cls);
+                if (f == null) return 0;
                 Object v = f.get(null);
                 c = ((Number) v).intValue();
             }
@@ -118,6 +113,53 @@ public final class AccountManager {
             return 0;
         }
     }
+
+    /**
+     * 定位宿主保存「当前选中账号」的静态 int 字段（2026-11-08 · 13.2.x 适配）。
+     *
+     * 为什么不能只按名字找：
+     *   13.2.0 起 R8 不再保留 org.telegram.messenger.* 的字段名，
+     *   UserConfig.selectedAccount 被改名 —— 实测 13.2.1 = `public static t0:I`，
+     *   取值路径变成 SharedPreferences.getInt("selectedAccount", 0) → sput t0。
+     *   旧实现按名字反射取不到就 catch → return 0，于是**模块永远把自己当成账号1**：
+     *   切号永远侦测不到、面板永远显示账号1的目标与状态（用户实测「账号2串成账号1」）。
+     *
+     * 为什么能按结构找（且安全）：
+     *   该类型上**有且只有一个** public static int 字段 ——
+     *   13.1.1 是 selectedAccount，13.2.1 是 t0；判据「唯一」跨版本成立。
+     *   一旦候选不唯一就返回 null，**不猜**（宁可按旧行为退化，也不取错账号）。
+     */
+    private static Field selectedAccountField(Class<?> cls) {
+        try {
+            return cls.getField("selectedAccount");           // ≤13.1：原名直取
+        } catch (Throwable ignored) {}
+        try {
+            Field f = cls.getDeclaredField("selectedAccount");
+            f.setAccessible(true);
+            return f;
+        } catch (Throwable ignored) {}
+        try {
+            Field only = null;
+            for (Field f : cls.getFields()) {
+                int m = f.getModifiers();
+                if (!java.lang.reflect.Modifier.isStatic(m)) continue;
+                if (java.lang.reflect.Modifier.isFinal(m)) continue;
+                if (f.getType() != int.class) continue;
+                if (only != null) return null;                // 不唯一 → 不猜
+                only = f;
+            }
+            if (only != null) {
+                try { lastFieldName = only.getName(); } catch (Throwable ignored) {}
+            }
+            return only;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /** 最近一次成功解析到的字段名（诊断用：能看出走的是原名还是结构判定）。 */
+    public String lastFieldName() { return lastFieldName; }
+    private static volatile String lastFieldName = "selectedAccount";
 
     private void warn(int raw, int total, int used) {
         String sig = raw + "/" + total;
