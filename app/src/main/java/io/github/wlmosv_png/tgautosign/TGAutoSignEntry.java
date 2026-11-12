@@ -384,9 +384,15 @@ public final class TGAutoSignEntry extends XposedModule {
             }
             if (hooked > 0) logInfo("hooked 气泡按钮回调 " + cls.getName() + "（匹配 " + hooked + " 个方法）");
             try {
-                Diag.hookTarget("UI_cell:" + cls.getSimpleName(), cn, true, true, 0, "-");
-                Diag.hookInstall("UI_cell:" + cls.getSimpleName(), cn, hooked > 0,
-                        hooked > 0 ? null : "该类无可挂方法");
+                // 2026-11-12：hooked==0 是「该类存在但没有可挂方法」——各客户端混淆名不同，
+                //   这是**常态**，不是挂钩失败。旧写法无条件调 hookInstall(ok=false)，
+                //   于是每天固定刷 8 条 `UI_cell:n1 FAIL(该类无可挂方法)` 的假失败，
+                //   把真正的挂钩失败淹掉了（用户会以为模块挂了）。
+                //   现在：只有真挂上才记 hookInstall；没方法可挂只记一条目标解析记录。
+                if (hooked > 0) {
+                    Diag.hookTarget("UI_cell:" + cls.getSimpleName(), cn, true, true, hooked, "-");
+                    Diag.hookInstall("UI_cell:" + cls.getSimpleName(), cn, true, null);
+                }
             } catch (Throwable ignored) {}
             return hooked;
         } catch (Throwable t) {

@@ -30,6 +30,11 @@ public final class InboundGate {
     public static final int UPD_NONE          = 0;
     public static final int UPD_NEW_MESSAGE   = 1;
     public static final int UPD_NEW_CHANNEL   = 2;
+    /** 编辑消息（2026-11-12 P0）：bot 常"先发图/占位、再把文字编辑成结果"，
+     *  真机「流光画廊」就是这么回「今天已签到，当前 777 廊币。」的 ——
+     *  旧实现只认 TL_updateNewMessage，编辑更新被当成 not_new_message 丢掉，
+     *  模块以为 bot 没回复 → 超时判「未回复」。 */
+    public static final int UPD_EDIT_MESSAGE  = 3;
 
     /**
      * update 类型识别。语义与 TGAutoSignCore:24380-24382 完全一致：
@@ -40,6 +45,9 @@ public final class InboundGate {
         if (className == null) return UPD_NONE;
         if (className.contains("TL_updateNewMessage")) return UPD_NEW_MESSAGE;
         if (className.contains("TL_updateNewChannelMessage")) return UPD_NEW_CHANNEL;
+        // 编辑类：私聊 TL_updateEditMessage / 频道与群 TL_updateEditChannelMessage
+        if (className.contains("TL_updateEditMessage")) return UPD_EDIT_MESSAGE;
+        if (className.contains("TL_updateEditChannelMessage")) return UPD_EDIT_MESSAGE;
         return UPD_NONE;
     }
 

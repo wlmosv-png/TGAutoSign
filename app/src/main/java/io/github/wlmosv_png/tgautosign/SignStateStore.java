@@ -251,11 +251,17 @@ public final class SignStateStore {
      * 也不能把用户真在等的处置吞掉；陈旧的那些由用户处置或跨天自然收敛。
      */
     public boolean pendingIsToday(String prefix, String id) {
+        // 2026-11-12 P0：语义纠偏 —— 问的是「这条待确认**今天**还有效吗」。
+        //   旧实现把"没有日戳的老记录"当成"今天标的"（保守留），结果是目标
+        //   永久停在「判不出」且永久不再自动重试 —— 真机卡了两天。
+        //   现在统一走纯逻辑 SignLogic.pendingStillValid。
         try {
-            String d = store.s(Keys.pendingDay(prefix, id), "");
-            if (d.length() == 0) return true;      // 老数据：保守保留
-            return today().equals(d);
-        } catch (Throwable t) { return true; }
+            return SignLogic.pendingStillValid(
+                    store.b(Keys.pendingCfm(prefix, id), false),
+                    store.s(Keys.pendingDay(prefix, id), ""),
+                    store.s(Keys.last(prefix, id), ""),
+                    today());
+        } catch (Throwable t) { return false; }
     }
 
     /** 读取归类码；无归类返回 -1。 */
@@ -579,11 +585,12 @@ public final class SignStateStore {
         try {
             String v = store.s(Keys.evGrade(prefix, id), "");
             if (v == null || v.length() == 0) return SignLogic.GRADE_NONE;
-            int bar = v.indexOf('|');
-            if (bar <= 0) return SignLogic.GRADE_NONE;
-            int round = Integer.parseInt(v.substring(0, bar));
-            int grade = Integer.parseInt(v.substring(bar + 1));
-            return round == roundOf(prefix, id) ? grade : SignLogic.GRADE_NONE;
+            // 2026-11-12 P0：证据戳必须带**日期**。
+            //   轮次每天从 1 重开，旧实现只比轮次 → 昨天的「已判定」被当成今天的证据，
+            //   界面显示「回复判不出」且当天不再自动重试（真机 8428906628，prefs 实证
+            //   ev_grade_="1|4" 而 round_day_=昨天；日志实证 11-12 rc 已过期但 grade 没变）。
+            //   判据细节见 SignLogic.evidenceGradeOf（纯逻辑 + 单测）。
+            return SignLogic.evidenceGradeOf(v, today(), roundOf(prefix, id));
         } catch (Throwable t) { return SignLogic.GRADE_NONE; }
     }
 
@@ -598,7 +605,8 @@ public final class SignStateStore {
             final int r = roundOf(prefix, id);
             if (grade > evidenceGrade(prefix, id)) {
                 store.tx(ed -> {
-                    ed.putString(Keys.evGrade(prefix, id), r + "|" + grade);
+                    ed.putString(Keys.evGrade(prefix, id),
+                                 SignLogic.evidenceStamp(today(), r, grade));
                     // 归档"最后一个有证据的轮次"——重试时**不清**，供回溯
                     if (grade >= SignLogic.GRADE_SEEN) ed.putInt(Keys.evRoundArchived(prefix, id), r);
                 });

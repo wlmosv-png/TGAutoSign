@@ -925,7 +925,7 @@ public final class SignLogic {
         }
         // ── 再判「冷却/等待/说明」子类（对象感知）──
         {
-            Match ncMatch = matchAt(lower, NON_CONCLUSION_WORDS);
+            Match ncMatch = matchAt(lower, NON_CONCLUSION_EFFECTIVE);
             if (ncMatch == null) {
                 ncMatch = matchAt(lower, WAIT_PHRASES);   // EXHAUSTED 剥离下来的等待词
             }
@@ -961,7 +961,12 @@ public final class SignLogic {
         }
 
         // ── S6 SUCCESS：明确成功 ──
-        m = matched(lower, ok);
+        // 2026-11-12 P0：取**最强命中**，不是表序首个命中。
+        //   实测：用户词表里「成功」排在「签到成功」之前，回复「🎉签到成功🎉」命中的
+        //   是泛词「成功」，而泛词必须过 hasSuccessShape 守卫；回复尾部只要带一句
+        //   「使用说明」，hasSuccessShape 即为 false → 整条判「回复判不出」。
+        //   用户补词也没用（词表里本来就有「签到成功」，只是被泛词顶掉了）。
+        m = matchedStrongest(lower, ok);
         if (m != null && !negated(lower, m) && !isLikelyAnnouncement(in.reply)
                 && !hitInNonSuccessClause(in.reply, m)
                 // 2026-11-01 M3 修复：语境要求只对**内置词**生效，用户词豁免。
@@ -1075,6 +1080,20 @@ public final class SignLogic {
      *   整条判断更稳；而"有签到词"的常见句式（「今日签到次数已达上限」）
      *   本来就会被签到词救回，不会误伤。
      */
+    /**
+     * 对象窗口半径（字符）—— 额度词前后各看这么多字。
+     *
+     * 取 6 的依据（两个真实用例，符号级对称）：
+     *   · 必须覆盖： 「签到次数已达上限」的"签到"在命中词前 2 字、
+     *                「已达上限（抽奖）」的"抽奖"在命中词后 3 字 → 6 够用；
+     *   · 必须排除： 「今日次数已用完，请明日再试\n推广：…」这条 400 字长推广里，
+     *                "推广"距命中词 7 字 —— 它是**页脚**，不是这个额度的对象。
+     *                窗口取 12 时会被它命中，把明确额度结论误判成"别的业务的额度"，
+     *                最终落到 NON_CONCLUSION 变「判不出」（既有失败 E-2）。
+     * 语义：对象是**紧邻修饰语**，不是"整条里出现过"。
+     */
+    static final int OBJ_WINDOW = 6;
+
     public static boolean exhaustedAboutOtherObject(String reply) {
         return exhaustedAboutOtherObject(reply, null);
     }
@@ -1103,7 +1122,35 @@ public final class SignLogic {
                 }
             }
 
-            // ── 兜底：整条判断（仅在紧邻看不到修饰语时）──
+            // ── 兜底（2026-11-12 P0 修）──
+            // 有命中词时：**只在命中词附近的窗口内**找对象，不再整条 contains。
+            //
+            // 事故（AnnouncementLengthTest E-2，既有失败、此前从未被跑过）：
+            //   「今日次数已用完，请明日再试 + 400 字推广」被整条判断 ——
+            //   推广尾巴里的其他业务词让本函数返回 true，
+            //   于是明确的额度结论被丢掉，落到 NON_CONCLUSION 变成「判不出」。
+            //   这与「成功词被使用说明尾巴吞掉」是**同一类缺陷**：
+            //   用整条的粗粒度证据去否证局部结论。
+            //   而"额度说明与对象分离书写"（「已达上限（抽奖）」）在 6~12 字内，
+            //   窗口足以覆盖，不需要整条。
+            if (hitWord != null && hitWord.length() > 0) {
+                String hw = stripSpace(hitWord);
+                int idx = flat.indexOf(hw);
+                int from = idx < 0 ? 0 : Math.max(0, idx - OBJ_WINDOW);
+                int to = idx < 0 ? flat.length()
+                                 : Math.min(flat.length(), idx + hw.length() + OBJ_WINDOW);
+                String win = flat.substring(from, to);
+                for (String w : OBJECT_SIGN_WORDS) {
+                    if (win.contains(stripSpace(w))) return false;
+                }
+                for (String w : OBJECT_OTHER_WORDS) {
+                    if (win.contains(stripSpace(w))) return true;
+                }
+                // 附近既没有签到词也没有其他业务词 → 不构成"这是别的业务的额度"
+                return false;
+            }
+
+            // 无命中词（1 参重载）：保留整条判断（调用方语义不同，不动）
             for (String w : OBJECT_SIGN_WORDS) {
                 if (flat.contains(stripSpace(w))) return false;
             }
@@ -1876,7 +1923,7 @@ public final class SignLogic {
         // 2026-11-01 阶段 2：本条分支在"把 EXHAUSTED 前移"的补丁里曾被误删
         //（替换注释时连带删掉了 if 代码体），导致「签到冷却中,请于 8 小时后再试,
         //  已签到 5 次」被 DUP 词「已签到」判成成功 —— 回归测试抓到后补回。
-        if (matched(lower, NON_CONCLUSION_WORDS) != null) {
+        if (matched(lower, NON_CONCLUSION_EFFECTIVE) != null) {
             return new Object[]{Integer.valueOf(V_UNKNOWN), ""};
         }
         // 2026-10-24：成功侧也要过「公告/广告」守卫 ——
@@ -1894,7 +1941,7 @@ public final class SignLogic {
                 && !(m.contains("重复") && hasTrailingNegation(lower))) {
             return new Object[]{Integer.valueOf(V_SIGNED), m};
         }
-        m = matched(lower, hasWords(ok) ? ok : OK_WORDS_DEFAULT);
+        m = matchedStrongest(lower, hasWords(ok) ? ok : OK_WORDS_DEFAULT);
         if (m != null && !negated(lower, m) && !isLikelyAnnouncement(reply)
                 // 2026-11-01 P0：与 scoped 链同一判据（两处必须一致）
                 && !hitInNonSuccessClause(reply, m)
@@ -2396,14 +2443,120 @@ public final class SignLogic {
      *   否则「签到失败,详见规则说明」会被它先吞成 V_UNKNOWN，丢掉真失败结论。
      */
     private static final String[] NON_CONCLUSION_WORDS = {
-            // 说明 / 规则
-            "规则", "说明", "教程", "指引", "如何", "怎么", "帮助", "介绍",
-            // 统计 / 排行
+            // 统计 / 排行 —— 只描述「别人 / 历史」，不是本次结论
             "已有", "已有 ", "人数", "排名", "排行", "榜单", "统计", "总数", "累计",
-            // 冷却 / 等待
+            // 冷却 / 等待 —— 描述「本次签到当前状态」
             "冷却", "请等待", "稍后", "后再试", "小时后", "分钟后再",
-            "rules", "how to", "guide", "ranking", "cooldown", "try again in",
+            "ranking", "cooldown", "try again in",
     };
+
+    /**
+     * 「文档 / 教程类」词 —— **不参与**「本次签到没有结论」的裁决（2026-11-12 P0）。
+     *
+     * 事故（真机日志 2026-11-12，离线可复现）：
+     *   bot 实际回复「…🎉签到成功🎉 您已经获得 1 积分。您现在的积分为：33分。…
+     *              📝 使用说明：- 只要点菜单 获取邀请连接…」
+     *   模块判「回复判不出」；最小复现就是「🎉签到成功🎉 说明」。
+     *   根因：这类词原本收在 NON_CONCLUSION_WORDS 里，而 S4 排在 S6 SUCCESS 之前 ——
+     *   只要回复尾部挂一句使用说明，整条消息就永远到不了成功阶段。
+     *   词表里本来就有「签到成功」，所以用户「补判定词」怎么补都没用。
+     *
+     * 语义纠正：这些词只说明「这段文字是文档」，**不描述本次签到做没做完**；
+     *   它们的正确作用是「抑制把教程误判成成功形态」(looksLikeTutorialOrHelp /
+     *   looksLikeMenuHelp / 公告守卫)，而不是把整条消息判成"本次没有结论"。
+     *
+     * 2026-11-01 的「明天再来」事故（见 WAIT_PHRASES 注释）与本条是同一类错误：
+     *   把"成功附带语"当成"非结论"。当时靠挪词表修补，这次改为**结构性排除**：
+     *   任何出现在本表里的词，都会被 NON_CONCLUSION_EFFECTIVE 构造时剔除 ——
+     *   即使以后有人又把文档词加回 NON_CONCLUSION_WORDS，S4 也不会再吞掉成功。
+     */
+    private static final String[] DOC_HELP_WORDS = {
+            "规则", "说明", "教程", "指引", "如何", "怎么", "帮助", "介绍",
+            "rules", "how to", "guide",
+    };
+
+    /** NON_CONCLUSION_WORDS 剔除文档词后的**实际生效表**（在静态初始化时构造一次）。 */
+    private static final String[] NON_CONCLUSION_EFFECTIVE =
+            minusWords(NON_CONCLUSION_WORDS, DOC_HELP_WORDS);
+
+    /**
+     * 在词表的**所有命中**里挑一个「最强」的，而不是返回表序首个命中（2026-11-12 P0）。
+     *
+     * 事故（真机 + 离线双证据，目标 7999853294 / 8353929739）：
+     *   bot 回复里明明有「🎉签到成功🎉」，但因为用户自定义词表里「成功」排在
+     *   「签到成功」之前，matched() 返回的是「成功」这个**泛词**；
+     *   泛词必须过 hasSuccessShape 守卫，而回复尾部挂了一句「📝 使用说明」，
+     *   该守卫返回 false → 整条消息判「回复判不出」。
+     *   用户往词表里补词也没用 —— 真正该命中的「签到成功」本来就在表里，
+     *   只是被更靠前的泛词顶掉了。
+     *
+     * 排序（字典序，越大越强；**声明式**，每条都可由单测锁定）：
+     *   ① 非文档句      —— 命中的词本身长得像教程/说明句（如用户误学进去的整段教程），
+     *                      不能当作「本次签到成功」的证据；
+     *   ② 明确结论形态  —— 含 STRONG_RESULT / DONE_STATE（签到成功 / 已领取 …）；
+     *   ③ 非泛词        —— 判别力强于「成功 / 签到」这类高频词；
+     *   ④ 词更长         —— 更具体的说法优先；
+     *   ⑤ 长度相同取表序靠前者（保持确定性，避免同一输入两种结论）。
+     *
+     * 注意：这**不放松任何守卫**。泛词该被 hasSuccessShape 拦住还是被拦住，
+     *   只是它不再能顶掉更强的证据。
+     */
+    public static String matchedStrongest(String lower, String[] words) {
+        if (lower == null || words == null || words.length == 0) return null;
+        String best = null;
+        int[] bestKey = null;
+        for (int i = 0; i < words.length; i++) {
+            String w = words[i];
+            if (w == null || w.length() == 0) continue;
+            String lw = w.toLowerCase(java.util.Locale.US);
+            if (!lower.contains(lw)) continue;
+            boolean doc = looksLikeTutorialOrHelp(lw) || isDocHelpWord(w);
+            boolean strong = false;
+            for (String sr : STRONG_RESULT) if (lw.contains(sr)) { strong = true; break; }
+            if (!strong) for (String ds : DONE_STATE) if (lw.contains(ds)) { strong = true; break; }
+            int[] key = new int[]{
+                    doc ? 0 : 1,
+                    strong ? 1 : 0,
+                    isGenericOkWord(w) ? 0 : 1,
+                    lw.length(),
+                    -i                       // 表序靠前者优先 → 用负值参与字典序比较
+            };
+            if (bestKey == null || cmpKey(key, bestKey) > 0) { bestKey = key; best = w; }
+        }
+        return best;
+    }
+
+    /** 字典序比较：任一维更大即更大。 */
+    private static int cmpKey(int[] a, int[] b) {
+        for (int i = 0; i < a.length; i++) {
+            if (a[i] != b[i]) return a[i] > b[i] ? 1 : -1;
+        }
+        return 0;
+    }
+
+    /** 从 base 中剔除 remove 里的词（区分大小写，与 matched() 的语义一致）。 */
+    static String[] minusWords(String[] base, String[] remove) {
+        if (base == null || base.length == 0) return new String[0];
+        java.util.List<String> out = new java.util.ArrayList<String>();
+        for (String b : base) {
+            if (b == null || b.length() == 0) continue;
+            boolean drop = false;
+            if (remove != null) {
+                for (String r : remove) {
+                    if (r != null && r.equals(b)) { drop = true; break; }
+                }
+            }
+            if (!drop) out.add(b);
+        }
+        return out.toArray(new String[out.size()]);
+    }
+
+    /** 该词是否属于「文档 / 教程类」——只说明这段是文档，不代表本次签到状态。 */
+    public static boolean isDocHelpWord(String w) {
+        if (w == null) return false;
+        for (String d : DOC_HELP_WORDS) if (d.equals(w)) return true;
+        return false;
+    }
 
     /**
      * 否定词 —— 出现在命中词**紧邻之前**时，该命中作废。
@@ -3198,15 +3351,20 @@ public final class SignLogic {
                                           boolean sentToday, long sentAgeMs,
                                           int grade, int rc, boolean chainHealthy) {
         if (signedToday) return PS_SIGNED;
-        if (pendingConfirm) return PS_UNKNOWN;
-        // ① 先看证据：有回复证据（含判不出）→ 永远不会被判成"未回复"
-        if (grade >= GRADE_SEEN || rc == R_REPLIED_UNK) return PS_UNKNOWN;
-        if (rc == R_FAILED) return PS_SENDFAIL;
-        if (rc == R_BTN_STALE) return PS_PANEL;
-        // ② 明确归类：只有超时 sweep 在"链路健康且无任何证据"时才写过 R_NO_REPLY
+        // 2026-11-12：**明确归类优先于「待确认」布尔**。
+        //   事故（真机截图）：同一条目上同时显示「判不出」与「bot 全程没回复」——
+        //   因为 sweep 写下了 R_NO_REPLY（归类=未回复）的同时也置了 pendcfm_，
+        //   而这里旧顺序先看 pendingConfirm → 返回 PS_UNKNOWN（判不出），
+        //   与 statusOf() 读归类得到的「未回复」互相矛盾。
+        //   现在：有明确归类就按归类说，pendcfm_ 只在"没有归类"时兜底。
         if (rc == R_NO_REPLY) {
             return chainHealthy ? PS_NO_REPLY : PS_UNCONFIRMED;
         }
+        if (rc == R_FAILED) return PS_SENDFAIL;
+        if (rc == R_BTN_STALE) return PS_PANEL;
+        if (pendingConfirm) return PS_UNKNOWN;
+        // ① 先看证据：有回复证据（含判不出）→ 永远不会被判成"未回复"
+        if (grade >= GRADE_SEEN || rc == R_REPLIED_UNK) return PS_UNKNOWN;
         if (!sentToday) return PS_NONE;
         // ③ 最后才看时间：窗口内 = 等回复；超窗口但无任何证据 = **未确定**，不是未回复
         if (sentAgeMs <= 0L) return PS_SENT;
@@ -3221,6 +3379,134 @@ public final class SignLogic {
      */
     public static boolean mayMarkNoReply(boolean answered, int grade, boolean chainHealthy) {
         return !answered && grade < GRADE_SEEN && chainHealthy;
+    }
+
+    /**
+     * 触发源是否属于「用户刚打开宿主」这一类。
+     *
+     * 2026-11-12 从 TGAutoSignCore 迁入：它只做字符串判断，是纯逻辑。
+     * 原来的位置使纯逻辑单测无法覆盖它 —— build.sh 的单测编译集不含 TGAutoSignCore，
+     * 测试文件一引用该类，整条门禁链直接编译失败（实测 72 个错误）。
+     * 本仓既定原则是「纯逻辑抽进 SignLogic」，这里按原则收口。
+     */
+    public static boolean isStartupTrigger(String reason) {
+        if (reason == null) return false;
+        return reason.contains("启动") || reason.contains("打开");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  跨天证据 / 待确认 的纯逻辑（2026-11-12 P0）
+    //
+    //  真机事故（目标 8428906628，日志 + prefs 双证据）：
+    //    · ev_grade_ 存 "1|4"（轮次|等级），round_day_ = 昨天；
+    //      roundOf() 每天从 1 重开 → 昨天的「已判定」被当成今天的证据；
+    //    · 于是界面显示「回复判不出」，且 pendcfm_ 让它当天不再自动重试。
+    //  日志实证：11-11 rc=replied_unknown，11-12 rc 变成 unknown
+    //            （归类按天过期了）但 grade 仍是「已判定」（证据没日期，泄漏了）。
+    //
+    //  治理方式：把「日期」写进证据本身；解析时**日期或轮次任一不符 = 没有证据**。
+    //  旧格式（"1|4"）无法证明属于今天 → 一律视为无证据，绝不猜。
+    // ═══════════════════════════════════════════════════════════════
+
+    /** 证据戳分隔符。 */
+    public static final String EVIDENCE_SEP = "|";
+
+    /** 组装证据戳：day|round|grade。 */
+    public static String evidenceStamp(String day, int round, int grade) {
+        return (day == null ? "" : day) + EVIDENCE_SEP + round + EVIDENCE_SEP + grade;
+    }
+
+    /**
+     * 解析证据戳；日期或轮次任一不匹配 → GRADE_NONE。
+     *
+     * @param stamp 形如 "2026-11-12|1|4"；旧格式 "1|4"（无日期）→ GRADE_NONE
+     */
+    public static int evidenceGradeOf(String stamp, String day, int round) {
+        if (stamp == null) return GRADE_NONE;
+        String[] p = stamp.split("\\" + EVIDENCE_SEP);
+        if (p.length != 3) return GRADE_NONE;          // 旧格式：无法证明属于今天，不猜
+        if (day == null || !day.equals(p[0])) return GRADE_NONE;
+        try {
+            if (Integer.parseInt(p[1]) != round) return GRADE_NONE;
+            int g = Integer.parseInt(p[2]);
+            return (g >= GRADE_NONE && g <= GRADE_VERDICT) ? g : GRADE_NONE;
+        } catch (Throwable t) { return GRADE_NONE; }
+    }
+
+    /**
+     * 「待确认」是否仍然有效（可以拦住自动重发）。
+     *
+     * 事故：pendcfm_ 只有一个布尔 + 一个可被误删的 pendcfm_day_ 日戳。
+     * 日戳一丢（孤儿键清理按短前缀先命中，见 Keys.ORPHAN_HEADS），
+     * 目标就永久停在「判不出」且永久不再自动重试 —— 8428906628 卡了整整两天。
+     *
+     * 规则（保守方向 = **不阻断**）：
+     *   · 今天已签            → 不再需要确认
+     *   · 无日戳（老/已损坏）  → 视为过期，不阻断
+     *   · 日戳不是今天         → 过期，不阻断
+     *   · 日戳是今天           → 有效
+     * 说明：这里选择"过期就不阻断"而不是"过期也留着"，因为阻断是用户真正的痛点
+     *   （他看到的正是"卡住不动"）；而归类与证据仍然照常显示，不会丢信息。
+     */
+    public static boolean pendingStillValid(boolean pendingCfm, String markedDay,
+                                            String lastSignedDay, String today) {
+        if (!pendingCfm) return false;
+        if (today != null && today.equals(lastSignedDay)) return false;
+        if (markedDay == null || markedDay.length() == 0) return false;
+        return markedDay.equals(today);
+    }
+
+    /**
+     * 一条「判不出」的回复，是否**有资格**升级成「待确认」。
+     *
+     * 有资格 = 会写归类（result_）+ 进「需处理」列表 + 当天不再自动重签。
+     * 没资格 = 只记日志 / 进未识别池（供用户查看与学词），**不碰任何状态**。
+     *
+     * 事故（2026-11-12 真机）：bot 主动推了一条色情广告
+     *   「夜生活开始！！约茶全国精品外围妹子…请私聊客服」
+     *   → 被归属到目标 → 判定链判不出 → **无条件** markResultCode(R_REPLIED_UNK)
+     *   → 目标立刻钉成「待确认」：进「需处理」聚合条、当天不再自动重签。
+     *   用户看到的就是「还没签到就判断了，一大片要处理」。
+     *   同批 6 个目标里，4 个都是被这类与签到无关的推送钉住的。
+     *
+     * 判据（任一成立才允许升级，**声明式、可单测**）：
+     *   ① sentPendingFresh —— 该目标此刻确实"发出过、还在等结论"
+     *      （本次签到流程内的回复，正是这条链要处理的对象）；
+     *   ② looksLikeSignResult —— 文本本身像签到结果（含签到/打卡/领取等字样、且非进度提示）。
+     *      用来兜住"bot 回得很慢"的真结论，同时把广告/公告挡在外面。
+     *
+     * 反面（两条都不成立）：与签到无关的推送。此时升级只会制造假待办，
+     *   还会顺手禁止当天的自动重签 —— 代价远大于收益。
+     */
+    public static boolean mayPromoteUnknown(boolean sentPendingFresh, boolean looksLikeSignResult) {
+        return sentPendingFresh || looksLikeSignResult;
+    }
+
+    /**
+     * 该目标此刻是否「还没到它自己的固定时刻」——**目标级**过滤（2026-11-12）。
+     *
+     * 事故（用户实测 2026-11-12）：账号1 里只有**一个**目标设了 12:00 固定时刻，
+     *   而账号级判据取"账号内最早固定时刻"，于是 09:35 整批目标被判
+     *   「未到目标固定时刻 12:00，本次不发送」—— 用户以为"打开即签坏了"。
+     *   固定时刻本该是**那个目标自己的**约束，不该压住别的 bot。
+     *
+     * 判据（纯逻辑、可单测）：
+     *   · 定时模式（timerOn）→ 由当日时刻表调度，本判据不参与；
+     *   · 该目标没设固定时刻（!hasSignAt 或 signAt<0）→ **不跳过**（照常签）；
+     *   · 设了且当前时刻已到 → 不跳过；
+     *   · 设了且未到      → 跳过（只跳过它）。
+     *
+     * @param winAny 账号窗口（用于把时刻归一到窗口内），null 表示不归一
+     * @param nowMin 当前分钟数
+     */
+    public static boolean targetFixedMinuteNotReached(boolean timerOn, boolean hasSignAt,
+                                                     int signAt, int[] winAny, int nowMin) {
+        if (timerOn) return false;
+        if (!hasSignAt || signAt < 0) return false;
+        int[] rm = resolveSignMinute(signAt, winAny);
+        int mm = rm == null ? -1 : rm[0];
+        if (mm < 0) return false;
+        return nowMin < mm;
     }
 
     /** 证据等级界面文案。 */
@@ -3605,6 +3891,44 @@ public final class SignLogic {
         return -1;
     }
 
+    /**
+     * 去掉「文档 / 教程」子句后的正文（2026-11-12 P0）。
+     *
+     * 用途：**整条级**判断（"这条算不算公告"）时，文档句既不是公告特征，
+     * 也不该让别的子句里的结论证据消失。
+     * 事故：8296060286 / 8353929739 这类回复 =
+     *   「✨ [ 配给领取 ] 连续服役: 13 天 · 获得盒能: +50」+「📝 使用说明：…」；
+     *   整条 contains「使用说明」→ hasSuccessShape=false → ANNOUNCE_WEAK 命中
+     *   → 整条被判公告 → 真结果被丢掉 → 界面「回复判不出」。
+     */
+    static String dropDocClauses(String lower) {
+        if (lower == null || lower.length() == 0) return "";
+        StringBuilder sb = new StringBuilder();
+        int i = 0, n = lower.length();
+        while (i <= n) {
+            int j = i;
+            while (j < n && !isClauseBoundary(lower.charAt(j))) j++;
+            String c = lower.substring(i, Math.min(j, n));
+            if (c.trim().length() > 0 && !looksLikeTutorialOrHelp(c)) sb.append(c).append('\n');
+            i = j + 1;
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 「整条有没有结果形态」——**忽略文档子句**的版本。
+     *
+     * 与 hasSuccessShape 的区别只在于：先把文档/教程子句摘掉再判形态。
+     * 这样「真结果 + 使用说明尾巴」仍是结果形态，「纯教程」仍不是。
+     * 注意：成功侧的泛词守卫（S6 的 isGenericOkWord && !hasSuccessShape）**继续用整条原版**，
+     * 那边宁可少判成功。
+     */
+    static boolean hasSuccessShapeNonDoc(String lower) {
+        if (lower == null) return false;
+        if (hasSuccessShape(lower)) return true;
+        return hasSuccessShape(dropDocClauses(lower));
+    }
+
     public static boolean isLikelyAnnouncement(String reply) {
         if (reply == null || reply.length() == 0) return false;
         String lr = reply.toLowerCase(java.util.Locale.US);
@@ -3661,8 +3985,20 @@ public final class SignLogic {
                 // 为什么：真结果尾部常挂"邀请好友 +100盒能"这类推广，
                 // 强特征会把它整条判成公告 → 真签到被漏判。
                 // 教程 / 菜单 / 导航
-                "使用说明", "使用帮助", "命令列表", "查看全部", "怎么用",
-                "点击下方", "点击上方", "请选择功能", "请选择操作",
+                // 2026-11-12 P0：**摘掉「使用说明」「怎么用」** ——
+                //   它们不是"这是广告"的特征，而是"这段是文档"的特征，
+                //   归宿是 TUTORIAL_HINT → looksLikeTutorialOrHelp → hasSuccessShape
+                //   （所以摘掉不会让教程被误判成功：教程句仍过不了成功形态守卫，
+                //     例如「📝 使用说明：发送 /qd 即可签到」仍是 UNKNOWN）。
+                //   留着它们的代价是"整条否证"：真机 8353929739 回复里明明有
+                //   「🎉签到成功🎉」，只因尾部挂了一句「📝 使用说明」，
+                //   整条被判成公告 → 结论被丢掉 → 界面上就是「回复判不出」。
+                //   其余公告词一个不动（防 2026-10-24 那类"面板被判成功"的事故）。
+                // 2026-11-12 P0：**菜单 / 导航语域整体移出公告强特征**。
+                //   与「使用说明」同理：它们是"这段是文档/导航"，不是"这是广告"。
+                //   归宿已改到 TUTORIAL_HINT（见该表注释），那里管"有没有结果形态"。
+                //   留着会让「真结果 + 一行导航尾缀」整条被判公告 → 结论丢失。
+                //   纯面板仍判不出：所有子句都是文档 → 形态为空 → 过不了成功守卫。
                 // 2026-10-18 单测抓出的漏网：bot 常把运维说明附在回复里，
                 // 用户截图那条「抬头向上看…价格表…提示被注销」就是。
                 "价格表", "查询价格", "路线查询", "提示被注销", "无法使用可以",
@@ -3688,7 +4024,8 @@ public final class SignLogic {
                 "去商城", "去充值", "开通会员", "购买",
         };
         for (String w : ANNOUNCE_WEAK) {
-            if (lr.contains(w) && !hasSuccessShape(lr)) return true;
+            // 2026-11-12 P0：改用 hasSuccessShapeNonDoc —— 文档子句不再否证整条的结果形态。
+            if (lr.contains(w) && !hasSuccessShapeNonDoc(lr)) return true;
         }
 
         // ③ 超长且无结果词 → 大概率是公告/说明
@@ -3707,7 +4044,8 @@ public final class SignLogic {
         //        ② hasSuccessShape 成立（签到语境 + 强结论词/完成态/业务数字）时，
         //           长度一律不再否决，交给判定链
         //        ③ 无结果证据的长文本仍照旧判公告（保留原有识别能力）
-        if (effectiveBodyLength(reply) > ANNOUNCE_LENGTH_LIMIT && !hasSuccessShape(lr)) return true;
+        // 2026-11-12 P0：同上一处 —— 形态判定忽略文档子句，避免"真结果 + 使用说明"被长度否决。
+        if (effectiveBodyLength(reply) > ANNOUNCE_LENGTH_LIMIT && !hasSuccessShapeNonDoc(lr)) return true;
 
         return false;
     }
@@ -3764,6 +4102,13 @@ public final class SignLogic {
             "可获得", "可获取", "可以获得", "获取方式", "获取方法", "使用方法", "使用说明",
             "演示", "示例", "例如", "格式", "怎么用", "如何", "教程", "说明：", "详情",
             "积分获取", "积分获得方式",
+            // 2026-11-12 P0：菜单 / 导航语域也属于"这段是文档，不是结果"。
+            //   与 ANNOUNCE 里的同名条目并不重复：ANNOUNCE 管"整条算不算公告"，
+            //   TUTORIAL_HINT 管"这段文字有没有结果形态"。
+            //   归到这里之后，带导航尾缀的真结果不再被整条否证
+            //   （dropDocClauses 会摘掉这些子句再判形态）。
+            "使用帮助", "命令列表", "查看全部", "请选择功能", "请选择操作",
+            "点击下方", "点击上方",
     };
 
     /** 是否属于“教程/帮助/说明”文本（含签到动词也不算结论）。 */

@@ -2369,6 +2369,7 @@ public final class TGAutoSignCore {
         int _bootAcc = currentAccount();
         int _bootCnt = acctTargetCount(_bootAcc);
         jlogForce("账号: " + accountLabel(_bootAcc) + "(acc" + _bootAcc + "_) 目标: " + _bootCnt
+                  + " · 槽位:" + java.util.Arrays.toString(accountSlots())
             + " 按钮学习: " + (AUTO_LEARN ? "开" : "关") + " 网络学习: " + (AUTO_LEARN_NET ? "开" : "关"));
         jlogForce("使用: 在任意聊天输入 /jmb 打开管理界面");
         logFlush();   // 强制落盘（jlogForce 已绕过采样）
@@ -2699,8 +2700,24 @@ public final class TGAutoSignCore {
      */
     private int[] scanAccountSlots() {
         try {
-            Class<?> sc = classEx("org.telegram.messenger.SharedConfig");
-            Object v = getFieldVal(null, sc, "activeAccounts");
+            // 2026-11-12 P0：类名与字段都必须走 HostSymbols。
+            //   事故：SharedConfig 在 Telegram 13.2.x 被 R8 改名（→ tz），
+            //   这里原来只按原名 Class.forName → 失败 → 退到下面"prefs 里有键就算账号"
+            //   的启发式；而那个启发式会把**幽灵槽**算成真实账号
+            //   （真机 acc1_ 只有 8 个 cfg_ 键、0 个目标，却被算进去）。
+            //   用户现象：「账号一览」外显 4 个账号，实际只登录 2 个。
+            //   与 1.7.1 修 UserConfig 是同一味药：能拿到权威集合就别用启发式。
+            Class<?> sc = HostSymbols.mapClass("org.telegram.messenger.SharedConfig");
+            if (sc == null) sc = classEx("org.telegram.messenger.SharedConfig");
+            Object v = null;
+            if (sc != null) {
+                java.lang.reflect.Field af = HostSymbols.field(sc, "activeAccounts", java.util.Set.class);
+                if (af != null) {
+                    try { v = af.get(null); } catch (Throwable ignored) {}
+                    if (v != null) jlog("[槽位] activeAccounts 经 HostSymbols 解析成功");
+                }
+                if (v == null) v = getFieldVal(null, sc, "activeAccounts");
+            }
             if (v instanceof java.util.Set) {
                 java.util.TreeSet<Integer> set = new java.util.TreeSet<>();
                 for (Object o : (java.util.Set<?>) v) {
@@ -2732,9 +2749,25 @@ public final class TGAutoSignCore {
             int n = Math.max(activatedAccounts(), 12);
             java.util.List<Integer> list = new java.util.ArrayList<>();
             for (int i = 0; i < n; i++) {
+                // 2026-11-12 P0：**先按「有目标」收口**。
+                //   目标是模块自己写下的键（acc<N>_did_*），只可能来自真实登录过的账号，
+                //   比宿主反射可靠得多 —— 13.2.x 上 UserConfig.isValidAccount /
+                //   SharedConfig.activeAccounts 的解析在这台宿主上都没落地，
+                //   判据塌成"只有当前账号"（真机日志实测 槽位:[0]，
+                //   而 acc3_ 明明有 17 个目标）。
+                if (slotHasTargets(i)) { list.add(Integer.valueOf(i)); continue; }
                 try {
                     Class<?> uc = classEx("org.telegram.messenger.UserConfig");
-                    Object ok = staticInvoke(uc, "isValidAccount",
+                    // 2026-11-12 P0：**方法名也要走 HostSymbols**。
+                    //   13.2.x 上按名调 isValidAccount 会抛 NoSuchMethod → 每个槽位都 continue
+                    //   → 列表塌成只有当前账号（真机日志实测 槽位:[0]，而用户其实有两个账号）。
+                    //   先按结构解析（唯一的 public static boolean isValidAccount(int)），
+                    //   解析不到才退回按名调用 —— 旧版行为不变。
+                    Object ok;
+                    java.lang.reflect.Method iv = HostSymbols.method(uc, "isValidAccount",
+                            new Class<?>[]{int.class}, Boolean.TRUE);
+                    if (iv != null) ok = iv.invoke(null, Integer.valueOf(i));
+                    else ok = staticInvoke(uc, "isValidAccount",
                             new Class<?>[]{int.class}, new Object[]{i});
                     if (!Boolean.TRUE.equals(ok)) continue;
                     // 真有数据才收：prefs 里存在 acc<i>_ 开头的键
@@ -2780,6 +2813,24 @@ public final class TGAutoSignCore {
      * 单靠它会把"没登录过的槽位"也算成账号，主页/统计就会凭空多出账号、数字错乱。
      * 判据：prefs 里存在 {@code acc<i>_} 开头的键（说明模块在这个槽位下写过东西）。
      */
+    /**
+     * 该槽位是否有**目标**（模块自己写下的 acc&lt;N&gt;_did_* 键）。
+     *
+     * 2026-11-12 P0：这是"这个槽位是真实账号"的**最硬判据** ——
+     *   键是模块为真实会话写下的，宿主反射（isValidAccount / activeAccounts）
+     *   在 13.2.x 上可能解析失败，而键不会说谎。
+     *   用户现象：「账号一览」外显账号数与实际不符（真机 acc3_ 有 17 个目标却不显示）。
+     */
+    private boolean slotHasTargets(int slot) {
+        try {
+            String pfx = "acc" + slot + "_did_";
+            for (String k : prefs.getAll().keySet()) {
+                if (k != null && k.startsWith(pfx)) return true;
+            }
+        } catch (Throwable t) { noteSwallowed("slotHasTargets", t); }
+        return false;
+    }
+
     private boolean slotHasModuleData(int slot) {
         try {
             String pfx = "acc" + slot + "_";
@@ -2935,6 +2986,9 @@ public final class TGAutoSignCore {
 
     /** Toast 策略：同类提示 5 分钟内只弹一次 / 每天最多一次 / 一轮签到结果合并成一条 */
         private final Map<String, Long> toastAt = new HashMap<String, Long>();
+        /** 显示层去重：同一条**已翻译文案**在 TOAST_DEDUP_MS 内只弹一次（2026-11-12 A档）。 */
+        private final Map<String, Long> toastRecent = new HashMap<String, Long>();
+        private static final long TOAST_DEDUP_MS = 1500L;
         private int roundOkN = 0, roundErrN = 0;
         private boolean roundScheduled = false;
         // 每账号独立聚合结果；全账号签到时绝不能把账号 A 的结果 Toast 到账号 B。
@@ -3050,6 +3104,21 @@ public final class TGAutoSignCore {
             } catch (Throwable t) { return false; }
         }
 
+        /**
+         * 发布「上一轮」摘要（2026-11-12 A档）。
+         *
+         * 为什么不弹 toast：它由**后台批量**触发（一轮签到结束），
+         *   弹窗会打断用户、且一闪而过无法回看。
+         *   · 写 WARN 日志 → 运行日志页可按级别筛、可复制；
+         *   · 存 prefs（按账号 + 日期）→ 目标列表顶部的战报条常驻显示第二行。
+         */
+        private void publishRoundSummary(int acc, int ok, int er, String text) {
+            try { logw("[上一轮] " + text); } catch (Throwable ignored) {}
+            try {
+                prefs.edit().putString("jmb_last_round_" + acc, todayStr() + "|" + text).apply();
+            } catch (Throwable ignored) {}
+        }
+
         private void flushRoundToast() {
             final Map<Integer, int[]> snapshot = new HashMap<Integer, int[]>();
             synchronized (toastAt) {
@@ -3064,9 +3133,14 @@ public final class TGAutoSignCore {
             for (Map.Entry<Integer, int[]> e : snapshot.entrySet()) {
                 int acc = e.getKey();
                 int ok = e.getValue()[0], er = e.getValue()[1];
-                String tk = "round|" + todayStr() + "|" + acc;
-                if (er == 0) toastOnce(tk, Lang.tf("{0}：签到完成 {1} 个", accountLabel(acc), ok));
-                else toastOnce(tk, Lang.tf("{0}：签到完成 {1} 个，{2} 个没成功（/jmb →  运行日志 里有原因）", accountLabel(acc), ok, er));
+                // 2026-11-12 A档：**自动流程的一轮结果不再弹 toast**。
+                //   它是一次"后台批量"的产物，弹窗既打断用户、又只有 3.5 秒不可回溯。
+                //   现在：写一条 WARN 日志（运行日志里可按级别筛）+ 存成"上一轮摘要"，
+                //   由目标列表顶部的战报条**常驻显示第二行**（可停留、可回看）。
+                if (er == 0) publishRoundSummary(acc, ok, 0,
+                        Lang.tf("{0}：签到完成 {1} 个", accountLabel(acc), ok));
+                else publishRoundSummary(acc, ok, er,
+                        Lang.tf("{0}：签到完成 {1} 个，{2} 个没成功", accountLabel(acc), ok, er));
             }
             // 通知摘要也按账号独立处理；全账号签到时不能只检查 currentAccount()。
             try {
@@ -3081,9 +3155,23 @@ public final class TGAutoSignCore {
         }
     void toast(String msg) {
         final String out = Lang.tr(msg);
+        // 2026-11-12 A档：**SHORT + 1.5 秒同文案去重**。
+        //   改前一律 LENGTH_LONG（≈3.5 秒），连点两次时前一条会被后一条直接顶掉 ——
+        //   用户"没看见上一条"的体感来源。去重键用**已翻译后的文案**，
+        //   因此同一句话在 1.5 秒内只弹一次（不误伤不同内容的连续提示）。
+        //   注意：这是**显示层**去重，与 toastOnce（同 key 5 分钟）语义不同，各管一层。
+        try {
+            long now = System.currentTimeMillis();
+            synchronized (toastRecent) {
+                Long prev = toastRecent.get(out);
+                if (prev != null && now - prev.longValue() < TOAST_DEDUP_MS) return;
+                toastRecent.put(out, Long.valueOf(now));
+                if (toastRecent.size() > 64) toastRecent.clear();   // 有界，防键无限增长
+            }
+        } catch (Throwable ignored) {}
         try {
             mainHandler.post(() -> {
-                try { Toast.makeText(appContext, String.valueOf(out), Toast.LENGTH_LONG).show(); } catch (Throwable ignored) {}
+                try { Toast.makeText(appContext, String.valueOf(out), Toast.LENGTH_SHORT).show(); } catch (Throwable ignored) {}
             });
         } catch (Throwable ignored) {}
     }
@@ -3564,10 +3652,17 @@ public final class TGAutoSignCore {
                     for (LogLine l : out) seen.add(l.flat());
                     List<LogLine> older = new ArrayList<LogLine>();
                     long totalRead = 0L;
-                    // 从「最旧文件」往后读、文件内也从旧往新，直接得到「旧→新」。
-                    // 旧写法是「从新文件往回读 + 整体 reverse 一次」，那样跨文件时会倒成
-                    // [最旧][次旧]…[最新]，把最新日志甩到列表尾部，首屏反而全是老日志。
-                    for (int fi = 0; fi < files.size(); fi++) {
+                    // 2026-11-12 修复：日志预算必须花在**最新**的文件上。
+                    //   旧实现按文件名升序（最旧在前）逐文件、逐行读到满 max 就 break，
+                    //   再从头部裁剪 —— 于是"最近 N 行"永远拿不到：预算全被最旧的文件吃掉，
+                    //   中间的整天根本没被读进来。实测：用户导出的日志里 11-11 一整天
+                    //   （磁盘上 run-20261111*.log 共约 1.3MB 都还在）完全缺失，
+                    //   而他正是要排查那一天。
+                    //   现在从最新文件开始、文件内从后往前读，读满 max 即停，
+                    //   用 addFirst 还原时间正序。语义 = 最近 max 行。
+                    java.util.LinkedList<LogLine> newestFirst = new java.util.LinkedList<LogLine>();
+                    readAll:
+                    for (int fi = files.size() - 1; fi >= 0; fi--) {
                         java.io.File f = files.get(fi);
                         if (!f.exists() || f.length() <= 0L) continue;
                         if (f.length() > 8L * 1024 * 1024) continue;
@@ -3578,19 +3673,18 @@ public final class TGAutoSignCore {
                             String ln;
                             while ((ln = br.readLine()) != null) lines.add(ln);
                         } finally { try { br.close(); } catch (Throwable ignored) {} }
-                        for (int i = 0; i < lines.size(); i++) {   // 文件内从旧往新
+                        for (int i = lines.size() - 1; i >= 0; i--) {
                             String t = lines.get(i);
                             if (t == null || t.trim().length() == 0) continue;
                             if (seen.contains(t)) continue;
                             seen.add(t);
                             LogLine _pl = parseLogLine(t);
-                            if (_pl == null) continue;   // 不是日志行（外部文本混入），跳过
-                            older.add(_pl);
-                            totalRead++;
-                            if (totalRead > max) break;
+                            if (_pl == null) continue;
+                            newestFirst.addFirst(_pl);
+                            if (++totalRead >= max) break readAll;
                         }
-                        if (totalRead > max) break;
                     }
+                    older.addAll(newestFirst);
                     out.addAll(0, older);
                 }
             } catch (Throwable ignored) {}
@@ -4249,7 +4343,14 @@ public final class TGAutoSignCore {
                 if (us <= 0) continue;
                 String body = k.substring(us + 1);
                 String hitId = null;
-                for (String h : ORPHAN_HEADS) {
+                // 2026-11-12 P0：必须**长前缀先匹配**。
+                //   事故：ORPHAN_HEADS 里 "pendcfm_" 排在 "pendcfm_day_" 之前，
+                //   而这里首个命中即 break —— 键 acc0_pendcfm_day_8428906628_1
+                //   被 "pendcfm_" 吃掉，算出假 id "day_8428906628_1" → 不在目标集合
+                //   → **每次启动都把日戳当孤儿删掉**。日戳一没，跨天判据全废。
+                //   同族被误删的还有 pendcfm_note_ / pendcfm_result_ /
+                //   panelstale_day_ / silent_day_ / fails_day_。
+                for (String h : ORPHAN_HEADS_LONGEST_FIRST) {
                     if (body.startsWith(h)) { hitId = body.substring(h.length()); break; }
                 }
                 if (hitId == null || hitId.length() == 0) continue;
@@ -4272,6 +4373,32 @@ public final class TGAutoSignCore {
      * 一份表两处维护必然漂移，改为单一真相源。
      */
     private static final String[] ORPHAN_HEADS = Keys.ORPHAN_HEADS;
+
+    /**
+     * ORPHAN_HEADS 的**长度降序**副本（长的先匹配）。
+     *
+     * 2026-11-12 P0：孤儿键清理用的是「首个前缀命中即 break」。短前缀若排在长前缀之前
+     * （例如 "pendcfm_" 先于 "pendcfm_day_"），复合键永远匹配错，算出假 id 后被当孤儿
+     * 删除 —— 于是所有日戳类伴随键（pendcfm_day_ / panelstale_day_ / silent_day_ /
+     * fails_day_ / pendcfm_note_ / pendcfm_result_）**每次启动都会被清掉**，
+     * 跨天判据全部失效（真机：6 个目标因此永久卡在「判不出」）。
+     * 由 tools/check-orphan-prefix.py 门禁锁定：必须严格长度降序。
+     */
+    private static final String[] ORPHAN_HEADS_LONGEST_FIRST =
+            sortedLongestFirst(Keys.ORPHAN_HEADS);
+
+    /** 按长度降序排序（长度相同保持原相对顺序，稳定）。 */
+    static String[] sortedLongestFirst(String[] a) {
+        if (a == null) return new String[0];
+        String[] c = a.clone();
+        for (int i = 1; i < c.length; i++) {           // 数组很短（<32），插入排序即可
+            String key = c[i];
+            int j = i - 1;
+            while (j >= 0 && c[j].length() < key.length()) { c[j + 1] = c[j]; j--; }
+            c[j + 1] = key;
+        }
+        return c;
+    }
 
     /**
      * 每天第一次加载时提示一条汇总（之前是每次重启都弹两条，很吵）。
@@ -5094,7 +5221,8 @@ public final class TGAutoSignCore {
                         // 2026-10-24：取不到标题也**不再丢弃**。旧实现在这里 continue，
                         // 而私聊与新版会话常取不到标题 → 整层等于空（TG 13.1.1 实测）。
                         if (title == null || title.isEmpty()) {
-                            title = (uname != null && uname.length() > 0) ? ("@" + uname) : ("会话 " + did);
+                            title = (uname != null && uname.length() > 0) ? ("@" + uname)
+                                    : Lang.tf("会话 {0}", did);
                         }
                         PickEntry.merge(bag, PickEntry.fromDid(did, title, uname, isBot, true));
                     }
@@ -5582,7 +5710,7 @@ public final class TGAutoSignCore {
                             : rc2 == SignLogic.R_REPLIED_UNK ? Lang.tr("回复认不出")
                             : rc2 == SignLogic.R_NO_REPLY ? Lang.tr("bot 没回")
                             : rc2 == SignLogic.R_BTN_STALE ? Lang.tr("按钮失效") : Lang.tr("待确认");
-                    t.setText("· " + targetTitle(entryDid(m)) + "　" + why);
+                    t.setText("· " + targetTitle(entryDid(m)) + "  " + why);
                     box.addView(t);
                 }
             }
@@ -8055,6 +8183,8 @@ public final class TGAutoSignCore {
                                         // 归类却写「bot 未回复」—— 两处自相矛盾（实测 21:21:39 vs 21:22:06）。
                                         // 现在与上一分支同口径：有回复 → 回复判不出；确实没回 → bot 未回复。
                                         boolean _ans = todayStr().equals(prefs.getString(Keys.answered(fPrefix, fId), ""));
+                                        // PROMOTE-OK: 长消息链超时分支 —— 前提是该请求确实发出过
+                                        //   （能走到这里说明在等应答窗口内超时），不属于"无关推送"。
                                         markResultCode(fPrefix, fId, _ans ? SignLogic.R_REPLIED_UNK : SignLogic.R_NO_REPLY);
                                         logw("已发出但无签到结论(" + errText + ")：标记「"
                                              + (_ans ? "回复判不出" : "bot 未回复") + "」，"
@@ -8250,6 +8380,8 @@ public final class TGAutoSignCore {
                                                 // 补写归类（2026-09-28 修）：原来只写 answered 不写归类，
                                                 // 界面读不到原因、状态停在「已发出」，用户不知道到底怎么了。
                                                 // bot 已经明确回了内容、只是词表没认出 —— 这就是「回复判不出」。
+                                                // PROMOTE-OK: 就地对答 —— 前提是模块本次主动发出的请求
+                                                //   已收到应答（ans 非空），语义上必然"在途"。
                                                 markResultCode(fPrefix, fId, SignLogic.R_REPLIED_UNK);
                                             }
                                         } catch (Throwable ignored) {}
@@ -8341,10 +8473,19 @@ public final class TGAutoSignCore {
         // 语义：只要还有「设了固定时刻且今天没签」的目标没到点，本次就不发。
         // 手动（force=true）不受限 —— 用户点了「立即签到」就该发。
         if (!force) {
+            // 2026-11-12（用户明确要求）：固定时刻改为**目标级**语义。
+            //   改前：只要账号内**任一**目标设了固定时刻（如 12:00）且未到点，
+            //   整批目标都不发 —— 真机实测 09:35 出现「未到目标固定时刻 12:00」，
+            //   于是用户以为"打开即签坏了"。这不影响签到正确性，但把别的 bot 一起压住。
+            //   改后：只有"所有未签目标都是固定时刻、且都没到点"才整批不发（保持
+            //   原有"整批一起签"的场景）；只要还有没设时刻的目标，就继续往下走，
+            //   由下方**逐目标**过滤把没到点的那个跳过。
             int _efm = earliestPlanMinToday2(account);
-            if (_efm >= 0 && nowMin() < _efm) {
+            if (_efm >= 0 && nowMin() < _efm
+                    && !hasUnsignedTargetWithoutFixedMin(accountPrefix(account), account)) {
                 logw("[" + reason + "] " + accountLabel(account)
-                     + " 未到目标固定时刻 " + hhmm(_efm) + "（当前 " + nowHM() + "），本次不发送");
+                     + " 全部未签目标都定了固定时刻，最早 " + hhmm(_efm)
+                     + "（当前 " + nowHM() + "），本次不发送");
                 lastRound = null;
                 return 0;
             }
@@ -8399,6 +8540,8 @@ public final class TGAutoSignCore {
             long dialogId = entryDid(m);
             String id = entryId(m);
             try {
+                // 2026-11-12：**目标级**固定时刻过滤 —— 只跳过没到点的它，不影响别的目标。
+                if (!force && fixedMinuteNotReached(prefix, account, id, dialogId)) continue;
                 // 跨天重置重试计数（副作用，保留在筛选阶段）
                 String retryDay = prefs.getString(kRetryDay(prefix, id), "");
                 int retries = prefs.getInt(kRetry(prefix, id), 0);
@@ -11014,7 +11157,12 @@ public final class TGAutoSignCore {
         addTile(g1, act, "doc", "运行日志", "搜索·筛选·清空", "log");
         addTile(g1, act, "sliders", "设置", "定时·窗口·间隔", "settings");
         addTile(g1, act, "trash", "排除管理", "规则·排除 bot·待添加", "exclude");
-        addTile(g1, act, "globe", "账号一览", Lang.tf("{0} 个账号", activatedAccounts()), "accounts");
+        // 2026-11-12 P0：副标题必须与点进去之后的**同一口径**。
+        //   事故：这里用 activatedAccounts()（宿主 getActivatedAccountsCount()，
+        //   含未登录的预分配幽灵槽）→ 面板写「4 个账号」，用户实际只登录 2 个；
+        //   而点进去用的是 accountSlots()（已按"模块 prefs 里真有数据"过滤）→ 两处对不上。
+        addTile(g1, act, "globe", "账号一览",
+                Lang.tf("{0} 个账号", Math.max(1, accountSlots().length)), "accounts");
         // 问题 5：tile 副标题动态显示待学习条数 —— 池里有东西时用户一眼能看到。
         int unkPending = countUnknownPending();
         addTile(g1, act, "key", "未识别回复",
@@ -15076,19 +15224,34 @@ public final class TGAutoSignCore {
                         rt.setTextSize(Theme.TS_SECOND);
                         rt.setTextColor(_c);
                         rt.setTypeface(Theme.text());
-                        rt.setSingleLine(true);
+                        rt.setSingleLine(false);   // 2026-11-12 A档：允许第二行显示"上一轮"摘要
+                        rt.setMaxLines(2);
                         int _streak = 0;
                         try { _streak = SignLogic.streakDisplay(
                                 prefs.getInt(_tp + "streak", 0),
                                 prefs.getString(_tp + "last_sign_date", ""),
                                 todayStr(), yesterdayStr()); } catch (Throwable ignored) {}
+                        String _rrBase;
                         if (allDone) {
-                            rt.setText(_streak > 0
+                            _rrBase = _streak > 0
                                     ? Lang.tf("今日 {0}/{1} 已签完 · 连续 {2} 天", _done, _tot, _streak)
-                                    : Lang.tf("今日 {0}/{1} 已签完", _done, _tot));
+                                    : Lang.tf("今日 {0}/{1} 已签完", _done, _tot);
                         } else {
-                            rt.setText(Lang.tf("今日 {0}/{1} 已签 · 还剩 {2} 个", _done, _tot, _tot - _done));
+                            _rrBase = Lang.tf("今日 {0}/{1} 已签 · 还剩 {2} 个", _done, _tot, _tot - _done);
                         }
+                        // 2026-11-12 A档：把"上一轮"结果**常驻**在这条上（第二行）。
+                        //   toast 一闪而过、不可回看；这里一直挂着，直到下一轮覆盖或跨天失效。
+                        String _rrLast = "";
+                        try {
+                            String _lv = prefs.getString("jmb_last_round_" + currentAccount(), "");
+                            int _bar = _lv.indexOf('|');
+                            if (_bar > 0 && todayStr().equals(_lv.substring(0, _bar))) {
+                                _rrLast = _lv.substring(_bar + 1);
+                            }
+                        } catch (Throwable ignored) {}
+                        rt.setText(_rrLast.length() > 0
+                                ? _rrBase + "\n" + Lang.tf("上一轮：{0}", _rrLast)
+                                : _rrBase);
                         rb.addView(rt, new LinearLayout.LayoutParams(0, -2, 1f));
 
                         TextView rgo = new TextView(act);
@@ -16868,15 +17031,18 @@ public final class TGAutoSignCore {
     private static String kPendingConfirm(String prefix, String id) { return prefix + "pendcfm_" + id; }
     private boolean isPendingConfirm(String prefix, String id) {
         try {
+            // 2026-11-12 P0：判据统一到 SignLogic.pendingStillValid（纯逻辑 + 单测）。
+            //   事故：pendcfm_ 只有一个布尔 + 一个会被孤儿键清理误删的 pendcfm_day_，
+            //   日戳一丢就永久为真 → 目标永久「判不出」且永久不再自动重试
+            //   （真机 8428906628 卡了整整两天）。现在无日戳 / 隔天一律视为过期。
             if (!prefs.getBoolean(kPendingConfirm(prefix, id), false)) return false;
-            /* 今天已签 → 不再需要确认（2026-09-29 修）：
-               只读 pendcfm_ 不能区分「确认后的残留」与「真正待处理」。
-               last_ 是「已签」的最终凭据 —— 已签还赖在待处理里就是 bug。 */
-            if (todayStr().equals(prefs.getString(kLast(prefix, id), ""))) return false;
-            /* 双保险：条目已删（清空配置 / 手动删除）时，残留的 pendcfm_ 不该让
-               "重新添加的同一 bot" 一上来就显示「待确认」。 */
+            // 双保险：条目已删（清空配置 / 手动删除）时，残留的 pendcfm_ 不该让
+            //   "重新添加的同一 bot" 一上来就显示「待确认」。
             if (findEntryById(id, accountOfPrefix(prefix)) == null) return false;
-            return true;
+            return SignLogic.pendingStillValid(true,
+                    prefs.getString(Keys.pendingDay(prefix, id), ""),
+                    prefs.getString(kLast(prefix, id), ""),
+                    todayStr());
         } catch (Throwable t) { return false; }
     }
 
@@ -17055,6 +17221,9 @@ public final class TGAutoSignCore {
             // 补写归类（2026-09-28 修）：上轮只改主路径，漏了这条兜底 ——
             // 结果界面读不到归类、落回兜底文案，日志也还写着旧词「待确认」。
             // 归类是界面文案与处置入口的唯一真相源，这条路径同样必须写。
+            // PROMOTE-OK: 转「待确认」这条兜底路径开头已校验 sentToday
+            //   （todayStr().equals(prefs.getString(kLast...)) 与 isOptimisticToday），
+            //   即"今天确实发过"，不属于无关推送。
             markResultCode(prefix, id, answered ? SignLogic.R_REPLIED_UNK : SignLogic.R_NO_REPLY);
             logw("已发出 " + (age / 60000L) + " 分钟仍无签到结论：" + id
                  + " 标记为「" + (answered ? "回复判不出" : "bot 未回复") + "」（" + why + "）"
@@ -17327,6 +17496,27 @@ public final class TGAutoSignCore {
         } catch (Throwable t) { return false; }
     }
 
+    /**
+     * 该会话对应的目标此刻是否"正在等结论"（2026-11-12，编辑消息门槛用）。
+     *
+     * @param acc  账号索引
+     * @param did  会话 id（与目标 entryDid 一致）
+     */
+    private boolean targetAwaiting(int acc, long did) {
+        try {
+            if (acc < 0) acc = currentAccount();
+            String prefix = accountPrefix(acc);
+            java.util.List<Map<String, Object>> list = new java.util.ArrayList<Map<String, Object>>();
+            loadTargetsInto(prefix, list);
+            for (Map<String, Object> m : list) {
+                if (entryDid(m) != did) continue;
+                if (isSentPendingFresh(prefix, entryId(m))) return true;
+                if (isPendingFresh(prefix, entryId(m))) return true;
+            }
+        } catch (Throwable t) { noteSwallowed("targetAwaiting", t); }
+        return false;
+    }
+
     /** "已发出、且还在等结论的时效内"——超过 PENDING_TTL_MS 才允许再发。 */
     private boolean isSentPendingFresh(String prefix, String id) {
         return stateStore.isSentPendingFresh(prefix, id, PENDING_TTL_MS);
@@ -17578,17 +17768,18 @@ public final class TGAutoSignCore {
                     continue;
                 }
 
-                // ── 判据二（老数据兜底）：没有 pendcfm_day_ 的老记录 ──
-                // 保留原逻辑，但**先查今天已签**：已签还赖在待确认里就是残留。
-                if (today.equals(prefs.getString(kLast(prefix, id), ""))) {
-                    e.remove(k);
-                    e.remove(prefix + "pendcfm_note_" + id);
-                    e.remove(prefix + "pendcfm_result_" + id);
-                    n++;
-                    continue;
-                }
-                // 无日期标注的老记录：宁可留着（用户能看到处置入口），
-                // 不当"隔天残留"删 —— 删错会把正在等的处置吞掉。
+                // ── 判据二（老数据兜底）：没有 pendcfm_day_ 的记录 ──
+                // 2026-11-12 P0 方向修正：无日戳 = **无法证明是今天标的** → 清掉。
+                //   旧实现"宁可留着"，结果是目标永久停在「判不出」且永久不再自动重试
+                //   （真机 8428906628：pendcfm_=true 却无 pendcfm_day_，卡了两天）。
+                //   归类与证据键（result_ / ev_grade_）不受影响，信息不会丢；
+                //   用户仍能在列表里看到归类并手动处置。
+                e.remove(k);
+                e.remove(prefix + "pendcfm_day_" + id);
+                e.remove(prefix + "pendcfm_note_" + id);
+                e.remove(prefix + "pendcfm_result_" + id);
+                n++;
+                continue;
             }
             if (n > 0) e.apply();
         } catch (Throwable t) { noteSwallowed("sweepStalePendingConfirm", t); }
@@ -18958,6 +19149,54 @@ public final class TGAutoSignCore {
         return timerOf(acc) ? earliestPlanMinToday(prefix) : earliestFixedSignMinToday(prefix, acc);
     }
 
+    /**
+     * 账号内是否还有「没有固定时刻」的未签目标（2026-11-12）。
+     *
+     * 用来判断能不能因为固定时刻整批不发：只要还剩一个没设时刻的目标，
+     * 就不该让别的目标的固定时刻把整批压住 —— 那正是用户报的
+     * 「一个目标设了 12:00，整个账号上午都不签」。
+     */
+    private boolean hasUnsignedTargetWithoutFixedMin(String prefix, int acc) {
+        try {
+            java.util.List<Map<String, Object>> list = new java.util.ArrayList<Map<String, Object>>();
+            loadTargetsInto(prefix, list);
+            String today = todayStr();
+            for (Map<String, Object> m : list) {
+                String id = entryId(m);
+                if (today.equals(prefs.getString(kLast(prefix, id), ""))) continue;
+                if (isFrozen(prefix, id)) continue;
+                if (isSnoozed(prefix, id)) continue;
+                if (!prefs.contains(Keys.signAt(prefix, id))) return true;
+                if (prefs.getInt(Keys.signAt(prefix, id), -1) < 0) return true;
+            }
+            return false;
+        } catch (Throwable t) { noteSwallowed("hasUnsignedTargetWithoutFixedMin", t); return true; }
+    }
+
+    /**
+     * 该目标此刻是否「还没到它自己的固定时刻」（2026-11-12，目标级过滤）。
+     *
+     * 定时模式下由时刻表调度，本判据不生效（返回 false）。
+     * 手动（force）不走这里 —— 用户点了「立即签到」就该发。
+     */
+    private boolean fixedMinuteNotReached(String prefix, int acc, String id, long did) {
+        try {
+            if (timerOf(acc)) return false;
+            if (!prefs.contains(Keys.signAt(prefix, id))) return false;
+            int want = prefs.getInt(Keys.signAt(prefix, id), -1);
+            if (want < 0) return false;
+            int[] rm = SignLogic.resolveSignMinute(want, windowAnyOf(acc));
+            int mm = rm[0];
+            if (mm < 0) return false;
+            if (nowMin() < mm) {
+                logd("[目标固定时刻] " + did + "（" + id + "）未到 " + hhmm(mm)
+                     + "（当前 " + nowHM() + "），本轮跳过它，其它目标照常");
+                return true;
+            }
+            return false;
+        } catch (Throwable t) { noteSwallowed("fixedMinuteNotReached", t); return false; }
+    }
+
     private int earliestFixedSignMinToday(String prefix, int acc) {
         try {
             java.util.List<Map<String, Object>> list = new java.util.ArrayList<Map<String, Object>>();
@@ -19328,10 +19567,11 @@ public final class TGAutoSignCore {
         } catch (Throwable ignored) {}
     }
 
-    /** 触发源是否属于「用户刚打开宿主」这一类。 */
+    /** 触发源是否属于「用户刚打开宿主」这一类。
+     *  2026-11-12：实现迁到 SignLogic（纯逻辑，需被单测覆盖），此处保留薄委托，
+     *  既有调用点（startupTrigger）不变 —— 单一真相源，避免两处漂移。 */
     static boolean isStartupTrigger(String reason) {
-        if (reason == null) return false;
-        return reason.contains("启动") || reason.contains("打开");
+        return SignLogic.isStartupTrigger(reason);
     }
 
     /** 今天还没签的目标数（不含冻结/排除）。 */
@@ -24074,7 +24314,19 @@ public final class TGAutoSignCore {
             // 全都含「签到/积分」字样，于是整段防骗广告塞满主列表 ——
             // 用户看到的 10 条里 6 条是广告，真正该判的一条也没有。
             // 现在：公告只记进「被自动过滤」，可在那里一次收回，不污染主列表。
-            try { stateStore.noteEvidence(prefix, id, SignLogic.GRADE_VERDICT); } catch (Throwable ignored) {}
+            // 2026-11-12 P0：**不得无条件升级**。只有"本次确实在等这条回复"
+            //   或"这条文本本身就象签到结果"才允许写归类；否则只记日志/入池。
+            //   证据等级也改记 GRADE_BOT（"目标 bot 回过"），不再写 GRADE_VERDICT ——
+            //   判不出却标"已判定"是自相矛盾的标签（真机日志里就长这样）。
+            boolean _fresh = isSentPendingFresh(prefix, id);
+            boolean _likeSign = SignLogic.looksLikeSignResult(text);
+            if (!SignLogic.mayPromoteUnknown(_fresh, _likeSign)) {
+                jlog("【回复判定】" + did + " 与本次等待无关的推送（在途=" + _fresh
+                     + " 像结果=" + _likeSign + "），只入池不升级状态: " + clip(text, 40));
+                try { noteUnknownReply(prefix, did, text, id, did); } catch (Throwable ignored) {}
+                return;
+            }
+            try { stateStore.noteEvidence(prefix, id, SignLogic.GRADE_BOT); } catch (Throwable ignored) {}
             markResultCode(prefix, id, SignLogic.R_REPLIED_UNK);
             try { evt("verdict", id, did, account, "v=unknown grade=" + SignLogic.gradeLabel(
                     stateStore.evidenceGrade(prefix, id)) + " txt=" + clip(text, 20)); } catch (Throwable ignored) {}
@@ -24090,9 +24342,19 @@ public final class TGAutoSignCore {
                          + "」但这段像公告/广告 → 不判成功（若它确实是结果，请删掉这个过宽的词）");
                 }
             } catch (Throwable ignored) {}
-            if (SignLogic.isLikelyAnnouncement(text)) {
-                logd("【回复判定】" + did + " 像公告/广告，不进未识别池: " + clip(text, 50));
-                try { noteSkippedUnknown(prefix, "像是公告/广告", text); } catch (Throwable ignored) {}
+            // 2026-11-12：文档 / 教程 / 菜单类也不进「未识别回复」池。
+            //   为什么必须一起判：原来只有"整条像公告"才跳过，而菜单（如
+            //   「请选择功能：签到 / 查询 / 商城」）既不像公告、又不是结果 ——
+            //   它会掉进池子里提示用户"去学一个词"，而学词对菜单毫无意义
+            //   （下一句才是结果）。判据从 isLikelyAnnouncement 扩到
+            //   isLikelyAnnouncement || looksLikeTutorialOrHelp 之后，
+            //   文档/菜单语域统一走"不入池"这条出口。
+            if (SignLogic.isLikelyAnnouncement(text) || SignLogic.looksLikeTutorialOrHelp(text)) {
+                logd("【回复判定】" + did + " 像公告/广告或教程菜单，不进未识别池: " + clip(text, 50));
+                try {
+                    noteSkippedUnknown(prefix,
+                            SignLogic.isLikelyAnnouncement(text) ? "像是公告/广告" : "像是教程/菜单", text);
+                } catch (Throwable ignored) {}
                 return;
             }
             // ── 2026-11-01：今天已签 → 不再进「未识别回复」池 ──
@@ -24716,6 +24978,27 @@ public final class TGAutoSignCore {
                 }
             } catch (Throwable ignored) {}
             // 2026-11-08 F8：三条过滤（自噬）抽到 InboundGate.classifyEarly，纯函数有测试。
+            // 2026-11-12 P0：编辑消息（bot 先发图/占位、再编辑成结果）只在
+            //   "该目标确实在等结论"时才进判定链。
+            //   为什么要这道门槛：编辑更新量很大（真机一天 713 条），
+            //   若全放进来会白烧算力并可能误判；而"在途"恰好是本条链真正关心的场景。
+            //   真机事故：流光画廊把消息编辑成「今天已签到，当前 777 廊币。」，
+            //   旧实现把编辑当 not_new_message 丢掉 → 模块以为 bot 没回复 → 判「未回复」。
+            if (_updKind == InboundGate.UPD_EDIT_MESSAGE) {
+                boolean _awaitingEdit = targetAwaiting(ctrlAcc, peerUid);
+                if (!_awaitingEdit) {
+                    try {
+                        Diag.noteDrop("drop:edit_not_awaiting");
+                        if (Diag.allow("edit:" + peerUid, 30000L)) {
+                            Diag.event("drop", "A", ctrlAcc, peerUid, fromUid, 0, 0, "-", "-",
+                                    "drop:edit_not_awaiting", Diag.hookStatus("A"));
+                        }
+                    } catch (Throwable ignored) {}
+                    continue;
+                }
+                try { Diag.event("recv", "A", ctrlAcc, peerUid, fromUid, 0, 0,
+                        "edit_awaiting=1", "-", "-", Diag.hookStatus("A")); } catch (Throwable ignored) {}
+            }
             {
                 String _why = InboundGate.classifyEarly(false, _updKind, false, peerUid, msgOut, selfId, fromUid);
                 if (!InboundGate.ACCEPT.equals(_why)) {
@@ -25448,9 +25731,18 @@ public final class TGAutoSignCore {
                         } else {
                             logd("【回复判定】" + did + " 群聊非 bot 消息，不入未识别池: " + clip(replyText, 30));
                         }
+                        // 2026-11-12 P0：与短消息链同口径 —— 不得无条件升级（两链必须一致）。
                         for (Map<String, Object> m : judgeTargets) {
                             if (entryDid(m) != did) continue;
-                            markResultCode(prefix, entryId(m), SignLogic.R_REPLIED_UNK);
+                            String _mid = entryId(m);
+                            boolean _mfresh = isSentPendingFresh(prefix, _mid);
+                            boolean _mlike = SignLogic.looksLikeSignResult(replyText);
+                            if (!SignLogic.mayPromoteUnknown(_mfresh, _mlike)) {
+                                jlog("【回复判定】" + did + " 与本次等待无关的推送（在途=" + _mfresh
+                                     + " 像结果=" + _mlike + "），只入池不升级状态: " + _mid);
+                                continue;
+                            }
+                            markResultCode(prefix, _mid, SignLogic.R_REPLIED_UNK);
                         }
                     } else {
                         // 措辞要准确：bot 一次交互常发多条消息（先菜单/广告、后结果），
@@ -25520,6 +25812,8 @@ public final class TGAutoSignCore {
                             String cid = entryId(m);
                             int curRc = resultCodeOf(prefix, cid);
                             if (curRc == SignLogic.R_NO_REPLY) {
+                                // PROMOTE-OK: 仅在**已有 no_reply 归类**上把原因修正为"回复判不出"
+                                //   （curRc == R_NO_REPLY 才进来），不会凭空制造归类。
                                 markResultCode(prefix, cid, SignLogic.R_REPLIED_UNK);
                                 logw("【回复判定】" + did + " 收到回复，归类由「bot 未回复」修正为「回复判不出」");
                             }
@@ -25564,14 +25858,15 @@ public final class TGAutoSignCore {
     /** 把「距今多少毫秒」说成人话（自检面板用）。 */
     private static String humanAge(long ms) {
         if (ms < 0L) return "?";
-        if (ms < 1000L) return ms + " 毫秒";
+        // 2026-11-12：单位也走 Lang —— 这些字符串会直接显示在自检面板上。
+        if (ms < 1000L) return ms + " " + Lang.tr("毫秒");
         long s = ms / 1000L;
-        if (s < 60L) return s + " 秒";
+        if (s < 60L) return s + " " + Lang.tr("秒");
         long mn = s / 60L;
-        if (mn < 60L) return mn + " 分钟";
+        if (mn < 60L) return mn + " " + Lang.tr("分钟");
         long h = mn / 60L;
-        if (h < 48L) return h + " 小时";
-        return (h / 24L) + " 天";
+        if (h < 48L) return h + " " + Lang.tr("小时");
+        return (h / 24L) + " " + Lang.tr("天");
     }
 
     private static String clip(String t, int max) {

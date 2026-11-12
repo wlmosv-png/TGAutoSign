@@ -212,10 +212,26 @@ public final class Keys {
      * 孤儿清理只看"挂在条目上才有意义"的键；cfg_/enabled 这类账号级配置不能碰。
      */
     public static final String[] ORPHAN_HEADS = {
-            "frozen_", "snooze_", "pendcfm_", "pendcfm_day_", "pendcfm_note_", "pendcfm_result_",
-            "title_", "fail_streak_", "fail_laststamp_", "fail_alert_", "fail_date_",
-            "fails_today_", "fails_day_", "permfail_",
-            "sent_at_", "signed_at_", "miss_at_", "opt_", "answered_", "send_n_",
-            "panelstale_", "panelstale_day_", "silent_", "silent_day_"
+            // ⚠️ 必须**按长度降序**排列（门禁 tools/check-orphan-prefix.py 强制）。
+            //
+            // 为什么（2026-11-12 P0 事故）：清理孤儿键用的是「首个前缀命中即 break」，
+            //   for (String h : HEADS) if (body.startsWith(h)) { hitId = body.substring(h.length()); break; }
+            //   短前缀若排在长前缀之前，复合键就会被短前缀吃掉、算出假 id 后被当孤儿删除。
+            //   旧顺序里 "pendcfm_" 排在 "pendcfm_day_" 之前，于是每次启动都会删掉
+            //   pendcfm_day_（"哪天标的"）——跨天判据当场失效，6 个目标永久卡在「判不出」。
+            //   同族受害者：panelstale_day_ / silent_day_ / fails_day_ /
+            //   pendcfm_note_ / pendcfm_result_。
+            //
+            // 新增键时：**按长度插入到正确位置**，并跑 check-orphan-prefix.py。
+            "pendcfm_result_", "fail_laststamp_", "panelstale_day_",
+            "pendcfm_note_",
+            "pendcfm_day_", "fail_streak_", "fails_today_",
+            "fail_alert_", "panelstale_", "silent_day_",
+            "fail_date_", "fails_day_", "signed_at_",
+            "permfail_", "answered_",
+            "pendcfm_", "sent_at_", "miss_at_",
+            "frozen_", "snooze_", "send_n_", "silent_",
+            "title_",
+            "opt_"
     };
 }

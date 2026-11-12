@@ -84,7 +84,16 @@ public final class AccountManager {
         try {
             Class<?> c = uc();
             if (c != null) {
-                Object n = c.getMethod("getActivatedAccountsCount").invoke(null);
+                // 2026-11-12 P0：方法名也要过宿主符号层。
+                //   13.2.x 上按名调 getActivatedAccountsCount 抛 NoSuchMethod →
+                //   一路回退到 countProvider（scanAccountsFromPrefs：取 acc 前缀最大者 + 1）
+                //   → 真机 prefs 里有 acc0_/acc1_/acc3_ ⇒ 返回 4，
+                //   而用户实际只登录 2 个账号 —— 「账号一览」外显 4 个的直接来源。
+                //   先按结构解析（唯一的 public static int getActivatedAccountsCount()），
+                //   解析不到再按名调用，旧版行为不变。
+                java.lang.reflect.Method gm = HostSymbols.method(c, "getActivatedAccountsCount",
+                        new Class<?>[0], Boolean.TRUE);
+                Object n = (gm != null) ? gm.invoke(null) : c.getMethod("getActivatedAccountsCount").invoke(null);
                 if (n instanceof Number) {
                     int v = ((Number) n).intValue();
                     if (v > 0) return v;
