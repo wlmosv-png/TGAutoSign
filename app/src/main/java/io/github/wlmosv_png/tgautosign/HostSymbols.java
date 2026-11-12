@@ -71,6 +71,23 @@ public final class HostSymbols {
         // 混淆名与 13.2.0 官网版**完全不同** —— 印证「混淆名逐版本变化，必须按版本档维护」。
         // 全部由结构指纹独立定位（vp=全包唯一 5 参 processUpdateArray；ys=(int,Object[])+keyAt；
         // c20 super=d1 且持 TLRPC$User；i5 同时有 (Peer)->long 与 (InputPeer)->long …）。
+        // Telegram 13.2.2（Play 渠道实测 versionCode 73031，base.apk sha256 47ebdaac…03b）
+        // 13.2.1 的档位在这个版本上**整表失配**（2026-11-12 真机日志：MC=✗ NC=✗ UC=✗
+        // →「宿主未适配」→ 锚点 A/B 均不安装，自动签到静默失效）。
+        // 本档由 tools/hostmap-gen.py --tier 73000 用结构指纹重新定位，9/9 唯一定位成功。
+        // 注意 d1(BaseController) 与 i5(DialogObject) 与 13.2.1 同名 —— 印证「逐版本重排」是
+        // 大概率而非必然，不能靠旧档蒙。
+        CLASS_MAPS.put(73000L, new String[][]{
+                {"org.telegram.messenger.MessagesController", "org.telegram.messenger.wp"},
+                {"org.telegram.messenger.NotificationCenter", "org.telegram.messenger.zs"},
+                {"org.telegram.messenger.BaseController", "org.telegram.messenger.d1"},
+                {"org.telegram.messenger.UserConfig", "org.telegram.messenger.d20"},
+                {"org.telegram.messenger.SharedConfig", "org.telegram.messenger.uz"},
+                {"org.telegram.messenger.MessagesStorage", "org.telegram.messenger.is"},
+                {"org.telegram.messenger.DialogObject", "org.telegram.messenger.i5"},
+                {"org.telegram.messenger.SendMessagesHelper", "org.telegram.messenger.rz"},
+                {"org.telegram.messenger.UserNameResolver", "org.telegram.messenger.g20"},
+        });
         CLASS_MAPS.put(72900L, new String[][]{
                 {"org.telegram.messenger.MessagesController", "org.telegram.messenger.vp"},
                 {"org.telegram.messenger.NotificationCenter", "org.telegram.messenger.ys"},
@@ -154,6 +171,7 @@ public final class HostSymbols {
         MEMBER_HINTS.put(tier + "|" + legacyCls + "#" + legacyMethod + paramsSig, actual);
     }
     static {
+        mh(73000L, "org.telegram.messenger.NotificationCenter", "postNotificationName", "(int,java.lang.Object[])", "k");
         mh(72800L, "org.telegram.messenger.NotificationCenter", "postNotificationName", "(int,java.lang.Object[])", "k");
         mh(72900L, "org.telegram.messenger.NotificationCenter", "postNotificationName", "(int,java.lang.Object[])", "k");
     }
