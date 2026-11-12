@@ -183,17 +183,25 @@ You installed a debug build. Uninstall it, then install the official APK from th
 
 ## 更新日志 · Changelog
 
-### v1.7.8 (178) — 2026-11-08
+### v1.7.1 (171) — 2026-11-01
 
-**New**: Hook lifecycle forensics. · Update-type histogram. · Retry timeline. · Pure functions with real tests.
+**Fixed**: A target's fixed time is no longer bypassed by an all-day global window. · The heartbeat path no longer bypasses the sign-in gate. · The make-up window start is computed per target. · Account panels are no longer misread as sign-in failures. · Genuine rejections are still treated as failures.
 
-**Fixed**: Probe log level. · Anchor B probe moved to the real path. · Inbound probe moved earlier. · Every early exit now carries a reason. · Throttle is now observable.
+**New**: Mark a target as "not signed" again by hand.
 
-### v1.7.7 (177) — 2026-11-08
+**Fixed**: Once a target is signed today, automatic verdicts no longer flip it. · Signed targets no longer enter the unrecognized-reply pool. · Revoking a sign-in now clears the signed timestamp too. · Self-heal for a torn signed state. · Every revocation is now logged with its reason.
 
-**New**: Inbound diagnostics, throttled per chat.
+**UI**: The undo entry is now one compact row per target. · New "Paused" section: pausing no longer hides a target. · The entry menu now shows the actual state instead of a static label.
 
-**Fixed**: Rapid retries created a receive blind spot. · Overload selection for DialogObject.
+**工程**: The make-up predicate gains a target-scoped overload. · The trigger-policy test is now part of the gate.
+
+### v1.7.0 (170) — 2026-10-30
+
+**Fixed**: Opening Telegram now actually triggers the missed sign-ins. · Out-of-window triggers are no longer silently dropped. · Scheduled mode no longer exits silently. · Scheduled tasks survive account switches. · The merge log is rate-limited again (60s per account). · Custom judging words now work per account. · Auto-judge / fallback mode are read per account. · The "allow" description matches the implementation.
+
+**New**: The settings page marks dependent options as inactive. · The target list now shows where to turn it on.
+
+**Changed**: Out-of-window behaviour is now explicit.
 
 [Full changelog →](https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md)
 
