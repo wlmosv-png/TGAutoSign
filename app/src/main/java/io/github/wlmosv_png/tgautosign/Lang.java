@@ -1599,5 +1599,29 @@ public final class Lang {
         EN.put("今天全部签完了", "All done for today");
         EN.put("另有 {0} 个账号没学习目标", "{0} more account(s) have no targets");
         EN.put("；另有 {0} 个账号没学习目标", "; {0} more account(s) have no targets");
+        EN.put("上一轮：{0}", "Last round: {0}");
+        EN.put("{0}：签到完成 {1} 个，{2} 个没成功", "{0}: signed {1}, {2} failed");
+        EN.put("ntfy: https://ntfy.sh/你的主题   Bark: https://api.day.app/你的key", "ntfy: https://ntfy.sh/your-topic   Bark: https://api.day.app/your-key");
+        EN.put("签到统计", "Sign-in stats");
+        EN.put("数据清理", "Data cleanup");
+        EN.put("今日已签 · 重新签", "Signed today · sign again");
+        EN.put("今天已判定成功；再点是重新发送一次", "Judged successful today; tapping again resends once");
+        EN.put("复制到其它账号", "Copy to other accounts");
+        EN.put("不可撤销", "Cannot be undone");
+        EN.put("历史 · 成功率", "History · success rate");
+        EN.put("清空日志", "Clear logs");
+        EN.put("删本地记录", "Delete local records");
+        EN.put("删孤儿状态", "Delete orphan state");
+        EN.put("几点签·补签", "Schedule & make-up");
+        EN.put("导出问题报告", "Export issue report");
+        EN.put("未识别回复", "Unrecognized replies");
+        EN.put("如: 每日签到（一行一条）", "e.g. daily check-in (one per line)");
+        EN.put("ntfy: https://ntfy.sh/你的主题   Bark: https://api.day.app/your-key", "ntfy: https://ntfy.sh/your-topic   Bark: https://api.day.app/your-key");
+        EN.put("毫秒", "ms");
+        EN.put("秒", "s");
+        EN.put("分钟", "min");
+        EN.put("小时", "h");
+        EN.put("天", "d");
+        EN.put("会话 {0}", "Chat {0}");
     }
 }

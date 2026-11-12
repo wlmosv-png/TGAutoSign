@@ -80,6 +80,8 @@ if [ "${TGAS_SKIP_TESTS:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/SignLogicTest
   rm -rf "$_tcls"; mkdir -p "$_tcls"
   if javac -nowarn -encoding UTF-8 -d "$_tcls" \
         "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/SignLogic.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/PickEntry.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/SoundGate.java" \
         "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/UpdateLogic.java" \
         "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/DateUtils.java" \
         "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/StatsData.java" \
@@ -94,6 +96,94 @@ if [ "${TGAS_SKIP_TESTS:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/SignLogicTest
     echo "FATAL: 单测编译失败（临时跳过：TGAS_SKIP_TESTS=1）" >&2; exit 1
   fi
   rm -rf "$_tcls"
+fi
+
+# ── 判定链纯逻辑测试组（2026-11-12 接线）──
+# 为什么单列：这 9 个测试文件此前**从未被 build.sh 跑过**（含 StageTableTest 79 条、
+#   TriggerPolicyTest 174 条、VerdictEvidenceTest、DualChainDiffTest 两条判定链互斥基线）——
+#   "门禁 1051 条"里有相当一部分是写了不跑，于是判定链缺陷（成功词被文档尾缀吞掉、
+#   命中取表序首个、EXHAUSTED 被长推广污染）一直没人发现。
+#   tools/check-tests-wired.py 现在强制每个 *Test.java 必须被引用。
+# 跳过：TGAS_SKIP_JUDGESET=1
+if [ "${TGAS_SKIP_JUDGESET:-0}" != 1 ]; then
+  echo "== 判定链纯逻辑测试组 =="
+  _gcls="${TMPDIR:-/tmp}/tgas-gcls-$$"
+  rm -rf "$_gcls"; mkdir -p "$_gcls"
+  _gsrc="$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign"
+  _gtests="AnnouncementLengthTest DualChainDiffTest MatchPositionTest ReplyMatchTest StageTableTest TriggerPolicyTest VerdictEvidenceTest StateLeakTest"
+  _gj=""
+  for _t in $_gtests; do _gj="$_gj $TGAS_SRC/tools/tests/$_t.java"; done
+  if javac -nowarn -encoding UTF-8 -d "$_gcls" \
+        "$_gsrc/SignLogic.java" "$_gsrc/PickEntry.java" $_gj 2>&1; then
+    _gfail=0
+    for _t in $_gtests; do
+      java -cp "$_gcls" io.github.wlmosv_png.tgautosign.$_t || _gfail=1
+    done
+    rm -rf "$_gcls"
+    if [ "$_gfail" != 0 ]; then
+      echo "FATAL: 判定链纯逻辑测试组失败（临时跳过：TGAS_SKIP_JUDGESET=1）" >&2; exit 1
+    fi
+  else
+    rm -rf "$_gcls"
+    echo "FATAL: 判定链测试组编译失败（临时跳过：TGAS_SKIP_JUDGESET=1）" >&2; exit 1
+  fi
+fi
+
+# ── 跨天状态泄漏 / 判定词顺序 单测（2026-11-12 P0，事故驱动）──
+# 事故：① 回复尾部带「📝 使用说明」→ 整条判「回复判不出」
+#        （真机 7999853294 / 8353929739，prefs 里 last_unk_ 有原始回复）；
+#      ② 用户词表里「成功」排在「签到成功」之前，命中取**表序首个** → 强词被泛词顶掉；
+#      ③ ev_grade_ / pendcfm_ 没有日期 → 昨天的「判不出」泄漏到今天，且永久不再自动重试。
+# 三类缺陷判据完全不同，单独一个 runner 才能看出"哪条不变量被破坏"。
+# 跳过：TGAS_SKIP_STATELEAK=1
+if [ "${TGAS_SKIP_STATELEAK:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/StateLeakTest.java" ]; then
+  echo "== 跨天状态泄漏 / 判定词顺序 单测 =="
+  _lcls="${TMPDIR:-/tmp}/tgas-lcls-$$"
+  rm -rf "$_lcls"; mkdir -p "$_lcls"
+  if javac -nowarn -encoding UTF-8 -d "$_lcls" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/SignLogic.java" \
+        "$TGAS_SRC/tools/tests/StateLeakTest.java" 2>&1; then
+    if ! java -cp "$_lcls" io.github.wlmosv_png.tgautosign.StateLeakTest; then
+      rm -rf "$_lcls"
+      echo "FATAL: 跨天状态泄漏单测失败（临时跳过：TGAS_SKIP_STATELEAK=1）" >&2; exit 1
+    fi
+  else
+    rm -rf "$_lcls"
+    echo "FATAL: 跨天状态泄漏单测编译失败（临时跳过：TGAS_SKIP_STATELEAK=1）" >&2; exit 1
+  fi
+  rm -rf "$_lcls"
+fi
+
+# ── 孤儿键前缀门禁（2026-11-12 P0）──
+# 事故：ORPHAN_HEADS 里 "pendcfm_" 排在 "pendcfm_day_" 之前，而孤儿清理是
+#   「首个前缀命中即 break」→ 日戳类伴随键每次启动都被删 → 跨天判据全废
+#   （真机 6 个目标因此永久卡在「判不出」）。
+# 跳过：TGAS_SKIP_ORPHAN=1
+if [ "${TGAS_SKIP_ORPHAN:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/check-orphan-prefix.py" ]; then
+  echo "== 孤儿键前缀门禁 =="
+  python3 "$TGAS_SRC/tools/check-orphan-prefix.py" "$TGAS_SRC" || {
+    echo "FATAL: 孤儿键前缀序被破坏（临时跳过：TGAS_SKIP_ORPHAN=1）" >&2; exit 1; }
+fi
+
+# ── 「判不出」升级门槛门禁（2026-11-12 P0，事故驱动）──
+# 事故：bot 主动推一条与签到无关的广告 → 判定链判不出 → **无条件**写
+#   markResultCode(R_REPLIED_UNK) → 目标钉成「待确认」：进「需处理」+ 当天不再自动重签。
+#   用户现象：「还没签到就判断了，一大片要处理」（真机 6 个目标里 4 个如此）。
+# 规则：每个写入点必须有 mayPromoteUnknown 门槛，或紧随其上的 // PROMOTE-OK: 理由。
+# 跳过：TGAS_SKIP_PROMOTE=1
+if [ "${TGAS_SKIP_PROMOTE:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/check-unknown-promote.py" ]; then
+  echo "== 判不出升级门槛门禁 =="
+  python3 "$TGAS_SRC/tools/check-unknown-promote.py" "$TGAS_SRC" || {
+    echo "FATAL: 有判不出写入点缺门槛（临时跳过：TGAS_SKIP_PROMOTE=1）" >&2; exit 1; }
+fi
+
+# ── 测试接线门禁（2026-11-12）──
+# 事故：测试写了却没挂进门禁链（或引用编译集里没有的类）→ "测试通过"是假象。
+# 跳过：TGAS_SKIP_TESTWIRE=1
+if [ "${TGAS_SKIP_TESTWIRE:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/check-tests-wired.py" ]; then
+  echo "== 测试接线门禁 =="
+  python3 "$TGAS_SRC/tools/check-tests-wired.py" "$TGAS_SRC" || {
+    echo "FATAL: 有测试没被编译/运行（临时跳过：TGAS_SKIP_TESTWIRE=1）" >&2; exit 1; }
 fi
 
 # ── 更新日志双语门禁：最新版本段中英条目必须配对（写不全就出不了包）──
@@ -167,10 +257,12 @@ if [ "${TGAS_SKIP_JUDGETEST:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/JudgeTest
   if javac -nowarn -encoding UTF-8 -d "$_jcls" \
         $_jstub $_jcommon \
         "$TGAS_SRC/tools/tests/JudgeTest.java" \
-        "$TGAS_SRC/tools/tests/GroupScopeTest.java" 2>&1; then
+        "$TGAS_SRC/tools/tests/GroupScopeTest.java" \
+        "$TGAS_SRC/tools/tests/SuggestWordTest.java" 2>&1; then
     _jfail=0
     java -cp "$_jcls" io.github.wlmosv_png.tgautosign.JudgeTest || _jfail=1
     java -cp "$_jcls" io.github.wlmosv_png.tgautosign.GroupScopeTest || _jfail=1
+    java -cp "$_jcls" io.github.wlmosv_png.tgautosign.SuggestWordTest || _jfail=1
     rm -rf "$_jcls"
     if [ "$_jfail" != 0 ]; then
       echo "FATAL: judge / 群聊作用域 单测失败（临时跳过：TGAS_SKIP_JUDGETEST=1）" >&2; exit 1
@@ -178,6 +270,46 @@ if [ "${TGAS_SKIP_JUDGETEST:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/JudgeTest
   else
     rm -rf "$_jcls"
     echo "FATAL: judge 单测编译失败（临时跳过：TGAS_SKIP_JUDGETEST=1）" >&2; exit 1
+  fi
+fi
+
+# ── 判定接线测试组（2026-11-12 接线，清掉最后 5 个欠账）──
+# 这 5 个测试此前因编译集未就绪而**从未被执行**（门禁里显式列债）：
+#   UnkPoolSourcesTest / LearnFlowTest / SavedMsgPolicyTest / ScopedWireTest / JudgeOnGateTest
+# 现在统一用「stubs + android.jar」两段式 classpath：
+#   · 编译期 cp = stubs:android.jar —— 既能编过需要 android 类型的类，又优先用桩的签名；
+#   · 运行期 cp = out:stubs        —— 纯 Java 环境里真正跑到桩实现。
+# 跳过：TGAS_SKIP_WIRESET=1
+if [ "${TGAS_SKIP_WIRESET:-0}" != 1 ]; then
+  echo "== 判定接线测试组 =="
+  _wcls="${TMPDIR:-/tmp}/tgas-wcls-$$"
+  rm -rf "$_wcls"; mkdir -p "$_wcls"
+  _wsrc="$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign"
+  if javac -nowarn -encoding UTF-8 -d "$_wcls" \
+        -cp "$TGAS_SRC/tools/tests/stubs:$TGAS_ANDROID_JAR" \
+        "$TGAS_SRC"/tools/tests/stubs/android/content/*.java \
+        "$TGAS_SRC/tools/tests/persist/FileSharedPreferences.java" \
+        "$_wsrc/SignLogic.java" "$_wsrc/Keys.java" "$_wsrc/PrefsStore.java" \
+        "$_wsrc/SignStateStore.java" "$_wsrc/SoundGate.java" "$_wsrc/Diag.java" \
+        "$_wsrc/DateUtils.java" "$_wsrc/PickEntry.java" \
+        "$_wsrc"/judge/*.java "$_wsrc"/savedmsg/*.java \
+        "$TGAS_SRC/tools/tests/JudgeTest.java" \
+        "$TGAS_SRC/tools/tests/UnkPoolSourcesTest.java" \
+        "$TGAS_SRC/tools/tests/LearnFlowTest.java" \
+        "$TGAS_SRC/tools/tests/SavedMsgPolicyTest.java" \
+        "$TGAS_SRC/tools/tests/ScopedWireTest.java" \
+        "$TGAS_SRC/tools/tests/JudgeOnGateTest.java" 2>&1; then
+    _wfail=0
+    for _t in UnkPoolSourcesTest LearnFlowTest SavedMsgPolicyTest ScopedWireTest JudgeOnGateTest; do
+      java -cp "$_wcls:$TGAS_SRC/tools/tests/stubs" io.github.wlmosv_png.tgautosign.$_t || _wfail=1
+    done
+    rm -rf "$_wcls"
+    if [ "$_wfail" != 0 ]; then
+      echo "FATAL: 判定接线测试组失败（临时跳过：TGAS_SKIP_WIRESET=1）" >&2; exit 1
+    fi
+  else
+    rm -rf "$_wcls"
+    echo "FATAL: 判定接线测试组编译失败（临时跳过：TGAS_SKIP_WIRESET=1）" >&2; exit 1
   fi
 fi
 
@@ -252,12 +384,14 @@ if [ "${TGAS_SKIP_PENDINGTEST:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/Pending
   rm -rf "$_pcls"; mkdir -p "$_pcls"
   if javac -nowarn -encoding UTF-8 -d "$_pcls" \
         "$TGAS_SRC/tools/tests/stubs/android/content/SharedPreferences.java" \
+        "$TGAS_SRC/tools/tests/stubs/android/util/Log.java" \
         "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/DateUtils.java" \
         "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/Keys.java" \
         "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/SignLogic.java" \
         "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/PrefsStore.java" \
         "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/SignStateStore.java" \
         "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/SoundGate.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/Diag.java" \
         "$TGAS_SRC/tools/tests/PendingStateTest.java" 2>&1; then
     if ! java -cp "$_pcls" io.github.wlmosv_png.tgautosign.PendingStateTest; then
       rm -rf "$_pcls"
@@ -317,7 +451,10 @@ import io, re, sys
 path, gen = sys.argv[1], sys.argv[2]
 s = io.open(path, encoding="utf-8").read()
 new = io.open(gen, encoding="utf-8").read().rstrip("\n")
-m = re.search(r"^##\s*📜[^\n]*\n", s, re.M)
+# 2026-11-12：段头以「生成器实际输出 + README 实际内容」为准。
+#   生成器 tools/gen-readme-changelog.py 输出「## 更新日志 · Changelog」，两个 README 也是；
+#   这里原先却要求段头带 📜 → 本门禁**永远不可能通过**（红在既有基线上，没人发现）。
+m = re.search(r"^##\s*(?:📜\s*)?更新日志[^\n]*\n", s, re.M)
 if not m:
     print("  FATAL: %s 里没有更新日志段" % path); sys.exit(1)
 end = m.end() + re.search(r"^##\s", s[m.end():], re.M).start()

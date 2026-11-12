@@ -472,6 +472,12 @@ def main():
         'ensureTimerPlan', 'windowRange', 'timerPlan', 'entryLabel',
         # 纯逻辑判定：体内中文用于 contains\/equals 比较，改了会坏功能
         'statusRank', 'statusColorCol', 'peerKindCn', 'sortWeight',
+        # 2026-11-12 补：纯数据运算，返回值不进界面
+        #   mergeWords  —— 分词用的正则分隔符（含中文逗号），改了会坏解析
+        #   foldKeyOf   —— 折叠用的数据键（"窗口外"等），只做键比较
+        #   sendExternal—— 外部通知的日志前缀，只进 notify 日志
+        #   shotBaseName—— 导出截图**文件名**基名，不进 UI（文件名不需要翻译）
+        'mergeWords', 'foldKeyOf', 'sendExternal', 'shotBaseName',
     }
     # 只要体内有 setText/toast/showDialog 等出口，或名字像 UI 文案的，就查
     for (mname, mbody) in _methods(src):

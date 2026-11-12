@@ -77,6 +77,12 @@ public final class SignLogicTest {
     }
 
     // ── 收藏夹摘要开关的账号作用域（2026-10-27 修跨账号串扰）──────────
+    private static SignLogic.StageInput _mkStage(String reply) {
+        SignLogic.StageInput in = new SignLogic.StageInput();
+        in.reply = reply;
+        return in;
+    }
+
     private static void savedMsgScope() {
         // ① 账号 A 关闭、账号 B 开启 → 只有 B 可发（B 的解析结果不受 A 影响）
         eq("A关B开·账号A", SignLogic.resolveSavedMsgOn(Boolean.FALSE, null, true), Boolean.FALSE);
@@ -1757,8 +1763,13 @@ public final class SignLogicTest {
             SignLogic.isLikelyAnnouncement("广告勿点"));
 
         // 菜单（含「签到」二字）：判公告，避免用户去给菜单学词
-        tru("菜单含签到 → 公告",
-            SignLogic.isLikelyAnnouncement("请选择功能：签到 / 查询 / 商城"));
+        // 2026-11-12：判据迁移 —— 菜单类不再靠「公告」拦（公告特征词已收敛为
+        //   真正的广告特征），改由「文档/教程语域」承担：既不入未识别池（不引导学词），
+        //   也过不了成功形态守卫（不误判成功）。原意（别让用户给菜单学词）保持不变。
+        String _menu = "请选择功能：签到 / 查询 / 商城";
+        tru("菜单含签到 → 文档语域（不入池）", SignLogic.looksLikeTutorialOrHelp(_menu));
+        tru("菜单含签到 → 判定链不得判成功",
+            SignLogic.decideByStage(_mkStage(_menu)).verdict != SignLogic.V_SIGNED);
 
         // 真结果含「积分」但不含公告词
         tru("积分结果 → 放行",
@@ -1888,13 +1899,13 @@ public final class SignLogicTest {
      *  只有启动/打开类触发才允许越窗补签，定时类仍受窗口约束。
      */
     private static void startupCatchupTrigger() {
-        tru("「启动」算启动触发", TGAutoSignCore.isStartupTrigger("启动"));
-        tru("「启动补签」算启动触发", TGAutoSignCore.isStartupTrigger("启动补签"));
-        tru("「打开TG」算启动触发", TGAutoSignCore.isStartupTrigger("打开TG"));
-        tru("「定时」不算", !TGAutoSignCore.isStartupTrigger("定时"));
-        tru("「进入窗口」不算", !TGAutoSignCore.isStartupTrigger("进入窗口"));
-        tru("空串不算", !TGAutoSignCore.isStartupTrigger(""));
-        tru("null 不算", !TGAutoSignCore.isStartupTrigger(null));
+        tru("「启动」算启动触发", SignLogic.isStartupTrigger("启动"));
+        tru("「启动补签」算启动触发", SignLogic.isStartupTrigger("启动补签"));
+        tru("「打开TG」算启动触发", SignLogic.isStartupTrigger("打开TG"));
+        tru("「定时」不算", !SignLogic.isStartupTrigger("定时"));
+        tru("「进入窗口」不算", !SignLogic.isStartupTrigger("进入窗口"));
+        tru("空串不算", !SignLogic.isStartupTrigger(""));
+        tru("null 不算", !SignLogic.isStartupTrigger(null));
     }
 
 
