@@ -319,21 +319,102 @@ public final class HostSymbols {
         if (canLoad(legacy)) return legacy;                        // ① 原名直查
         if (!sMapped) return null;
         String[][] map = (sMapOverride != null) ? sMapOverride : pickMap(sVersionCode);
-        if (map == null) return null;
         String actual = null;
-        for (String[] pair : map) {
-            if (pair[0].equals(legacy)) { actual = pair[1]; break; }
+        if (map != null) {
+            for (String[] pair : map) {
+                if (pair[0].equals(legacy)) { actual = pair[1]; break; }
+            }
         }
-        if (actual == null) return null;
-        if (!canLoad(actual)) {                                    // ② 映射名不存在
-            addDiag("映射失效：" + legacy + " → " + actual + " 不存在（宿主可能已再次改动混淆）");
-            return null;
+        if (actual != null) {
+            // ②③ 映射名存在 + 结构契约通过 —— 快路径，零额外开销。
+            if (canLoad(actual) && verifyClassContract(legacy, actual)) return actual;
+            addDiag("映射不可用：" + simple(legacy) + " → " + simple(actual)
+                    + (canLoad(actual) ? "（结构契约不符）" : "（类不存在，宿主已再次改动混淆）"));
         }
-        if (!verifyClassContract(legacy, actual)) {                // ③ 结构指纹校验
-            addDiag("映射被拒绝：" + actual + " 不满足 " + simple(legacy) + " 的结构契约");
-            return null;
+        // ④ 自愈（2026-11-12 新增）：映射表过期也能自己把类找回来。
+        //    触发条件：映射表没这个符号 / 名字不存在 / 契约不符。
+        //    映射表健康时这条路根本不走。
+        String auto = autoLocate(legacy);
+        if (auto != null && canLoad(auto) && verifyClassContract(legacy, auto)) {
+            addDiag("自愈命中：" + simple(legacy) + " → " + simple(auto) + "（运行时结构指纹）");
+            return auto;
         }
-        return actual;
+        return null;
+    }
+
+    // ────────────────── 运行时自愈（2026-11-12） ──────────────────
+
+    private static volatile java.util.Map<String, String> sAutoFound = null;
+    private static volatile java.util.List<String> sAutoNotes = null;
+    private static volatile boolean sAutoTried = false;
+    private static volatile String[] sApkPaths = null;
+    private static volatile long sAutoMs = 0L;
+    private static volatile int sAutoClasses = 0;
+
+    /** 宿主 APK 路径（base + split；自愈解析 dex 用）。缺失则自愈不可用。 */
+    public static void provideApkPaths(String... paths) {
+        if (paths == null || paths.length == 0) return;
+        java.util.List<String> list = new java.util.ArrayList<String>();
+        for (String p : paths) if (p != null && !p.isEmpty()) list.add(p);
+        if (list.isEmpty()) return;
+        String[] arr = list.toArray(new String[0]);
+        if (java.util.Arrays.equals(arr, sApkPaths)) return;
+        sApkPaths = arr;
+        synchronized (HostSymbols.class) {
+            sAutoTried = false;
+            sAutoFound = null;
+            sAutoNotes = null;
+        }
+    }
+
+    /**
+     * 懒加载自愈：解析宿主 dex，用结构指纹把 9 个符号找回来（约 350ms，只在需要时跑一次）。
+     */
+    private static String autoLocate(String legacy) {
+        if (sApkPaths == null) return null;
+        if (!legacy.startsWith("org.telegram.messenger.")) return null;
+        if (!sAutoTried) {
+            synchronized (HostSymbols.class) {
+                if (!sAutoTried) {
+                    sAutoTried = true;
+                    try {
+                        io.github.wlmosv_png.tgautosign.host.DexReader dr =
+                                io.github.wlmosv_png.tgautosign.host.DexReader.fromApk(sApkPaths);
+                        io.github.wlmosv_png.tgautosign.host.HostLocator.Result r =
+                                io.github.wlmosv_png.tgautosign.host.HostLocator.locate(dr);
+                        sAutoFound = r.found;
+                        sAutoNotes = r.notes;
+                        sAutoMs = r.scanMs;
+                        sAutoClasses = dr == null ? 0 : dr.classCount();
+                        addLog("宿主符号自愈：自动定位 " + r.found.size() + "/"
+                                + io.github.wlmosv_png.tgautosign.host.HostLocator.LEGACY.length
+                                + "（" + r.scanMs + "ms，扫描 " + sAutoClasses + " 类）");
+                        for (java.util.Map.Entry<String, String> e : r.found.entrySet()) {
+                            addLog("  ≈ " + e.getKey() + " → " + simple(e.getValue()));
+                        }
+                        for (String n : r.notes) addLog("  ! " + n);
+                    } catch (Throwable t) {
+                        addLog("宿主符号自愈失败：" + t);
+                    }
+                }
+            }
+        }
+        java.util.Map<String, String> f = sAutoFound;
+        return f == null ? null : f.get(simple(legacy));
+    }
+
+    /** 自愈结果摘要（面板显示用）；未触发过返回 null。 */
+    public static String autoHealSummary() {
+        java.util.Map<String, String> f = sAutoFound;
+        if (f == null) return null;
+        return "自愈 " + f.size() + "/" + io.github.wlmosv_png.tgautosign.host.HostLocator.LEGACY.length
+                + "（" + sAutoMs + "ms / " + sAutoClasses + " 类）";
+    }
+
+    /** 自愈过程中的注释（未定位项、多候选等）。 */
+    public static java.util.List<String> autoHealNotes() {
+        java.util.List<String> n = sAutoNotes;
+        return n == null ? new java.util.ArrayList<String>() : new java.util.ArrayList<String>(n);
     }
 
     /**
@@ -372,7 +453,19 @@ public final class HostSymbols {
                     // 2026-11-08 修复：原来用 mapClass（只管 org.telegram.messenger.*），
                     // "java.lang.Object" 会返回 null → 契约恒假。改为先按旧名映射、再按真名加载。
                     Class<?> wantCls = mapTgOrSystem(want);
-                    return wantCls != null && cls.getSuperclass() == wantCls;
+                    if (wantCls == null || cls.getSuperclass() != wantCls) return false;
+                    // ★ 2026-11-12（真机实证的假阳性）：父类为 Object 的契约对任何顶层类都成立，
+                    //   它**证明不了身份**。13.2.1 档的 SharedConfig→tz 在 13.2.2 上照样「通过」
+                    //   （tz 这个类存在、父类也是 Object），而 13.2.2 真正的 SharedConfig 是 uz。
+                    //   更糟的是：假阳性会让自愈永远不被触发（映射表"看起来没问题"）。
+                    //   这类恒真契约必须由运行时结构指纹再确认一次 —— 判据与 hostmap-gen.py 同源。
+                    if ("java.lang.Object".equals(want)) {
+                        String heal = autoLocate(legacy);
+                        // 自愈不可用时（拿不到 APK，或单测环境）退回旧行为，
+                        // 免得把「存在但不是它」的假阳性换成「直接全盘失效」。
+                        return heal == null || heal.equals(actual);
+                    }
+                    return true;
                 }
                 if (spec.startsWith("c:")) {                       // 存在某构造函数
                     return findUniqueCtor(cls, spec.substring(2)) != null;
@@ -830,9 +923,11 @@ public final class HostSymbols {
                     + " NC=" + (hasNotificationCenter() ? "✓" : "✗")
                     + " UC=" + (hasUserConfig() ? "✓" : "✗");
         }
-        return "混淆映射(" + sMapLabel + ") · MC=" + (hasMessagesController() ? "✓" : "✗")
+        String base = "混淆映射(" + sMapLabel + ") · MC=" + (hasMessagesController() ? "✓" : "✗")
                 + " NC=" + (hasNotificationCenter() ? "✓" : "✗")
                 + " UC=" + (hasUserConfig() ? "✓" : "✗");
+        String heal = autoHealSummary();
+        return heal == null ? base : base + " · " + heal;
     }
 
     /** 宿主版本是否已被本模块适配（用于「明确显示不兼容」）。 */

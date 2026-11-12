@@ -114,9 +114,24 @@ public final class TGAutoSignEntry extends XposedModule {
             android.content.pm.PackageInfo pi = appContext.getPackageManager().getPackageInfo(packageName, 0);
             vc = pi.getLongVersionCode();
         } catch (Throwable ignored) {}
+        // 2026-11-12：自愈需要宿主 APK 路径（base + split）；缺了就只能靠映射表。
+        try {
+            android.content.pm.ApplicationInfo ai = appContext.getApplicationInfo();
+            java.util.List<String> _paths = new java.util.ArrayList<String>();
+            if (ai.sourceDir != null) _paths.add(ai.sourceDir);
+            if (ai.splitSourceDirs != null) {
+                for (String _p : ai.splitSourceDirs) if (_p != null) _paths.add(_p);
+            }
+            HostSymbols.provideApkPaths(_paths.toArray(new String[0]));
+        } catch (Throwable ignored) {}
         HostSymbols.install(appLoader, packageName, vc);
         logInfo("宿主符号解析：" + HostSymbols.summaryLine());
         for (String _sym : HostSymbols.symbolLog()) logInfo(_sym);
+        // 失败必须可见（2026-11-12 事故：符号全失配却仍打「注入成功」，用户无从察觉）
+        if (!HostSymbols.hostAdapted()) {
+            logError("⚠ 宿主未适配：Telegram 改了混淆名，自愈也没完全成功 —— "
+                    + HostSymbols.summaryLine(), null);
+        }
 
         if (CORE == null) {
             synchronized (TGAutoSignEntry.class) {

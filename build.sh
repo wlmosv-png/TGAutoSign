@@ -331,6 +331,8 @@ if [ "${TGAS_SKIP_SYMBOLTEST:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/HostSymb
         "$TGAS_SRC/tools/tests/stubs/android/util/Log.java" \
         $_sfiles \
         "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/HostSymbols.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/host/DexReader.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/host/HostLocator.java" \
         "$TGAS_SRC/tools/tests/HostSymbolsTest.java" 2>&1; then
     if ! java -cp "$_scls" io.github.wlmosv_png.tgautosign.HostSymbolsTest; then
       rm -rf "$_scls"
@@ -341,6 +343,42 @@ if [ "${TGAS_SKIP_SYMBOLTEST:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/HostSymb
     echo "FATAL: 宿主符号层单测编译失败（临时跳过：TGAS_SKIP_SYMBOLTEST=1）" >&2; exit 1
   fi
   rm -rf "$_scls"
+fi
+
+# ── 宿主符号自愈层单测（2026-11-12）：DexReader + HostLocator ──
+# 为什么单独一道：模块不再只靠「逐版本硬编码映射表」，而是能在运行时自己解析宿主 dex 把类找回来。
+# 这条链一旦写错（dex 偏移算错、判据不唯一）会**静默失效**，必须拿真实 APK 端到端回归。
+# APK 来源（按序）：$TGAS_HOST_APK → $TGAS_BUILD_ROOT/fixtures/host-test.apk；
+#   都没有则只做编译校验（打印用法后退出 0）。
+# 跳过：TGAS_SKIP_HOSTLOCATETEST=1
+if [ "${TGAS_SKIP_HOSTLOCATETEST:-0}" != 1 ] && [ -f "$TGAS_SRC/tools/tests/HostLocateTest.java" ]; then
+  echo "== 宿主符号自愈层单测（DexReader / HostLocator）=="
+  _hcls="${TMPDIR:-/tmp}/tgas-hcls-$$"
+  rm -rf "$_hcls"; mkdir -p "$_hcls"
+  if javac -nowarn -encoding UTF-8 -d "$_hcls" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/host/DexReader.java" \
+        "$TGAS_SRC/app/src/main/java/io/github/wlmosv_png/tgautosign/host/HostLocator.java" \
+        "$TGAS_SRC/tools/tests/HostLocateTest.java" 2>&1; then
+    _hapk="${TGAS_HOST_APK:-}"
+    if [ -z "$_hapk" ] && [ -f "$TGAS_BUILD_ROOT/fixtures/host-test.apk" ]; then
+      _hapk="$TGAS_BUILD_ROOT/fixtures/host-test.apk"
+    fi
+    if [ -n "$_hapk" ] && [ -f "$_hapk" ]; then
+      if ! java -cp "$_hcls" io.github.wlmosv_png.tgautosign.HostLocateTest "$_hapk"; then
+        rm -rf "$_hcls"
+        echo "FATAL: 宿主符号自愈层单测失败（临时跳过：TGAS_SKIP_HOSTLOCATETEST=1）" >&2
+        exit 1
+      fi
+    else
+      echo "  （跳过硬验证：未提供宿主 APK —— 设 TGAS_HOST_APK 或放 fixtures/host-test.apk）"
+      java -cp "$_hcls" io.github.wlmosv_png.tgautosign.HostLocateTest || true
+    fi
+  else
+    rm -rf "$_hcls"
+    echo "FATAL: 宿主符号自愈层单测编译失败（临时跳过：TGAS_SKIP_HOSTLOCATETEST=1）" >&2
+    exit 1
+  fi
+  rm -rf "$_hcls"
 fi
 
 # ── 接收链观测单测（2026-11-08 F8）：真跑 Diag / InboundGate 纯逻辑 ──
