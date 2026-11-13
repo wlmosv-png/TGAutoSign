@@ -183,6 +183,14 @@ You installed a debug build. Uninstall it, then install the official APK from th
 
 ## 更新日志 · Changelog
 
+### v1.7.2 (172) — 2026-11-13
+
+**New**: Self-healing host symbols: the module adapts to Telegram updates on its own. · Explicit warning when the host is not adapted.
+
+**Fixed**: Fixed an installation failure that affected users. · Ambiguous matches now pick the strongest hit instead of the first one in the word list. · Documentation wording no longer swallows a real result. · Fixed a cross-day state leak that could pin a target permanently. · Narrowed the announcement guard; quota checks now look at an adjacent window only.
+
+**工程**: Quality gates now actually run. · Added end-to-end tests for the self-healing layer, run against a real host APK.
+
 ### v1.7.1 (171) — 2026-11-01
 
 **Fixed**: A target's fixed time is no longer bypassed by an all-day global window. · The heartbeat path no longer bypasses the sign-in gate. · The make-up window start is computed per target. · Account panels are no longer misread as sign-in failures. · Genuine rejections are still treated as failures.
@@ -194,14 +202,6 @@ You installed a debug build. Uninstall it, then install the official APK from th
 **UI**: The undo entry is now one compact row per target. · New "Paused" section: pausing no longer hides a target. · The entry menu now shows the actual state instead of a static label.
 
 **工程**: The make-up predicate gains a target-scoped overload. · The trigger-policy test is now part of the gate.
-
-### v1.7.0 (170) — 2026-10-30
-
-**Fixed**: Opening Telegram now actually triggers the missed sign-ins. · Out-of-window triggers are no longer silently dropped. · Scheduled mode no longer exits silently. · Scheduled tasks survive account switches. · The merge log is rate-limited again (60s per account). · Custom judging words now work per account. · Auto-judge / fallback mode are read per account. · The "allow" description matches the implementation.
-
-**New**: The settings page marks dependent options as inactive. · The target list now shows where to turn it on.
-
-**Changed**: Out-of-window behaviour is now explicit.
 
 [Full changelog →](https://github.com/wlmosv-png/TGAutoSign/blob/master/CHANGELOG.md)
 
