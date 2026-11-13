@@ -462,8 +462,20 @@ public final class TGAutoSignEntry extends XposedModule {
 
     // 触发源 3.1：打开聊天补签
     private void hookChatActivityOnResume() {
+        Class<?> ca;
         try {
-            Class<?> ca = loadClass("org.telegram.ui.ChatActivity");
+            ca = loadClass("org.telegram.ui.ChatActivity");
+        } catch (Throwable t) {
+            // R8 从 Telegram 13.x 起会改写这个类名（实测 13.2.x = org.telegram.ui.vn），
+            // 原名找不到是**常态而非故障**：「打开 TG 补签」由 LaunchActivity.onResume 兜底。
+            // 2026-11-13：以前这里会抛到外层打 E 级 + 整段堆栈，每次启动刷 25 行，
+            // 把真正要看的东西淹掉。现在只记一行说明。
+            logInfo("ChatActivity 原名不可用（R8 改名，补签走 LaunchActivity 兜底），跳过该钩子");
+            try { Diag.hookInstall("UI_chat", "org.telegram.ui.ChatActivity.onResume", false, "原名不可用(R8改名)"); }
+            catch (Throwable ignored) {}
+            return;
+        }
+        try {
             Method onResume = findMethod(ca, "onResume");
             if (onResume == null) {
                 logError("ChatActivity.onResume not found", null);
