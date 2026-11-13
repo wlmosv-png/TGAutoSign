@@ -4,55 +4,44 @@
 
 ## 1.7.2 (172) — 2026-11-13
 
-> Telegram 每次更新都会重排 `org.telegram.messenger.*` 的类名。这一版之后，模块**自己把类找回来** —— 不再需要等适配包。
+> Telegram 13.2.0 起 R8 会重排 `org.telegram.messenger.*` 的类名，依赖类名的钩子随之失效。本版引入运行时符号自愈：宿主更新后模块自行重新解析，不再依赖随版本发布的映射表。
 
 ### 新增 · Added
 
-- **宿主符号自愈：Telegram 更新后模块自己适配**
-  *Self-healing host symbols: the module adapts to Telegram updates on its own.*
-  Telegram 13.2.0 起 R8 每版重排核心类名（`MessagesController` 在 13.2.1 是 `vp`、13.2.2 是 `wp`…），
-  旧做法是逐版本硬编码映射表 —— 必然过期。本版加入运行时自愈：直接解析宿主 APK 的 dex
-  （纯字节解析，**不加载任何类**），用结构指纹把 9 个核心符号当场找回来（实测 110ms / 21932 个类）。
-  映射表仍作快路径，只有它失效时才触发自愈。实测：把映射表故意做旧 → 自愈 9/9 命中 →
-  锚点 A/B 全部挂上、签到功能正常。
-- **宿主未适配时明确告警**
-  *Explicit warning when the host is not adapted.*
-  以前符号全部失配时模块仍打印「注入成功」，用户无从察觉，直到发现签到不工作。
-  现在会直接打 E 级告警，`/jmb` 面板那行也标红。
+- **宿主符号运行时自愈**
+  *Runtime self-healing of host symbols.*
+  直接解析宿主 APK 的 dex（纯字节解析，不加载任何类），按结构指纹在运行时重新定位
+  `MessagesController` / `NotificationCenter` / `UserConfig` 等 9 个核心符号（实测 21932 个类耗时 110ms）。
+  映射表保留为快路径，仅在其失效时触发。验证方式：将映射表人为置为旧版本后启动宿主，
+  自愈 9/9 命中，锚点 A/B 与发送端全部挂载。
+- **符号解析失败时输出明确状态**
+  *Explicit status when symbol resolution fails.*
+  符号全部失配时不再输出「注入成功」；现输出未适配告警，`/jmb` 链路自检行同步标红。
 
 ### 修复 · Fixed
 
-- **「用户装不上」的安装包问题（重要）**
-  *Fixed an installation failure that affected users.*
-  出包脚本把 `classes.dex` / `AndroidManifest.xml` 写成 STORED 却不做 4 字节对齐，
-  Android 11+ 会直接拒绝安装；而本机以 root 安装会**绕过**该检查 —— 自己装得上不等于用户装得上。
-  现已收口成工具并逐条读回自检，未对齐在出包阶段就失败。
-- **判不出：命中词取「最强」而非词表里第一个**
-  *Ambiguous matches now pick the strongest hit instead of the first one in the word list.*
-  用户词表里「成功」排在「签到成功」之前时，回复「🎉签到成功🎉」会先命中泛词「成功」，
-  再被「缺少成功形态」拦下 → 判不出。现在按「非文档句 > 明确结论 > 非泛词 > 更长 > 表序」取最强命中。
-- **文档/说明语不再把真结果吞成「判不出」**
-  *Documentation wording no longer swallows a real result.*
-  回复尾部一句「📝 使用说明」曾让整条被判成判不出（补词也无效）。文档词已拆出并在判定构造时剔除。
-- **跨天状态泄漏：目标不再被永久钉死**
+- **APK 条目未对齐导致 Android 11+ 拒绝安装**
+  *Fixed misaligned APK entries that made Android 11+ reject installation.*
+  出包链将 `classes.dex` / `AndroidManifest.xml` 以 STORED 存储但未做 4 字节对齐，
+  触发 Android 11+ 的安装校验（`resources.arsc` 须 STORED 且 4 字节对齐）。
+  现由打包工具统一处理并逐条回读自检，不合规在出包阶段即失败。
+- **判定命中改取最强匹配，不再由词表顺序决定**
+  *Verdicts now take the strongest match instead of the first one in the word list.*
+  自定义词表中「成功」排在「签到成功」之前时，`🎉签到成功🎉` 会先命中泛词「成功」，
+  再被成功形态判据拒绝，最终判不出。现按「非文档句 > 明确结论形态 > 非泛词 > 更长 > 表序」
+  排序取最强命中，两条判定链同步。
+- **文档类措辞不再吞掉明确结论**
+  *Documentation wording no longer swallows an explicit verdict.*
+  回复尾部一句「📝 使用说明」曾使整条被判为判不出（补词无效）。
+  文档词已从非结论词表拆出，改为在判定构造时剔除。
+- **跨天状态泄漏导致目标被永久钉死**
   *Fixed a cross-day state leak that could pin a target permanently.*
-  证据戳与「待确认」判据都补上了日期/轮次绑定，不符一律视为过期，不再阻断当天的自动重签。
-- **公告守卫收窄、额度判断只看紧邻窗口**
-  *Narrowed the announcement guard; quota checks now look at an adjacent window only.*
-  400 字的推广尾巴会让「次数已用完」这类结论被误判成别的业务。
-
-### 工程 · Engineering
-
-- **门禁从「假通过」变成真跑**
-  *Quality gates now actually run.*
-  排查发现 13 个测试文件从未被 `build.sh` 引用（含 174 条的 TriggerPolicyTest），
-  且测试链因缺依赖**编译失败**而无人知晓 —— 「测试通过」长期是假象。
-  现已全部接线，并新增《测试接线门禁》等 4 道：写了不跑会直接报错。
-- **新增自愈层端到端单测**
-  *Added end-to-end tests for the self-healing layer, run against a real host APK.*
-  拿真实宿主 APK 验证 9/9 定位；写错 dex 偏移这类静默故障再也藏不住。
-- **日志降噪**：`ChatActivity` 原名不可用属常态（R8 改名，已有 `LaunchActivity` 兜底），
-  不再打 E 级 + 整段堆栈，避免淹没真正要看的东西。
+  证据戳与「待确认」判据补充日期/轮次绑定：日期或轮次不符一律视为过期，
+  不再阻断当天的自动重签。
+- **面板公告与额度判断的边界收紧**
+  *Tightened verdict boundaries for panel announcements and quota wording.*
+  公告守卫收窄；额度类结论仅在命中词紧邻窗口内匹配修饰语，
+  不再整条搜索（长推广前缀会使其落入其他业务的语义）。
 
 ---
 

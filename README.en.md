@@ -185,11 +185,9 @@ You installed a debug build. Uninstall it, then install the official APK from th
 
 ### v1.7.2 (172) — 2026-11-13
 
-**New**: Self-healing host symbols: the module adapts to Telegram updates on its own. · Explicit warning when the host is not adapted.
+**New**: Runtime self-healing of host symbols. · Explicit status when symbol resolution fails.
 
-**Fixed**: Fixed an installation failure that affected users. · Ambiguous matches now pick the strongest hit instead of the first one in the word list. · Documentation wording no longer swallows a real result. · Fixed a cross-day state leak that could pin a target permanently. · Narrowed the announcement guard; quota checks now look at an adjacent window only.
-
-**工程**: Quality gates now actually run. · Added end-to-end tests for the self-healing layer, run against a real host APK.
+**Fixed**: Fixed misaligned APK entries that made Android 11+ reject installation. · Verdicts now take the strongest match instead of the first one in the word list. · Documentation wording no longer swallows an explicit verdict. · Fixed a cross-day state leak that could pin a target permanently. · Tightened verdict boundaries for panel announcements and quota wording.
 
 ### v1.7.1 (171) — 2026-11-01
 
